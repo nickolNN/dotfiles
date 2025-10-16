@@ -3,11 +3,11 @@ require "configs.ts"
 require "configs.eslint"
 require "configs.gopls"
 
-local servers = { "html", "cssls", "angularls" }
-vim.lsp.enable(servers)
+vim.lsp.enable { "html", "cssls", "angularls", "ts_ls", "gopls", "eslint" }
 -- read :h vim.lsp.config for changing options of lsp servers
 
 local hover = vim.lsp.buf.hover
+
 ---@diagnostic disable-next-line: duplicate-set-field
 vim.lsp.buf.hover = function()
   return hover {

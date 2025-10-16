@@ -1,7 +1,5 @@
-local lspconfig = require "lspconfig"
 local util = require "lspconfig.util"
-
-lspconfig.gopls.setup {
+vim.lsp.config("gopls", {
   -- on_attach = function(client, bufnr)
   --   -- Optional: Set up keybindings for LSP actions here For example:
   -- end,
@@ -21,4 +19,4 @@ lspconfig.gopls.setup {
       },
     },
   },
-}
+})

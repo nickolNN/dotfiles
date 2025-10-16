@@ -1,7 +1,6 @@
-local lsp = require "lspconfig"
 local util = require "lspconfig/util"
 
-lsp.ts_ls.setup {
+vim.lsp.config("ts_ls", {
   on_attach = function(client, bufnr)
     -- Enable inlay hints (new in TS 5.0+)
     -- if client.supports_method "textDocument/inlayHint" then
@@ -31,4 +30,4 @@ lsp.ts_ls.setup {
     },
   },
   root_dir = util.root_pattern("package.json", "tsconfig.json", "jsconfig.json", ".git"),
-}
+})

@@ -70,6 +70,7 @@ return {
       require "configs.yadro-minuet"
     end,
   },
+
   {
     "kdheepak/lazygit.nvim",
     lazy = true,

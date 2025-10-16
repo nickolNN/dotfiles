@@ -1,6 +1,4 @@
-local lsp = require "lspconfig"
-
-lsp.eslint.setup {
+vim.lsp.config("eslint", {
   on_attach = function(client, bufnr)
     vim.api.nvim_create_autocmd("BufWritePre", {
       pattern = { "*.ts", "*.tsx" },
@@ -10,4 +8,4 @@ lsp.eslint.setup {
       end,
     })
   end,
-}
+})
