@@ -59,13 +59,6 @@ return {
   },
 
   {
-    "akinsho/git-conflict.nvim",
-    version = "*",
-    lazy = false,
-    config = true,
-  },
-
-  {
     "nvim-tree/nvim-tree.lua",
     opts = require "configs.nvim-tree",
   },
