@@ -1,12 +1,6 @@
 local util = require "lspconfig/util"
 
 vim.lsp.config("ts_ls", {
-  on_attach = function(client, bufnr)
-    -- Enable inlay hints (new in TS 5.0+)
-    -- if client.supports_method "textDocument/inlayHint" then
-    --   vim.lsp.inlay_hint.enable(bufnr, 1)
-    -- end
-  end,
   settings = {
     typescript = {
       preferences = {
