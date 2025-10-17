@@ -1,7 +1,6 @@
 local go = require "go"
 
 go.setup {
-  -- Your customizations
   goimport = "gopls",
   gofmt = "gofmt",
   lsp_keymaps = false,
