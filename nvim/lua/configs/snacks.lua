@@ -23,5 +23,4 @@ local snacksOpts = {
     style = "out",
   },
 }
-
 return snacksOpts

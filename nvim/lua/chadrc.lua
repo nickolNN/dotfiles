@@ -20,9 +20,6 @@ M.ui = {
   tabufline = {
     lazyload = false,
   },
-  statusline = {
-    theme = "minimal",
-  },
 }
 
 -- M.term = {

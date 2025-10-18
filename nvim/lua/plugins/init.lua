@@ -44,12 +44,6 @@ return {
   },
 
   {
-    "folke/trouble.nvim",
-    lazy = false,
-    dependencies = { "nvim-tree/nvim-web-devicons" },
-  },
-
-  {
     "ray-x/go.nvim",
     ft = { "go", "gomod" },
     dependencies = { "ray-x/guihua.lua" },
@@ -72,10 +66,15 @@ return {
   },
 
   {
+    "folke/trouble.nvim",
+    lazy = false,
+    dependencies = { "nvim-tree/nvim-web-devicons" },
+  },
+
+  {
     "folke/snacks.nvim",
     priority = 1000,
     lazy = false,
-    ---@type snacks.Config
     opts = require "configs.snacks",
     keys = {
       {
@@ -83,7 +82,7 @@ return {
         function()
           Snacks.lazygit()
         end,
-        desc = "Lazygit",
+        desc = "Launch Lazygit",
       },
     },
   },
