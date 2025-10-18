@@ -1,7 +1,8 @@
-return {
+---@type snacks.Config
+local snacksOpts = {
   lazygit = { enabled = true },
   animate = {
-    duration = 500, -- ms per step
+    duration = 100, -- ms per step
     easing = "inOutBounce",
     fps = 144, -- frames per second. Global setting for all animations
   },
@@ -22,3 +23,5 @@ return {
     style = "out",
   },
 }
+
+return snacksOpts
