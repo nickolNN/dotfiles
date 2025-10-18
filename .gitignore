@@ -1,6 +1,7 @@
 yarn/*
 zed/*
 configstore/*
+neofetch/*
 gtk-2.0/*
 .DS_Store
 .zip
