@@ -6,7 +6,7 @@
 local M = {}
 
 M.base46 = {
-  theme = "kanagawa",
+  theme = "tokyodark",
 
   transparency = true,
   -- hl_override = {
@@ -21,7 +21,7 @@ M.ui = {
     lazyload = false,
   },
   statusline = {
-    theme = "vscode_colored",
+    theme = "minimal",
   },
 }
 

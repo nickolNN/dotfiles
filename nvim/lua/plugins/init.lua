@@ -72,42 +72,19 @@ return {
   },
 
   {
-    "kdheepak/lazygit.nvim",
-    lazy = true,
-    cmd = {
-      "LazyGit",
-      "LazyGitConfig",
-      "LazyGitCurrentFile",
-      "LazyGitFilter",
-      "LazyGitFilterCurrentFile",
-    },
-    -- optional for floating window border decoration
-    dependencies = {
-      "nvim-lua/plenary.nvim",
-    },
-    -- setting the keybinding for LazyGit with 'keys' is recommended in
-    -- order to load the plugin when the command is run for the first time
-    keys = {
-      { "<leader>lg", "<cmd>LazyGit<cr>", desc = "LazyGit" },
-    },
-  },
-
-  {
     "folke/snacks.nvim",
-    opts = {
-      animate = {
-        duration = 20, -- ms per step
-        easing = "linear",
-        fps = 144, -- frames per second. Global setting for all animations
+    priority = 1000,
+    lazy = false,
+    ---@type snacks.Config
+    opts = require "configs.snacks",
+    keys = {
+      {
+        "<leader>lg",
+        function()
+          Snacks.lazygit()
+        end,
+        desc = "Lazygit",
       },
-      scroll = {
-        enabled = true,
-      },
-      indent = { enabled = true },
     },
   },
-
-  -- {
-  --   "folke/trouble.nvim",
-  -- },
 }
