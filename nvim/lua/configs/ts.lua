@@ -21,5 +21,5 @@ vim.lsp.config("ts_ls", {
       },
     },
   },
-  -- root_dir = util.root_pattern("package.json", "tsconfig.json", "jsconfig.json", ".git"),
+  root_markers = {"package.json", "tsconfig.json", "jsconfig.json", ".git"}
 })
