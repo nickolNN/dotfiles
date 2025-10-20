@@ -3,8 +3,8 @@ return {
   event = "LazyFile",
   opts = {
     servers = {
-      -- html = { enabled = true },
-      css = { enabled = true },
+      html = { enabled = true, format = { enable = false } },
+      cssls = { enabled = true },
       angularls = { enabled = true },
       eslint = { enabled = true },
       json = {
@@ -12,15 +12,23 @@ return {
       },
       ts_ls = {
         enabled = true,
-        filetypes = { "typescript", "html", "typescriptreact", "typescript.tsx", "htmlangular" },
+        -- disable formatting by ts_ls in favor of eslint for example
+        on_init = function(client)
+          client.server_capabilities.documentFormattingProvider = false
+          client.server_capabilities.documentRangeFormattingProvider = false
+        end,
+        filetypes = { "typescript", "typescriptreact", "typescript.tsx", "angularhtml", "angular" },
         settings = {
           typescript = {
+            format = {
+              convertTabsToSpaces = true,
+            },
             preferences = {
               importModuleSpecifier = "shortest", -- New import style
               jsxAttributeCompletionStyle = "auto", -- Smarter JSX
             },
             inlayHints = {
-              includeInlayParameterNameHints = "all",
+              -- includeInlayParameterNameHints = "all",
               includeInlayFunctionParameterTypeHints = true,
             },
             tsserver = {

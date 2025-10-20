@@ -17,7 +17,7 @@ return {
       "comment",
       "angular",
       "scss",
-      "typescript",
+      "typescript-language-server",
     },
   },
 }
