@@ -8,7 +8,7 @@ return {
     },
     animate = {
       duration = 100,
-      easing = "inOutBounce",
+      easing = "linear",
       fps = 144,
     },
 

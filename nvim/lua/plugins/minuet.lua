@@ -1,6 +1,6 @@
 return {
   "milanglacier/minuet-ai.nvim",
-  -- lazy = false,
+  lazy = true,
   event = "LazyFile",
   config = function()
     local openai_api_key = "sk-NmiCMsI3-3HKRq1Xv6uMsQ" -- взять из выданного конфига
@@ -47,7 +47,7 @@ return {
         },
       },
       virtualtext = {
-        auto_trigger_ft = { "typescript", "html", "lua", "htmlangular", "json" },
+        -- auto_trigger_ft = { "typescript", "html", "lua", "htmlangular", "json" },
         keymap = {
           accept = "<A-a>",
           accept_line = "<A-o>",
