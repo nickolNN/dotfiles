@@ -3,4 +3,3 @@
 -- Add any additional options here
 local o = vim.o
 o.cursorlineopt = "both" -- to enable cursorline!
-vim.g.lazyvim_eslint_auto_format = true

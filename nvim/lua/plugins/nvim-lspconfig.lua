@@ -12,16 +12,6 @@ return {
           client.server_capabilities.documentRangeFormattingProvider = false
         end,
       },
-      gopls = {
-        completeUnimported = true,
-        usePlaceholders = true,
-        staticcheck = true,
-        analyses = {
-          unusedparams = true,
-          staticcheck = true,
-          gofumpt = true,
-        },
-      },
     },
   },
 }
