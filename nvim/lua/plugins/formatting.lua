@@ -10,8 +10,6 @@ return {
       vue = { "eslint_d", "stylelint" },
       go = { "gofmt", "goimports", "golines" },
       html = { "eslint_d" },
-      -- css = { "stylelint" },
-      -- scss = { "stylelint" },
     },
   },
 }

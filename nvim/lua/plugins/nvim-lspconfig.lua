@@ -6,20 +6,19 @@ return {
       json = {
         filetypes = { "json" },
       },
+      html = {},
       cssls = {},
       angularls = {
+        filetypes = { "typescript", "html", "htmlangular" },
+        -- avoid angulals enabling on non-angular projects
         root_dir = function(_, on_dir)
-          if vim.fs.find({ "angular.json", "nx.json" }, { upward = true })[1] then
+          if
+            vim.fs.find({ "angular.json", "nx.json" }, { upward = true, type = "file", stop = vim.fn.getcwd() })[1]
+          then
             on_dir()
           end
         end,
       },
-      -- vtsls = {
-      --   on_init = function(client)
-      --     client.server_capabilities.documentFormattingProvider = false
-      --     client.server_capabilities.documentRangeFormattingProvider = false
-      --   end,
-      -- },
     },
   },
 }
