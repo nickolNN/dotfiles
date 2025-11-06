@@ -6,6 +6,7 @@ return {
       json = {
         filetypes = { "json" },
       },
+      cssls = {},
       angularls = {
         root_dir = function(_, on_dir)
           if vim.fs.find({ "angular.json", "nx.json" }, { upward = true })[1] then
