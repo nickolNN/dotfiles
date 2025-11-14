@@ -1,3 +1,5 @@
+[general]
+import = [ "~/.config/alacritty/themes/tokyonight.toml" ]
 [env]
 TERM = "xterm-256color"
 [font]
@@ -6,9 +8,11 @@ normal = { family = "FiraCode Nerd Font", style="Retina" }
 [window]
 option_as_alt = "Both"
 decorations_theme_variant = "Dark"
-opacity = 0.9
+opacity = 0.95
 title = "Алакритя"
 dynamic_title = true
 resize_increments = true
 # padding = { x = 3, y = 3 }
 dynamic_padding = true
+[mouse]
+hide_when_typing = true

@@ -3,6 +3,7 @@ zed/*
 configstore/*
 neofetch/*
 gtk-2.0/*
+htop/*
 nvim/lazy-lock.json
 .DS_Store
 .zip
