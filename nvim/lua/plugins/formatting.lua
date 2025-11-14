@@ -8,7 +8,7 @@ return {
       javascript = { "eslint_d" },
       javascriptreact = { "eslint_d" },
       vue = { "eslint_d", "stylelint" },
-      go = { "gofmt", "goimports", "golines" },
+      go = { "golines", "golangci-lint" },
       html = { "eslint_d" },
     },
   },

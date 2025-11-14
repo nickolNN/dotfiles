@@ -12,7 +12,7 @@ map("n", "<leader>fT", function()
 end, { desc = "Terminal (Root Dir)" })
 
 map("n", "<c-/>", function()
-  Snacks.terminal()
+  Snacks.terminal(nil, { win = { position = "right" } })
 end, { desc = "Terminal (cwd)" })
 
 map("n", "<c-_>", function()
