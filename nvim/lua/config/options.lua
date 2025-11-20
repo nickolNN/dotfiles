@@ -3,3 +3,4 @@
 -- Add any additional options here
 local o = vim.o
 o.cursorlineopt = "both" -- to enable cursorline!
+o.colorcolumn = "100"
