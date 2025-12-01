@@ -4,6 +4,7 @@ return {
   opts = {
     views = {
       hover = {
+        position = { row = 2, col = 0 },
         border = {
           style = "rounded",
         },

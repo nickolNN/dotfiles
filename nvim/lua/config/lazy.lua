@@ -53,3 +53,5 @@ require("lazy").setup({
     },
   },
 })
+-- disable autochdir
+vim.g.root_spec = { "cwd" }
