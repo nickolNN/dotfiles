@@ -4,6 +4,7 @@ configstore/*
 neofetch/*
 gtk-2.0/*
 htop/*
+tmux/plugins
 nvim/lazy-lock.json
 .DS_Store
 .zip
