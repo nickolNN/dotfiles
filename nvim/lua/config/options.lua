@@ -4,3 +4,4 @@
 local o = vim.o
 o.cursorlineopt = "both" -- to enable cursorline!
 o.colorcolumn = "100"
+vim.opt.sessionoptions = "buffers,curdir,folds,help,tabpages,winsize,winpos,terminal,localoptions"

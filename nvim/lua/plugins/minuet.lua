@@ -16,10 +16,10 @@ return {
             return openai_api_key
           end,
           end_point = openai_base_endpoint .. "/v1/chat/completions",
-          model = "autocomplete/qwen2.5-coder:7b",
+          model = "Qwen2.5-Coder-7B-Instruct-fp8",
           stream = true,
           optional = {
-            max_tokens = 150,
+            max_tokens = 2000,
             top_p = 0.9,
           },
         },
@@ -28,7 +28,7 @@ return {
             return openai_api_key
           end,
           end_point = openai_base_endpoint .. "/completions",
-          model = "autocomplete/qwen2.5-coder:7b",
+          model = "Qwen2.5-Coder-7B-Instruct-fp8",
           stream = true,
           template = {
             prompt = function(context_before_cursor, context_after_cursor, _)
@@ -41,7 +41,7 @@ return {
             suffix = false,
           },
           optional = {
-            max_tokens = 150,
+            max_tokens = 2000,
             top_p = 0.9,
           },
         },
