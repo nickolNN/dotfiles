@@ -8,7 +8,8 @@ normal = { family = "FiraCode Nerd Font", style="Retina" }
 [window]
 option_as_alt = "Both"
 decorations_theme_variant = "Dark"
-# opacity = 0.95
+opacity = 0.8
+blur = true
 title = "Алакритя"
 dynamic_title = true
 resize_increments = true
