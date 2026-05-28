@@ -6,6 +6,9 @@ return {
       enabled = false,
     },
     servers = {
+      eslint = {
+        format = false,
+      },
       json = {
         filetypes = { "json" },
       },
