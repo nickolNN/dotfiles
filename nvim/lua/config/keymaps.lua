@@ -18,3 +18,5 @@ end, { desc = "Terminal (cwd)" })
 map("n", "<c-_>", function()
   Snacks.terminal(nil, { cwd = LazyVim.root() })
 end, { desc = "which_key_ignore" })
+
+map("t", "<C-[>", [[<C-\><C-n>]], { desc = "Terminal: Escape to Normal", noremap = true })
