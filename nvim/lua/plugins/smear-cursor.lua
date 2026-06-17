@@ -1,6 +1,6 @@
 return {
   "sphamba/smear-cursor.nvim",
-  enabled = false,
+  enabled = true,
   opts = {
     time_interval = 8,
     cursor_color = "none",
