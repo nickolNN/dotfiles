@@ -10,6 +10,19 @@ local kilo_win = nil
 -- 1. KILO CODE WINDOW AND TERMINAL MANAGEMENT
 -- ==========================================================================
 
+-- Helper: close all terminal buffers related to kilo
+local function close_kilo_buffers()
+  local bufs = vim.api.nvim_list_bufs()
+  for _, buf in ipairs(bufs) do
+    if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "terminal" then
+      local buf_name = vim.api.nvim_buf_get_name(buf)
+      if string.find(buf_name, "kilo") then
+        vim.api.nvim_buf_delete(buf, { force = true })
+      end
+    end
+  end
+end
+
 local function toggle_kilo()
   -- If Kilo window is already open — close it
   if kilo_win and vim.api.nvim_win_is_valid(kilo_win) then
@@ -27,6 +40,9 @@ local function toggle_kilo()
   if kilo_buf and vim.api.nvim_buf_is_valid(kilo_buf) then
     vim.api.nvim_win_set_buf(kilo_win, kilo_buf)
   else
+    -- Close any existing kilo buffers before creating a new one
+    close_kilo_buffers()
+
     -- Launch your 'kilo' utility in Neovim terminal mode
     vim.cmd("terminal kilo .")
     kilo_buf = vim.api.nvim_get_current_buf()
