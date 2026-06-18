@@ -18,9 +18,12 @@ local function activeChannelFor(buffer)
 end
 
 local function findSession(state)
-  if state.kilo_chan and vim.api.nvim_buf_is_valid(state.kilo_buf) then
-    return state.kilo_buf, state.kilo_chan
-  end
+  if state.kilo_chan and state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
+      local info = vim.api.nvim_get_chan_info(state.kilo_chan)
+      if info and info.id then
+        return state.kilo_buf, state.kilo_chan
+      end
+    end
 
   local channels = vim.api.nvim_list_chans()
   for _, chan in ipairs(channels) do
@@ -60,8 +63,10 @@ end
 local function closeActiveWindow(state)
   if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
     vim.api.nvim_win_close(state.kilo_win, true)
-    state.kilo_win = nil
   end
+  state.kilo_win = nil
+  state.kilo_buf = nil
+  state.kilo_chan = nil
 end
 
 local function setupNewBuffer(state)
