@@ -33,6 +33,33 @@ return function(terminal)
     terminal:focusActiveTerminal()
   end
 
+  local function _diagnostics_from_lsp()
+    local buf = vim.api.nvim_get_current_buf()
+    local lnum = vim.api.nvim_win_get_cursor(0)[1] - 1
+    local diags = vim.diagnostic.get(buf, {
+      lnum = lnum,
+      severity = { vim.diagnostic.severity.ERROR, vim.diagnostic.severity.WARN },
+    })
+    if not diags or #diags == 0 then
+      return nil
+    end
+    local msgs = {}
+    for _, d in ipairs(diags) do
+      local parts = {}
+      if d.code then
+        table.insert(parts, "[" .. d.code .. "]")
+      end
+      if d.message then
+        table.insert(parts, d.message)
+      end
+      if d.source then
+        table.insert(parts, "(source: " .. d.source .. ")")
+      end
+      table.insert(msgs, table.concat(parts, " "))
+    end
+    return table.concat(msgs, " | ")
+  end
+
   local function _fn_name_from_lsp()
     local params = vim.lsp.util.make_position_params(0, "utf-32")
     local ok, resp = pcall(vim.lsp.buf_request_sync, 0, "textDocument/documentSymbol", params, 1000)
@@ -131,7 +158,12 @@ return function(terminal)
     local line_number = vim.api.nvim_win_get_cursor(0)[1]
     local fn_name = fn_name_under_cursor()
     local relative_path = get_relative_path()
-    local text_to_send = "@" .. relative_path .. " line " .. line_number .. " (function: " .. fn_name .. ")\n"
+    local text_to_send = "@" .. relative_path .. " line " .. line_number .. " (function: " .. fn_name .. ")"
+    local diag_info = _diagnostics_from_lsp()
+    if diag_info then
+      text_to_send = text_to_send .. " [errors/warnings: " .. diag_info .. "]"
+    end
+    text_to_send = text_to_send .. "\n"
     vim.api.nvim_chan_send(chan, text_to_send)
     _focus_terminal()
     vim.notify("Function context added to Kilo: " .. fn_name, vim.log.levels.INFO)
