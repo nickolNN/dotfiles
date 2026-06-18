@@ -14,6 +14,11 @@ return function(state, terminal, file_sender)
     file_sender.send_current_file(state, terminal)
   end, vim.tbl_extend("force", opts, { desc = "Send current file to Kilo" }))
 
+  -- <leader>kd — Send current file's containing folder to Kilo
+  map("n", "<leader>kd", function()
+    file_sender.send_current_file_containing_folder(state, terminal)
+  end, vim.tbl_extend("force", opts, { desc = "Send current file folder to Kilo" }))
+
   -- <leader>kl — Send current file with cursor line number to Kilo
   map("n", "<leader>kl", function()
     file_sender.send_current_file_with_line(state, terminal)
