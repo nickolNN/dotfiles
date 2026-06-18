@@ -28,4 +28,9 @@ return function(terminal, key_handlers)
   map("n", "<leader>kl", function()
     key_handlers.send_current_file_with_line()
   end, vim.tbl_extend("force", opts, { desc = "Send current file + line to Kilo" }))
+
+  -- <leader>ka — Send all buffer diagnostics to Kilo
+  map("n", "<leader>ka", function()
+    key_handlers.send_all_diagnostics()
+  end, vim.tbl_extend("force", opts, { desc = "Send all diagnostics to Kilo" }))
 end
