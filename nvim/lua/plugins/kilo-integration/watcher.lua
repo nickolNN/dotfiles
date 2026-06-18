@@ -63,4 +63,8 @@ local function setup_dir_cleanup(watch_group, state)
   })
 end
 
-return { setup_autocmds = setup_autocmds, start_dir_watch = start_dir_watch, setup_dir_cleanup = setup_dir_cleanup }
+return {
+  setup_autocmds = setup_autocmds,
+  start_dir_watch = start_dir_watch,
+  setup_dir_cleanup = setup_dir_cleanup,
+}

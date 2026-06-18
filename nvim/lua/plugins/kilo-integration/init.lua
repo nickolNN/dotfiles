@@ -12,8 +12,8 @@ local state = {
 }
 
 -- Wire modules together (module-path requires)
-local terminal = require("plugins.kilo-integration.terminal")
-local file_sender = require("plugins.kilo-integration.send_file")
+local terminal = require("plugins.kilo-integration.terminal")(state)
+local file_sender = require("plugins.kilo-integration.send_file")(terminal)
 local watcher = require("plugins.kilo-integration.watcher")
 
 -- Initialize
@@ -23,7 +23,7 @@ watcher.start_dir_watch(state)
 watcher.setup_dir_cleanup(state.watch_group, state)
 
 -- Apply keymaps
-require("plugins.kilo-integration.keymaps")(state, terminal, file_sender)
+require("plugins.kilo-integration.keymaps")(terminal, file_sender)
 
 -- Guard
 vim.g.kilo_integration_loaded = true
