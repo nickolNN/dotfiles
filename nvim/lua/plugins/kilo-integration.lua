@@ -4,7 +4,9 @@
 
 -- Guard: lazy.nvim will load this file as a plugin spec.
 -- Return early to avoid userdata fields in the module table.
-if vim.g.kilo_integration_loaded then return end
+if vim.g.kilo_integration_loaded then
+  return
+end
 
 -- Magic constants
 local KILO_PATTERN = "kilo"
@@ -36,27 +38,27 @@ local function find_kilo_terminal()
   -- Search for the terminal buffer
   local chans = vim.api.nvim_list_chans()
   for _, chan in ipairs(chans) do
-      if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
-        local buf_name = vim.api.nvim_buf_get_name(chan.buf)
-        if string.find(buf_name, TERM_PREFIX) and string.find(buf_name, KILO_PATTERN) then
-          state.kilo_buf = chan.buf
-          state.kilo_chan = chan.id
-          return chan.buf, chan.id
-        end
+    if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
+      local buf_name = vim.api.nvim_buf_get_name(chan.buf)
+      if string.find(buf_name, TERM_PREFIX) and string.find(buf_name, KILO_PATTERN) then
+        state.kilo_buf = chan.buf
+        state.kilo_chan = chan.id
+        return chan.buf, chan.id
       end
     end
+  end
 
   -- Fall back to checking old state variable
   if state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
-      for _, chan in ipairs(chans) do
-        if chan.buf == state.kilo_buf then
-          state.kilo_chan = chan.id
-          return state.kilo_buf, chan.id
-        end
+    for _, chan in ipairs(chans) do
+      if chan.buf == state.kilo_buf then
+        state.kilo_chan = chan.id
+        return state.kilo_buf, chan.id
       end
     end
+  end
 
-    return nil, nil
+  return nil, nil
 end
 
 -- Helper: close all terminal buffers related to kilo
@@ -72,6 +74,16 @@ local function close_kilo_buffers()
   end
 end
 
+local function new_kilo_buffer()
+  close_kilo_buffers()
+  vim.cmd("terminal kilo .")
+  state.kilo_buf = vim.api.nvim_get_current_buf()
+  vim.bo[state.kilo_buf].bufhidden = "hide"
+  local win = vim.api.nvim_get_current_win()
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+end
+
 local function toggle_kilo()
   -- If Kilo window is already open — close it
   if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
@@ -80,7 +92,6 @@ local function toggle_kilo()
     return
   end
 
-  -- Create a vertical split on the right with 45 chars width
   vim.cmd("vsplit")
   state.kilo_win = vim.api.nvim_get_current_win()
 
@@ -88,17 +99,7 @@ local function toggle_kilo()
   if state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
     vim.api.nvim_win_set_buf(state.kilo_win, state.kilo_buf)
   else
-    -- Close any existing kilo buffers before creating a new one
-    close_kilo_buffers()
-
-    -- Launch your 'kilo' utility in Neovim terminal mode
-    vim.cmd("terminal kilo .")
-    state.kilo_buf = vim.api.nvim_get_current_buf()
-
-    -- Buffer settings: hide on window close, disable line numbers
-    vim.bo[state.kilo_buf].bufhidden = "hide"
-    vim.wo[state.kilo_win].number = false
-    vim.wo[state.kilo_win].relativenumber = false
+    new_kilo_buffer()
   end
 
   -- Automatically enter insert mode (Terminal Mode) for input
@@ -184,9 +185,6 @@ end
 -- DISK CHANGE MONITORING AND SYNCHRONIZATION (AI -> NVIM)
 -- ==========================================================================
 
--- Allow Neovim to automatically reload changed files
-vim.o.autoread = true
-
 -- Autocmd to force Neovim buffers to refresh when AI works
 state.watch_group = vim.api.nvim_create_augroup("KiloSyncGroup", { clear = true })
 vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorMoved", "CursorHold" }, {
@@ -242,6 +240,9 @@ local function start_dir_watch()
   end
 end
 
+-- Initialize folder watching
+start_dir_watch()
+
 -- ==========================================================================
 -- KEYMAPPINGS ASSIGNMENT
 -- ==========================================================================
@@ -250,10 +251,12 @@ local map = vim.keymap.set
 local opts = { noremap = true, silent = true }
 
 -- <leader>kk — Show / hide Kilo Code chat panel
-map("n", "<leader>kk", toggle_kilo, vim.tbl_extend("force", opts, { desc = "Toggle Kilo TUI Panel" }))
+map("n", "<leader>kk", toggle_kilo,
+  vim.tbl_extend("force", opts, { desc = "Toggle Kilo TUI Panel" }))
 
 -- <leader>kf — Copy current file path and paste into Kilo as @-mention
-map("n", "<leader>kf", send_current_file_to_kilo, vim.tbl_extend("force", opts, { desc = "Send current file to Kilo" }))
+map("n", "<leader>kf", send_current_file_to_kilo,
+  vim.tbl_extend("force", opts, { desc = "Send current file to Kilo" }))
 
 -- <leader>kl — Send current file with cursor line number to Kilo
 map(
@@ -278,15 +281,14 @@ vim.api.nvim_create_autocmd("DirChanged", {
   end,
 })
 
--- Initialize folder watching
-start_dir_watch()
-
 -- ==========================================================================
 -- MODULE PATTERN (required by lazy.nvim spec loader)
 -- ==========================================================================
 
 -- Return M to follow lazy.nvim plugin spec pattern
 -- Only load once to avoid returning userdata in the module table
-if vim.g.kilo_integration_loaded then return end
+if vim.g.kilo_integration_loaded then
+  return
+end
 vim.g.kilo_integration_loaded = true
 return M
