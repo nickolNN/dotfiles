@@ -1,0 +1,21 @@
+-- Keybindings for Kilo integration
+
+return function(state, terminal, file_sender)
+  local map = vim.keymap.set
+  local opts = { noremap = true, silent = true }
+
+  -- <leader>kk — Show / hide Kilo Code chat panel
+  map("n", "<leader>kk", function()
+    terminal.toggle(state)
+  end, vim.tbl_extend("force", opts, { desc = "Toggle Kilo TUI Panel" }))
+
+  -- <leader>kf — Copy current file path and paste into Kilo as @-mention
+  map("n", "<leader>kf", function()
+    file_sender.send_current_file(state, terminal)
+  end, vim.tbl_extend("force", opts, { desc = "Send current file to Kilo" }))
+
+  -- <leader>kl — Send current file with cursor line number to Kilo
+  map("n", "<leader>kl", function()
+    file_sender.send_current_file_with_line(state, terminal)
+  end, vim.tbl_extend("force", opts, { desc = "Send current file + line to Kilo" }))
+end
