@@ -19,11 +19,11 @@ end
 
 local function findSession(state)
   if state.kilo_chan and state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
-      local info = vim.api.nvim_get_chan_info(state.kilo_chan)
-      if info and info.id then
-        return state.kilo_buf, state.kilo_chan
-      end
+    local info = vim.api.nvim_get_chan_info(state.kilo_chan)
+    if info and info.id then
+      return state.kilo_buf, state.kilo_chan
     end
+  end
 
   local channels = vim.api.nvim_list_chans()
   for _, chan in ipairs(channels) do
@@ -65,6 +65,8 @@ local function closeActiveWindow(state)
     vim.api.nvim_win_close(state.kilo_win, true)
   end
   state.kilo_win = nil
+  -- Keep kilo_buf/kilo_chan so findSession reuses the existing terminal
+  -- buffer instead of closing and recreating it on each toggle.
   state.kilo_buf = nil
   state.kilo_chan = nil
 end
@@ -79,7 +81,11 @@ local function setupNewBuffer(state)
 end
 
 local function ensureSession(state)
-  if findSession(state) then
+  local buf, chan = findSession(state)
+  if buf and chan then
+    vim.api.nvim_win_set_buf(state.kilo_win, buf)
+    state.kilo_buf = buf
+    state.kilo_chan = chan
     return
   end
   closeAllKiloBuffers()
