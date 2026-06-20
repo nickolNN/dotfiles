@@ -106,36 +106,48 @@ local function _format_diagnostic_part(d, include_line_info)
   return table.concat(parts, " | ")
 end
 
-local function _diagnostics_from_lsp()
+local function _get_diagnostics(filter)
   local diags = vim.diagnostic.get(0, {
     severity = { min = vim.diagnostic.severity.HINT },
   })
   if #diags == 0 then
     return nil
   end
+
   local parts = {}
-  -- Only include errors and warnings for the under-cursor context
   for _, d in ipairs(diags) do
-    if d.severity == vim.diagnostic.severity.ERROR or d.severity == vim.diagnostic.severity.WARN then
+    if not filter or d.lnum == filter then
       table.insert(parts, _format_diagnostic_part(d, true))
     end
   end
+
   if #parts == 0 then
+    return nil
+  end
+  return parts
+end
+
+local function _diagnostics_for_file()
+  local parts = _get_diagnostics(nil)
+  if not parts then
+    return nil
+  end
+  return parts
+end
+
+local function _diagnostics_for_line()
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  local parts = _get_diagnostics(line - 1)
+  if not parts then
     return nil
   end
   return table.concat(parts, "; ")
 end
 
 local function _all_diagnostics()
-  local diags = vim.diagnostic.get(0, {
-    severity = { min = vim.diagnostic.severity.HINT },
-  })
-  if #diags == 0 then
+  local parts = _diagnostics_for_file()
+  if not parts then
     return nil
-  end
-  local parts = {}
-  for _, d in ipairs(diags) do
-    table.insert(parts, _format_diagnostic_part(d, true))
   end
   return table.concat(parts, "\n")
 end
@@ -155,7 +167,7 @@ return function(terminal)
     local fn_name = fn_name_under_cursor()
     local relative_path = buffer.get_relative_path()
     local text_to_send = "@" .. relative_path .. " line " .. line_number .. " (function: " .. fn_name .. ")"
-    local diag_info = _diagnostics_from_lsp()
+    local diag_info = _diagnostics_for_line()
     if diag_info then
       text_to_send = text_to_send .. " [errors/warnings: " .. diag_info .. "]"
     end
