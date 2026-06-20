@@ -3,11 +3,11 @@
 local KILO_PATTERN = "kilo"
 local TERM_PREFIX = "term://"
 
-local function isKiloTerminal(bufferName)
+local function is_kilo_terminal(bufferName)
   return bufferName:find(TERM_PREFIX, 1, true) and bufferName:find(KILO_PATTERN, 1, true)
 end
 
-local function activeChannelFor(buffer)
+local function _active_channel_for(buffer)
   local channels = vim.api.nvim_list_chans()
   for _, chan in ipairs(channels) do
     if chan.buf == buffer then
@@ -17,7 +17,7 @@ local function activeChannelFor(buffer)
   return nil
 end
 
-local function findSession(state)
+local function _find_session(state)
   if state.kilo_chan and state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
     local info = vim.api.nvim_get_chan_info(state.kilo_chan)
     if info and info.id then
@@ -29,7 +29,7 @@ local function findSession(state)
   for _, chan in ipairs(channels) do
     if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
       local bufferName = vim.api.nvim_buf_get_name(chan.buf)
-      if isKiloTerminal(bufferName) then
+      if is_kilo_terminal(bufferName) then
         state.kilo_buf = chan.buf
         state.kilo_chan = chan.id
         return chan.buf, chan.id
@@ -38,7 +38,7 @@ local function findSession(state)
   end
 
   if state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
-    local channel = activeChannelFor(state.kilo_buf)
+    local channel = _active_channel_for(state.kilo_buf)
     if channel then
       state.kilo_chan = channel
       return state.kilo_buf, channel
@@ -48,30 +48,30 @@ local function findSession(state)
   return nil, nil
 end
 
-local function closeAllKiloBuffers()
+local function _close_all_kilo_buffers()
   local buffers = vim.api.nvim_list_bufs()
   for _, buffer in ipairs(buffers) do
     if vim.api.nvim_buf_is_valid(buffer) and vim.bo[buffer].buftype == "terminal" then
       local bufferName = vim.api.nvim_buf_get_name(buffer)
-      if isKiloTerminal(bufferName) then
+      if is_kilo_terminal(bufferName) then
         vim.api.nvim_buf_delete(buffer, { force = true })
       end
     end
   end
 end
 
-local function closeActiveWindow(state)
+local function _close_active_window(state)
   if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
     vim.api.nvim_win_close(state.kilo_win, true)
   end
   state.kilo_win = nil
-  -- Keep kilo_buf/kilo_chan so findSession reuses the existing terminal
+  -- Keep kilo_buf/kilo_chan so _find_session reuses the existing terminal
   -- buffer instead of closing and recreating it on each toggle.
   state.kilo_buf = nil
   state.kilo_chan = nil
 end
 
-local function setupNewBuffer(state)
+local function _setup_new_buffer(state)
   vim.cmd("terminal kilo .")
   state.kilo_buf = vim.api.nvim_get_current_buf()
   vim.bo[state.kilo_buf].bufhidden = "hide"
@@ -80,19 +80,19 @@ local function setupNewBuffer(state)
   vim.wo[window].relativenumber = false
 end
 
-local function ensureSession(state)
-  local buf, chan = findSession(state)
+local function _ensure_session(state)
+  local buf, chan = _find_session(state)
   if buf and chan then
     vim.api.nvim_win_set_buf(state.kilo_win, buf)
     state.kilo_buf = buf
     state.kilo_chan = chan
     return
   end
-  closeAllKiloBuffers()
-  setupNewBuffer(state)
+  _close_all_kilo_buffers()
+  _setup_new_buffer(state)
 end
 
-local function focusActiveTerminal(state)
+local function _focus_active_terminal(state)
   if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
     vim.api.nvim_set_current_win(state.kilo_win)
     vim.cmd("startinsert")
@@ -113,7 +113,7 @@ return function(initialState)
 
   Module.toggle = function()
     if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
-      closeActiveWindow(state)
+      _close_active_window(state)
       return
     end
 
@@ -123,18 +123,18 @@ return function(initialState)
     if state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
       vim.api.nvim_win_set_buf(state.kilo_win, state.kilo_buf)
     else
-      ensureSession(state)
+      _ensure_session(state)
     end
 
     vim.cmd("startinsert")
   end
 
   Module.find = function()
-    return findSession(state)
+    return _find_session(state)
   end
 
-  Module.focusActiveTerminal = function()
-    return focusActiveTerminal(state)
+  Module.focus_active_terminal = function()
+    return _focus_active_terminal(state)
   end
 
   return Module
