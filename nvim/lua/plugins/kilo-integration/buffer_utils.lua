@@ -11,10 +11,17 @@ end
 local function validate_buffer()
   local path = get_relative_path()
   if path == "" or vim.bo.buftype == "terminal" then
-    vim.notify(NOT_A_FILE_MSG, vim.log.levels.WARN)
     return false
   end
   return true
+end
+
+local function validate_buffer_with_notify(msg)
+  local result = validate_buffer()
+  if not result then
+    vim.notify(msg, vim.log.levels.WARN)
+  end
+  return result
 end
 
 local function get_channel(terminal)
@@ -27,7 +34,7 @@ local function get_channel(terminal)
 end
 
 local function ensure_context(terminal)
-  if not validate_buffer() then
+  if not validate_buffer_with_notify(NOT_A_FILE_MSG) then
     return
   end
   local chan = get_channel(terminal)
@@ -39,5 +46,7 @@ end
 
 return {
   get_relative_path = get_relative_path,
+  validate_buffer = validate_buffer,
+  validate_buffer_with_notify = validate_buffer_with_notify,
   ensure_context = ensure_context,
 }

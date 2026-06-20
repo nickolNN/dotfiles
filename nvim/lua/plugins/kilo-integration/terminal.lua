@@ -17,24 +17,25 @@ local function _active_channel_for(buffer)
   return nil
 end
 
-local function _find_session(state)
-  if state.kilo_chan and state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
-    local info = vim.api.nvim_get_chan_info(state.kilo_chan)
-    if info and info.id then
-      return state.kilo_buf, state.kilo_chan
-    end
-  end
-
+local function find_kilo_terminal()
   local channels = vim.api.nvim_list_chans()
   for _, chan in ipairs(channels) do
     if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
       local bufferName = vim.api.nvim_buf_get_name(chan.buf)
       if is_kilo_terminal(bufferName) then
-        state.kilo_buf = chan.buf
-        state.kilo_chan = chan.id
         return chan.buf, chan.id
       end
     end
+  end
+  return nil, nil
+end
+
+local function _find_session(state)
+  local buf, chan = find_kilo_terminal()
+  if buf and chan then
+    state.kilo_buf = buf
+    state.kilo_chan = chan
+    return buf, chan
   end
 
   if state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
@@ -130,7 +131,7 @@ return function(initialState)
   end
 
   Module.find = function()
-    return _find_session(state)
+    return find_kilo_terminal()
   end
 
   Module.focus_active_terminal = function()

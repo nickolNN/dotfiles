@@ -2,6 +2,11 @@
 
 local DEBOUNCE_MS = 300
 
+-- Get the event loop handle (libuv)
+local function get_uv()
+  return vim.loop or vim.uv
+end
+
 -- Check if any window (other than Kilo's) has the given buffer open
 local function find_window_with_buf(bufnr, kilo_win)
   local wins = vim.api.nvim_list_wins()
@@ -76,65 +81,38 @@ local function handle_file_event(state, full_path)
   move_cursor_to_end(kilo_win, buf)
 end
 
-local function start_dir_watch(state)
-  local last_changed = 0
-  local debounce_timer = nil
+local function schedule_file_event(state, filename)
+  local full_path = state.watch_dir .. "/" .. filename
+  if should_ignore(full_path) then return end
 
-  local uv = vim.loop or vim.uv
+  local uv = get_uv()
+  local debounce_timer = uv.new_timer()
+  if debounce_timer then
+    debounce_timer:start(
+      DEBOUNCE_MS, 0, vim.schedule_wrap(function()
+        debounce_timer:stop()
+        debounce_timer:close()
+        debounce_timer = nil
+        handle_file_event(state, full_path)
+      end)
+    )
+  end
+end
+
+local function start_dir_watch(state)
+  local uv = get_uv()
   local watch_dir = vim.fn.getcwd()
   state.watch_dir = watch_dir
-  local handle = uv.new_fs_event()
-  state.fs_handle = handle
+  state.fs_handle = uv.new_fs_event()
 
-  -- Schedule debounced processing of a file system event using closure-captured state
-  local function schedule_debounced_event(filename)
-    local full_path = watch_dir .. "/" .. filename
-    local now = uv.now()
-
-    -- Defer work to vim main thread for safe API access
-    local deferred = vim.schedule_wrap(function()
-      if should_ignore(full_path) then
-        return
-      end
-      handle_file_event(state, full_path)
-    end)
-
-    if debounce_timer then
+  local callback = vim.schedule_wrap(function(err, filename, events)
+    if err or not filename or not (events.change or events.rename) then
       return
     end
-    if now - last_changed < DEBOUNCE_MS then
-      debounce_timer = uv.new_timer()
-      if debounce_timer then
-        debounce_timer:start(
-          DEBOUNCE_MS,
-          0,
-          vim.schedule_wrap(function()
-            if debounce_timer then
-              debounce_timer:stop()
-              debounce_timer:close()
-              debounce_timer = nil
-            end
-            last_changed = uv.now()
-            deferred()
-          end)
-        )
-      end
-      return
-    end
-    last_changed = now
-    deferred()
-  end
+    schedule_file_event(state, filename)
+  end)
 
-  if handle then
-    local callback = vim.schedule_wrap(function(err, filename, events)
-      if err or not filename or not (events.change or events.rename) then
-        return
-      end
-      schedule_debounced_event(filename)
-    end)
-
-    uv.fs_event_start(handle, watch_dir, {}, callback)
-  end
+  uv.fs_event_start(state.fs_handle, watch_dir, {}, callback)
 end
 
 local function setup_dir_cleanup(watch_group, state)
@@ -142,7 +120,7 @@ local function setup_dir_cleanup(watch_group, state)
     group = watch_group,
     callback = function()
       if state.fs_handle then
-        local uv = vim.loop or vim.uv
+        local uv = get_uv()
         uv.fs_event_stop(state.fs_handle)
         state.fs_handle = nil
       end

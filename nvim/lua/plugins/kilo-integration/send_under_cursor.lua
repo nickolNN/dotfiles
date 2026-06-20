@@ -2,6 +2,28 @@
 
 local buffer = require("plugins.kilo-integration.buffer_utils")
 
+local function walk_tree(nodes, cursor_pos)
+  local lnum = cursor_pos[1] - 1
+  local col = cursor_pos[2]
+  for _, node in ipairs(nodes) do
+    local sl = node.range.start.line
+    local sc = node.range.start.character
+    local el = node.range["end"].line
+    local ec = node.range["end"].character
+    if lnum >= sl and lnum <= el and col >= sc and col <= ec then
+      local name = node.name
+      if name then
+        return name
+      end
+      local found = walk_tree(node.children or {}, {lnum, col})
+      if found then
+        return found
+      end
+    end
+  end
+  return nil
+end
+
 local function _fn_name_from_lsp()
   local params = vim.lsp.util.make_position_params(0, "utf-32")
   local ok, resp = pcall(vim.lsp.buf_request_sync, 0, "textDocument/documentSymbol", params, 1000)
@@ -10,25 +32,11 @@ local function _fn_name_from_lsp()
   end
 
   local cursorpos = vim.api.nvim_win_get_cursor(0)
-  local lnum, col = cursorpos[1] - 1, cursorpos[2]
-
-  local function walk(syms)
-    for _, s in ipairs(syms) do
-      local sl, sc = s.range.start.line, s.range.start.character
-      local el, ec = s.range["end"].line, s.range["end"].character
-      if lnum >= sl and lnum <= el and col >= sc and col <= ec then
-        return s.name, walk(s.children or {})
-      end
-      local found = walk(s.children or {})
-      if found then
-        return found
-      end
-    end
-  end
+  local cursor_pos = {cursorpos[1] - 1, cursorpos[2]}
 
   for _, _, r in pairs(resp) do
     if r and r.result then
-      local name = walk(r.result)
+      local name = walk_tree(r.result, cursor_pos)
       if name then
         return name
       end
