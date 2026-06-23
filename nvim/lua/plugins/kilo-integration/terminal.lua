@@ -3,6 +3,7 @@
 local KILO_PATTERN = "kilo"
 local TERM_PREFIX = "term://"
 
+-- Low-level: buffer window detection
 local function is_kilo_terminal(bufferName)
   return bufferName:find(TERM_PREFIX, 1, true) and bufferName:find(KILO_PATTERN, 1, true)
 end
@@ -31,6 +32,7 @@ local function find_kilo_window()
   return best_win, best_buf, best_chan
 end
 
+-- Low-level: channel lookup
 local function find_channel_by_pattern(pattern)
   for _, chan in ipairs(vim.api.nvim_list_chans()) do
     if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
@@ -54,6 +56,11 @@ end
 
 local function find_kilo_terminal()
   return find_channel_by_pattern(KILO_PATTERN)
+end
+
+-- Session helpers
+local function _show_in_window(win, buf)
+  vim.api.nvim_win_set_buf(win, buf)
 end
 
 local function _find_cached_session(state)
@@ -82,21 +89,6 @@ local function _close_all_kilo_buffers()
       end
     end
   end
-end
-
-local function _close_active_window(state)
-  if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
-    vim.api.nvim_win_close(state.kilo_win, true)
-  end
-  state.kilo_win = nil
-  -- Clear references so toggle cycle re-triggers session detection.
-  -- The terminal buffer persists because bufhidden=hide prevents destroy-on-close.
-  state.kilo_buf = nil
-  state.kilo_chan = nil
-end
-
-local function _show_in_window(win, buf)
-  vim.api.nvim_win_set_buf(win, buf)
 end
 
 local function _setup_new_buffer(state)
@@ -147,9 +139,19 @@ local function _focus_active_terminal(state)
   return false
 end
 
+local function _close_active_window(state)
+  if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
+    vim.api.nvim_win_close(state.kilo_win, true)
+  end
+  state.kilo_win = nil
+  -- Clear references so toggle cycle re-triggers session detection.
+  -- The terminal buffer persists because bufhidden=hide prevents destroy-on-close.
+  state.kilo_buf = nil
+  state.kilo_chan = nil
+end
+
 return function(initialState)
   local Module = {}
-
   local state = initialState or {}
 
   Module.toggle = function()

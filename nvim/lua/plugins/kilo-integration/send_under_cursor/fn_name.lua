@@ -9,31 +9,43 @@ local FUNCTION_NODE_TYPES = {
   method = true,
 }
 
-local function walk_document_symbols(nodes, cursor_pos)
-  local lnum = cursor_pos[1]
-  local col = cursor_pos[2]
+local _LSP_TIMEOUT_MS = 1000
+local _LSP_POSITION_ENCODING = "utf-32"
+
+local function _walk_node(node, cursor_pos)
+  if not node then
+    return nil
+  end
+  local sl = node.range.start.line
+  local el = node.range["end"].line
+  if cursor_pos[1] < sl or cursor_pos[1] > el then
+    return nil
+  end
+  if node.name then
+    return node.name
+  end
+  for _, child in ipairs(node.children or {}) do
+    local found = _walk_node(child, cursor_pos)
+    if found then
+      return found
+    end
+  end
+  return nil
+end
+
+local function find_function_at_position(nodes, cursor_pos)
   for _, node in ipairs(nodes) do
-    local sl = node.range.start.line
-    local sc = node.range.start.character
-    local el = node.range["end"].line
-    local ec = node.range["end"].character
-    if lnum >= sl and lnum <= el and col >= sc and col <= ec then
-      local name = node.name
-      if name then
-        return name
-      end
-      local found = walk_document_symbols(node.children or {}, {lnum, col})
-      if found then
-        return found
-      end
+    local result = _walk_node(node, cursor_pos)
+    if result then
+      return result
     end
   end
   return nil
 end
 
 local function _fn_name_from_lsp()
-  local params = vim.lsp.util.make_position_params(0, "utf-32")
-  local ok, resp = pcall(vim.lsp.buf_request_sync, 0, "textDocument/documentSymbol", params, 1000)
+  local params = vim.lsp.util.make_position_params(0, _LSP_POSITION_ENCODING)
+  local ok, resp = pcall(vim.lsp.buf_request_sync, 0, "textDocument/documentSymbol", params, _LSP_TIMEOUT_MS)
   if not ok or not resp then
     return nil
   end
@@ -56,7 +68,7 @@ local function _fn_name_from_lsp()
   local best_name
   for _, node in ipairs(symbols) do
     if node.range.start.line == cursor_line then
-      local name = walk_document_symbols({node}, {cursor_line, cursor_col})
+      local name = find_function_at_position({node}, {cursor_line, cursor_col})
       if name then
         best_name = name
       end

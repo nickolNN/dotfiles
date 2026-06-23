@@ -1,3 +1,5 @@
+local LEADER_TOGGLE = "<leader>kk"
+
 local function get_relative_path()
   local full_path = vim.fn.expand("%:p")
   local cwd = vim.fn.getcwd()
@@ -16,21 +18,26 @@ end
 local function ensure_kilo_terminal(terminal)
   local _, chan = terminal.find()
   if not chan then
-    vim.notify("Kilo terminal is not running. Open it first with <leader>kk", vim.log.levels.WARN)
+    vim.notify("Kilo terminal is not running. Open it first with " .. LEADER_TOGGLE, vim.log.levels.WARN)
     return nil
   end
   return chan
 end
 
-local function get_cursor_line_number(win_id)
+local function get_cursor_line(win_id)
   win_id = win_id or 0
   local cursor = vim.api.nvim_win_get_cursor(win_id)
   return cursor[1]
+end
+
+local function make_file_reference(path, suffix)
+  return "@" .. path .. (suffix or " ")
 end
 
 return {
   get_relative_path = get_relative_path,
   buffer_is_valid = buffer_is_valid,
   ensure_kilo_terminal = ensure_kilo_terminal,
-  get_cursor_line = get_cursor_line_number,
+  get_cursor_line = get_cursor_line,
+  make_file_reference = make_file_reference,
 }

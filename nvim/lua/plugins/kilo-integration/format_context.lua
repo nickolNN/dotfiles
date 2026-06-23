@@ -1,18 +1,8 @@
--- Shared utilities for building and sending file/context references to Kilo
-
 local buffer = require("plugins.kilo-integration.context")
 
-local function make_file_ref(path, suffix)
-  return "@" .. path .. (suffix or " ")
-end
+-- Shared utilities for building and sending file/context references to Kilo
 
-local send_to_kilo = {}
-
-function send_to_kilo.make_file_reference(path, suffix)
-  return make_file_ref(path, suffix)
-end
-
-function send_to_kilo.send(terminal, text, message, opts)
+local function send(terminal, text, message, opts)
   opts = opts or {}
   if not buffer.buffer_is_valid() then
     vim.notify("Current buffer is not a file", vim.log.levels.WARN)
@@ -29,12 +19,17 @@ function send_to_kilo.send(terminal, text, message, opts)
   end
 end
 
-function send_to_kilo.send_file(terminal, message)
-  send_to_kilo.send(terminal, make_file_reference(buffer.get_relative_path(), " "), message)
-end
+return {
+  make_file_reference = buffer.make_file_reference,
 
-function send_to_kilo.send_file_with_suffix(terminal, suffix, message)
-  send_to_kilo.send(terminal, make_file_reference(buffer.get_relative_path(), suffix), message)
-end
+  send = send,
 
-return send_to_kilo
+  send_file = function(terminal, message)
+    send(terminal, buffer.make_file_reference(buffer.get_relative_path(), " "), message)
+  end,
+
+  send_file_with_suffix = function(terminal, suffix, message)
+    send(terminal, buffer.make_file_reference(buffer.get_relative_path(), suffix), message)
+  end
+}
+

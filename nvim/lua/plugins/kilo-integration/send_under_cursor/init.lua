@@ -40,51 +40,47 @@ return function(terminal)
     terminal:focus_active_terminal()
   end
 
-  local function send_under_cursor()
+  local function _send_if_valid(fn)
     if not buffer.buffer_is_valid() then
       vim.notify("Current buffer is not a file", vim.log.levels.WARN)
-      return
+      return false
     end
     local chan = buffer.ensure_kilo_terminal(terminal)
-    if not chan then
-      return
-    end
+    if not chan then return false end
+    return fn(chan)
+  end
 
-    local line_number = buffer.get_cursor_line()
-    local fn = fn_name.fn_name_under_cursor() or "<none>"
-    local relative_path = buffer.get_relative_path()
-    local text_to_send = "@" .. relative_path .. " line " .. line_number .. " (function: " .. fn .. ")"
-    local diag_parts = get_formatted_diagnostics(line_number - 1)
-    if diag_parts then
-      text_to_send = text_to_send .. " [errors/warnings: " .. table.concat(diag_parts, "; ") .. "]"
-    end
-    text_to_send = text_to_send .. "\n"
-    vim.api.nvim_chan_send(chan, text_to_send)
-    _focus_terminal()
-    vim.notify("Function context added to Kilo: " .. fn, vim.log.levels.INFO)
+  local function send_under_cursor()
+    _send_if_valid(function(chan)
+      local line_number = buffer.get_cursor_line()
+      local fn = fn_name.fn_name_under_cursor() or "<none>"
+      local relative_path = buffer.get_relative_path()
+      local text_to_send = "@" .. relative_path .. " line " .. line_number .. " (function: " .. fn .. ")"
+      local diag_parts = get_formatted_diagnostics(line_number - 1)
+      if diag_parts then
+        text_to_send = text_to_send .. " [errors/warnings: " .. table.concat(diag_parts, "; ") .. "]"
+      end
+      text_to_send = text_to_send .. "\n"
+      vim.api.nvim_chan_send(chan, text_to_send)
+      _focus_terminal()
+      vim.notify("Function context added to Kilo: " .. fn, vim.log.levels.INFO)
+    end)
   end
 
   local function send_all_diagnostics()
-    if not buffer.buffer_is_valid() then
-      vim.notify("Current buffer is not a file", vim.log.levels.WARN)
-      return
-    end
-    local chan = buffer.ensure_kilo_terminal(terminal)
-    if not chan then
-      return
-    end
+    _send_if_valid(function(chan)
+      local relative_path = buffer.get_relative_path()
+      local diag_parts = get_formatted_diagnostics(nil)
+      if not diag_parts then
+        vim.notify("No diagnostics found in current buffer", vim.log.levels.INFO)
+        return
+      end
 
-    local relative_path = buffer.get_relative_path()
-    local diag_parts = get_formatted_diagnostics(nil)
-    if not diag_parts then
-      vim.notify("No diagnostics found in current buffer", vim.log.levels.INFO)
-      return
-    end
-
-    local text_to_send = "fix all problems in @" .. relative_path .. ":\n" .. table.concat(diag_parts, "\n") .. "\n"
-    vim.api.nvim_chan_send(chan, text_to_send)
-    _focus_terminal()
-    vim.notify("All diagnostics sent to Kilo for: " .. relative_path, vim.log.levels.INFO)
+      local text_to_send = "fix all problems in @" .. relative_path .. ":\n" .. table.concat(diag_parts, "\n") .. "\n"
+      vim.api.nvim_chan_send(chan, text_to_send)
+      _focus_terminal()
+      vim.notify("All diagnostics sent to Kilo for: " .. relative_path, vim.log.levels.INFO)
+    end)
   end
 
   return {

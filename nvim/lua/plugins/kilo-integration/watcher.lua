@@ -89,6 +89,9 @@ local function start_dir_watch(state)
 
   local callback = vim.schedule_wrap(function(err, filename, events)
     if err or not filename or not (events.change or events.rename) then
+      if err then
+        vim.notify("Filesystem watch error: " .. tostring(err), vim.log.levels.ERROR)
+      end
       return
     end
     schedule_file_event(state, filename)

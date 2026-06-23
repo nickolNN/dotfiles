@@ -4,6 +4,8 @@ local context = require("plugins.kilo-integration.format_context")
 
 local buffer = require("plugins.kilo-integration.context")
 
+local LINE_CONTEXT_SUFFIX = " line "
+
 return function(terminal)
   return {
     send_current_file = function()
@@ -15,7 +17,7 @@ return function(terminal)
       context.send(
         terminal,
         context.make_file_reference(buffer.get_relative_path(),
-          " line " .. line_number .. "\n"),
+          LINE_CONTEXT_SUFFIX .. line_number .. "\n"),
         "File + line context added to Kilo"
       )
     end,
