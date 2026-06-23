@@ -2,11 +2,15 @@
 
 local buffer = require("plugins.kilo-integration.context")
 
-local function make_file_reference(path, suffix)
+local function make_file_ref(path, suffix)
   return "@" .. path .. (suffix or " ")
 end
 
 local send_to_kilo = {}
+
+function send_to_kilo.make_file_reference(path, suffix)
+  return make_file_ref(path, suffix)
+end
 
 function send_to_kilo.send(terminal, text, message, opts)
   opts = opts or {}
