@@ -7,22 +7,11 @@ local function is_kilo_terminal(bufferName)
   return bufferName:find(TERM_PREFIX, 1, true) and bufferName:find(KILO_PATTERN, 1, true)
 end
 
-local function _active_channel_for(buffer)
-  local channels = vim.api.nvim_list_chans()
-  for _, chan in ipairs(channels) do
-    if chan.buf == buffer then
-      return chan.id
-    end
-  end
-  return nil
-end
-
-local function find_kilo_terminal()
-  local channels = vim.api.nvim_list_chans()
-  for _, chan in ipairs(channels) do
+local function find_channel_by_pattern(pattern)
+  for _, chan in ipairs(vim.api.nvim_list_chans()) do
     if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
-      local bufferName = vim.api.nvim_buf_get_name(chan.buf)
-      if is_kilo_terminal(bufferName) then
+      local buffer_name = vim.api.nvim_buf_get_name(chan.buf)
+      if buffer_name:find(pattern, 1, true) then
         return chan.buf, chan.id
       end
     end
@@ -30,32 +19,33 @@ local function find_kilo_terminal()
   return nil, nil
 end
 
-local function _find_session(state)
-  local buf, chan = find_kilo_terminal()
-  if buf and chan then
-    state.kilo_buf = buf
-    state.kilo_chan = chan
-    return buf, chan
-  end
-
-  if state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
-    local channel = _active_channel_for(state.kilo_buf)
-    if channel then
-      state.kilo_chan = channel
-      return state.kilo_buf, channel
+local function find_channel_by_buffer(target_buf)
+  for _, chan in ipairs(vim.api.nvim_list_chans()) do
+    if chan.buf == target_buf then
+      return target_buf, chan.id
     end
   end
-
   return nil, nil
+end
+
+local function find_kilo_terminal()
+  return find_channel_by_pattern(KILO_PATTERN)
+end
+
+local function _find_cached_session(state)
+  if not state.kilo_buf or not vim.api.nvim_buf_is_valid(state.kilo_buf) then
+    return nil, nil
+  end
+  return find_channel_by_buffer(state.kilo_buf)
 end
 
 local function _close_all_kilo_buffers()
   local buffers = vim.api.nvim_list_bufs()
-  for _, buffer in ipairs(buffers) do
-    if vim.api.nvim_buf_is_valid(buffer) and vim.bo[buffer].buftype == "terminal" then
-      local bufferName = vim.api.nvim_buf_get_name(buffer)
+  for _, buf in ipairs(buffers) do
+    if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "terminal" then
+      local bufferName = vim.api.nvim_buf_get_name(buf)
       if is_kilo_terminal(bufferName) then
-        vim.api.nvim_buf_delete(buffer, { force = true })
+        vim.api.nvim_buf_delete(buf, { force = true })
       end
     end
   end
@@ -66,29 +56,42 @@ local function _close_active_window(state)
     vim.api.nvim_win_close(state.kilo_win, true)
   end
   state.kilo_win = nil
-  -- Keep kilo_buf/kilo_chan so _find_session reuses the existing terminal
-  -- buffer instead of closing and recreating it on each toggle.
+  -- Clear references so toggle cycle re-triggers session detection.
+  -- The terminal buffer persists because bufhidden=hide prevents destroy-on-close.
   state.kilo_buf = nil
   state.kilo_chan = nil
 end
 
+local function _show_in_window(win, buf)
+  vim.api.nvim_win_set_buf(win, buf)
+end
+
 local function _setup_new_buffer(state)
+  vim.cmd("vsplit")
+  state.kilo_win = vim.api.nvim_get_current_win()
   vim.cmd("terminal kilo .")
   state.kilo_buf = vim.api.nvim_get_current_buf()
   vim.bo[state.kilo_buf].bufhidden = "hide"
-  local window = vim.api.nvim_get_current_win()
-  vim.wo[window].number = false
-  vim.wo[window].relativenumber = false
+  vim.wo[state.kilo_win].number = false
+  vim.wo[state.kilo_win].relativenumber = false
 end
 
 local function _ensure_session(state)
-  local buf, chan = _find_session(state)
+  local buf, chan = find_kilo_terminal()
   if buf and chan then
-    vim.api.nvim_win_set_buf(state.kilo_win, buf)
     state.kilo_buf = buf
     state.kilo_chan = chan
+    _show_in_window(state.kilo_win, buf)
     return
   end
+
+  buf, chan = _find_cached_session(state)
+  if buf and chan then
+    state.kilo_chan = chan
+    _show_in_window(state.kilo_win, buf)
+    return
+  end
+
   _close_all_kilo_buffers()
   _setup_new_buffer(state)
 end
@@ -105,12 +108,7 @@ end
 return function(initialState)
   local Module = {}
 
-  local state = {}
-  if initialState then
-    state.kilo_buf = initialState.kilo_buf
-    state.kilo_chan = initialState.kilo_chan
-    state.kilo_win = initialState.kilo_win
-  end
+  local state = initialState or {}
 
   Module.toggle = function()
     if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
@@ -131,7 +129,7 @@ return function(initialState)
   end
 
   Module.find = function()
-    return find_kilo_terminal()
+    return find_channel_by_pattern(KILO_PATTERN)
   end
 
   Module.focus_active_terminal = function()

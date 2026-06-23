@@ -2,12 +2,12 @@
 
 local DEBOUNCE_MS = 300
 
--- Get the event loop handle (libuv)
-local function get_uv()
-  return vim.loop or vim.uv
+local function should_ignore(full_path)
+  if string.match(full_path, "[/\\]node_modules[/\\]") then return true end
+  if string.match(full_path, "[/\\]\\.git[/\\]") or string.match(full_path, "[/\\]\\.git$") then return true end
+  return false
 end
 
--- Check if any window (other than Kilo's) has the given buffer open
 local function find_window_with_buf(bufnr, kilo_win)
   local wins = vim.api.nvim_list_wins()
   for _, win in ipairs(wins) do
@@ -20,19 +20,6 @@ local function find_window_with_buf(bufnr, kilo_win)
   return nil
 end
 
--- Returns true if the path should be skipped (not a text file we watch)
-local function should_ignore(full_path)
-  if string.find(full_path, "node_modules") then
-    return true
-  end
-  if string.find(full_path, "%.git") then
-    return true
-  end
-  return false
-end
-
--- Move cursor to end of buffer in the window that has it open
--- Only activates if current window is kilo_win
 local function move_cursor_to_end(kilo_win, buf)
   local active_win = vim.api.nvim_get_current_win()
   if active_win ~= kilo_win then
@@ -48,23 +35,21 @@ local function move_cursor_to_end(kilo_win, buf)
   end
 end
 
--- Process a file event after debounce: handle new files and cursor navigation
 local function handle_file_event(state, full_path)
   local kilo_win = state.kilo_win
+  local canonical_path = vim.fs.realpath(full_path) or full_path
 
-  if vim.fn.bufexists(full_path) == 0 and vim.fn.filereadable(full_path) == 1 then
-    -- New file: create buffer. Content loads from disk on BufRead (file already on disk from Kilo write).
-    vim.fn.bufadd(full_path)
+  if vim.fn.bufexists(canonical_path) == 0 and vim.fn.filereadable(canonical_path) == 1 then
+    vim.fn.bufadd(canonical_path)
     vim.notify("Kilo created a new file: " .. vim.fn.fnamemodify(full_path, ":t"), vim.log.levels.INFO)
 
     if kilo_win and vim.api.nvim_win_is_valid(kilo_win) then
-      local buf = vim.fn.bufnr(full_path)
+      local buf = vim.fn.bufnr(canonical_path)
       move_cursor_to_end(kilo_win, buf)
     end
     return
   end
 
-  -- Existing file open in a window: force-reload content from disk
   local buf = vim.fn.bufnr(full_path)
   if not vim.api.nvim_buf_is_valid(buf) then
     return
@@ -85,22 +70,19 @@ local function schedule_file_event(state, filename)
   local full_path = state.watch_dir .. "/" .. filename
   if should_ignore(full_path) then return end
 
-  local uv = get_uv()
-  local debounce_timer = uv.new_timer()
-  if debounce_timer then
-    debounce_timer:start(
-      DEBOUNCE_MS, 0, vim.schedule_wrap(function()
-        debounce_timer:stop()
-        debounce_timer:close()
-        debounce_timer = nil
-        handle_file_event(state, full_path)
-      end)
-    )
+  if not state._file_event_timer then
+    state._file_event_timer = vim.uv.new_timer()
   end
+  state._file_event_timer:stop()
+
+  state._file_event_timer:start(DEBOUNCE_MS, 0, vim.schedule_wrap(function()
+    state._file_event_timer:stop()
+    handle_file_event(state, full_path)
+  end))
 end
 
 local function start_dir_watch(state)
-  local uv = get_uv()
+  local uv = vim.uv
   local watch_dir = vim.fn.getcwd()
   state.watch_dir = watch_dir
   state.fs_handle = uv.new_fs_event()
@@ -115,20 +97,9 @@ local function start_dir_watch(state)
   uv.fs_event_start(state.fs_handle, watch_dir, {}, callback)
 end
 
-local function setup_dir_cleanup(watch_group, state)
-  vim.api.nvim_create_autocmd("DirChanged", {
-    group = watch_group,
-    callback = function()
-      if state.fs_handle then
-        local uv = get_uv()
-        uv.fs_event_stop(state.fs_handle)
-        state.fs_handle = nil
-      end
-    end,
-  })
-end
+local function setup(state)
+  local watch_group = vim.api.nvim_create_augroup("KiloSyncGroup", { clear = true })
 
-local function setup_autocmds(watch_group)
   vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorMoved", "CursorHold" }, {
     group = watch_group,
     pattern = "*",
@@ -138,10 +109,27 @@ local function setup_autocmds(watch_group)
       end
     end,
   })
+
+  vim.api.nvim_create_autocmd("DirChanged", {
+    group = watch_group,
+    callback = function()
+      if state.fs_handle then
+        local uv = vim.uv
+        uv.fs_event_stop(state.fs_handle)
+        state.fs_handle = nil
+      end
+      if state._file_event_timer then
+        state._file_event_timer:stop()
+        state._file_event_timer:close()
+        state._file_event_timer = nil
+      end
+    end,
+  })
+
+  start_dir_watch(state)
+  return watch_group
 end
 
 return {
-  setup_autocmds = setup_autocmds,
-  start_dir_watch = start_dir_watch,
-  setup_dir_cleanup = setup_dir_cleanup,
+  setup = setup,
 }

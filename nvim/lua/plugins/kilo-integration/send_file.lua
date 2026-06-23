@@ -1,38 +1,29 @@
 -- Sending current file or file+line context to Kilo chat
 
-local buffer = require("plugins.kilo-integration.buffer_utils")
+local context = require("plugins.kilo-integration.format_context")
+
+local buffer = require("plugins.kilo-integration.context")
 
 return function(terminal)
-  local function send_context(text, message)
-    local chan = buffer.ensure_context(terminal)
-    if not chan then
-      return
-    end
-    vim.api.nvim_chan_send(chan, text)
-    terminal.focus_active_terminal()
-    vim.notify(message, vim.log.levels.INFO)
-  end
-
-  local function send_current_file_containing_folder()
-    local current_folder = (buffer.get_relative_path():match("(.*)/") or ".")
-    send_context("@" .. current_folder .. "/", "Folder added to Kilo context")
-  end
-
-  local function send_current_file_to_kilo()
-    send_context("@" .. buffer.get_relative_path() .. " ", "File added to Kilo context")
-  end
-
-  local function send_current_file_with_line()
-    local line_number = vim.api.nvim_win_get_cursor(0)[1]
-    send_context(
-      "@" .. buffer.get_relative_path() .. " line " .. line_number .. "\n",
-      "File + line context added to Kilo"
-    )
-  end
-
   return {
-    send_current_file = send_current_file_to_kilo,
-    send_current_file_with_line = send_current_file_with_line,
-    send_current_file_containing_folder = send_current_file_containing_folder,
+    send_current_file = function()
+      context.send_file(terminal, "File added to Kilo context")
+    end,
+
+    send_current_file_with_line = function()
+      local line_number = buffer.get_cursor_line()
+      context.send(
+        terminal,
+        context.make_file_reference(buffer.get_relative_path(),
+          " line " .. line_number .. "\n"),
+        "File + line context added to Kilo"
+      )
+    end,
+
+    send_current_file_containing_folder = function()
+      local relative_path = buffer.get_relative_path()
+      local current_folder = relative_path:match("(.*)/") or "."
+      context.send(terminal, "@" .. current_folder .. "/", "Folder added to Kilo context")
+    end,
   }
 end
