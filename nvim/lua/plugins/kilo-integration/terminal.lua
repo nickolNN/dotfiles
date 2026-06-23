@@ -7,6 +7,30 @@ local function is_kilo_terminal(bufferName)
   return bufferName:find(TERM_PREFIX, 1, true) and bufferName:find(KILO_PATTERN, 1, true)
 end
 
+local function find_kilo_window()
+  local wins = vim.api.nvim_list_wins()
+  local best_win, best_buf, best_chan = nil, nil, nil
+  for _, win in ipairs(wins) do
+    if vim.api.nvim_win_is_valid(win) then
+      local buf = vim.api.nvim_win_get_buf(win)
+      if buf and vim.api.nvim_buf_is_valid(buf) then
+        local buffer_name = vim.api.nvim_buf_get_name(buf)
+        if is_kilo_terminal(buffer_name) then
+          best_win, best_buf = win, buf
+          best_chan = nil
+          for _, chan in ipairs(vim.api.nvim_list_chans()) do
+            if chan.buf == buf then
+              best_chan = chan.id
+              break
+            end
+          end
+        end
+      end
+    end
+  end
+  return best_win, best_buf, best_chan
+end
+
 local function find_channel_by_pattern(pattern)
   for _, chan in ipairs(vim.api.nvim_list_chans()) do
     if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
@@ -34,6 +58,15 @@ end
 
 local function _find_cached_session(state)
   if not state.kilo_buf or not vim.api.nvim_buf_is_valid(state.kilo_buf) then
+    return nil, nil
+  end
+  -- Reject stale cached window: must be valid AND actually displaying the
+  -- cached buffer. After Neovim session restore the Lua state is nil but
+  -- the physical split may still exist with a different/buffer mismatch.
+  if not state.kilo_win or not vim.api.nvim_win_is_valid(state.kilo_win) then
+    return nil, nil
+  end
+  if vim.api.nvim_win_get_buf(state.kilo_win) ~= state.kilo_buf then
     return nil, nil
   end
   return find_channel_by_buffer(state.kilo_buf)
@@ -77,23 +110,32 @@ local function _setup_new_buffer(state)
 end
 
 local function _ensure_session(state)
+  local function _set_and_show(buf)
+    if not state.kilo_win or not vim.api.nvim_win_is_valid(state.kilo_win) then
+      vim.cmd("vsplit")
+      state.kilo_win = vim.api.nvim_get_current_win()
+    end
+    state.kilo_buf = buf
+    _show_in_window(state.kilo_win, buf)
+  end
+
   local buf, chan = find_kilo_terminal()
   if buf and chan then
-    state.kilo_buf = buf
     state.kilo_chan = chan
-    _show_in_window(state.kilo_win, buf)
+    _set_and_show(buf)
     return
   end
 
   buf, chan = _find_cached_session(state)
   if buf and chan then
     state.kilo_chan = chan
-    _show_in_window(state.kilo_win, buf)
+    _set_and_show(buf)
     return
   end
 
   _close_all_kilo_buffers()
   _setup_new_buffer(state)
+  return
 end
 
 local function _focus_active_terminal(state)
@@ -111,15 +153,27 @@ return function(initialState)
   local state = initialState or {}
 
   Module.toggle = function()
+    local win, buf, chan = find_kilo_window()
+    if win then
+      if win == vim.api.nvim_get_current_win() then
+        _close_active_window(state)
+        return
+      end
+      state.kilo_win = win
+      state.kilo_buf = buf
+      state.kilo_chan = chan
+      vim.api.nvim_set_current_win(win)
+      return
+    end
+
     if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
       _close_active_window(state)
       return
     end
 
-    vim.cmd("vsplit")
-    state.kilo_win = vim.api.nvim_get_current_win()
-
     if state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
+      vim.cmd("vsplit")
+      state.kilo_win = vim.api.nvim_get_current_win()
       vim.api.nvim_win_set_buf(state.kilo_win, state.kilo_buf)
     else
       _ensure_session(state)
