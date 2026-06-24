@@ -47,7 +47,7 @@ local function _fn_name_from_lsp()
   local params = vim.lsp.util.make_position_params(0, _LSP_POSITION_ENCODING)
   local ok, resp = pcall(vim.lsp.buf_request_sync, 0, "textDocument/documentSymbol", params, _LSP_TIMEOUT_MS)
   if not ok or not resp then
-    return nil
+    return nil, "request_failed"
   end
 
   local cursorpos = vim.api.nvim_win_get_cursor(0)
@@ -62,7 +62,7 @@ local function _fn_name_from_lsp()
     end
   end
   if not symbols then
-    return nil
+    return nil, "no_result"
   end
 
   local best_name
@@ -74,7 +74,7 @@ local function _fn_name_from_lsp()
       end
     end
   end
-  return best_name
+  return best_name, "ok"
 end
 
 local function _fn_name_from_ts()
@@ -116,7 +116,7 @@ local function _fn_name_from_regex(line_text)
 end
 
 local function fn_name_under_cursor()
-  local name = _fn_name_from_lsp()
+  local name, lsp_reason = _fn_name_from_lsp()
   if name then
     return name
   end

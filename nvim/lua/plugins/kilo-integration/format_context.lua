@@ -26,10 +26,6 @@ return {
 
   send_file = function(terminal, message)
     send(terminal, buffer.make_file_reference(buffer.get_relative_path(), " "), message)
-  end,
-
-  send_file_with_suffix = function(terminal, suffix, message)
-    send(terminal, buffer.make_file_reference(buffer.get_relative_path(), suffix), message)
   end
 }
 
