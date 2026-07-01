@@ -2,6 +2,10 @@ local buffer = require("plugins.kilo-integration.context")
 
 -- Shared utilities for building and sending file/context references to Kilo
 
+local function warn(msg)
+  vim.notify("[kilo-debug] " .. msg, vim.log.levels.WARN)
+end
+
 local function send(terminal, text, message, opts)
   opts = opts or {}
   if not buffer.buffer_is_valid() then
@@ -12,7 +16,9 @@ local function send(terminal, text, message, opts)
   if not chan then return end
   vim.api.nvim_chan_send(chan, text)
   if not opts.skip_focus then
-    terminal:focus_active_terminal()
+    if not terminal:focus_active_terminal() then
+      warn("focus_active_terminal returned false, skipping")
+    end
   end
   if not opts.skip_notify then
     vim.notify(message, vim.log.levels.INFO)
@@ -24,8 +30,9 @@ return {
 
   send = send,
 
-  send_file = function(terminal, message)
-    send(terminal, buffer.make_file_reference(buffer.get_relative_path(), " "), message)
+  send_file = function(terminal, message, opts)
+    opts = opts or {}
+    send(terminal, buffer.make_file_reference(buffer.get_relative_path(), " "), message, opts)
   end
 }
 

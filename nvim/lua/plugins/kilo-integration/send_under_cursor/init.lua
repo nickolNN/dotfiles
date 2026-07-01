@@ -37,7 +37,7 @@ local function get_formatted_diagnostics(line_number_filter)
 end
 
 return function(terminal)
-  local function send_under_cursor()
+  local function send_under_cursor(opts)
     local line_number = buffer.get_cursor_line()
     local fn = fn_name.fn_name_under_cursor() or "<none>"
     local relative_path = buffer.get_relative_path()
@@ -47,10 +47,10 @@ return function(terminal)
       text_to_send = text_to_send .. " [errors/warnings: " .. table.concat(diag_parts, "; ") .. "]"
     end
     text_to_send = text_to_send .. "\n"
-    context.send(terminal, text_to_send, "Function context added to Kilo: " .. fn)
+    context.send(terminal, text_to_send, "Function context added to Kilo: " .. fn, { skip_focus = not (opts and opts.focused) })
   end
 
-  local function send_all_diagnostics()
+  local function send_all_diagnostics(opts)
     local relative_path = buffer.get_relative_path()
     local diag_parts = get_formatted_diagnostics(nil)
     if not diag_parts then
@@ -59,10 +59,10 @@ return function(terminal)
     end
 
     local text_to_send = "fix all problems in @" .. relative_path .. ":\n" .. table.concat(diag_parts, "\n") .. "\n"
-    context.send(terminal, text_to_send, "All diagnostics sent to Kilo for: " .. relative_path)
+    context.send(terminal, text_to_send, "All diagnostics sent to Kilo for: " .. relative_path, { skip_focus = not (opts and opts.focused) })
   end
 
-  local function send_word_under_cursor()
+  local function send_word_under_cursor(opts)
     local line_number = buffer.get_cursor_line()
     local word = vim.fn.expand("<cWORD>")
     if not word or string.match(word, "^%s*$") then
@@ -71,7 +71,7 @@ return function(terminal)
     end
     local relative_path = buffer.get_relative_path()
     local text_to_send = "@" .. relative_path .. " line " .. line_number .. " " .. word .. "\n"
-    context.send(terminal, text_to_send, "Word + context sent to Kilo: " .. word)
+    context.send(terminal, text_to_send, "Word + context sent to Kilo: " .. word, { skip_focus = not (opts and opts.focused) })
   end
 
   return {

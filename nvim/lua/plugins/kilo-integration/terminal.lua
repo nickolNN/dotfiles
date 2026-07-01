@@ -130,13 +130,25 @@ local function _ensure_session(state)
   return
 end
 
+local function warn(msg)
+  vim.notify("[kilo-debug] " .. msg, vim.log.levels.WARN)
+end
+
 local function _focus_active_terminal(state)
-  if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
-    vim.api.nvim_set_current_win(state.kilo_win)
-    vim.cmd("startinsert")
-    return true
+  local target_win = state.kilo_win
+  local is_valid = target_win and vim.api.nvim_win_is_valid(target_win)
+
+  if not is_valid then
+    target_win, state.kilo_buf, state.kilo_chan = find_kilo_window()
+    if not target_win then
+      warn("no kilo window found for focus")
+      return false
+    end
   end
-  return false
+
+  vim.api.nvim_set_current_win(target_win)
+  vim.cmd("startinsert")
+  return true
 end
 
 local function _close_active_window(state)
