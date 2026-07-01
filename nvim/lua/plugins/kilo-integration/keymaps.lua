@@ -37,4 +37,9 @@ return function(terminal, key_handlers)
   map_key("<leader>ka", function()
     key_handlers.send_all_diagnostics()
   end, "Send all diagnostics to Kilo")
+
+  -- <leader>kw - Send word under cursor to Kilo
+  map_key("<leader>kw", function()
+    key_handlers.send_word_under_cursor()
+  end, "Send word under cursor to Kilo")
 end

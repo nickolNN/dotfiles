@@ -62,8 +62,21 @@ return function(terminal)
     context.send(terminal, text_to_send, "All diagnostics sent to Kilo for: " .. relative_path)
   end
 
+  local function send_word_under_cursor()
+    local line_number = buffer.get_cursor_line()
+    local word = vim.fn.expand("<cWORD>")
+    if not word or string.match(word, "^%s*$") then
+      vim.notify("No word under cursor", vim.log.levels.WARN)
+      return
+    end
+    local relative_path = buffer.get_relative_path()
+    local text_to_send = "@" .. relative_path .. " line " .. line_number .. " " .. word .. "\n"
+    context.send(terminal, text_to_send, "Word + context sent to Kilo: " .. word)
+  end
+
   return {
     send_under_cursor = send_under_cursor,
     send_all_diagnostics = send_all_diagnostics,
+    send_word_under_cursor = send_word_under_cursor,
   }
 end
