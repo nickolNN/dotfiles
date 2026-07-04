@@ -6,9 +6,9 @@ local function warn(msg)
   vim.notify("[kilo-debug] " .. msg, vim.log.levels.WARN)
 end
 
-local function send(terminal, text, message, opts)
+local function send(terminal, text, message, opts, path)
   opts = opts or {}
-  if not buffer.buffer_is_valid() then
+  if not path or path == "" then
     vim.notify("Current buffer is not a file", vim.log.levels.WARN)
     return nil
   end
@@ -32,7 +32,8 @@ return {
 
   send_file = function(terminal, message, opts)
     opts = opts or {}
-    send(terminal, buffer.make_file_reference(buffer.get_relative_path(), " "), message, opts)
+    local relative_path = buffer.get_relative_path()
+    send(terminal, buffer.make_file_reference(relative_path, " "), message, opts, relative_path)
   end
 }
 

@@ -1,24 +1,40 @@
 local LEADER_TOGGLE = "<leader>kk"
 
+local _relative_path_cache = nil
+local _relative_path_valid = false
+
+vim.api.nvim_create_autocmd("BufWinEnter", {
+  callback = function()
+    _relative_path_valid = false
+  end,
+})
+
 local function get_relative_path()
+  if _relative_path_cache ~= nil and _relative_path_valid then
+    return _relative_path_cache
+  end
   local full_path = vim.fn.expand("%:p")
   local cwd = vim.fn.getcwd()
   local prefix = cwd .. "/"
   if string.sub(full_path, 1, #prefix) == prefix then
-    return string.sub(full_path, #prefix + 1)
+    _relative_path_cache = string.sub(full_path, #prefix + 1)
+    _relative_path_valid = true
+  else
+    _relative_path_cache = full_path
+    _relative_path_valid = true
   end
-  return full_path
+  return _relative_path_cache
 end
 
-local function buffer_is_valid()
-  local path = get_relative_path()
-  return path ~= "" and vim.bo.buftype ~= "terminal"
-end
+local _kilo_terminal_warned = false
 
 local function ensure_kilo_terminal(terminal)
   local _, chan = terminal.find()
   if not chan then
-    vim.notify("Kilo terminal is not running. Open it first with " .. LEADER_TOGGLE, vim.log.levels.WARN)
+    if not _kilo_terminal_warned then
+      _kilo_terminal_warned = true
+      vim.notify("Kilo terminal is not running. Open it first with " .. LEADER_TOGGLE, vim.log.levels.WARN)
+    end
     return nil
   end
   return chan
@@ -36,7 +52,6 @@ end
 
 return {
   get_relative_path = get_relative_path,
-  buffer_is_valid = buffer_is_valid,
   ensure_kilo_terminal = ensure_kilo_terminal,
   get_cursor_line = get_cursor_line,
   make_file_reference = make_file_reference,

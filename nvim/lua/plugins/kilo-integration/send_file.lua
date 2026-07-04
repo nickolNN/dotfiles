@@ -14,19 +14,21 @@ return function(terminal)
 
     send_current_file_with_line = function(opts)
       local line_number = buffer.get_cursor_line()
+      local relative_path = buffer.get_relative_path()
       context.send(
         terminal,
-        context.make_file_reference(buffer.get_relative_path(),
+        context.make_file_reference(relative_path,
           LINE_CONTEXT_SUFFIX .. line_number .. "\n"),
         "File + line context added to Kilo",
-        { skip_focus = not (opts and opts.focused) }
+        { skip_focus = not (opts and opts.focused) },
+        relative_path
       )
     end,
 
     send_current_file_containing_folder = function(opts)
       local relative_path = buffer.get_relative_path()
       local current_folder = relative_path:match("(.*)/") or "."
-      context.send(terminal, "@" .. current_folder .. "/", "Folder added to Kilo context", { skip_focus = not (opts and opts.focused) })
+      context.send(terminal, "@" .. current_folder .. "/", "Folder added to Kilo context", { skip_focus = not (opts and opts.focused) }, relative_path)
     end,
   }
 end

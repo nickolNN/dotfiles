@@ -11,7 +11,8 @@ local state = {
 local terminal = require("plugins.kilo-integration.terminal")(state)
 
 -- Merge handler tables into one
-local key_handlers = vim.tbl_extend("force",
+local key_handlers = vim.tbl_extend(
+  "force",
   require("plugins.kilo-integration.send_file")(terminal),
   require("plugins.kilo-integration.send_under_cursor")(terminal)
 )

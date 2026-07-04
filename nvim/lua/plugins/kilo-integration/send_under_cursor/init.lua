@@ -39,6 +39,7 @@ end
 return function(terminal)
   local function send_under_cursor(opts)
     local line_number = buffer.get_cursor_line()
+    fn_name.clear_fn_name_cache()
     local fn = fn_name.fn_name_under_cursor() or "<none>"
     local relative_path = buffer.get_relative_path()
     local text_to_send = "@" .. relative_path .. " line " .. line_number .. " (function: " .. fn .. ")"
@@ -47,32 +48,33 @@ return function(terminal)
       text_to_send = text_to_send .. " [errors/warnings: " .. table.concat(diag_parts, "; ") .. "]"
     end
     text_to_send = text_to_send .. "\n"
-    context.send(terminal, text_to_send, "Function context added to Kilo: " .. fn, { skip_focus = not (opts and opts.focused) })
-  end
-
-  local function send_all_diagnostics(opts)
-    local relative_path = buffer.get_relative_path()
-    local diag_parts = get_formatted_diagnostics(nil)
-    if not diag_parts then
-      vim.notify("No diagnostics found in current buffer", vim.log.levels.INFO)
-      return
+    context.send(terminal, text_to_send, "Function context added to Kilo: " .. fn, { skip_focus = not (opts and opts.focused) }, relative_path)
     end
 
-    local text_to_send = "fix all problems in @" .. relative_path .. ":\n" .. table.concat(diag_parts, "\n") .. "\n"
-    context.send(terminal, text_to_send, "All diagnostics sent to Kilo for: " .. relative_path, { skip_focus = not (opts and opts.focused) })
-  end
+   local function send_all_diagnostics(opts)
+      local relative_path = buffer.get_relative_path()
+      local diag_parts = get_formatted_diagnostics(nil)
+      if not diag_parts then
+        vim.notify("No diagnostics found in current buffer", vim.log.levels.INFO)
+        return
+      end
 
-  local function send_word_under_cursor(opts)
-    local line_number = buffer.get_cursor_line()
-    local word = vim.fn.expand("<cWORD>")
-    if not word or string.match(word, "^%s*$") then
-      vim.notify("No word under cursor", vim.log.levels.WARN)
-      return
+      local text_to_send = "fix all problems in @" .. relative_path .. ":\n" .. table.concat(diag_parts, "\n") .. "\n"
+      context.send(terminal, text_to_send, "All diagnostics sent to Kilo for: " .. relative_path, { skip_focus = not (opts and opts.focused) }, relative_path)
     end
-    local relative_path = buffer.get_relative_path()
-    local text_to_send = "@" .. relative_path .. " line " .. line_number .. " " .. word .. "\n"
-    context.send(terminal, text_to_send, "Word + context sent to Kilo: " .. word, { skip_focus = not (opts and opts.focused) })
-  end
+
+   local function send_word_under_cursor(opts)
+      local line_number = buffer.get_cursor_line()
+      local word = vim.fn.expand("<cWORD>")
+      if not word or string.match(word, "^%s*$") then
+        vim.notify("No word under cursor", vim.log.levels.WARN)
+        return
+      end
+      fn_name.clear_fn_name_cache()
+      local relative_path = buffer.get_relative_path()
+      local text_to_send = "@" .. relative_path .. " line " .. line_number .. " " .. word .. "\n"
+      context.send(terminal, text_to_send, "Word + context sent to Kilo: " .. word, { skip_focus = not (opts and opts.focused) }, relative_path)
+    end
 
   return {
     send_under_cursor = send_under_cursor,

@@ -1,3 +1,23 @@
+-- LSP cache to avoid synchronous requests when cursor hasn't moved
+local _fn_name_cache = {}
+local _CACHE_TTL_MS = 5000
+
+local function _get_cached_fn_name()
+  local now = vim.uv.now() * 1000
+  if _fn_name_cache.pos and now - _fn_name_cache.pos < _CACHE_TTL_MS then
+    return _fn_name_cache.name
+  end
+  return nil
+end
+
+local function _set_cached_fn_name(name)
+  _fn_name_cache = { name = name, pos = vim.uv.now() * 1000 }
+end
+
+local function clear_fn_name_cache()
+  _fn_name_cache = {}
+end
+
 local FUNCTION_NODE_TYPES = {
   function_declaration = true,
   function_definition = true,
@@ -68,7 +88,7 @@ local function _fn_name_from_lsp()
   local best_name
   for _, node in ipairs(symbols) do
     if node.range.start.line == cursor_line then
-      local name = find_function_at_position({node}, {cursor_line, cursor_col})
+      local name = find_function_at_position({ node }, { cursor_line, cursor_col })
       if name then
         best_name = name
       end
@@ -109,19 +129,25 @@ local function _fn_name_from_ts()
 end
 
 local function _fn_name_from_regex(line_text)
-  local stripped = line_text
-    :gsub("^%s+", "")
-    :gsub("^%a[%w_]*%s*", "")
+  local stripped = line_text:gsub("^%s+", ""):gsub("^%a[%w_]*%s*", "")
   return stripped:match("^%a[%w_]*") or vim.fn.expand("<cword>")
 end
 
 local function fn_name_under_cursor()
-  local name, lsp_reason = _fn_name_from_lsp()
+  -- Check cache first (avoids blocking LSP request when cursor hasn't moved)
+  local cached = _get_cached_fn_name()
+  if cached then
+    return cached
+  end
+
+  local name = _fn_name_from_lsp()
   if name then
+    _set_cached_fn_name(name, 0)
     return name
   end
   name = _fn_name_from_ts()
   if name then
+    _set_cached_fn_name(name, 0)
     return name
   end
   local cursorpos = vim.api.nvim_win_get_cursor(0)
@@ -135,4 +161,5 @@ end
 
 return {
   fn_name_under_cursor = fn_name_under_cursor,
+  clear_fn_name_cache = clear_fn_name_cache,
 }
