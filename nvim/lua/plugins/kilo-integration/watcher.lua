@@ -140,18 +140,24 @@ local function start_dir_watch(state)
     schedule_file_event(state, filename)
   end
 
-  -- Update window->buffer cache on focus/buffer change (O(1) for file watcher)
-  vim.api.nvim_create_autocmd({ "BufEnter", "FocusGained" }, {
+  -- Pre-populate window->buffer cache
+  state._window_buf_map = {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(win) then
+      local buf = vim.api.nvim_win_get_buf(win)
+      if buf and vim.api.nvim_buf_is_valid(buf) then
+        state._window_buf_map[buf] = win
+      end
+    end
+  end
+
+  -- Rebuild cache entries on window leave (removes stale entries)
+  vim.api.nvim_create_autocmd("WinLeave", {
     group = watch_group,
     callback = function()
-      state._window_buf_map = {}
-      for _, win in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_is_valid(win) then
-          local buf = vim.api.nvim_win_get_buf(win)
-          if buf and vim.api.nvim_buf_is_valid(buf) then
-            state._window_buf_map[buf] = win
-          end
-        end
+      local buf = vim.api.nvim_win_get_buf(0)
+      if buf and vim.api.nvim_buf_is_valid(buf) then
+        state._window_buf_map[buf] = 0
       end
     end,
   })
@@ -171,7 +177,9 @@ local function setup(state)
       if not _checktime_pending then
         _checktime_pending = true
         vim.defer_fn(function()
-          vim.cmd("checktime")
+          if state.kilo_buf and vim.api.nvim_get_current_buf() == state.kilo_buf then
+            vim.cmd("checktime")
+          end
           _checktime_pending = false
         end, 50)
       end

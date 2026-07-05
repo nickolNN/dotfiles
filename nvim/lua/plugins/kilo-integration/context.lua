@@ -13,27 +13,27 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 })
 
 local function get_relative_path()
-  if _relative_path_cache ~= nil and _relative_path_valid then
+  if _relative_path_cache ~= nil and _last_buf_path == vim.fn.expand("%:p") then
     return _relative_path_cache
   end
   local full_path = vim.fn.expand("%:p")
-  if _last_buf_path ~= full_path then
-    _last_buf_path = full_path
-    local cwd = vim.fn.getcwd()
-    local prefix = cwd .. "/"
-    if string.sub(full_path, 1, #prefix) == prefix then
-      _relative_path_cache = string.sub(full_path, #prefix + 1)
-    else
-      _relative_path_cache = full_path
-    end
-    _relative_path_valid = true
+  local cwd = vim.fn.getcwd()
+  local prefix = cwd .. "/"
+  if string.sub(full_path, 1, #prefix) == prefix then
+    _relative_path_cache = string.sub(full_path, #prefix + 1)
+  else
+    _relative_path_cache = full_path
   end
+  _relative_path_valid = true
   return _relative_path_cache
 end
 
 local _kilo_terminal_warned = false
 
-local function ensure_kilo_terminal(terminal)
+local function ensure_kilo_terminal(terminal, state)
+  if state and state.kilo_chan then
+    return state.kilo_chan
+  end
   local _, chan = terminal.find()
   if not chan then
     if not _kilo_terminal_warned then

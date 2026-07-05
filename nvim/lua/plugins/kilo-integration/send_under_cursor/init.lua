@@ -36,7 +36,7 @@ local function get_formatted_diagnostics(line_number_filter)
   return #parts > 0 and parts or nil
 end
 
-return function(terminal)
+return function(terminal, state)
   local function send_under_cursor(opts)
     local line_number = buffer.get_cursor_line()
     fn_name.clear_fn_name_cache()
@@ -48,7 +48,7 @@ return function(terminal)
       text_to_send = text_to_send .. " [errors/warnings: " .. table.concat(diag_parts, "; ") .. "]"
     end
     text_to_send = text_to_send .. "\n"
-    context.send(terminal, text_to_send, "Function context added to Kilo: " .. fn, { skip_focus = not (opts and opts.focused) }, relative_path)
+    context.send(terminal, state, text_to_send, "Function context added to Kilo: " .. fn, { skip_focus = not (opts and opts.focused) }, relative_path)
     end
 
    local function send_all_diagnostics(opts)
@@ -60,7 +60,7 @@ return function(terminal)
       end
 
       local text_to_send = "fix all problems in @" .. relative_path .. ":\n" .. table.concat(diag_parts, "\n") .. "\n"
-      context.send(terminal, text_to_send, "All diagnostics sent to Kilo for: " .. relative_path, { skip_focus = not (opts and opts.focused) }, relative_path)
+      context.send(terminal, state, text_to_send, "All diagnostics sent to Kilo for: " .. relative_path, { skip_focus = not (opts and opts.focused) }, relative_path)
     end
 
    local function send_word_under_cursor(opts)
@@ -73,7 +73,7 @@ return function(terminal)
       fn_name.clear_fn_name_cache()
       local relative_path = buffer.get_relative_path()
       local text_to_send = "@" .. relative_path .. " line " .. line_number .. " " .. word .. "\n"
-      context.send(terminal, text_to_send, "Word + context sent to Kilo: " .. word, { skip_focus = not (opts and opts.focused) }, relative_path)
+      context.send(terminal, state, text_to_send, "Word + context sent to Kilo: " .. word, { skip_focus = not (opts and opts.focused) }, relative_path)
     end
 
   return {

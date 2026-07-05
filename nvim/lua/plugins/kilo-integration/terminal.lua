@@ -3,35 +3,6 @@
 local KILO_PATTERN = "kilo"
 local TERM_PREFIX = "term://"
 
--- Session cache with TTL invalidation
-local _session_cache = nil
-local _session_cache_ts = 0
-local _session_cache_last_win_count = 0
-local SESSION_TTL = 200 -- ms
-local function invalidate_session_cache()
-  _session_cache = nil
-  _session_cache_ts = vim.uv.now()
-  _session_cache_last_win_count = 0
-end
-
-local function get_session_from_cache()
-  local now = vim.uv.now()
-  if _session_cache ~= nil and _session_cache_last_win_count > 0 and (now - _session_cache_ts) < SESSION_TTL then
-    -- Only re-scan if window count changed
-    local wins = vim.api.nvim_list_wins()
-    if #wins == _session_cache_last_win_count then
-      return _session_cache.win, _session_cache.buf, _session_cache.chan
-    end
-  end
-  return nil
-end
-
-local function set_session_cache(win, buf, chan)
-  _session_cache = { win = win, buf = buf, chan = chan }
-  _session_cache_ts = vim.uv.now()
-  _session_cache_last_win_count = #vim.api.nvim_list_wins()
-end
-
 -- Low-level: buffer window detection
 local function is_kilo_terminal(bufferName)
   return bufferName:find(TERM_PREFIX, 1, true) and bufferName:find(KILO_PATTERN, 1, true)
@@ -91,7 +62,6 @@ local function _get_kilo_session(s)
   if s.kilo_win and vim.api.nvim_win_is_valid(s.kilo_win) then
     local buf = vim.api.nvim_win_get_buf(s.kilo_win)
     if buf and vim.api.nvim_buf_is_valid(buf) and is_kilo_terminal(vim.api.nvim_buf_get_name(buf)) then
-      set_session_cache(s.kilo_win, buf, s.kilo_chan)
       return s.kilo_win, buf, s.kilo_chan
     end
   end
@@ -106,21 +76,12 @@ local function _get_kilo_session(s)
         local buffer_name = vim.api.nvim_buf_get_name(buf)
         if is_kilo_terminal(buffer_name) then
           best_win, best_buf = win, buf
-          best_chan = nil
-          for _, chan in ipairs(vim.api.nvim_list_chans()) do
-            if chan.buf == buf then
-              best_chan = chan.id
-              break
-            end
-          end
+          local _, best_chan = find_channel_by_buffer(buf)
         end
       end
     end
   end
 
-  if best_win then
-    set_session_cache(best_win, best_buf, best_chan)
-  end
   return best_win, best_buf, best_chan
 end
 
@@ -145,11 +106,8 @@ local function _find_cached_session(state)
   if vim.api.nvim_win_get_buf(state.kilo_win) ~= state.kilo_buf then
     return nil, nil
   end
-  -- Use cached channel if still valid (avoids O(n*m) channel scan)
-  if state.kilo_chan then
-    return state.kilo_buf, state.kilo_chan
-  end
-  return find_channel_by_buffer(state.kilo_buf)
+  -- Use cached channel directly (validated above)
+  return state.kilo_buf, state.kilo_chan
 end
 
 local function _close_active_window(state)
@@ -160,7 +118,6 @@ local function _close_active_window(state)
   state.kilo_buf = nil
   state.kilo_chan = nil
   _clear_channel_map(state)
-  invalidate_session_cache()
 end
 
 local function _setup_new_buffer(state)
@@ -170,7 +127,10 @@ local function _setup_new_buffer(state)
   vim.bo[state.kilo_buf].bufhidden = "hide"
   vim.wo[state.kilo_win].number = false
   vim.wo[state.kilo_win].relativenumber = false
-  _update_channel_map(state, state.kilo_buf, state.kilo_chan)
+  local _, chan = find_channel_by_buffer(state.kilo_buf)
+  if chan then
+    _update_channel_map(state, state.kilo_buf, chan)
+  end
 end
 
 local function _ensure_session(state)
@@ -219,7 +179,6 @@ local function _focus_active_terminal(state)
     end
   end
 
-  set_session_cache(target_win, state.kilo_buf, state.kilo_chan)
   vim.api.nvim_set_current_win(target_win)
   vim.cmd("startinsert")
   return true
@@ -233,7 +192,6 @@ return function(initialState)
     local win, buf, chan = _get_kilo_session(state)
     if win then
       if win == vim.api.nvim_get_current_win() then
-        _close_active_window(state)
         return
       end
       state.kilo_win = win
