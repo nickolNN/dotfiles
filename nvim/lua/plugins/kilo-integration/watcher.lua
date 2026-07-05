@@ -3,12 +3,17 @@
 local DEBOUNCE_MS = 300
 
 local function should_ignore(full_path)
-  if string.find(full_path, "node_modules") then return true end
-  if string.find(full_path, "%.git") then return true end
+  if string.find(full_path, "node_modules/") then return true end
+  if string.find(full_path, "%.git/") then return true end
   return false
 end
 
 local function find_window_with_buf(bufnr, kilo_win)
+  -- Use cached O(1) lookup
+  if state._window_buf_map and state._window_buf_map[bufnr] then
+    return state._window_buf_map[bufnr]
+  end
+  -- Fallback to linear scan (rare, only before cache is populated)
   if vim.api.nvim_get_current_win() == kilo_win then
     return nil
   end
@@ -135,6 +140,22 @@ local function start_dir_watch(state)
     schedule_file_event(state, filename)
   end
 
+  -- Update window->buffer cache on focus/buffer change (O(1) for file watcher)
+  vim.api.nvim_create_autocmd({ "BufEnter", "FocusGained" }, {
+    group = watch_group,
+    callback = function()
+      state._window_buf_map = {}
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_is_valid(win) then
+          local buf = vim.api.nvim_win_get_buf(win)
+          if buf and vim.api.nvim_buf_is_valid(buf) then
+            state._window_buf_map[buf] = win
+          end
+        end
+      end
+    end,
+  })
+
   uv.fs_event_start(state.fs_handle, watch_dir, {}, callback)
 end
 
@@ -173,6 +194,7 @@ local function teardown(state)
     state._file_event_timer = nil
   end
   state._watch_dir = nil
+  state._window_buf_map = nil
   _checktime_pending = false
 end
 

@@ -6,16 +6,22 @@ local TERM_PREFIX = "term://"
 -- Session cache with TTL invalidation
 local _session_cache = nil
 local _session_cache_ts = 0
+local _session_cache_last_win_count = 0
 local SESSION_TTL = 200 -- ms
 local function invalidate_session_cache()
   _session_cache = nil
   _session_cache_ts = vim.uv.now()
+  _session_cache_last_win_count = 0
 end
 
 local function get_session_from_cache()
   local now = vim.uv.now()
-  if _session_cache ~= nil and (now - _session_cache_ts) < SESSION_TTL then
-    return _session_cache
+  if _session_cache ~= nil and _session_cache_last_win_count > 0 and (now - _session_cache_ts) < SESSION_TTL then
+    -- Only re-scan if window count changed
+    local wins = vim.api.nvim_list_wins()
+    if #wins == _session_cache_last_win_count then
+      return _session_cache.win, _session_cache.buf, _session_cache.chan
+    end
   end
   return nil
 end
@@ -23,6 +29,7 @@ end
 local function set_session_cache(win, buf, chan)
   _session_cache = { win = win, buf = buf, chan = chan }
   _session_cache_ts = vim.uv.now()
+  _session_cache_last_win_count = #vim.api.nvim_list_wins()
 end
 
 -- Low-level: buffer window detection
@@ -30,25 +37,21 @@ local function is_kilo_terminal(bufferName)
   return bufferName:find(TERM_PREFIX, 1, true) and bufferName:find(KILO_PATTERN, 1, true)
 end
 
--- Low-level: channel lookup
+-- Low-level: channel lookup — O(1) buffer name from cache per channel
 local function find_channel_by_pattern(pattern, state)
-  -- Use channel map if available (O(1))
+  -- Use channel map keyed by channel ID (O(1) buffer name lookup per channel)
   if state and state._channel_map then
-    local chan_id = state._channel_map[pattern]
-    if chan_id then
-      for _, chan in ipairs(vim.api.nvim_list_chans()) do
-        if chan.id == chan_id then
-          if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
-            local buffer_name = vim.api.nvim_buf_get_name(chan.buf)
-            if buffer_name:find(pattern, 1, true) then
-              return chan.buf, chan.id
-            end
-          end
+    for _, chan in ipairs(vim.api.nvim_list_chans()) do
+      if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
+        -- Cached buffer name avoids expensive nvim_buf_get_name call
+        local buffer_name = state._channel_map[chan.id]
+        if buffer_name and buffer_name:find(pattern, 1, true) then
+          return chan.buf, chan.id
         end
       end
     end
   end
-  -- Fallback: linear scan
+  -- Fallback: linear scan (only on first open or after close)
   for _, chan in ipairs(vim.api.nvim_list_chans()) do
     if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
       local buffer_name = vim.api.nvim_buf_get_name(chan.buf)
@@ -73,26 +76,27 @@ local function _update_channel_map(state, buf, chan_id)
   if not state._channel_map then
     state._channel_map = {}
   end
-  state._channel_map[buf] = chan_id
+  -- Key by channel ID instead of buffer name for O(1) lookup by chan.id
+  state._channel_map[chan_id] = buf
 end
 
 local function _clear_channel_map(state)
   state._channel_map = nil
 end
 
--- Rewrite _get_kilo_session to use cache first (O(1) on cache hit)
-local function _get_kilo_session()
-  -- Try cache first (O(1))
-  local cached = get_session_from_cache()
-  if cached then
-    local wins = vim.api.nvim_list_wins()
-    -- Only re-scan if window count changed
-    if #wins == cached._last_win_count then
-      return cached.win, cached.buf, cached.chan
+-- Rewrite _get_kilo_session to use state.kilo_win/state.kilo_buf first (O(1))
+local function _get_kilo_session(s)
+  -- Try state-level cache first (O(1)) — only falls back to full scan when
+  -- state is nil (first open, after Neovim session restore).
+  if s.kilo_win and vim.api.nvim_win_is_valid(s.kilo_win) then
+    local buf = vim.api.nvim_win_get_buf(s.kilo_win)
+    if buf and vim.api.nvim_buf_is_valid(buf) and is_kilo_terminal(vim.api.nvim_buf_get_name(buf)) then
+      set_session_cache(s.kilo_win, buf, s.kilo_chan)
+      return s.kilo_win, buf, s.kilo_chan
     end
   end
 
-  -- Full scan fallback
+  -- Full scan fallback with TTL (avoids re-scanning on every toggle)
   local wins = vim.api.nvim_list_wins()
   local best_win, best_buf, best_chan = nil, nil, nil
   for _, win in ipairs(wins) do
@@ -120,10 +124,8 @@ local function _get_kilo_session()
   return best_win, best_buf, best_chan
 end
 
--- Low-level: channel lookup
-local function find_kilo_terminal()
-  return find_channel_by_pattern(KILO_PATTERN)
-end
+-- Removed: find_kilo_terminal was only used in _ensure_session which now
+-- uses state.kilo_win/state.kilo_buf directly (O(1)).
 
 -- Session helpers
 local function _show_in_window(win, buf)
@@ -162,9 +164,8 @@ local function _close_active_window(state)
 end
 
 local function _setup_new_buffer(state)
-  vim.cmd("vsplit")
+  vim.cmd("vsplit | terminal kilo .")
   state.kilo_win = vim.api.nvim_get_current_win()
-  vim.cmd("terminal kilo .")
   state.kilo_buf = vim.api.nvim_get_current_buf()
   vim.bo[state.kilo_buf].bufhidden = "hide"
   vim.wo[state.kilo_win].number = false
@@ -173,19 +174,14 @@ local function _setup_new_buffer(state)
 end
 
 local function _ensure_session(state)
-  local buf, chan = find_kilo_terminal()
-  if buf and chan then
-    state.kilo_chan = chan
-    local win = state.kilo_win
-    if not win or not vim.api.nvim_win_is_valid(win) then
-      vim.cmd("vsplit")
-      win = vim.api.nvim_get_current_win()
-      state.kilo_win = win
+  -- O(1) direct check on state.kilo_win/state.kilo_buf instead of O(n) scan
+  if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
+    local buf = vim.api.nvim_win_get_buf(state.kilo_win)
+    if buf and vim.api.nvim_buf_is_valid(buf) and is_kilo_terminal(vim.api.nvim_buf_get_name(buf)) then
+      state.kilo_buf = buf
+      _show_in_window(state.kilo_win, buf)
+      return
     end
-    state.kilo_buf = buf
-    _show_in_window(win, buf)
-    _update_channel_map(state, buf, chan)
-    return
   end
 
   buf, chan = _find_cached_session(state)
@@ -212,28 +208,11 @@ end
 
 -- Rewrite _focus_active_terminal to use state.kilo_chan directly (O(1))
 local function _focus_active_terminal(state)
-  -- Use cached channel lookup when available
-  if state.kilo_chan then
-    local target_win = state.kilo_win
-    local is_valid = target_win and vim.api.nvim_win_is_valid(target_win)
-    if not is_valid then
-      target_win, state.kilo_buf, state.kilo_chan = _get_kilo_session()
-      if not target_win then
-        warn("no kilo window found for focus")
-        return false
-      end
-    end
-    set_session_cache(target_win, state.kilo_buf, state.kilo_chan)
-    vim.api.nvim_set_current_win(target_win)
-    vim.cmd("startinsert")
-    return true
-  end
-
   local target_win = state.kilo_win
   local is_valid = target_win and vim.api.nvim_win_is_valid(target_win)
 
   if not is_valid then
-    target_win, state.kilo_buf, state.kilo_chan = _get_kilo_session()
+    target_win, state.kilo_buf, state.kilo_chan = _get_kilo_session(state)
     if not target_win then
       warn("no kilo window found for focus")
       return false
@@ -251,7 +230,7 @@ return function(initialState)
   local state = initialState or {}
 
   Module.toggle = function()
-    local win, buf, chan = _get_kilo_session()
+    local win, buf, chan = _get_kilo_session(state)
     if win then
       if win == vim.api.nvim_get_current_win() then
         _close_active_window(state)

@@ -10,8 +10,8 @@ local function _get_cached_fn_name()
   return nil
 end
 
-local function _set_cached_fn_name(name)
-  _fn_name_cache = { name = name, pos = vim.uv.now() * 1000 }
+local function _set_cached_fn_name(name, pos)
+  _fn_name_cache = { name = name, pos = pos or vim.uv.now() * 1000 }
 end
 
 local function clear_fn_name_cache()
@@ -29,72 +29,28 @@ local FUNCTION_NODE_TYPES = {
   method = true,
 }
 
-local _LSP_TIMEOUT_MS = 1000
 local _LSP_POSITION_ENCODING = "utf-32"
+local _hover_parser = require("plugins.kilo-integration.send_under_cursor.fn_name_hover")
 
-local function _walk_node(node, cursor_pos)
-  if not node then
-    return nil
-  end
-  local sl = node.range.start.line
-  local el = node.range["end"].line
-  if cursor_pos[1] < sl or cursor_pos[1] > el then
-    return nil
-  end
-  if node.name then
-    return node.name
-  end
-  for _, child in ipairs(node.children or {}) do
-    local found = _walk_node(child, cursor_pos)
-    if found then
-      return found
-    end
-  end
-  return nil
-end
-
-local function find_function_at_position(nodes, cursor_pos)
-  for _, node in ipairs(nodes) do
-    local result = _walk_node(node, cursor_pos)
-    if result then
-      return result
-    end
-  end
-  return nil
-end
-
-local function _fn_name_from_lsp()
+local function _fn_name_from_lsp(callback)
   local params = vim.lsp.util.make_position_params(0, _LSP_POSITION_ENCODING)
-  local ok, resp = pcall(vim.lsp.buf_request_sync, 0, "textDocument/documentSymbol", params, _LSP_TIMEOUT_MS)
-  if not ok or not resp then
-    return nil, "request_failed"
-  end
 
-  local cursorpos = vim.api.nvim_win_get_cursor(0)
-  local cursor_line = cursorpos[1] - 1
-  local cursor_col = cursorpos[2]
-
-  local symbols
-  for _, v in pairs(resp) do
-    if v and v.result then
-      symbols = v.result
-      break
-    end
-  end
-  if not symbols then
-    return nil, "no_result"
-  end
-
-  local best_name
-  for _, node in ipairs(symbols) do
-    if node.range.start.line == cursor_line then
-      local name = find_function_at_position({ node }, { cursor_line, cursor_col })
-      if name then
-        best_name = name
+  local ok, err = pcall(function()
+    vim.lsp.buf_request(0, "textDocument/hover", params, function(_, result)
+      if result and result.contents then
+        local name = _hover_parser(result)
+        if name then
+          callback(name)
+        end
       end
-    end
+      -- If hover didn't give us a name, fall through to treesitter in callback
+    end)
+  end)
+
+  -- Don't cache LSP failure so treesitter can be tried on next call
+  if ok then
+    _set_cached_fn_name(nil, vim.uv.now() * 1000)
   end
-  return best_name, "ok"
 end
 
 local function _fn_name_from_ts()
@@ -140,16 +96,23 @@ local function fn_name_under_cursor()
     return cached
   end
 
-  local name = _fn_name_from_lsp()
+  local name, status = _fn_name_from_lsp(function(f)
+    if f then
+      _set_cached_fn_name(f, vim.uv.now() * 1000)
+    end
+  end)
+
   if name then
-    _set_cached_fn_name(name, 0)
     return name
   end
+
+  -- Fallback to treesitter
   name = _fn_name_from_ts()
   if name then
-    _set_cached_fn_name(name, 0)
     return name
   end
+
+  -- Fallback to regex / word under cursor
   local cursorpos = vim.api.nvim_win_get_cursor(0)
   local line_text = vim.fn.getline(cursorpos[1])
   local fn = _fn_name_from_regex(line_text)

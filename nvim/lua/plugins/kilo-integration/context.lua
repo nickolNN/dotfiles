@@ -2,10 +2,13 @@ local LEADER_TOGGLE = "<leader>kk"
 
 local _relative_path_cache = nil
 local _relative_path_valid = false
+local _last_buf_path = nil
 
 vim.api.nvim_create_autocmd("BufWinEnter", {
   callback = function()
-    _relative_path_valid = false
+    if _last_buf_path ~= vim.fn.expand("%:p") then
+      _relative_path_valid = false
+    end
   end,
 })
 
@@ -14,13 +17,15 @@ local function get_relative_path()
     return _relative_path_cache
   end
   local full_path = vim.fn.expand("%:p")
-  local cwd = vim.fn.getcwd()
-  local prefix = cwd .. "/"
-  if string.sub(full_path, 1, #prefix) == prefix then
-    _relative_path_cache = string.sub(full_path, #prefix + 1)
-    _relative_path_valid = true
-  else
-    _relative_path_cache = full_path
+  if _last_buf_path ~= full_path then
+    _last_buf_path = full_path
+    local cwd = vim.fn.getcwd()
+    local prefix = cwd .. "/"
+    if string.sub(full_path, 1, #prefix) == prefix then
+      _relative_path_cache = string.sub(full_path, #prefix + 1)
+    else
+      _relative_path_cache = full_path
+    end
     _relative_path_valid = true
   end
   return _relative_path_cache

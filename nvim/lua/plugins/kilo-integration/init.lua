@@ -5,6 +5,7 @@ local state = {
   kilo_win = nil,
   kilo_chan = nil,
   fs_handle = nil,
+  _window_buf_map = {},
 }
 
 -- Wire modules together (module-path requires)
