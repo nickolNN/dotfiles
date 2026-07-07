@@ -92,6 +92,10 @@ local function get_uv_wrap()
   if not _uv_wrap_fn then
     if vim.uv_wrap and type(vim.uv_wrap) == "function" then
       _uv_wrap_fn = vim.uv_wrap
+    else
+      _uv_wrap_fn = function(cb)
+        return vim.schedule_wrap(cb)
+      end
     end
   end
   return _uv_wrap_fn
