@@ -4,7 +4,6 @@ local state = {
   kilo_buf = nil,
   kilo_win = nil,
   kilo_chan = nil,
-  fs_handle = nil,
   _window_buf_map = {},
 }
 
@@ -17,10 +16,6 @@ local key_handlers = vim.tbl_extend(
   require("plugins.kilo-integration.send_file")(terminal, state),
   require("plugins.kilo-integration.send_under_cursor")(terminal, state)
 )
-
--- Setup watcher (autocmds, dir cleanup, fs event)
-local watcher = require("plugins.kilo-integration.watcher")
-state.watch_group = watcher.setup(state)
 
 -- Apply keymaps
 require("plugins.kilo-integration.keymaps")(terminal, key_handlers)
