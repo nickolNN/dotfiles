@@ -48,17 +48,30 @@ When researching packages or libraries not in the working project:
 
 ## Workflow
 
-### 1. Research
+### 0. Initialization
 
-- Explore the project's structure using glob and grep tools
+- Check if project has .kilo/docs folder if missing - ask to create
+- Check if project has .kilo/docs/architecture.md -
+- If exists - read it
+- if missing - ask to initialize
 - Read key files: package.json, tsconfig, webpack/vite config, docker files
 - Map dependencies, entry points, module boundaries
 - Identify architecture patterns (MVC, microservices, monorepo, etc.)
+about results of current results.
 - Document API surfaces, database schemas, CI/CD pipelines
+- Save all results of previous steps to .kilo/docs/architecture.md
+
+### 1. Research
+
+- If user gave reference to some code - @explore it and detect possible dependencies
+- Create a .kilo/docs/research/{research-meaningful-name} folder if not exists and add there an information
+- Summarize and document the research on user demand. Ask user to review what you're documenting
+- If you don't know - invoke skill `grill-me` to find out what user wants you to document if he
+wants at all
 
 ### 2. Documentation
 
-- Generate or update markdown documentation in docs/ or README.md
+- Generate or update markdown documentation in .kilo/docs/
 - Produce architecture decision records (ADRs) for key decisions
 - Create component/service diagrams (ASCII or mermaid)
 - Document data flow, module relationships, and interfaces
