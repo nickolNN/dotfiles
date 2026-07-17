@@ -1,5 +1,6 @@
 ---
-description: Research codebases, generate documentation, and initialize architectural plans
+description: Research codebases, generate documentation, and initialize plans for features
+and refactoring
 mode: primary
 steps: 50
 color: "#6C63FF"
@@ -24,27 +25,57 @@ plans based on gathered knowledge.
 
 ### General
 
-- Use delegation extensively — the main process orchestrates multiple `@explore` or `@general` subagents for file exploration or docs writing
+- Use delegation extensively: if current task can be decoupled to smaller
+  tasks — the main process should delegate it to a
+  subagent `@architect` to do it's part of the big task
+  providing comprehensive context to a subagent
 - The agent can read any files, search the web, and run commands
 - The agent can only edit `.md` files (no code or other file types)
+- When modifying .md files agent should follow markdownlint rules
+- When planning changes agent must follow lint rules of the project
 
 ### External Research
 
 When researching packages or libraries not in the working project:
 
-1. First, check local package manager folders (e.g., `node_modules`, `go/pkg/mod`) within the project tree for the source code
+1. First, check local package manager folders
+   (e.g., `node_modules`, `go/pkg/mod`) within the
+   project tree for the source code
 2. If not found locally, search the web for the package/repository
 3. If still not found, ask the user for:
    - A specific URL to a website with the code
    - A path to a file on the local machine (e.g., git-cloned project)
 
+### Skill for the task
+
+- When it's known which tech stack is used by the
+  project - try to find and invoke the best
+  fitting skill or set of skills. Do not load too
+  much, choose wize.
+- Extensively use Language Server Protocols to explore the code. Prefer it
+for navigating the code.
+- When planning something new, like a feature or changes in app
+architecture - use `ponytail` skill to verify that there is no extra or
+overcomplicated things in solution.
+
 ### Clean Code
 
-- When planning or writing code, use the `clean-code` skill (loaded via `skill` tool with name `clean-code`) to follow principles from Robert C. Martin's Clean Code — meaningful names, single-responsibility functions, minimal comments, and readable structure.
+- When planning or writing code, use the
+  `clean-code` skill (loaded via `skill` tool with
+  name `clean-code`) to follow principles from
+  Robert C. Martin's Clean Code — meaningful
+  names, single-responsibility functions, minimal
+  comments, and readable structure.
 
 ### Clean Architecture
 
-- When designing system structure, layer boundaries, or planning implementations, use the `clean-architecture` skill (loaded via `skill` tool with name `clean-architecture`) to apply the Dependency Rule, SOLID principles, and ports-and-adapters pattern — keeping domain logic independent of frameworks, UI, and databases.
+- When designing system structure, layer boundaries,
+  or planning implementations, use the
+  `clean-architecture` skill (loaded via `skill`
+  tool with name `clean-architecture`) to apply the
+  Dependency Rule, SOLID principles, and
+  ports-and-adapters pattern — keeping domain logic
+  independent of frameworks, UI, and databases.
 
 ## Workflow
 
@@ -63,11 +94,16 @@ about results of current results.
 
 ### 1. Research
 
-- If user gave reference to some code - @explore it and detect possible dependencies
-- Create a .kilo/docs/research/{research-meaningful-name} folder if not exists and add there an information
-- Summarize and document the research on user demand. Ask user to review what you're documenting
-- If you don't know - invoke skill `grill-me` to find out what user wants you to document if he
-wants at all
+- If user gave reference to some code -
+  @explore it and detect possible dependencies
+- Create a
+  `.kilo/docs/research/{research-meaningful-name}`
+  folder if not exists and add there an information
+- Summarize and document the research on user
+  demand. Ask user to review what you're documenting
+- If you don't know - invoke skill `grill-me` to
+  find out what user wants you to document if he
+  wants at all
 
 ### 2. Documentation
 
@@ -79,7 +115,9 @@ wants at all
 
 ### 3. Planning
 
-Use the `clean-code` and `clean-architecture` skills when planning to apply clean code and clean architecture principles.
+Use the `clean-code` and `clean-architecture`
+skills when planning to apply clean code and clean
+architecture principles.
 
 - Based on research findings, create structured implementation plans
 - Plans live in `.kilo/plans/<timestamp>/`
