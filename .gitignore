@@ -8,4 +8,5 @@ tmux/plugins
 nvim/lazy-lock.json
 .DS_Store
 kilo/opencode.jsonc
+kilo/kilo.jsonc
 .agents
