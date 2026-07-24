@@ -8,21 +8,7 @@ local function is_kilo_terminal(bufferName)
   return bufferName:find(TERM_PREFIX, 1, true) and bufferName:find(KILO_PATTERN, 1, true)
 end
 
--- Low-level: channel lookup — O(1) buffer name from cache per channel
-local function find_channel_by_pattern(pattern, state)
-  -- Use channel map keyed by channel ID (O(1) buffer name lookup per channel)
-  if state and state._channel_map then
-    for _, chan in ipairs(vim.api.nvim_list_chans()) do
-      if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
-        -- Cached buffer name avoids expensive nvim_buf_get_name call
-        local buffer_name = state._channel_map[chan.id]
-        if buffer_name and buffer_name:find(pattern, 1, true) then
-          return chan.buf, chan.id
-        end
-      end
-    end
-  end
-  -- Fallback: linear scan (only on first open or after close)
+local function find_channel_by_pattern(pattern)
   for _, chan in ipairs(vim.api.nvim_list_chans()) do
     if chan.buf and vim.api.nvim_buf_is_valid(chan.buf) then
       local buffer_name = vim.api.nvim_buf_get_name(chan.buf)
@@ -43,30 +29,32 @@ local function find_channel_by_buffer(target_buf)
   return nil, nil
 end
 
-local function _update_channel_map(state, buf, chan_id)
-  if not state._channel_map then
-    state._channel_map = {}
-  end
-  -- Key by channel ID instead of buffer name for O(1) lookup by chan.id
-  state._channel_map[chan_id] = buf
-end
-
-local function _clear_channel_map(state)
-  state._channel_map = nil
-end
-
--- Rewrite _get_kilo_session to use state.kilo_win/state.kilo_buf first (O(1))
-local function _get_kilo_session(s)
-  -- Try state-level cache first (O(1)) — only falls back to full scan when
-  -- state is nil (first open, after Neovim session restore).
-  if s.kilo_win and vim.api.nvim_win_is_valid(s.kilo_win) then
-    local buf = vim.api.nvim_win_get_buf(s.kilo_win)
+local function get_session(state)
+  if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
+    local buf = vim.api.nvim_win_get_buf(state.kilo_win)
     if buf and vim.api.nvim_buf_is_valid(buf) and is_kilo_terminal(vim.api.nvim_buf_get_name(buf)) then
-      return s.kilo_win, buf, s.kilo_chan
+      return state.kilo_win, buf, state.kilo_chan
     end
   end
 
-  -- Full scan fallback with TTL (avoids re-scanning on every toggle)
+  -- Reject stale cached window: must be valid AND actually displaying the
+  -- cached buffer. After Neovim session restore the Lua state is nil but
+  -- the physical split may still exist with a different/buffer mismatch.
+  if state.kilo_buf and vim.api.nvim_buf_is_valid(state.kilo_buf) then
+    if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
+      if vim.api.nvim_win_get_buf(state.kilo_win) == state.kilo_buf then
+        return state.kilo_win, state.kilo_buf, state.kilo_chan
+      end
+    end
+  end
+
+  local buf_to_chan = {}
+  for _, chan in ipairs(vim.api.nvim_list_chans()) do
+    if chan.buf then
+      buf_to_chan[chan.buf] = chan.id
+    end
+  end
+
   local wins = vim.api.nvim_list_wins()
   local best_win, best_buf, best_chan = nil, nil, nil
   for _, win in ipairs(wins) do
@@ -76,7 +64,7 @@ local function _get_kilo_session(s)
         local buffer_name = vim.api.nvim_buf_get_name(buf)
         if is_kilo_terminal(buffer_name) then
           best_win, best_buf = win, buf
-          best_chan = select(2, find_channel_by_buffer(buf))
+          best_chan = buf_to_chan[buf]
         end
       end
     end
@@ -85,29 +73,9 @@ local function _get_kilo_session(s)
   return best_win, best_buf, best_chan
 end
 
--- Removed: find_kilo_terminal was only used in _ensure_session which now
--- uses state.kilo_win/state.kilo_buf directly (O(1)).
-
 -- Session helpers
 local function _show_in_window(win, buf)
   vim.api.nvim_win_set_buf(win, buf)
-end
-
-local function _find_cached_session(state)
-  if not state.kilo_buf or not vim.api.nvim_buf_is_valid(state.kilo_buf) then
-    return nil, nil
-  end
-  -- Reject stale cached window: must be valid AND actually displaying the
-  -- cached buffer. After Neovim session restore the Lua state is nil but
-  -- the physical split may still exist with a different/buffer mismatch.
-  if not state.kilo_win or not vim.api.nvim_win_is_valid(state.kilo_win) then
-    return nil, nil
-  end
-  if vim.api.nvim_win_get_buf(state.kilo_win) ~= state.kilo_buf then
-    return nil, nil
-  end
-  -- Use cached channel directly (validated above)
-  return state.kilo_buf, state.kilo_chan
 end
 
 local function _close_active_window(state)
@@ -117,7 +85,6 @@ local function _close_active_window(state)
   state.kilo_win = nil
   state.kilo_buf = nil
   state.kilo_chan = nil
-  _clear_channel_map(state)
 end
 
 local function _setup_new_buffer(state)
@@ -127,54 +94,28 @@ local function _setup_new_buffer(state)
   vim.bo[state.kilo_buf].bufhidden = "hide"
   vim.wo[state.kilo_win].number = false
   vim.wo[state.kilo_win].relativenumber = false
-  local _, chan = find_channel_by_buffer(state.kilo_buf)
-  if chan then
-    _update_channel_map(state, state.kilo_buf, chan)
-  end
 end
 
 local function _ensure_session(state)
-  -- O(1) direct check on state.kilo_win/state.kilo_buf instead of O(n) scan
-  if state.kilo_win and vim.api.nvim_win_is_valid(state.kilo_win) then
-    local buf = vim.api.nvim_win_get_buf(state.kilo_win)
-    if buf and vim.api.nvim_buf_is_valid(buf) and is_kilo_terminal(vim.api.nvim_buf_get_name(buf)) then
-      state.kilo_buf = buf
-      _show_in_window(state.kilo_win, buf)
-      return
-    end
-  end
-
-  local buf, chan = _find_cached_session(state)
-  if buf and chan then
-    state.kilo_chan = chan
-    local win = state.kilo_win
-    if not win or not vim.api.nvim_win_is_valid(win) then
-      vim.cmd("vsplit")
-      win = vim.api.nvim_get_current_win()
-      state.kilo_win = win
-    end
+  local win, buf, chan = get_session(state)
+  if win then
+    state.kilo_win = win
     state.kilo_buf = buf
+    state.kilo_chan = chan
     _show_in_window(win, buf)
-    _update_channel_map(state, buf, chan)
     return
   end
 
   _setup_new_buffer(state)
 end
 
-local function warn(msg)
-  vim.notify("[kilo-debug] " .. msg, vim.log.levels.WARN)
-end
-
--- Rewrite _focus_active_terminal to use state.kilo_chan directly (O(1))
 local function _focus_active_terminal(state)
   local target_win = state.kilo_win
   local is_valid = target_win and vim.api.nvim_win_is_valid(target_win)
 
   if not is_valid then
-    target_win, state.kilo_buf, state.kilo_chan = _get_kilo_session(state)
+    target_win, state.kilo_buf, state.kilo_chan = get_session(state)
     if not target_win then
-      warn("no kilo window found for focus")
       return false
     end
   end
@@ -189,7 +130,7 @@ return function(initialState)
   local state = initialState or {}
 
   Module.toggle = function()
-    local win, buf, chan = _get_kilo_session(state)
+    local win, buf, chan = get_session(state)
     if win then
       if win == vim.api.nvim_get_current_win() then
         return

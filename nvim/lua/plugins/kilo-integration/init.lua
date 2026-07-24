@@ -24,7 +24,6 @@ return {
       kilo_buf = nil,
       kilo_win = nil,
       kilo_chan = nil,
-      _window_buf_map = {},
     }
 
     local terminal = require("plugins.kilo-integration.terminal")(state)
