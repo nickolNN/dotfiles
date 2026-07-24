@@ -1,16 +1,7 @@
 local LEADER_TOGGLE = "<leader>kk"
 
 local _relative_path_cache = nil
-local _relative_path_valid = false
 local _last_buf_path = nil
-
-vim.api.nvim_create_autocmd("BufWinEnter", {
-  callback = function()
-    if _last_buf_path ~= vim.fn.expand("%:p") then
-      _relative_path_valid = false
-    end
-  end,
-})
 
 local function get_relative_path()
   if _relative_path_cache ~= nil and _last_buf_path == vim.fn.expand("%:p") then
@@ -24,7 +15,7 @@ local function get_relative_path()
   else
     _relative_path_cache = full_path
   end
-  _relative_path_valid = true
+  _last_buf_path = full_path
   return _relative_path_cache
 end
 

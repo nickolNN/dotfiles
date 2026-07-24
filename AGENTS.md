@@ -10,7 +10,7 @@
 - Alacritty launches tmux on startup (`alacritty/alagritty.toml:21`) — tmux is always the outer shell
 - Pane nav: `Ctrl-a h/j/k/l`; split: `Ctrl-a "` (horizontal), `Ctrl-a %` (vertical)
 - `Ctrl-a a` sends prefix (needed in nested tmux sessions)
-- Status bar powered by `tmux-powerkit` (`fabioluciano/tmux-powerkit` TPM plugin): ping, loadavg, temperature, battery, memory, GPU metrics (`tmux/tmux.conf`)
+- Status bar: `fabioluciano/tmux-powerkit` — no metrics (`tmux/tmux.conf`)
 
 ## Neovim (LazyVim)
 

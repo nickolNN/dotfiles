@@ -39,7 +39,6 @@ end
 return function(terminal, state)
   local function send_under_cursor(opts)
     local line_number = buffer.get_cursor_line()
-    fn_name.clear_fn_name_cache()
     local fn = fn_name.fn_name_under_cursor() or "<none>"
     local relative_path = buffer.get_relative_path()
     local text_to_send = "@" .. relative_path .. " line " .. line_number .. " (function: " .. fn .. ")"
@@ -70,7 +69,6 @@ return function(terminal, state)
         vim.notify("No word under cursor", vim.log.levels.WARN)
         return
       end
-      fn_name.clear_fn_name_cache()
       local relative_path = buffer.get_relative_path()
       local text_to_send = "@" .. relative_path .. " line " .. line_number .. " " .. word .. "\n"
       context.send(terminal, state, text_to_send, "Word + context sent to Kilo: " .. word, { skip_focus = not (opts and opts.focused) }, relative_path)

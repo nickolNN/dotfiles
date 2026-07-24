@@ -1,21 +1,14 @@
--- LSP cache to avoid synchronous requests when cursor hasn't moved
 local _fn_name_cache = {}
-local _CACHE_TTL_MS = 5000
 
-local function _get_cached_fn_name()
-  local now = vim.uv.now() * 1000
-  if _fn_name_cache.pos and now - _fn_name_cache.pos < _CACHE_TTL_MS then
+local function _get_cached_fn_name(buf, line, col)
+  if _fn_name_cache.buf == buf and _fn_name_cache.line == line and _fn_name_cache.col == col then
     return _fn_name_cache.name
   end
   return nil
 end
 
-local function _set_cached_fn_name(name, pos)
-  _fn_name_cache = { name = name, pos = pos or vim.uv.now() * 1000 }
-end
-
-local function clear_fn_name_cache()
-  _fn_name_cache = {}
+local function _set_cached_fn_name(name, buf, line, col)
+  _fn_name_cache = { name = name, buf = buf, line = line, col = col }
 end
 
 local FUNCTION_NODE_TYPES = {
@@ -35,22 +28,16 @@ local _hover_parser = require("plugins.kilo-integration.send_under_cursor.fn_nam
 local function _fn_name_from_lsp(callback)
   local params = vim.lsp.util.make_position_params(0, _LSP_POSITION_ENCODING)
 
-  local ok, err = pcall(function()
-    vim.lsp.buf_request(0, "textDocument/hover", params, function(_, result)
+  pcall(function()
+    vim.lsp.buf_request(0, "textDocument/hover", params, function(err, result, ctx)
       if result and result.contents then
         local name = _hover_parser(result)
         if name then
           callback(name)
         end
       end
-      -- If hover didn't give us a name, fall through to treesitter in callback
     end)
   end)
-
-  -- Don't cache LSP failure so treesitter can be tried on next call
-  if ok then
-    _set_cached_fn_name(nil, vim.uv.now() * 1000)
-  end
 end
 
 local function _fn_name_from_ts()
@@ -90,31 +77,30 @@ local function _fn_name_from_regex(line_text)
 end
 
 local function fn_name_under_cursor()
-  -- Check cache first (avoids blocking LSP request when cursor hasn't moved)
-  local cached = _get_cached_fn_name()
+  local buf = vim.api.nvim_get_current_buf()
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local line, col = cursor[1], cursor[2]
+
+  local cached = _get_cached_fn_name(buf, line, col)
   if cached then
     return cached
   end
 
-  local name, status = _fn_name_from_lsp(function(f)
+  local name = _fn_name_from_ts()
+  if name then
+    return name
+  end
+
+  _fn_name_from_lsp(function(f)
     if f then
-      _set_cached_fn_name(f, vim.uv.now() * 1000)
+      local cur = vim.api.nvim_win_get_cursor(0)
+      if vim.api.nvim_get_current_buf() == buf and cur[1] == line and cur[2] == col then
+        _set_cached_fn_name(f, buf, line, col)
+      end
     end
   end)
 
-  if name then
-    return name
-  end
-
-  -- Fallback to treesitter
-  name = _fn_name_from_ts()
-  if name then
-    return name
-  end
-
-  -- Fallback to regex / word under cursor
-  local cursorpos = vim.api.nvim_win_get_cursor(0)
-  local line_text = vim.fn.getline(cursorpos[1])
+  local line_text = vim.fn.getline(line)
   local fn = _fn_name_from_regex(line_text)
   if fn and fn ~= "" then
     return fn
@@ -124,5 +110,4 @@ end
 
 return {
   fn_name_under_cursor = fn_name_under_cursor,
-  clear_fn_name_cache = clear_fn_name_cache,
 }

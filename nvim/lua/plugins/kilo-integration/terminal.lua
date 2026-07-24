@@ -76,7 +76,7 @@ local function _get_kilo_session(s)
         local buffer_name = vim.api.nvim_buf_get_name(buf)
         if is_kilo_terminal(buffer_name) then
           best_win, best_buf = win, buf
-          local _, best_chan = find_channel_by_buffer(buf)
+          best_chan = select(2, find_channel_by_buffer(buf))
         end
       end
     end
@@ -144,7 +144,7 @@ local function _ensure_session(state)
     end
   end
 
-  buf, chan = _find_cached_session(state)
+  local buf, chan = _find_cached_session(state)
   if buf and chan then
     state.kilo_chan = chan
     local win = state.kilo_win
