@@ -1,2 +1,20 @@
--- bootstrap lazy.nvim, LazyVim and your plugins
-require("config.lazy")
+vim.g.mapleader = " "
+vim.g.maplocalleader = "\\"
+require("config.pack")
+require("config.options")
+require("config.autocmds")
+require("config.keymaps")
+require("plugins.lsp")
+require("plugins.completion")
+require("plugins.formatting")
+require("plugins.trouble")
+require("plugins.treesitter")
+require("plugins.colorscheme")
+require("plugins.ui")
+require("plugins.smear-cursor")
+require("plugins.fzf")
+require("plugins.gitsigns")
+require("plugins.editing")
+require("plugins.markdown")
+require("plugins.sessions")
+require("plugins.kilo")
