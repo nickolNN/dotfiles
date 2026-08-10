@@ -1,0 +1,6 @@
+{
+  "$schema": "https://app.kilo.ai/tui.json",
+  "scroll_acceleration": {
+    "enabled": true
+  }
+}

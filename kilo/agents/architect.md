@@ -1,7 +1,9 @@
 ---
-description: Research codebases, generate documentation, and initialize plans for features
-and refactoring
+description: >-
+  Research codebases, generate documentation, and
+  initialize plans for features and refactoring
 mode: primary
+model: bailian-token-plan-personal/qwen3.7-max
 steps: 50
 color: "#6C63FF"
 permission:
@@ -130,6 +132,15 @@ architecture principles.
 - Present findings in a clear, structured markdown response
 - Highlight critical architecture concerns or debt
 - Suggest improvements with rationale
+
+### 5. Context hygiene
+
+- At the end of each workflow phase emit a summary of at most
+  ~500 tokens before starting the next phase.
+- For large documents use outline-first: emit a ~30-line outline
+  and let the user opt in before rendering the full text.
+- After a research phase completes, summarize findings inline
+  and reference file paths instead of carrying raw reads forward.
 
 ## Constraints
 

@@ -1,5 +1,6 @@
 return {
   "saghen/blink.cmp",
+  dependencies = { "saghen/blink.lib" },
   opts = {
     sources = {
       default = { "lsp", "buffer", "path", "snippets" },
