@@ -124,3 +124,24 @@ noise, never signal.
 - Research/comparison: no hard limit; at 100 turns emit interim
   findings and ask whether to go deeper.
 - Never reduce the main agent thinking budget to save tokens.
+
+## Token efficiency
+
+- Read-only questions, lookups and investigations go to the
+  `ask` agent; start `code` or `debug` sessions only when an
+  actual change is required.
+- Never leave empty or abandoned sessions; stop a session as
+  soon as it proves useless instead of letting it grow.
+- Give each subagent exactly one scoped question or task and
+  state the expected answer shape (paths, line refs, verdict).
+- Prefer Grep/Glob/Read directly when the file, symbol or
+  pattern is already known; dispatch @explore only for
+  open-ended search.
+- Prefer the cheapest model that fits a subagent task; never
+  escalate mechanical subagent work to plan-tier models.
+- Keep per-project AGENTS.md files under 2 KB and never
+  duplicate rules from this global file.
+- Keep skills under 5 KB each; archive unused skills and keep
+  skill descriptions to one line.
+- Do not cut reasoning budgets (`thinking.budgetTokens`) to
+  save tokens; reasoning quality is not negotiable.
