@@ -1,147 +1,129 @@
 # Rules for all agents
 
-## General rules
+## General
 
-- If you need any interaction with human - use "question" tool
-- When using any cli tools and getting error before brutforcing
-solution invoke -h/--help or similar man action and start your investigation
-there
+- CLI errors: run `-h`/`--help` first; investigate before
+  brute-forcing.
+- Markdown: keep all lines under 80 chars; rules in
+  `~/.config/.markdownlint.json`; check with `markdownlint-cli2`.
 
-## Markdown Linting
+## Tools & execution
 
-- Rules are in @~/.config/.markdownlint.json
-- Use /markdown-lint to check files; run markdownlint-cli2 directly
-  for CI-like strict output.
-- When creating .md files always restrict your strings to 80 chars
+- Grep/Glob/Read directly when known — i.e. you can name the
+  file, symbol, or pattern. semantic_search for conceptual
+  queries; @explore for multi-step discovery; @general for
+  multi-step implementation — sufficient context, clear scoped
+  prompt.
+- Subagents run in parallel; sequential only when one depends on
+  another's output.
+- Local calls: batch freely (group related lookups into one call
+  when supported); internet calls strictly sequential (below).
 
-## Prefer delegation
+## Internet & browser tools
 
-- Always look for a way to decompose task and delegate it to @explore
-or @general. Make sure you provide sufficient context and clear
-prompt. Subagents should be launched preferrable sequentially
+- Scope: live external sites (webfetch, browser automation,
+  search/fetch MCPs). Local MCPs/offline sources exempt. Prefer
+  dedicated MCPs over browser automation; fall back after one
+  failure, never retry a broken MCP in a loop.
+- Anti-bot pacing: one internet call per message; randomized 2–8s
+  wait between calls (`sleep <N>` via Bash, random N 2–8); never
+  idle — batch the sleep with local work (process fetched
+  results); don't block a turn on sleep alone.
+- Throttling ("try again in N seconds/minutes", rate limits):
+  pause ALL queued internet requests immediately; resume after
+  the announced period + buffer — N+1 seconds, or N minutes +1
+  second, per the unit in the response. Prefer productive work
+  over raw sleep; if re-throttled, wait at least as long as the
+  previous pause, then retry once more.
 
-## Efficiency rules
+## Config & schema safety
 
-### Schema-first verification
-
-- When dealing with config fields, **always grep the binary/source** for the
-  exact schema before writing files
-- Example: `grep -aoE '.{60}field_name.{80}' /path/to/binary` reveals the
-  exact type structure
-- Don't trust skill docs blindly — they're often incomplete or stale
-- The actual binary/source code is the authoritative source of truth
-
-### Don't delete until you have the answer
-
-- If a file is invalid, don't delete it — fix it in place after finding the
-  correct schema
-- Only delete files when you're certain they're wrong AND you have the
-  correct replacement ready
-
-### Verify before creating
-
-- Check the schema/format first, then write the file
-- Don't create files speculatively — verify the structure matches
-  expectations
-- Use `kilo config check` or similar validation after writing config files
-
-### Batch exploration
-
-- Batch related searches and related reads together instead of sequential
-  exploration
-
-## Internet / browser-backed tools
-
-- Applies to any MCP/tool that drives a real browser against real
-  sites (search, fetch, browser automation). Match by behavior,
-  not by tool name — new MCPs behave the same way
-- Real sites enforce anti-bot limits and throttles. Mimic human
-  pacing:
-  - Never issue more than one internet call per message; internet
-    calls are strictly sequential, never parallel
-  - Wait a randomized 2–8s between consecutive internet calls
-    (e.g. `sleep <N>` with random N in 2–8 via Bash before the
-    next call)
-- Use waits productively: process already-fetched results, run
-  local analysis, or do other local tool work during the delay —
-  do not idle
-- Throttle handling ("try again in N seconds/minutes", rate-limit
-  responses):
-  - Immediately pause ALL internet requests of the waiting queue
-  - Resume only after the announced period plus buffer: N+1
-    seconds, or N minutes +1 second, per the unit in the response
-  - Prefer doing other productive work over raw sleeping; retry
-    the queue only after the full wait has elapsed
-  - If the retry is throttled again, wait again — at least as long
-    as the previous pause — then retry once more
+- Config fields: **always grep the binary/source** for the exact
+  schema before writing files — e.g.
+  `grep -aoE '.{60}field_name.{80}' /path/to/binary`. Source is
+  authoritative; skill docs describe workflows, not schemas —
+  verify claims against source.
+- No speculative files: check schema/format first, then write;
+  validate after writing config files (`kilo config check` or
+  similar). Scope: config/schema files (code: "Verify once").
+- Invalid file: fix in place after finding the correct schema;
+  delete only when certain it's wrong AND replacement is ready.
 
 ## Context & token efficiency
 
-Cache reads grow with turns x context size. Rules below cut
-noise, never signal.
+Context is write-once cache: everything emitted is re-read every
+later turn. Minimize what enters context, not just what you print.
 
 ### Session handoffs
 
-- Do not import a full prior-session transcript via `@session` —
-  it becomes permanent context re-read on every turn.
-- Instead pass a structured handoff:
-  - final deliverable (table/list/conclusion)
-  - eliminated options with one-line reasons
-  - user-stated preferences and constraints
-  - benchmark item new options are measured against
-- Use `@session` only when the agent must search across many
-  turns of history.
+- Don't import prior transcripts via `@session` (importing a
+  prior session's transcript as context); pass a structured
+  handoff instead — except only when the task requires searching
+  conversation history that no handoff could capture. Handoff
+  carries: final deliverable; eliminated options (one-line
+  reasons); user-stated preferences/constraints; benchmark item
+  new options are measured against.
 
-### Tool output hygiene
+### Output size
 
-- Prefer structured (JSON) extraction over raw text dumps; keep
-  tool results under ~2KB by summarizing in-flight.
-- Prefer a dedicated MCP over browser automation whenever one
-  exists; fall back to the browser after a single MCP failure,
-  never retry a broken MCP in a loop.
-- Group related lookups into one call when the tool supports
-  batch inputs; do not serialize what can be batched.
+- Tool and subagent results under ~2KB: summarize in-flight,
+  prefer structured (JSON) extraction.
+- Tables over ~15 rows or ~2KB: write to a file, reference the
+  path in chat. Never re-render unchanged large content — emit
+  diffs or changed rows/columns only.
 
-### Subagent output schemas
+### Subagents
 
-- When delegating data collection, require a return schema that
-  carries evidence (review quotes), sub-scores, ranks, and
-  warnings — not only headline numbers.
-- The subagent retries failures internally and returns only the
-  final results; error noise stays out of the parent context.
+- Research/analysis/comparison returns must carry evidence
+  (quotes), sub-scores, ranks, warnings — not headline numbers.
+- Returns: final results only — paths, line refs, verdicts,
+  minimal diffs; retries stay internal; no dumps, narratives,
+  logs.
+- Delegate noisy mechanical work (bulk edits, full lint/test
+  runs, dead-code scans); subagents return summaries only.
+- One scoped task per subagent; state expected answer shape;
+  cheapest fitting model — never escalate mechanical work to
+  plan-tier.
 
-### Large outputs
+### Files & edits
 
-- Never re-render unchanged large content; emit a diff or only
-  the changed rows/columns.
-- Tables with more than ~15 rows: write the full table to a file
-  and reference the path in chat.
+- Reference reads: locate via Grep/Glob, then Read only the
+  needed window (offset/limit); later, only the missing window.
+  Re-read only what changed (subagent, formatter, user); batch
+  independent reads into one call.
+- Edit targets: read whole once (2000-line cap) before the first
+  edit; larger files: windows covering edit region plus margin.
+  Never probe with repeated partial reads.
+- Plan all changes first; apply edits back to back, no Reads
+  between — Edit reports success and match context. 4+
+  non-adjacent edits or ~30% rewritten: single Write.
+  Read–Edit–Read re-emits the file per cycle — biggest waster.
 
-### Turn budgets
+### Command output & verification
 
-- Coding/implementation: 40 turns, then stop and re-plan.
-- Bug diagnosis: 60 turns, then rank hypotheses with evidence.
-- Research/comparison: no hard limit; at 100 turns emit interim
-  findings and ask whether to go deeper.
-- Never reduce the main agent thinking budget to save tokens.
+- Shape output at the source: count/filter/list inside the
+  command (`--listTests`, exit codes, `wc`). Tests: failures +
+  summary line only; never stream a full suite into context.
+- Verify once (code verifiers — lint, typecheck, tests): run
+  each once per edit batch; never re-run clean suites unless
+  later edits invalidate them. Max 2 fix–rerun cycles in main
+  context, then delegate the loop (subagent returns failures
+  only). Chain verifiers in one Bash call. Stop when verified
+  once; no extra loops.
 
-## Token efficiency
+### Phases & turn budgets
 
-- Read-only questions, lookups and investigations go to the
-  `ask` agent; start `code` or `debug` sessions only when an
-  actual change is required.
-- Never leave empty or abandoned sessions; stop a session as
-  soon as it proves useless instead of letting it grow.
-- Give each subagent exactly one scoped question or task and
-  state the expected answer shape (paths, line refs, verdict).
-- Prefer Grep/Glob/Read directly when the file, symbol or
-  pattern is already known; dispatch @explore only for
-  open-ended search.
-- Prefer the cheapest model that fits a subagent task; never
-  escalate mechanical subagent work to plan-tier models.
-- Keep per-project AGENTS.md files under 2 KB and never
-  duplicate rules from this global file.
-- Keep skills under 5 KB each; archive unused skills and keep
-  skill descriptions to one line.
-- Do not cut reasoning budgets (`thinking.budgetTokens`) to
-  save tokens; reasoning quality is not negotiable.
+- Lean messages: no restating contents, tool output, or plan
+  state; no narration; one summary. Tool calls are nearly free;
+  turns are not — maximize parallel calls, one edit burst per
+  file.
+- One phase per session; boundary = intent change (design →
+  implementation → verification) or budget hit. Hand off via
+  structured summary (deliverable, decisions, constraints);
+  never drag a session past its turn budget into the next phase.
+- Turn = assistant message with tool calls or user-facing
+  decision; near-budget counts are approximate — bias toward
+  handing off earlier. Budgets: coding 40 (stop, re-plan); bug
+  diagnosis 60 (rank hypotheses with evidence); research 100
+  (interim findings, then ask). Budget hit = stop and hand off,
+  never continue in place.
