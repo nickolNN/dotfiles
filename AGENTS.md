@@ -25,7 +25,7 @@
   tree
 - Formatting: Lua→stylua, TS/JS→eslint_d, Vue→eslint_d+stylelint, Go→golines+golangci-lint
 - Completion: `blink.cmp` with lsp, buffer, path, snippets sources (`nvim/lua/plugins/blink.lua`)
-- Colorscheme: Tokyonight with transparent sidebars/floats (`nvim/lua/plugins/colorscheme.lua`)
+- Colorscheme: Matrix green-on-black (`iruzo/matrix-nvim` via `nvim/lua/plugins/colorscheme.lua`)
 - Mason: `eslint_d`, `golines`, `golangci-lint`, `stylelint` auto-installed (`nvim/lua/plugins/mason.lua`)
 - Inlay hints disabled globally
 - Agent integrations: shared core in `nvim/lua/plugins/agent-integration/`
