@@ -10,3 +10,13 @@ nvim/lazy-lock.json
 kilo/opencode.jsonc
 kilo/kilo.jsonc
 .agents
+pi/models.json
+pi/mcp.json
+pi/npm/*
+!pi/npm/package.json
+pi/auth.json
+pi/sessions/
+pi/mcp-cache.json
+pi/mcp-onboarding.json
+pi/models-store.json
+pi/trust.json

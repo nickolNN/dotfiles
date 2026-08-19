@@ -28,7 +28,14 @@
 - Colorscheme: Tokyonight with transparent sidebars/floats (`nvim/lua/plugins/colorscheme.lua`)
 - Mason: `eslint_d`, `golines`, `golangci-lint`, `stylelint` auto-installed (`nvim/lua/plugins/mason.lua`)
 - Inlay hints disabled globally
-- Custom Kilo integration plugins live in `nvim/lua/plugins/kilo-integration/`
+- Agent integrations: shared core in `nvim/lua/plugins/agent-integration/`
+  provides terminal toggle, context send, keymaps — each agent is a thin
+  wrapper (`kilo-integration/init.lua`, `pi-integration/init.lua`)
+- Kilo: `<leader>k*` keymaps, command `kilo .`, simple pattern terminal detection
+- Pi: `<leader>p*` keymaps, command `pi`, strict command-segment terminal
+  detection, bracketed paste (`\x1b[200~`…`\x1b[201~`)
+- Both: `<leader>{k,p}{f,d,m,l,a,w}` send
+  file/folder/function/line/diagnostics/word, uppercase = focus
 - `nvim/.neoconf.json` with env var
   `NVIM_LAZYVIM_NEOCONFJSON_PATH`
 
@@ -36,13 +43,33 @@
 
 - Provider: custom LiteLLM proxy
 - Requires env var for API key authentication
-- `kilo/opencode.jsonc` is gitignored; create locally
+- `kilo/opencode.jsonc` and `kilo/kilo.jsonc` are gitignored;
+  create locally
+
+## Pi (pi coding agent)
+
+- `PI_CODING_AGENT_DIR=~/.config/pi` (set in `~/.zshrc`)
+- Config directory is this repo's `pi/` — fully git-backed
+- `GLOBAL_AGENTS.md` — shared agent rules (agent-agnostic)
+- `pi/AGENTS.md` → symlink to `GLOBAL_AGENTS.md`
+- `kilo/AGENTS.md` → symlink to `GLOBAL_AGENTS.md`
+- `pi/mcp.json` — MCP server definitions (kilo has its own copy in `kilo/kilo.jsonc`)
+- `pi/settings.json` and `pi/models.json` tracked (models use
+  `$ENV_VAR` refs, not real keys)
+- `pi/extensions/` tracked (e.g. `question-tool.ts`)
+- Runtime data (sessions, npm, auth, caches) gitignored via
+  `pi/.gitignore` — lives in the same dir but never committed
+- Old `~/.pi/agent/` is superseded; `PI_CODING_AGENT_DIR`
+  redirects Pi to `~/.config/pi`
 
 ## Excluded from git
 
 - `yarn/*`, `zed/*`, `configstore/*`, `neofetch/*`,
   `gtk-2.0/*`, `htop/*`, `tmux/plugins`, `nvim/lazy-lock.json`,
-  `.DS_Store`, `kilo/opencode.jsonc`, `.agents`
+  `.DS_Store`, `kilo/opencode.jsonc`, `kilo/kilo.jsonc`,
+  `pi/sessions/`, `pi/npm/node_modules/`, `pi/auth.json`,
+  `pi/mcp-cache.json`, `pi/mcp-onboarding.json`,
+  `pi/models-store.json`, `pi/trust.json`, `.agents`
 
 ## Branches
 
