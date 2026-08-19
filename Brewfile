@@ -4,6 +4,8 @@ tap "nikitabobko/tap", trusted: true
 brew "delve"
 # Simple, fast and user-friendly alternative to find
 brew "fd"
+# Command-line fuzzy finder written in Go
+brew "fzf"
 # GNU implementation of the famous stream editor
 brew "gnu-sed"
 # Open source programming language to build simple/reliable/efficient software
@@ -16,28 +18,26 @@ brew "golangci-lint"
 brew "gopls"
 # Improved top (interactive process viewer)
 brew "htop"
-# CLI wrapper for basic network utilities on macOS - ip command
-brew "iproute2mac"
 # Kubernetes CLI To Manage Your Clusters In Style!
 brew "k9s"
 # Simple terminal UI for git commands
 brew "lazygit"
-# Remote CLI tool for Mattermost server
-brew "mmctl"
+# LLM inference in C/C++
+brew "llama.cpp"
+# Package manager for the Lua programming language
+brew "luarocks"
+# Run LLMs with MLX
+brew "mlx-lm"
 # Ambitious Vim-fork focused on extensibility and agility
 brew "neovim"
 # AI agent toolkit
 brew "pi-coding-agent"
 # Search tool like grep and The Silver Searcher
 brew "ripgrep"
-# State of the art linter for the Go programming language
-brew "staticcheck"
 # Terminal multiplexer
 brew "tmux"
 # Plugin manager for tmux
 brew "tpm"
-# Tools for the WireGuard secure network tunnel
-brew "wireguard-tools"
 # Real-time type-ahead completion for Zsh
 brew "zsh-autocomplete"
 # Fish-like fast/unobtrusive autosuggestions for zsh
@@ -49,6 +49,8 @@ brew "kilo-org/tap/kilo", trusted: true
 # GPU-accelerated terminal emulator
 cask "alacritty"
 cask "font-fira-code-nerd-font"
+# Peer-to-peer video and text chat
+cask "keet"
 # Smooths scrolling and set mouse scroll directions independently
 cask "mos"
 # Desktop application for Open WebUI
