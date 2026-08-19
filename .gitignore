@@ -20,3 +20,5 @@ pi/mcp-cache.json
 pi/mcp-onboarding.json
 pi/models-store.json
 pi/trust.json
+pi/web-search-cache/
+pi/mcp-npx-cache.json
