@@ -17,7 +17,6 @@
   "packages": [
     "npm:pi-mcp-adapter",
     "npm:pi-lens",
-    "npm:@narumitw/pi-goal",
-    "npm:pi-web-access"
+    "npm:@narumitw/pi-goal"
   ]
 }
