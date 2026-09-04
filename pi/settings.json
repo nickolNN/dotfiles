@@ -1,12 +1,12 @@
 {
-  "lastChangelogVersion": "0.84.2",
+  "lastChangelogVersion": "0.84.4",
   "theme": "matrix",
   "themes": [
     "themes"
   ],
   "defaultProvider": "bailian-token-plan-personal",
-  "defaultModel": "deepseek-v4-pro",
-  "defaultThinkingLevel": "high",
+  "defaultModel": "qwen3.8-max",
+  "defaultThinkingLevel": "medium",
   "externalEditor": "nvim",
   "showCacheMissNotices": true,
   "compaction": {

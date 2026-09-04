@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── Usage ────────────────────────────────────────────────────────
+# Launch pi agent in the dotfiles-agent container, connected to a
+# default room named after the given folder.
+#
+# Usage: spawn-pi-agent.sh [FOLDER]
+#   FOLDER  Path to derive room name from (default: $PWD)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+IMAGE="dotfiles-agent"
+FOLDER="$(realpath "${1:-$PWD}")"
+ROOM="$(basename "$FOLDER")"
+# Per-directory container name — never steals/kills another folder's container.
+CONTAINER="$(bash "${SCRIPT_DIR}/container-name.sh" "${FOLDER}")"
+
+# ── Build image if needed ────────────────────────────────────────
+if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+  echo "→ Building ${IMAGE} image..."
+  bash "${SCRIPT_DIR}/build.sh"
+fi
+
+# ── Ensure container exists ──────────────────────────────────────
+STATE="$(docker inspect -f '{{.State.Status}}' "${CONTAINER}" 2>/dev/null || true)"
+
+if [ -z "${STATE}" ]; then
+  echo "→ Creating container ${CONTAINER} for ${FOLDER}..."
+  docker run -d --name "${CONTAINER}" \
+    -v "${FOLDER}:/home/agent/workspace" \
+    -v "${HOME}/.gitconfig:/home/agent/.gitconfig:ro" \
+    -v "${HOME}/.ssh:/home/agent/.ssh:ro" \
+    -v "agent-sessions:/home/agent/.pi/agent/sessions" \
+    --entrypoint sleep \
+    "${IMAGE}" \
+    infinity
+elif [ "${STATE}" != "running" ]; then
+  echo "→ Starting container ${CONTAINER}..."
+  docker start "${CONTAINER}" >/dev/null
+fi
+
+# ── Set default room + launch pi ─────────────────────────────────
+echo "→ Launching pi agent in room «${ROOM}»..."
+exec docker exec -it -w /home/agent/workspace "${CONTAINER}" \
+  bash -c "mkdir -p ~/.pi/agent/rooms && echo '{\"defaultRoom\":\"${ROOM}\"}' > ~/.pi/agent/rooms/config.json && pi update --extensions --no-approve 2>/dev/null; exec pi"

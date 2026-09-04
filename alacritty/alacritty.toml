@@ -18,7 +18,7 @@ dynamic_padding = true
 [mouse]
 hide_when_typing = true
 [terminal]
-shell = {program = "/bin/zsh", args = ["-l", "-c", "tmux attach || tmux"]}
+# shell = {program = "/bin/zsh", args = ["-l", "-c", "herdr || tmux attach || tmux"]}
 [window.dimensions]
 columns = 150
 lines = 50

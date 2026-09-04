@@ -1,0 +1,24 @@
+services:
+  agent:
+    build:
+      context: ..
+      dockerfile: dotfiles-agent/Dockerfile
+      args:
+        AGENT_UID: "${AGENT_UID:-1000}"
+        AGENT_GID: "${AGENT_GID:-1000}"
+    image: dotfiles-agent
+    container_name: dotfiles-agent
+    command: sleep infinity
+    volumes:
+      - "${WORKSPACE:-.}:/home/agent/workspace"
+      - "${HOME}/.gitconfig:/home/agent/.gitconfig:ro"
+      - "${HOME}/.ssh:/home/agent/.ssh:ro"
+      - agent-sessions:/home/agent/.pi/agent/sessions
+      - agent-skills:/home/agent/.agents/skills
+    ports: []
+    stdin_open: true
+    tty: true
+
+volumes:
+  agent-sessions:
+  agent-skills:

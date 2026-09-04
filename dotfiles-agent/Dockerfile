@@ -11,11 +11,22 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
   && echo "NVIM_ARCH=$NVIM_ARCH" >> /etc/environment \
   && echo "LUA_ARCH=$LUA_ARCH" >> /etc/environment
 
-# ── System dependencies ──────────────────────────────────────────
+# ── System dependencies + gh CLI repo ──────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git curl jq build-essential python3 unzip ripgrep fd-find fzf \
   htop luarocks chromium \
   && ln -s /usr/bin/chromium /usr/local/bin/chromium \
+  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+  && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+  && apt-get update && apt-get install -y gh \
+  && for i in 1 2 3; do \
+       npx playwright install-deps chromium firefox webkit && break; \
+       echo "Playwright deps attempt $i failed, retrying..."; sleep 5; \
+       [ "$i" -lt 3 ] || { echo "FATAL: playwright install-deps failed after 3 attempts"; exit 1; }; \
+     done \
   && rm -rf /var/lib/apt/lists/*
 
 # ── Go toolchain ──────────────────────────────────────────────────
@@ -25,16 +36,19 @@ RUN . /etc/environment \
   | tar xz -C /usr/local
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# ── Go tools ──────────────────────────────────────────────────────
+# ── Go tools (parallel) ────────────────────────────────────────
 ENV GOBIN=/usr/local/bin
 RUN for i in 1 2 3; do \
-    go install github.com/go-delve/delve/cmd/dlv@latest \
-      && go install golang.org/x/tools/cmd/goimports@latest \
-      && go install golang.org/x/tools/gopls@latest \
-      && go install github.com/fe3dback/go-arch-lint@latest \
-      && go install github.com/parvez3019/go-swagger3@latest \
-      && break; \
-    echo "Go tools attempt $i failed, retrying..."; sleep 5; \
+    pids="" \
+    && go install github.com/go-delve/delve/cmd/dlv@latest & pids="$pids $!" \
+    && go install golang.org/x/tools/cmd/goimports@latest & pids="$pids $!" \
+    && go install golang.org/x/tools/gopls@latest & pids="$pids $!" \
+    && go install github.com/fe3dback/go-arch-lint@latest & pids="$pids $!" \
+    && go install github.com/parvez3019/go-swagger3@latest & pids="$pids $!" \
+    && fails=0; for p in $pids; do wait $p || fails=$((fails+1)); done \
+    && [ $fails -eq 0 ] && break; \
+    echo "Go tools attempt $i had $fails failure(s), retrying..."; sleep 5; \
+    [ "$i" -lt 3 ] || { echo "FATAL: Go tools install failed after 3 attempts ($fails failures)"; exit 1; }; \
   done
 
 # ── golangci-lint ─────────────────────────────────────────────────
@@ -55,44 +69,59 @@ RUN . /etc/environment \
   && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL "https://github.com/jesseduffield/lazygit/releases/download/v${LG_VERSION}/lazygit_${LG_VERSION}_Linux_${TARGETARCH}.tar.gz" \
   | tar xz -C /usr/local/bin lazygit
 
-# ── GitHub CLI ───────────────────────────────────────────────────
-RUN curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-  | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-  | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-  && apt-get update && apt-get install -y gh \
-  && rm -rf /var/lib/apt/lists/*
-
 # ── Neovim (from official releases) ──────────────────────────────
 RUN . /etc/environment \
   && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL "https://github.com/neovim/neovim/releases/download/stable/nvim-linux-${NVIM_ARCH}.tar.gz" \
   | tar xz -C /usr/local --strip-components=1
 
+# ── Bun (fast package manager) ─────────────────────────────────
+ENV BUN_INSTALL=/opt/bun
+RUN for i in 1 2 3; do \
+      curl -fsSL https://bun.sh/install | bash && break; \
+      echo "Bun install attempt $i failed, retrying..."; sleep 5; \
+      [ "$i" -lt 3 ] || { echo "FATAL: bun install failed after 3 attempts"; exit 1; }; \
+    done \
+  && "$BUN_INSTALL/bin/bun" --version
+ENV PATH="/opt/bun/bin:${PATH}"
+
+# ── Shared, world-readable caches for tools installed as root ────
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    PUPPETEER_CACHE_DIR=/opt/puppeteer-cache \
+    CYPRESS_CACHE_FOLDER=/opt/cypress-cache
+
 # ── Node tools (LSP servers, formatters, linters) ────────────────
-RUN npm install -g \
+RUN bun install -g \
   eslint_d stylelint \
   typescript-language-server bash-language-server \
   vscode-langservers-extracted @angular/language-server \
   @angular/cli playwright puppeteer selenium-webdriver cypress \
-  agent-browser \
+  agent-browser skills \
   && corepack enable \
-  && AGENT_BROWSER_BIN=$(ls /usr/local/lib/node_modules/agent-browser/agent-browser-linux-* 2>/dev/null | head -1) \
-  && if [ -n "$AGENT_BROWSER_BIN" ]; then \
+  && chmod +x /opt/bun/install/global/node_modules/agent-browser/bin/agent-browser-* \
+  && AB_ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') \
+  && AGENT_BROWSER_BIN=/opt/bun/install/global/node_modules/agent-browser/bin/agent-browser-linux-${AB_ARCH} \
+  && if [ -x "$AGENT_BROWSER_BIN" ]; then \
        ln -sf "$AGENT_BROWSER_BIN" /usr/local/bin/agent-browser; \
      else \
        echo "WARNING: agent-browser native binary not found"; \
-     fi
+     fi \
+  && find /opt/bun/install/global/node_modules -type f -path '*/bin/*' -exec chmod +x {} +
 
 # ── Browser-automation browsers ────────────────────────────────
-# Puppeteer downloads its own Chrome during npm install (above)
-RUN npx cypress install
-
-# ── Playwright system dependencies (root) ────────────────────────
-RUN apt-get update \
+RUN cypress install && chmod -R a+rX "$CYPRESS_CACHE_FOLDER" \
+  && mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" "$PUPPETEER_CACHE_DIR" \
+  && chmod 777 "$PLAYWRIGHT_BROWSERS_PATH" "$PUPPETEER_CACHE_DIR" \
   && for i in 1 2 3; do \
-       npx playwright install-deps chromium firefox webkit && break; \
-       echo "Attempt $i failed, retrying..."; sleep 5; \
+       playwright install chromium firefox webkit && break; \
+       echo "Playwright browser install attempt $i failed, retrying..."; sleep 5; \
+       [ "$i" -lt 3 ] || { echo "FATAL: playwright install failed after 3 attempts"; exit 1; }; \
+     done \
+  && for i in 1 2 3; do \
+       puppeteer browsers install chrome && break; \
+       echo "Puppeteer browser install attempt $i failed, retrying..."; sleep 5; \
+       [ "$i" -lt 3 ] || { echo "FATAL: puppeteer browsers install failed after 3 attempts"; exit 1; }; \
      done
+
 # Browserless: separate service (browserless/chrome), not installed here.
 #   Run alongside: docker run -p 3000:3000 browserless/chrome
 
@@ -102,10 +131,32 @@ RUN . /etc/environment \
   | tar xz -C /usr/local/bin
 
 # ── web-search-mcp ───────────────────────────────────────────────
-RUN git clone https://github.com/mrkrsl/web-search-mcp.git /opt/web-search-mcp \
+RUN git clone --depth 1 https://github.com/mrkrsl/web-search-mcp.git /opt/web-search-mcp \
   && cd /opt/web-search-mcp \
-  && npm install \
-  && npm run build
+  && bun install \
+  && bun run build \
+  # Install the browser revisions matching THIS repo's pinned playwright
+  # version (playwright-core@1.54.2 → chromium-1181 /
+  # chromium_headless_shell-1181 / firefox-1489). Use the repo-local CLI
+  # explicitly — a bare `npx playwright` can fall back to the NEWER global
+  # playwright and silently install only the already-present newer
+  # revisions (1234/1538). Runs under the global ENV
+  # PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright; nothing later in the
+  # image touches that directory.
+  && PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
+     ./node_modules/.bin/playwright install chromium firefox \
+  # Belt-and-suspenders: alias the pinned revisions to the newer global
+  # ones so launches resolve even if the pinned download is ever skipped.
+  # Playwright resolves builds purely by directory name. Guarded so it is
+  # a no-op when the pinned install created real directories (ln -sfn
+  # fails on existing real dirs and would break the build).
+  && cd "$PLAYWRIGHT_BROWSERS_PATH" \
+  && for pair in \
+       "chromium-1181 chromium-1234" \
+       "chromium_headless_shell-1181 chromium_headless_shell-1234" \
+       "firefox-1489 firefox-1538"; \
+     do set -- $pair; [ -e "$1" ] || ln -s "$2" "$1"; done \
+  && chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
 
 # ── UID/GID alignment with host ──────────────────────────────────
 ARG AGENT_UID=1000
@@ -115,7 +166,7 @@ RUN groupmod -o -g $AGENT_GID node \
   && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
 
 # ── Pi coding agent ──────────────────────────────────────────────
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.2
+RUN bun install -g @earendil-works/pi-coding-agent
 
 USER agent
 WORKDIR /home/agent
@@ -124,61 +175,100 @@ ENV PATH="/home/agent/go/bin:${PATH}"
 
 # ── Pi config → ~/.pi/agent/ (default location) ──────────────────
 COPY --chown=agent:agent pi/ /tmp/pi-config/
+COPY --chown=agent:agent GLOBAL_AGENTS.md /tmp/pi-config/AGENTS.md
 
-# Fix web-search-mcp path for container
-RUN sed -i \
-  's|/Users/nickolaylobanov/code/web-search-mcp/dist/index.js|/opt/web-search-mcp/dist/index.js|g' \
-  /tmp/pi-config/mcp.json
-
-# AGENTS.md is a symlink → resolve it from GLOBAL_AGENTS.md
-COPY --chown=agent:agent GLOBAL_AGENTS.md /tmp/global-agents.md
-RUN rm /tmp/pi-config/AGENTS.md \
-  && cp /tmp/global-agents.md /tmp/pi-config/AGENTS.md \
-  && rm /tmp/global-agents.md
-
-# Move to default Pi config dir, remove host-only permissions extension
-RUN mkdir -p /home/agent/.pi/agent \
+# Overwrite (or create) the web-search entry in the CONTAINER's config copy.
+# The host mcp.json is host-specific (stale macOS paths, varies per machine,
+# entry may be missing or disabled), so the image does not trust it.
+# env points the server's bundled playwright at the shared browser cache
+# (its pinned playwright-core resolves builds from PLAYWRIGHT_BROWSERS_PATH;
+# without it it falls back to an empty ~/.cache/ms-playwright and every
+# search dies with "Search engine: None; 0 results").
+RUN jq '.mcpServers["web-search"] = {"command": "node", "args": ["/opt/web-search-mcp/dist/index.js"], "disabled": false, "env": {"PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"}}' \
+    /tmp/pi-config/mcp.json > /tmp/pi-config/mcp.json.new \
+  && mv /tmp/pi-config/mcp.json.new /tmp/pi-config/mcp.json \
+  && mkdir -p /home/agent/.pi/agent \
   && cp -r /tmp/pi-config/* /home/agent/.pi/agent/ \
   && rm -f /home/agent/.pi/agent/extensions/permissions.ts \
+  # Host pi/ config may carry ~/.pi/agent/bin/{fd,rg} downloaded for the HOST
+  # arch (e.g. macOS arm64 Mach-O). pi picks bin/ first by existence only,
+  # so a wrong-arch binary shadows system fd/fdfind and silently breaks
+  # @ file autocomplete (Exec format error, swallowed). Drop it; pi then
+  # falls back to system fd (symlinked above) or re-downloads correctly.
+  && rm -rf /home/agent/.pi/agent/bin \
   && rm -rf /tmp/pi-config
-
-# Pi packages
-RUN pi install npm:pi-mcp-adapter \
-  && pi install npm:pi-lens \
-  && pi install npm:@narumitw/pi-goal
-
-# ── Skills ────────────────────────────────────────────────────────
-RUN git config --global http.postBuffer 524288000 \
-  && for i in 1 2 3; do \
-       npx skills add vercel-labs/agent-browser --skill agent-browser -y \
-         && npx skills add juliusbrussee/caveman --skill caveman -y \
-         && npx skills add sickn33/agentic-awesome-skills --skill clean-code -y \
-         && npx skills add mattpocock/skills --skill domain-modeling --skill grill-with-docs -y \
-         && npx skills add anthropics/skills --skill frontend-design -y \
-         && npx skills add dietrichgebert/ponytail --skill ponytail -y \
-         && break; \
-       echo "Skills attempt $i failed, retrying..."; sleep 5; \
-     done
 
 # ── Neovim config → ~/.config/nvim/ ──────────────────────────────
 COPY --chown=agent:agent nvim/ /home/agent/.config/nvim/
 
-# Pre-install LazyVim plugins and Mason tools
-RUN nvim --headless '+Lazy sync' '+qa' 2>/dev/null || true
-RUN nvim --headless '+MasonToolsInstall' '+qa' 2>/dev/null || true
-
-# ── Playwright browsers (agent user) ─────────────────────────────
+# ── Agent tools: pi packages + skills + nvim plugins + browsers ─
+# ── Pi packages (register with pi) ────────────────────────────
 RUN for i in 1 2 3; do \
-      npx playwright install chromium firefox webkit && break; \
-      echo "Attempt $i failed, retrying..."; sleep 5; \
+      pi install npm:pi-mcp-adapter \
+        && pi install npm:pi-lens \
+        && pi install npm:@narumitw/pi-goal \
+        && pi install npm:pi-agents-talk-to-each-other \
+        && break; \
+      echo "Pi packages attempt $i failed, retrying..."; sleep 5; \
+      [ "$i" -lt 3 ] || { echo "FATAL: pi package install failed after 3 attempts"; exit 1; }; \
     done
 
-# ── Pre-trust the workspace ─────────────────────────────────────
-RUN mkdir -p /home/agent/.pi/agent \
-  && echo '{"/home/agent/workspace":true}' > /home/agent/.pi/agent/trust.json
+# ── Skills ────────────────────────────────────────────────────
+# Local skills (geo-bypass)
+COPY --chown=agent:agent ../agent-skills/ /home/agent/.agents/skills/
 
-# ── Agent sessions volume ────────────────────────────────────────
-# Mount at runtime: -v ~/.agent-sessions:/home/agent/.pi/agent/sessions
-RUN mkdir -p /home/agent/.pi/agent/sessions
+# Remote skills: parallel git clone --depth 1 (no skills CLI → no simple-git hangs)
+# Format: repo:subpath (skill name = basename of subpath, "." = repo root)
+RUN git config --global protocol.version 2 \
+  && export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
+  && TMP=/tmp/skills-clone-$$ && mkdir -p "$TMP" \
+  && set -- \
+       "vercel-labs/agent-browser:skills/agent-browser" \
+       "juliusbrussee/caveman:skills/caveman" \
+       "mattpocock/skills:skills/engineering/domain-modeling" \
+       "mattpocock/skills:skills/engineering/grill-with-docs" \
+       "mattpocock/skills:skills/productivity/handoff" \
+       "joneshong-skills/writing-great-skills:." \
+       "anthropics/skills:skills/frontend-design" \
+       "dietrichgebert/ponytail:skills/ponytail" \
+  && repos="" \
+  && for entry; do \
+       r="${entry%%:*}"; \
+       case " $repos " in *" $r "*) ;; *) repos="$repos $r";; esac; \
+     done \
+  && pids="" \
+  && for repo in $repos; do \
+       git clone --depth 1 --single-branch \
+         "https://github.com/$repo.git" "$TMP/$repo" & \
+       pids="$pids $!"; \
+     done \
+  && for p in $pids; do wait "$p" || echo "Clone failed: $p"; done \
+  && for entry; do \
+       repo="${entry%%:*}"; subpath="${entry#*:}"; \
+       if [ "$subpath" = "." ]; then \
+         skill="$(basename "$repo")"; src="$TMP/$repo"; \
+       else \
+         skill="$(basename "$subpath")"; src="$TMP/$repo/$subpath"; \
+       fi; \
+       cp -r "$src" "$HOME/.agents/skills/$skill" && echo "  -> $skill"; \
+     done \
+  && rm -rf "$TMP" \
+  && mkdir -p "$HOME/.agents/skills/clean-code" \
+  && curl -fsSL \
+       "https://raw.githubusercontent.com/sickn33/agentic-awesome-skills/main/skills/clean-code/SKILL.md" \
+       -o "$HOME/.agents/skills/clean-code/SKILL.md" \
+  && echo "  -> clean-code"
+
+# ── Update extensions to latest (no "updates available" on start) ─
+RUN for i in 1 2 3; do \
+      pi update --extensions && break; \
+      echo "Pi update attempt $i failed, retrying..."; sleep 5; \
+      [ "$i" -lt 3 ] || { echo "FATAL: pi update failed after 3 attempts"; exit 1; }; \
+    done
+
+# ── Pre-trust workspace + sessions volume ──────────────────────
+# Mount sessions at runtime: -v ~/.agent-sessions:/home/agent/.pi/agent/sessions
+RUN mkdir -p /home/agent/.pi/agent/sessions \
+  && echo '{"/home/agent/workspace":true}' > /home/agent/.pi/agent/trust.json
 VOLUME /home/agent/.pi/agent/sessions
 

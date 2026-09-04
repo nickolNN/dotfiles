@@ -11,6 +11,7 @@ cagent
 kilo/opencode.jsonc
 kilo/kilo.jsonc
 .agents
+skills-candidates/
 pi/models.json
 pi/mcp.json
 pi/npm/*
@@ -22,4 +23,6 @@ pi/mcp-onboarding.json
 pi/models-store.json
 pi/trust.json
 pi/web-search-cache/
-pi/mcp-npx-cache.json
+@herdr/
+!@herdr/config.toml
+
