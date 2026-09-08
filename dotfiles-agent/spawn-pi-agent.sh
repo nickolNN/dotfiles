@@ -40,6 +40,9 @@ elif [ "${STATE}" != "running" ]; then
 fi
 
 # ── Set default room + launch pi ─────────────────────────────────
+# Extensions are installed/updated at build time (Dockerfile). Don't re-run
+# `pi update --extensions` here: it was a full network npm install on every
+# launch. Skip the startup pi.dev version check too.
 echo "→ Launching pi agent in room «${ROOM}»..."
 exec docker exec -it -w /home/agent/workspace "${CONTAINER}" \
-  bash -c "mkdir -p ~/.pi/agent/rooms && echo '{\"defaultRoom\":\"${ROOM}\"}' > ~/.pi/agent/rooms/config.json && pi update --extensions --no-approve 2>/dev/null; exec pi"
+  bash -c "mkdir -p ~/.pi/agent/rooms && echo '{\"defaultRoom\":\"${ROOM}\"}' > ~/.pi/agent/rooms/config.json && export PI_SKIP_VERSION_CHECK=1; exec pi"

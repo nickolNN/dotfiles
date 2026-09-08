@@ -22,11 +22,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
     | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
   && apt-get update && apt-get install -y gh \
-  && for i in 1 2 3; do \
-       npx playwright install-deps chromium firefox webkit && break; \
-       echo "Playwright deps attempt $i failed, retrying..."; sleep 5; \
-       [ "$i" -lt 3 ] || { echo "FATAL: playwright install-deps failed after 3 attempts"; exit 1; }; \
-     done \
   && rm -rf /var/lib/apt/lists/*
 
 # ── Go toolchain ──────────────────────────────────────────────────
@@ -75,13 +70,19 @@ RUN . /etc/environment \
   | tar xz -C /usr/local --strip-components=1
 
 # ── Bun (fast package manager) ─────────────────────────────────
-ENV BUN_INSTALL=/opt/bun
+ENV BUN_INSTALL=/opt/bun \
+    BUN_INSTALL_CACHE_DIR=/opt/bun-cache
 RUN for i in 1 2 3; do \
       curl -fsSL https://bun.sh/install | bash && break; \
       echo "Bun install attempt $i failed, retrying..."; sleep 5; \
       [ "$i" -lt 3 ] || { echo "FATAL: bun install failed after 3 attempts"; exit 1; }; \
     done \
-  && "$BUN_INSTALL/bin/bun" --version
+  && "$BUN_INSTALL/bin/bun" --version \
+  # Bun stores its download cache under BUN_INSTALL (root-owned) by default,
+  # which the unprivileged `agent` user can't write to at runtime. A separate
+  # shared cache lets `pi install`/`pi update` (=> `bun install`) stay fast
+  # both at build time and at runtime.
+  && mkdir -p "$BUN_INSTALL_CACHE_DIR" && chmod 777 "$BUN_INSTALL_CACHE_DIR"
 ENV PATH="/opt/bun/bin:${PATH}"
 
 # ── Shared, world-readable caches for tools installed as root ────
@@ -108,7 +109,9 @@ RUN bun install -g \
   && find /opt/bun/install/global/node_modules -type f -path '*/bin/*' -exec chmod +x {} +
 
 # ── Browser-automation browsers ────────────────────────────────
-RUN cypress install && chmod -R a+rX "$CYPRESS_CACHE_FOLDER" \
+# Install apt libs via the globally-installed playwright CLI (no npx fetch).
+RUN playwright install-deps chromium firefox webkit \
+  && cypress install && chmod -R a+rX "$CYPRESS_CACHE_FOLDER" \
   && mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" "$PUPPETEER_CACHE_DIR" \
   && chmod 777 "$PLAYWRIGHT_BROWSERS_PATH" "$PUPPETEER_CACHE_DIR" \
   && for i in 1 2 3; do \
@@ -173,52 +176,31 @@ WORKDIR /home/agent
 ENV GOPATH="/home/agent/go"
 ENV PATH="/home/agent/go/bin:${PATH}"
 
-# ── Pi config → ~/.pi/agent/ (default location) ──────────────────
-COPY --chown=agent:agent pi/ /tmp/pi-config/
-COPY --chown=agent:agent GLOBAL_AGENTS.md /tmp/pi-config/AGENTS.md
+# ── Seed pi config so package installs use bun (npm is 5-10× slower) ──
+# Host pi/settings.json is copied later (kept LAST so dotfile edits don't
+# invalidate the heavy installs). Seed a minimal config now; the finalize
+# step below merges the installed `packages` + bun backend back in.
+RUN mkdir -p /home/agent/.pi/agent/npm /home/agent/.pi/agent/sessions \
+  && printf '%s\n' \
+       '{"npmCommand":["bun"],"packages":["npm:pi-mcp-adapter","npm:pi-lens","npm:@narumitw/pi-goal","npm:pi-agents-talk-to-each-other"]}' \
+       > /home/agent/.pi/agent/settings.json \
+  && printf '%s\n' '{"name":"pi-extensions","private":true}' \
+       > /home/agent/.pi/agent/npm/package.json
 
-# Overwrite (or create) the web-search entry in the CONTAINER's config copy.
-# The host mcp.json is host-specific (stale macOS paths, varies per machine,
-# entry may be missing or disabled), so the image does not trust it.
-# env points the server's bundled playwright at the shared browser cache
-# (its pinned playwright-core resolves builds from PLAYWRIGHT_BROWSERS_PATH;
-# without it it falls back to an empty ~/.cache/ms-playwright and every
-# search dies with "Search engine: None; 0 results").
-RUN jq '.mcpServers["web-search"] = {"command": "node", "args": ["/opt/web-search-mcp/dist/index.js"], "disabled": false, "env": {"PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"}}' \
-    /tmp/pi-config/mcp.json > /tmp/pi-config/mcp.json.new \
-  && mv /tmp/pi-config/mcp.json.new /tmp/pi-config/mcp.json \
-  && mkdir -p /home/agent/.pi/agent \
-  && cp -r /tmp/pi-config/* /home/agent/.pi/agent/ \
-  && rm -f /home/agent/.pi/agent/extensions/permissions.ts \
-  # Host pi/ config may carry ~/.pi/agent/bin/{fd,rg} downloaded for the HOST
-  # arch (e.g. macOS arm64 Mach-O). pi picks bin/ first by existence only,
-  # so a wrong-arch binary shadows system fd/fdfind and silently breaks
-  # @ file autocomplete (Exec format error, swallowed). Drop it; pi then
-  # falls back to system fd (symlinked above) or re-downloads correctly.
-  && rm -rf /home/agent/.pi/agent/bin \
-  && rm -rf /tmp/pi-config
-
-# ── Neovim config → ~/.config/nvim/ ──────────────────────────────
-COPY --chown=agent:agent nvim/ /home/agent/.config/nvim/
-
-# ── Agent tools: pi packages + skills + nvim plugins + browsers ─
-# ── Pi packages (register with pi) ────────────────────────────
+# ── Pi packages: ONE install of everything in settings.json ─────
+# `pi update --extensions` resolves + installs every package listed in
+# settings.json in a single `bun install` (the old approach ran 4× `pi
+# install` + a separate update, each a full `npm install`). `npmCommand`
+# above routes it through bun.
 RUN for i in 1 2 3; do \
-      pi install npm:pi-mcp-adapter \
-        && pi install npm:pi-lens \
-        && pi install npm:@narumitw/pi-goal \
-        && pi install npm:pi-agents-talk-to-each-other \
-        && break; \
+      pi update --extensions --no-approve && break; \
       echo "Pi packages attempt $i failed, retrying..."; sleep 5; \
       [ "$i" -lt 3 ] || { echo "FATAL: pi package install failed after 3 attempts"; exit 1; }; \
-    done
+    done \
+  && (cd /home/agent/.pi/agent/npm && bun pm trust --all) || true
 
-# ── Skills ────────────────────────────────────────────────────
-# Local skills (geo-bypass)
-COPY --chown=agent:agent ../agent-skills/ /home/agent/.agents/skills/
-
-# Remote skills: parallel git clone --depth 1 (no skills CLI → no simple-git hangs)
-# Format: repo:subpath (skill name = basename of subpath, "." = repo root)
+# ── Remote skills: parallel git clone --depth 1 ─────────────────
+# (no skills CLI → no simple-git hangs). Format: repo:subpath.
 RUN git config --global protocol.version 2 \
   && export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
   && TMP=/tmp/skills-clone-$$ && mkdir -p "$TMP" \
@@ -259,12 +241,45 @@ RUN git config --global protocol.version 2 \
        -o "$HOME/.agents/skills/clean-code/SKILL.md" \
   && echo "  -> clean-code"
 
-# ── Update extensions to latest (no "updates available" on start) ─
-RUN for i in 1 2 3; do \
-      pi update --extensions && break; \
-      echo "Pi update attempt $i failed, retrying..."; sleep 5; \
-      [ "$i" -lt 3 ] || { echo "FATAL: pi update failed after 3 attempts"; exit 1; }; \
-    done
+# Stash the package state (tiny) so the host config COPY below can't drop it.
+RUN jq -c '{packages: (.packages // []), npmCommand: (.npmCommand // ["bun"])}' \
+    /home/agent/.pi/agent/settings.json > /tmp/pi-pkg-meta.json
+
+# ── Host config (volatile — kept LAST so edits only bust this layer) ──
+COPY --chown=agent:agent pi/ /tmp/pi-config/
+COPY --chown=agent:agent GLOBAL_AGENTS.md /tmp/pi-config/AGENTS.md
+COPY --chown=agent:agent nvim/ /home/agent/.config/nvim/
+COPY --chown=agent:agent ../agent-skills/ /home/agent/.agents/skills/
+
+# ── Finalize pi config → ~/.pi/agent/ ───────────────────────────
+# Overwrite (or create) the web-search entry in the CONTAINER's config copy.
+# The host mcp.json is host-specific (stale macOS paths, varies per machine,
+# entry may be missing or disabled), so the image does not trust it.
+# env points the server's bundled playwright at the shared browser cache
+# (its pinned playwright-core resolves builds from PLAYWRIGHT_BROWSERS_PATH;
+# without it it falls back to an empty ~/.cache/ms-playwright and every
+# search dies with "Search engine: None; 0 results").
+RUN jq '.mcpServers["web-search"] = {"command": "node", "args": ["/opt/web-search-mcp/dist/index.js"], "disabled": false, "env": {"PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"}}' \
+    /tmp/pi-config/mcp.json > /tmp/pi-config/mcp.json.new \
+  && mv /tmp/pi-config/mcp.json.new /tmp/pi-config/mcp.json \
+  && mkdir -p /home/agent/.pi/agent \
+  # Copy host config but exclude any host-arch `npm/` (macOS binaries) so it
+  # can't clobber the container packages installed above.
+  && tar --exclude='./npm' -C /tmp/pi-config -cf - . \
+     | tar -C /home/agent/.pi/agent -xf - \
+  && rm -f /home/agent/.pi/agent/extensions/permissions.ts \
+  # Host pi/ config may carry ~/.pi/agent/bin/{fd,rg} downloaded for the HOST
+  # arch (e.g. macOS arm64 Mach-O). pi picks bin/ first by existence only,
+  # so a wrong-arch binary shadows system fd/fdfind and silently breaks
+  # @ file autocomplete (Exec format error, swallowed). Drop it; pi then
+  # falls back to system fd (symlinked above) or re-downloads correctly.
+  && rm -rf /home/agent/.pi/agent/bin \
+  # Re-apply the packages installed during the build + keep the bun backend.
+  && jq -s '.[0] * .[1]' \
+       /home/agent/.pi/agent/settings.json /tmp/pi-pkg-meta.json \
+       > /tmp/pi-settings.merged \
+  && mv /tmp/pi-settings.merged /home/agent/.pi/agent/settings.json \
+  && rm -rf /tmp/pi-config /tmp/pi-pkg-meta.json
 
 # ── Pre-trust workspace + sessions volume ──────────────────────
 # Mount sessions at runtime: -v ~/.agent-sessions:/home/agent/.pi/agent/sessions

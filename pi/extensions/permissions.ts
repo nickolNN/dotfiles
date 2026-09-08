@@ -26,7 +26,8 @@ export default function (pi: ExtensionAPI) {
       "question",
       "web_search",
       "web_fetch",
-      "mcp"
+      "mcp",
+      "mcpScript"
     ]);
     if (alwaysAllowed.has(name)) return;
 

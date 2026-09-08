@@ -144,3 +144,216 @@
 2026-09-04T18:46:00.070529Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
 2026-09-04T18:47:19.699778Z  INFO herdr::pane: agent changed pane=3 previous_agent=Some(Pi) agent=None pgid=Some(25892)
 2026-09-04T18:47:24.401166Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T18:49:05.522483Z  INFO herdr::pane: agent changed pane=3 previous_agent=None agent=Some(Pi) process=pi pgid=Some(35595)
+2026-09-04T18:49:06.335251Z  INFO herdr::pane: agent changed pane=3 previous_agent=None agent=Some(Pi) process=pi pgid=Some(35595)
+2026-09-04T18:49:11.238322Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T18:51:55.003668Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=5 rows=63 cols=207 scrollback_limit_bytes=10000000
+2026-09-04T18:51:55.009144Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=5 pid=35835
+2026-09-04T18:51:55.009507Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T18:52:00.017495Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T18:52:07.126222Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=5 status="ExitStatus { code: 0, signal: None }"
+2026-09-04T18:52:07.126633Z  INFO herdr::pane: pane session terminated pane=5 pid=35835 signal=Hangup
+2026-09-04T18:52:12.129637Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T18:52:22.720774Z  INFO herdr::pane: agent changed pane=3 previous_agent=None agent=Some(Pi) process=pi pgid=Some(35595)
+2026-09-04T18:52:27.619641Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T18:54:53.576598Z  INFO herdr::app::actions: copied selection to clipboard
+2026-09-04T18:54:57.243016Z  INFO herdr::pane: agent changed pane=3 previous_agent=Some(Pi) agent=None pgid=Some(25892)
+2026-09-04T18:55:01.946230Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T18:55:02.887385Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-04T18:55:05.941450Z  WARN herdr::logging: update check failed event="update.check.complete" subsystem="update" outcome="error" err="failed to fetch Homebrew formula JSON"
+2026-09-04T18:55:05.941645Z  WARN herdr::detect::manifest_update: agent detection manifest update failed: failed to fetch https://herdr.dev/agent-detection/index.toml
+2026-09-04T18:59:12.675248Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=6 rows=63 cols=207 scrollback_limit_bytes=10000000
+2026-09-04T18:59:12.684815Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=6 pid=37784
+2026-09-04T18:59:12.685391Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T18:59:17.691583Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T18:59:36.805115Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T18:59:41.811161Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T19:01:02.232498Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:01:07.238498Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T19:05:57.764067Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:06:02.772253Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T19:06:11.402927Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:06:16.406992Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T19:07:57.960253Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:07:59.073497Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:07:59.955686Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:08:01.012517Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:08:02.033668Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:08:07.041547Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T19:08:18.230106Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:08:23.233037Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-04T19:08:58.339836Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w6"
+2026-09-04T19:08:58.340905Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t1"
+2026-09-04T19:09:02.010816Z  INFO herdr::logging: workspace closed event="workspace.close" subsystem="workspace" outcome="ok" workspace_id="w6"
+2026-09-04T19:09:02.016366Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=4 status="ExitStatus { code: 1, signal: None }"
+2026-09-04T19:09:02.035105Z  INFO herdr::pane: pane session terminated pane=4 pid=26854 signal=Hangup
+2026-09-04T19:09:02.036851Z  WARN herdr::app::actions: PaneDied for unknown pane pane=4
+2026-09-04T19:09:03.556974Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w5"
+2026-09-04T19:09:03.557220Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:09:06.162030Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:09:11.170321Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:09:18.339783Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:10:01.700513Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:10:06.706438Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:10:58.317671Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:11:03.322883Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:18:48.287758Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:18:53.298553Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:19:04.218253Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:19:09.224022Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:19:17.971236Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:19:22.978043Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:19:23.603968Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:19:28.607418Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:25:02.924491Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-04T19:25:05.970845Z  WARN herdr::logging: update check failed event="update.check.complete" subsystem="update" outcome="error" err="failed to fetch Homebrew formula JSON"
+2026-09-04T19:25:05.971262Z  WARN herdr::detect::manifest_update: agent detection manifest update failed: failed to fetch https://herdr.dev/agent-detection/index.toml
+2026-09-04T19:34:30.259098Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-04T19:34:35.269537Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T19:34:38.447931Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=6 status="ExitStatus { code: 1, signal: None }"
+2026-09-04T19:34:38.467553Z  INFO herdr::pane: pane session terminated pane=6 pid=37784 signal=Hangup
+2026-09-04T19:34:38.470244Z  WARN herdr::app::actions: PaneDied for unknown pane pane=6
+2026-09-04T19:34:43.472632Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T22:54:35.029842Z  INFO herdr::server::headless: client detached client_id=2
+2026-09-04T22:54:35.039963Z  INFO herdr::server::headless: client disconnected client_id=2
+2026-09-04T22:54:48.183736Z  INFO herdr::server::headless: server shutdown initiated
+2026-09-04T22:54:48.239075Z  INFO herdr::server::headless: completing server shutdown
+2026-09-04T22:54:48.244936Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=1
+2026-09-04T22:54:48.245063Z  INFO herdr::server::headless: headless server exiting
+2026-09-04T22:54:48.251112Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=3 status="ExitStatus { code: 1, signal: None }"
+2026-09-04T22:54:48.272162Z  INFO herdr::pane: pane session terminated pane=3 pid=25892 signal=Hangup
+2026-09-04T22:54:48.276809Z  INFO herdr::logging: herdr exiting event="app.shutdown" subsystem="server" outcome="completed" pid=23544
+2026-09-05T09:31:54.655060Z  INFO herdr::platform::macos: raised server file descriptor soft limit previous=2560 target=8192
+2026-09-05T09:31:54.656256Z  INFO herdr::api::server: api server listening path=/Users/n.lobanov/.config/herdr/herdr.sock
+2026-09-05T09:31:54.661565Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=1 rows=24 cols=80 scrollback_limit_bytes=10000000
+2026-09-05T09:31:54.666810Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=1 pid=10610
+2026-09-05T09:31:54.669517Z  INFO herdr::logging: session restore evaluated event="persist.restore" subsystem="persist" outcome="ok" workspaces=1
+2026-09-05T09:31:54.669577Z  INFO herdr::app: using pane scrollback configuration pane_scrollback_limit_bytes=10000000
+2026-09-05T09:31:54.707502Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-05T09:31:54.711918Z  INFO herdr::server::headless: restored session already has workspaces; ignoring startup cwd cwd=/Users/n.lobanov
+2026-09-05T09:31:54.712195Z  INFO herdr::server::headless: client protocol socket listening path=/Users/n.lobanov/.config/herdr/herdr-client.sock
+2026-09-05T09:31:54.712209Z  INFO herdr::server::headless: herdr server started api_socket=/Users/n.lobanov/.config/herdr/herdr.sock client_socket=/Users/n.lobanov/.config/herdr/herdr-client.sock
+2026-09-05T09:31:54.712863Z  INFO herdr::logging: herdr starting event="app.startup" subsystem="server" outcome="started" pid=10609
+2026-09-05T09:31:54.968210Z  INFO herdr::server::headless: client connected client_id=2 cols=211 rows=64 cell_width_px=0 cell_height_px=0 render_encoding=SemanticFrame
+2026-09-05T11:04:19.983415Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-05T11:04:29.548447Z  WARN herdr::logging: update check failed event="update.check.complete" subsystem="update" outcome="error" err="failed to fetch Homebrew formula JSON"
+2026-09-05T11:04:29.548452Z  WARN herdr::detect::manifest_update: agent detection manifest update failed: failed to fetch https://herdr.dev/agent-detection/index.toml
+2026-09-05T11:21:46.459644Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=2 rows=63 cols=185 scrollback_limit_bytes=10000000
+2026-09-05T11:21:46.469917Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=2 pid=15913
+2026-09-05T11:21:46.471168Z  INFO herdr::logging: workspace created event="workspace.create" subsystem="workspace" outcome="ok" workspace_id="w6" pane_id=2
+2026-09-05T11:21:46.471200Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w6"
+2026-09-05T11:21:46.471237Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t1"
+2026-09-05T11:21:51.480173Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:21:58.154329Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w5"
+2026-09-05T11:21:58.154435Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:22:03.160025Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:34:11.425699Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=3 rows=63 cols=185 scrollback_limit_bytes=10000000
+2026-09-05T11:34:11.434087Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=3 pid=17773
+2026-09-05T11:34:11.434750Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:34:16.442664Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:34:19.979448Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-05T11:35:02.279746Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:35:06.766688Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:35:08.052496Z  WARN herdr::detect::manifest_update: agent detection manifest update failed: failed to fetch https://herdr.dev/agent-detection/index.toml
+2026-09-05T11:35:09.779814Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:35:12.028009Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:35:13.948056Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:35:18.957053Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:35:45.697386Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:35:50.702210Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:37:19.976594Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:37:24.983526Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:38:30.616084Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:38:35.624033Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:38:53.824943Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:38:58.838372Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:39:16.292378Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:39:21.297734Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:39:35.260290Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w6"
+2026-09-05T11:39:35.260420Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t1"
+2026-09-05T11:39:40.265680Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:40:13.234862Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w5"
+2026-09-05T11:40:13.236062Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:40:15.679960Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:40:20.335478Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:40:25.340206Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:41:13.392637Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=4 rows=63 cols=104 scrollback_limit_bytes=10000000
+2026-09-05T11:41:13.402234Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=4 pid=18926
+2026-09-05T11:41:13.403241Z  INFO herdr::logging: tab renamed event="tab.rename" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t2"
+2026-09-05T11:41:13.403319Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t2"
+2026-09-05T11:41:18.406652Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:43:01.617624Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:43:06.623491Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:43:16.356720Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:43:21.361134Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:43:37.706781Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:43:42.714883Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:45:05.243646Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:45:10.248869Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:52:31.723644Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:52:36.733498Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:52:41.359659Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-05T11:52:46.364721Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T11:57:59.097912Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w6"
+2026-09-05T11:57:59.100728Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t1"
+2026-09-05T11:58:04.107322Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-05T15:12:48.272466Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-06T17:00:48.589336Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-07T08:33:10.809979Z  INFO herdr::server::headless: client resize client_id=2 cols=301 rows=80 cell_width_px=0 cell_height_px=0
+2026-09-07T08:33:13.223973Z  INFO herdr::server::headless: client resize client_id=2 cols=211 rows=64 cell_width_px=0 cell_height_px=0
+2026-09-07T08:33:16.148721Z  INFO herdr::server::headless: client resize client_id=2 cols=301 rows=80 cell_width_px=0 cell_height_px=0
+2026-09-07T08:40:35.413788Z  INFO herdr::pane: agent changed pane=2 previous_agent=None agent=Some(Pi) process=pi pgid=Some(28288)
+2026-09-07T08:40:40.805804Z  INFO herdr::pane: agent changed pane=2 previous_agent=None agent=Some(Pi) process=pi pgid=Some(28288)
+2026-09-07T08:40:45.707742Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T08:46:30.976810Z  INFO herdr::pane: agent changed pane=2 previous_agent=Some(Pi) agent=None pgid=Some(15913)
+2026-09-07T08:46:34.003255Z  INFO herdr::pane: agent changed pane=2 previous_agent=None agent=Some(Pi) process=pi pgid=Some(29131)
+2026-09-07T08:46:34.574498Z  INFO herdr::pane: agent changed pane=2 previous_agent=None agent=Some(Pi) process=pi pgid=Some(29131)
+2026-09-07T08:46:39.471284Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T08:46:42.820719Z  INFO herdr::pane: agent changed pane=2 previous_agent=None agent=Some(Pi) process=pi pgid=Some(29131)
+2026-09-07T08:46:47.719080Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T08:47:11.227183Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-07T08:54:00.022487Z  INFO herdr::logging: spawning pane terminal event="pane.spawn.start" subsystem="pane" outcome="started" pane_id=5 rows=79 cols=297 scrollback_limit_bytes=10000000
+2026-09-07T08:54:00.026763Z  INFO herdr::logging: pane child spawned event="pane.spawned" subsystem="pane" outcome="ok" pane_id=5 pid=30368
+2026-09-07T08:54:00.026927Z  INFO herdr::logging: tab renamed event="tab.rename" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t2"
+2026-09-07T08:54:00.026940Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t2"
+2026-09-07T08:54:05.031322Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T08:54:13.702128Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t1"
+2026-09-07T08:54:18.704772Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T08:54:25.912444Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t2"
+2026-09-07T08:54:30.914795Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T08:54:38.429734Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t1"
+2026-09-07T08:54:43.433789Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T09:00:28.984402Z  INFO herdr::pane: agent changed pane=2 previous_agent=Some(Pi) agent=None pgid=Some(15913)
+2026-09-07T09:00:32.007429Z  INFO herdr::pane: agent changed pane=2 previous_agent=None agent=Some(Pi) process=pi pgid=Some(32544)
+2026-09-07T09:00:33.295072Z  INFO herdr::pane: agent changed pane=2 previous_agent=None agent=Some(Pi) process=pi pgid=Some(32544)
+2026-09-07T09:00:38.192225Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T09:14:34.475796Z  INFO herdr::server::headless: client resize client_id=2 cols=150 rows=50 cell_width_px=0 cell_height_px=0
+2026-09-07T09:17:11.194935Z  INFO herdr::logging: checking for updates event="update.check.start" subsystem="update" outcome="started"
+2026-09-07T09:17:55.439926Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t2"
+2026-09-07T09:18:00.446570Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T09:29:39.248664Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t1"
+2026-09-07T09:29:44.253371Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T09:29:44.840680Z  INFO herdr::pane: agent changed pane=2 previous_agent=Some(Pi) agent=None pgid=Some(15913)
+2026-09-07T09:29:46.730049Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w6"
+2026-09-07T09:29:46.730124Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w6" tab_id="w6:t1"
+2026-09-07T09:29:47.192868Z  INFO herdr::logging: workspace focused event="workspace.focus" subsystem="workspace" outcome="ok" workspace_id="w5"
+2026-09-07T09:29:47.192964Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-07T09:29:50.910412Z  INFO herdr::logging: tab focused event="tab.focus" subsystem="tab" outcome="ok" workspace_id="w5" tab_id="w5:t1"
+2026-09-07T09:29:55.913935Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T09:29:56.508044Z  INFO herdr::server::headless: client detached client_id=2
+2026-09-07T09:29:56.510082Z  INFO herdr::server::headless: client disconnected client_id=2
+2026-09-07T09:30:14.412338Z  INFO herdr::server::headless: server shutdown initiated
+2026-09-07T09:30:14.467852Z  INFO herdr::server::headless: completing server shutdown
+2026-09-07T09:30:14.469726Z  INFO herdr::logging: session saved event="persist.save" subsystem="persist" outcome="ok" path=/Users/n.lobanov/.config/herdr/session.json workspaces=2
+2026-09-07T09:30:14.469775Z  INFO herdr::server::headless: headless server exiting
+2026-09-07T09:30:14.473324Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=2 status="ExitStatus { code: 1, signal: None }"
+2026-09-07T09:30:14.494092Z  INFO herdr::pane: pane session terminated pane=2 pid=15913 signal=Hangup
+2026-09-07T09:30:14.503580Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=4 status="ExitStatus { code: 1, signal: None }"
+2026-09-07T09:30:14.520065Z  INFO herdr::pane: pane session terminated pane=4 pid=18926 signal=Hangup
+2026-09-07T09:30:14.524257Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=5 status="ExitStatus { code: 1, signal: None }"
+2026-09-07T09:30:14.543882Z  INFO herdr::pane: pane session terminated pane=5 pid=30368 signal=Hangup
+2026-09-07T09:30:14.547716Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=3 status="ExitStatus { code: 1, signal: None }"
+2026-09-07T09:30:14.565314Z  INFO herdr::pane: pane session terminated pane=3 pid=17773 signal=Hangup
+2026-09-07T09:30:14.571549Z  INFO herdr::logging: pane child exited event="pane.exit" subsystem="pane" outcome="completed" pane_id=1 status="ExitStatus { code: 1, signal: None }"
+2026-09-07T09:30:14.591076Z  INFO herdr::pane: pane session terminated pane=1 pid=10610 signal=Hangup
+2026-09-07T09:30:14.592252Z  INFO herdr::logging: herdr exiting event="app.shutdown" subsystem="server" outcome="completed" pid=10609

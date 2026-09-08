@@ -9,7 +9,7 @@ Usage: attach.sh [-p PORT] [--build] [--no-install] [FOLDER] [-- CMD...]
   FOLDER      Path to mount as /home/agent/workspace (default: \$PWD)
   -p PORT     Expose port (e.g. -p 3000:3000). Repeatable.
   --build     Force rebuild the image even if it exists.
-  --no-install  Skip auto npm install when package.json detected.
+  --no-install  Skip auto dependency install when package.json detected.
   CMD         Command to run (default: bash). Use "pi" for pi agent.
 EOF
   exit 1
@@ -96,13 +96,14 @@ elif [ "${STATE}" != "running" ]; then
   docker start "${CONTAINER}" >/dev/null
 fi
 
-# ── Auto npm install ─────────────────────────────────────────────
+# ── Auto dependency install ────────────────────────────────────
+# Prefer bun (in-image, ~5-10× faster than npm); fall back to npm.
 if [ "${NO_INSTALL}" = false ] &&
   [ -f "${FOLDER}/package.json" ] &&
   [ ! -d "${FOLDER}/node_modules" ]; then
-  echo "→ Installing npm dependencies..."
+  echo "→ Installing dependencies (bun)..."
   docker exec -w /home/agent/workspace "${CONTAINER}" \
-    bash -c 'corepack enable 2>/dev/null; npm install --legacy-peer-deps'
+    bash -c 'if command -v bun >/dev/null 2>&1; then bun install || npm install --legacy-peer-deps; else npm install --legacy-peer-deps; fi'
 fi
 
 # ── Attach ───────────────────────────────────────────────────────
