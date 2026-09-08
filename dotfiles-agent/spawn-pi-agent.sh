@@ -26,11 +26,16 @@ STATE="$(docker inspect -f '{{.State.Status}}' "${CONTAINER}" 2>/dev/null || tru
 
 if [ -z "${STATE}" ]; then
   echo "→ Creating container ${CONTAINER} for ${FOLDER}..."
+  MOUNTS=(-v "${FOLDER}:/home/agent/workspace")
+  # Only bind host git/ssh config when it actually exists. A missing source
+  # makes Docker auto-create a DIRECTORY, which then can't be mounted over
+  # the container's existing file (~/.gitconfig is baked in by the build's
+  # `git config --global protocol.version 2`) -> OCI "not a directory".
+  [ -f "${HOME}/.gitconfig" ] && MOUNTS+=(-v "${HOME}/.gitconfig:/home/agent/.gitconfig:ro")
+  [ -d "${HOME}/.ssh" ] && MOUNTS+=(-v "${HOME}/.ssh:/home/agent/.ssh:ro")
+  MOUNTS+=(-v "agent-sessions:/home/agent/.pi/agent/sessions")
   docker run -d --name "${CONTAINER}" \
-    -v "${FOLDER}:/home/agent/workspace" \
-    -v "${HOME}/.gitconfig:/home/agent/.gitconfig:ro" \
-    -v "${HOME}/.ssh:/home/agent/.ssh:ro" \
-    -v "agent-sessions:/home/agent/.pi/agent/sessions" \
+    "${MOUNTS[@]}" \
     --entrypoint sleep \
     "${IMAGE}" \
     infinity

@@ -11,7 +11,11 @@ services:
     command: sleep infinity
     volumes:
       - "${WORKSPACE:-.}:/home/agent/workspace"
-      - "${HOME}/.gitconfig:/home/agent/.gitconfig:ro"
+      # .ssh is dir->dir and safe even if missing (Docker auto-creates it).
+      # NOTE: .gitconfig mount removed — a missing host file makes Docker
+      # create a DIRECTORY that can't mount over the image's baked-in
+      # ~/.gitconfig file (OCI "not a directory"). Pass git identity via
+      # `docker exec ... git config` instead.
       - "${HOME}/.ssh:/home/agent/.ssh:ro"
       - agent-sessions:/home/agent/.pi/agent/sessions
       - agent-skills:/home/agent/.agents/skills
