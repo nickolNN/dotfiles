@@ -22,11 +22,9 @@ if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
 fi
 
 # ── Ensure container exists ──────────────────────────────────────
-STATE="$(docker inspect -f '{{.State.Status}}' "${CONTAINER}" 2>/dev/null || true)"
-
-if [ -z "${STATE}" ]; then
+create_container() {
   echo "→ Creating container ${CONTAINER} for ${FOLDER}..."
-  MOUNTS=(-v "${FOLDER}:/home/agent/workspace")
+  local MOUNTS=(-v "${FOLDER}:/home/agent/workspace")
   # Only bind host git/ssh config when it actually exists. A missing source
   # makes Docker auto-create a DIRECTORY, which then can't be mounted over
   # the container's existing file (~/.gitconfig is baked in by the build's
@@ -39,9 +37,23 @@ if [ -z "${STATE}" ]; then
     --entrypoint sleep \
     "${IMAGE}" \
     infinity
+}
+
+STATE="$(docker inspect -f '{{.State.Status}}' "${CONTAINER}" 2>/dev/null || true)"
+
+if [ -z "${STATE}" ]; then
+  create_container
 elif [ "${STATE}" != "running" ]; then
   echo "→ Starting container ${CONTAINER}..."
-  docker start "${CONTAINER}" >/dev/null
+  # A `docker start` failure means the container was created with a stale
+  # mount (e.g. an old unconditional ~/.gitconfig bind). Recreate it rather
+  # than loop on the same error — its only durable state is in the image +
+  # the workspace/sessions volumes, so this is safe and self-healing.
+  if ! docker start "${CONTAINER}" >/dev/null; then
+    echo "→ Start failed (stale mount?) — recreating ${CONTAINER}..."
+    docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
+    create_container
+  fi
 fi
 
 # ── Set default room + launch pi ─────────────────────────────────

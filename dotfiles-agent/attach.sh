@@ -81,12 +81,17 @@ if [ -z "${STATE}" ]; then
   echo "→ Creating container ${CONTAINER} for ${FOLDER}..."
   [ ${#PORT_ARGS[@]} -gt 0 ] && echo "→ Ports: ${USER_PORTS[*]}"
 
+  # Only bind host git/ssh config when it actually exists. A missing source
+  # makes Docker auto-create a DIRECTORY that can't mount over the image's
+  # baked-in ~/.gitconfig file -> OCI "not a directory".
+  MOUNTS=(-v "${FOLDER}:/home/agent/workspace")
+  [ -f "${HOME}/.gitconfig" ] && MOUNTS+=(-v "${HOME}/.gitconfig:/home/agent/.gitconfig:ro")
+  [ -d "${HOME}/.ssh" ] && MOUNTS+=(-v "${HOME}/.ssh:/home/agent/.ssh:ro")
+  MOUNTS+=(-v "agent-sessions:/home/agent/.pi/agent/sessions")
+
   docker run -d --name "${CONTAINER}" \
     ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
-    -v "${FOLDER}:/home/agent/workspace" \
-    -v "${HOME}/.gitconfig:/home/agent/.gitconfig:ro" \
-    -v "${HOME}/.ssh:/home/agent/.ssh:ro" \
-    -v "agent-sessions:/home/agent/.pi/agent/sessions" \
+    "${MOUNTS[@]}" \
     --entrypoint sleep \
     "${IMAGE}" \
     infinity
