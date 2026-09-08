@@ -78,10 +78,8 @@ RUN for i in 1 2 3; do \
       [ "$i" -lt 3 ] || { echo "FATAL: bun install failed after 3 attempts"; exit 1; }; \
     done \
   && "$BUN_INSTALL/bin/bun" --version \
-  # Bun stores its download cache under BUN_INSTALL (root-owned) by default,
-  # which the unprivileged `agent` user can't write to at runtime. A separate
-  # shared cache lets `pi install`/`pi update` (=> `bun install`) stay fast
-  # both at build time and at runtime.
+  # Separate bun's download cache from the root-owned BUN_INSTALL dir
+  # (shared world-writable so a future bun backend still works unprivileged).
   && mkdir -p "$BUN_INSTALL_CACHE_DIR" && chmod 777 "$BUN_INSTALL_CACHE_DIR"
 ENV PATH="/opt/bun/bin:${PATH}"
 
@@ -176,34 +174,33 @@ WORKDIR /home/agent
 ENV GOPATH="/home/agent/go"
 ENV PATH="/home/agent/go/bin:${PATH}"
 
-# ── Seed pi config so package installs use bun (npm is 5-10× slower) ──
+# ── Seed pi config so package installs find the packages to install ──
 # Host pi/settings.json is copied later (kept LAST so dotfile edits don't
 # invalidate the heavy installs). Seed a minimal config now; the finalize
-# step below merges the installed `packages` + bun backend back in.
+# step below merges the installed `packages` back in. No `npmCommand` is
+# set, so pi falls back to its default `npm` backend.
 RUN mkdir -p /home/agent/.pi/agent/npm /home/agent/.pi/agent/sessions \
   && printf '%s\n' \
-       '{"npmCommand":["bun"],"packages":["npm:pi-mcp-adapter","npm:pi-lens","npm:@narumitw/pi-goal","npm:pi-agents-talk-to-each-other"]}' \
+       '{"packages":["npm:pi-mcp-adapter","npm:pi-lens","npm:@narumitw/pi-goal","npm:pi-agents-talk-to-each-other"]}' \
        > /home/agent/.pi/agent/settings.json \
   && printf '%s\n' '{"name":"pi-extensions","private":true}' \
        > /home/agent/.pi/agent/npm/package.json
 
 # ── Pi packages: ONE install of everything in settings.json ─────
 # `pi update --extensions` resolves + installs every package listed in
-# settings.json in a single `bun install` (the old approach ran 4× `pi
-# install` + a separate update, each a full `npm install`). `npmCommand`
-# above routes it through bun.
+# settings.json in a single `npm install` (the old approach ran 4× `pi
+# install` + a separate update, each a full `npm install`).
 RUN for i in 1 2 3; do \
       pi update --extensions --no-approve && break; \
       echo "Pi packages attempt $i failed, retrying..."; sleep 5; \
       [ "$i" -lt 3 ] || { echo "FATAL: pi package install failed after 3 attempts"; exit 1; }; \
-    done \
-  && (cd /home/agent/.pi/agent/npm && bun pm trust --all) || true
+    done
 
 # ── Remote skills: parallel git clone --depth 1 ─────────────────
 # (no skills CLI → no simple-git hangs). Format: repo:subpath.
 RUN git config --global protocol.version 2 \
   && export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
-  && TMP=/tmp/skills-clone-$$ && mkdir -p "$TMP" \
+  && TMP=/tmp/skills-clone-$$ && mkdir -p "$TMP" "$HOME/.agents/skills" \
   && set -- \
        "vercel-labs/agent-browser:skills/agent-browser" \
        "juliusbrussee/caveman:skills/caveman" \
@@ -242,14 +239,14 @@ RUN git config --global protocol.version 2 \
   && echo "  -> clean-code"
 
 # Stash the package state (tiny) so the host config COPY below can't drop it.
-RUN jq -c '{packages: (.packages // []), npmCommand: (.npmCommand // ["bun"])}' \
+RUN jq -c '{packages: (.packages // [])}' \
     /home/agent/.pi/agent/settings.json > /tmp/pi-pkg-meta.json
 
 # ── Host config (volatile — kept LAST so edits only bust this layer) ──
 COPY --chown=agent:agent pi/ /tmp/pi-config/
 COPY --chown=agent:agent GLOBAL_AGENTS.md /tmp/pi-config/AGENTS.md
 COPY --chown=agent:agent nvim/ /home/agent/.config/nvim/
-COPY --chown=agent:agent ../agent-skills/ /home/agent/.agents/skills/
+COPY --chown=agent:agent agent-skills/ /home/agent/.agents/skills/
 
 # ── Finalize pi config → ~/.pi/agent/ ───────────────────────────
 # Overwrite (or create) the web-search entry in the CONTAINER's config copy.
@@ -274,7 +271,7 @@ RUN jq '.mcpServers["web-search"] = {"command": "node", "args": ["/opt/web-searc
   # @ file autocomplete (Exec format error, swallowed). Drop it; pi then
   # falls back to system fd (symlinked above) or re-downloads correctly.
   && rm -rf /home/agent/.pi/agent/bin \
-  # Re-apply the packages installed during the build + keep the bun backend.
+  # Re-apply the packages installed during the build.
   && jq -s '.[0] * .[1]' \
        /home/agent/.pi/agent/settings.json /tmp/pi-pkg-meta.json \
        > /tmp/pi-settings.merged \
