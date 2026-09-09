@@ -1,5 +1,5 @@
 [general]
-import = [ "~/.config/alacritty/themes/matrix.toml" ]
+import = [ "~/.config/alacritty/themes/hackerman.toml" ]
 [env]
 TERM = "xterm-256color"
 [font]

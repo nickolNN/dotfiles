@@ -14,8 +14,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 # ── System dependencies + gh CLI repo ──────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git curl jq build-essential python3 unzip ripgrep fd-find fzf \
-  htop luarocks chromium \
-  && ln -s /usr/bin/chromium /usr/local/bin/chromium \
+  htop luarocks \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -52,12 +51,6 @@ RUN . /etc/environment \
   && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL "https://github.com/golangci/golangci-lint/releases/download/${GCI_VERSION}/golangci-lint-${GCI_VERSION#v}-linux-${TARGETARCH}.tar.gz" \
   | tar xz -C /usr/local/bin --strip-components=1 "golangci-lint-${GCI_VERSION#v}-linux-${TARGETARCH}/golangci-lint"
 
-# ── k9s ───────────────────────────────────────────────────────────
-RUN . /etc/environment \
-  && K9S_VERSION=$(curl --retry 3 --retry-delay 5 --retry-all-errors -s https://api.github.com/repos/derailed/k9s/releases/latest | jq -r .tag_name) \
-  && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL "https://github.com/derailed/k9s/releases/download/${K9S_VERSION}/k9s_Linux_${TARGETARCH}.tar.gz" \
-  | tar xz -C /usr/local/bin k9s
-
 # ── lazygit ───────────────────────────────────────────────────────
 RUN . /etc/environment \
   && LG_VERSION=$(curl --retry 3 --retry-delay 5 --retry-all-errors -s https://api.github.com/repos/jesseduffield/lazygit/releases/latest | jq -r .tag_name | sed 's/^v//') \
@@ -85,15 +78,14 @@ ENV PATH="/opt/bun/bin:${PATH}"
 
 # ── Shared, world-readable caches for tools installed as root ────
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    PUPPETEER_CACHE_DIR=/opt/puppeteer-cache \
-    CYPRESS_CACHE_FOLDER=/opt/cypress-cache
+    PUPPETEER_CACHE_DIR=/opt/puppeteer-cache
 
 # ── Node tools (LSP servers, formatters, linters) ────────────────
 RUN bun install -g \
   eslint_d stylelint \
   typescript-language-server bash-language-server \
   vscode-langservers-extracted @angular/language-server \
-  @angular/cli playwright puppeteer selenium-webdriver cypress \
+  @angular/cli playwright puppeteer \
   agent-browser skills \
   && corepack enable \
   && chmod +x /opt/bun/install/global/node_modules/agent-browser/bin/agent-browser-* \
@@ -109,7 +101,6 @@ RUN bun install -g \
 # ── Browser-automation browsers ────────────────────────────────
 # Install apt libs via the globally-installed playwright CLI (no npx fetch).
 RUN playwright install-deps chromium firefox webkit \
-  && cypress install && chmod -R a+rX "$CYPRESS_CACHE_FOLDER" \
   && mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" "$PUPPETEER_CACHE_DIR" \
   && chmod 777 "$PLAYWRIGHT_BROWSERS_PATH" "$PUPPETEER_CACHE_DIR" \
   && for i in 1 2 3; do \
@@ -136,21 +127,12 @@ RUN git clone --depth 1 https://github.com/mrkrsl/web-search-mcp.git /opt/web-se
   && cd /opt/web-search-mcp \
   && bun install \
   && bun run build \
-  # Install the browser revisions matching THIS repo's pinned playwright
-  # version (playwright-core@1.54.2 → chromium-1181 /
-  # chromium_headless_shell-1181 / firefox-1489). Use the repo-local CLI
-  # explicitly — a bare `npx playwright` can fall back to the NEWER global
-  # playwright and silently install only the already-present newer
-  # revisions (1234/1538). Runs under the global ENV
-  # PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright; nothing later in the
-  # image touches that directory.
-  && PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
-     ./node_modules/.bin/playwright install chromium firefox \
-  # Belt-and-suspenders: alias the pinned revisions to the newer global
-  # ones so launches resolve even if the pinned download is ever skipped.
-  # Playwright resolves builds purely by directory name. Guarded so it is
-  # a no-op when the pinned install created real directories (ln -sfn
-  # fails on existing real dirs and would break the build).
+  # This repo pins an older playwright-core (1.54.2 → chromium-1181 /
+  # firefox-1489), while the global playwright above already installed the
+  # newer revisions (1234/1538) into PLAYWRIGHT_BROWSERS_PATH. Skip the
+  # duplicate browser download and alias the pinned revision names onto
+  # the newer builds — Playwright resolves builds purely by directory
+  # name. Guarded so it is a no-op if the pinned revision ever exists.
   && cd "$PLAYWRIGHT_BROWSERS_PATH" \
   && for pair in \
        "chromium-1181 chromium-1234" \

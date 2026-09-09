@@ -1,0 +1,33 @@
+# hackerman — neon-green-on-translucent-black
+# palette adapted from OwaisQuadri/hackerman.nvim
+[colors.primary]
+background = "#000000"
+foreground = "#d7ffe0"
+
+[colors.cursor]
+text = "#0b1210"
+cursor = "#39ff14"
+
+[colors.selection]
+text = "#0b1210"
+background = "#39ff14"
+
+[colors.normal]
+black = "#0b1210"
+red = "#ff4d4d"
+green = "#39ff14"
+yellow = "#ffe75c"
+blue = "#17f5d3"
+magenta = "#c46bff"
+cyan = "#5fffd7"
+white = "#d7ffe0"
+
+[colors.bright]
+black = "#a5c9b8"
+red = "#ff8a7a"
+green = "#8affc1"
+yellow = "#fff3a1"
+blue = "#5fffd7"
+magenta = "#d9a3ff"
+cyan = "#b7ff5c"
+white = "#ffffff"

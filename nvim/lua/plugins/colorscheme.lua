@@ -1,11 +1,12 @@
 return {
   {
-    "iruzo/matrix-nvim",
+    "OwaisQuadri/hackerman.nvim",
+    priority = 1000,
   },
   {
     "LazyVim/LazyVim",
     opts = {
-      colorscheme = "matrix",
+      colorscheme = "hackerman",
     },
   },
 }
