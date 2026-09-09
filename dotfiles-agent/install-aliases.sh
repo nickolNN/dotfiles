@@ -8,6 +8,7 @@ set -euo pipefail
 # Adds:
 #   agent-spawn  -> spawn-pi-agent.sh "$PWD"
 #   agent-attach -> attach.sh "$PWD"
+#   agent-fwd    -> port-forward.sh -f "$PWD"   (up|down|list ...)
 #   agent-stop   -> stop-all.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,6 +21,7 @@ END="# <<< dotfiles-agent aliases (managed) <<<"
 ALIASES=(
   "alias agent-spawn='${SCRIPT_DIR}/spawn-pi-agent.sh \"\$PWD\"'"
   "alias agent-attach='${SCRIPT_DIR}/attach.sh \"\$PWD\"'"
+  "alias agent-fwd='${SCRIPT_DIR}/port-forward.sh -f \"\$PWD\"'"
   "alias agent-stop='${SCRIPT_DIR}/stop-all.sh'"
 )
 
@@ -56,5 +58,5 @@ if [ -s "$ZSHRC" ]; then
 fi
 cat "$block" >>"$ZSHRC"
 
-echo "✓ agent-spawn, agent-attach, agent-stop"
+echo "✓ agent-spawn, agent-attach, agent-fwd, agent-stop"
 echo "  Reload with: source ${ZSHRC}   (or open a new terminal)"

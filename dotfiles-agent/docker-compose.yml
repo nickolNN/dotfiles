@@ -18,11 +18,9 @@ services:
       # `docker exec ... git config` instead.
       - "${HOME}/.ssh:/home/agent/.ssh:ro"
       - agent-sessions:/home/agent/.pi/agent/sessions
-      - agent-skills:/home/agent/.agents/skills
     ports: []
     stdin_open: true
     tty: true
 
 volumes:
   agent-sessions:
-  agent-skills:

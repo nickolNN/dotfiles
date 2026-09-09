@@ -1,5 +1,16 @@
 # Dotfiles
 
+## Conventions
+
+- **Keep docs in sync with functionality.** When you change a script, config,
+  or workflow, update the documentation that describes it in the same change
+  (this `AGENTS.md`, `dotfiles-agent/README.md`, `GLOBAL_AGENTS.md`, etc.).
+  Treat stale docs as a bug — don't let code and docs drift apart.
+- **Keep skills in sync too.** When you change something a skill describes
+  (in `agent-skills/` or the remote skills shipped into the image), update
+  that skill's `SKILL.md` in the same change — its frontmatter description
+  and body are documentation the agent reads, and a stale skill is a bug.
+
 ## Setup
 
 - `brew bundle` from `Brewfile` installs all CLI tools and fonts
@@ -62,6 +73,28 @@
   `pi/.gitignore` — lives in the same dir but never committed
 - Old `~/.pi/agent/` is superseded; `PI_CODING_AGENT_DIR`
   redirects Pi to `~/.config/pi`
+
+## dotfiles-agent (Docker dev environment)
+
+Full docs: `dotfiles-agent/README.md`. Quick reference:
+
+- `dotfiles-agent/` builds the `dotfiles-agent` image (node 24, Go, neovim,
+  bun, LSPs, browsers, pi + skills); uid/gid-aligned to the host user
+- Aliases (via `dotfiles-agent/install-aliases.sh`): `agent-spawn`,
+  `agent-attach`, `agent-fwd`, `agent-stop`
+- Containers are per-directory (`container-name.sh`); durable state is in
+  volumes, so recreating a container is cheap and safe
+- `agent-skills/` is re-synced into the container on every launch, so a new
+  skill shows up without a rebuild (rebuild only to bake it into the image)
+- Ports come in two flavors:
+  - Declared: `agent-spawn -p HOST:GUEST` / `agent-attach -p HOST:GUEST`
+    (repeatable; bare `PORT` ≡ `PORT:PORT`). Stateless — the live mapping is
+    diffed against `docker inspect` and the container recreated only on
+    mismatch; omitting `-p` leaves ports untouched.
+  - Ad-hoc: `agent-fwd up|down|list HOST:GUEST` — a `--network container:`
+    sidecar publishes a port into a *running* container without a restart.
+- Gotcha: fixed ports only (no `-p 0:PORT`); the in-container dev server must
+  listen on `0.0.0.0`.
 
 ## Excluded from git
 
