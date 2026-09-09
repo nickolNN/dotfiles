@@ -5,7 +5,7 @@
     "themes"
   ],
   "defaultProvider": "bailian-token-plan-personal",
-  "defaultModel": "qwen3.8-max",
+  "defaultModel": "deepseek-v4-pro-0813",
   "defaultThinkingLevel": "medium",
   "externalEditor": "nvim",
   "showCacheMissNotices": true,

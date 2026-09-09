@@ -112,7 +112,22 @@ RUN playwright install-deps chromium firefox webkit \
        puppeteer browsers install chrome && break; \
        echo "Puppeteer browser install attempt $i failed, retrying..."; sleep 5; \
        [ "$i" -lt 3 ] || { echo "FATAL: puppeteer browsers install failed after 3 attempts"; exit 1; }; \
-     done
+     done \
+  # agent-browser needs a discoverable Chrome/Chromium binary.
+  # Chrome for Testing has no Linux ARM64 build, so install
+  # system Chromium (Debian bookworm ships one) and point
+  # agent-browser at it via AGENT_BROWSER_EXECUTABLE_PATH (set in
+  # the ENV below).  Playwright's install-deps above already pulled
+  # the shared libraries agent-browser expects.  Do NOT run
+  # `agent-browser install` here: it only downloads Chrome for
+  # Testing, which fails on ARM64.
+  # Smoke-test the agent-browser→Chromium wiring now (`doctor` does a
+  # live headless launch); --no-sandbox is required in containers.
+  && apt-get update && apt-get install -y --no-install-recommends chromium \
+  && AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
+     AGENT_BROWSER_ARGS="--no-sandbox,--disable-dev-shm-usage" \
+     agent-browser doctor --offline \
+  && rm -rf /var/lib/apt/lists/*
 
 # Browserless: separate service (browserless/chrome), not installed here.
 #   Run alongside: docker run -p 3000:3000 browserless/chrome
@@ -149,6 +164,11 @@ RUN groupmod -o -g $AGENT_GID node \
   && usermod -o -u $AGENT_UID -g $AGENT_GID -d /home/agent -m -l agent node
 
 # ── Pi coding agent ──────────────────────────────────────────────
+# Point agent-browser at system Chromium (Chrome for Testing has no ARM64).
+# --no-sandbox is required to launch Chromium inside a container.
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
+    AGENT_BROWSER_ARGS="--no-sandbox,--disable-dev-shm-usage"
+
 RUN bun install -g @earendil-works/pi-coding-agent
 
 USER agent
