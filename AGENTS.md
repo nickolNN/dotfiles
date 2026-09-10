@@ -25,7 +25,8 @@
   shell
 - Pane nav: `Ctrl-a h/j/k/l`; split: `Ctrl-a "` (horizontal), `Ctrl-a %` (vertical)
 - `Ctrl-a a` sends prefix (needed in nested tmux sessions)
-- Status bar: `fabioluciano/tmux-powerkit` — no metrics (`tmux/tmux.conf`)
+- Status bar: hand-rolled hackerman theme in `tmux/tmux.conf`
+  (neon pill styling, `heading.sh` for the git branch)
 
 ## Neovim (LazyVim)
 
@@ -65,10 +66,11 @@
 - `GLOBAL_AGENTS.md` — shared agent rules (agent-agnostic)
 - `pi/AGENTS.md` → symlink to `GLOBAL_AGENTS.md`
 - `kilo/AGENTS.md` → symlink to `GLOBAL_AGENTS.md`
-- `pi/mcp.json` — MCP server definitions (kilo has its own copy in `kilo/kilo.jsonc`)
-- `pi/settings.json` and `pi/models.json` tracked (models use
-  `$ENV_VAR` refs, not real keys)
-- `pi/extensions/` tracked (e.g. `question-tool.ts`)
+- `pi/mcp.json` — MCP server definitions (kilo has its own copy in
+  `kilo/kilo.jsonc`) — gitignored
+- `pi/settings.json`, `pi/web-search.json`, `pi/themes/`, `pi/extensions/`
+  tracked
+- `pi/models.json` gitignored — holds literal API keys, never commit
 - Runtime data (sessions, npm, auth, caches) gitignored via
   `pi/.gitignore` — lives in the same dir but never committed
 - Old `~/.pi/agent/` is superseded; `PI_CODING_AGENT_DIR`
