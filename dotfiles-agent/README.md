@@ -28,7 +28,16 @@ See the `Dockerfile` for the full list and the reasoning behind each layer.
 | `port-forward.sh` | ad-hoc host→container port forwarding (no restart) |
 | `stop-all.sh` | stop/remove every `dotfiles-agent` container (incl. forwards) |
 | `install-aliases.sh` | install `agent-*` zsh aliases (idempotent) |
+| `host-notify/install.sh` | install the macOS desktop-notification bridge (LaunchAgent) |
 | `docker-compose.yml` | declarative alternative to the shell scripts |
+
+## Build prerequisites
+
+`build.sh` requires per-machine files that are gitignored (they hold secrets)
+and fails fast if they're missing:
+
+- `pi/models.json` — models + API keys; the image is unusable without it
+- `pi/mcp.json` — MCP server definitions the image rewrites at build time
 
 ## Quick start
 
@@ -101,6 +110,39 @@ Notes:
 - the in-container dev server must listen on `0.0.0.0` (not `127.0.0.1`) for
   host access to reach it
 
+## Desktop notifications
+
+Pi (host session or inside a `dotfiles-agent` container) pushes **completion**
+and **waiting-for-input** events to macOS Notification Center:
+
+- `host-notify/server.mjs` is a loopback HTTP bridge that turns a
+  `POST /notify` into an `osascript display notification`. Binds
+  `127.0.0.1:49151` by default (`PI_NOTIFY_PORT` / `PI_NOTIFY_BIND` override).
+- `pi/extensions/notify-desktop.ts` fires on `agent_settled` ("Pi finished")
+  and `ui_prompt_start` ("Pi needs you"). On the host it posts to `127.0.0.1`;
+  inside a container it posts to `host.docker.internal` (Docker Desktop
+  forwards that to the host loopback).
+
+Install the host bridge once:
+
+```bash
+./host-notify/install.sh   # LaunchAgent; starts at login, auto-restarts
+```
+
+Health check: `curl http://127.0.0.1:49151/health`.
+
+Notes:
+
+- "Pi needs you" is a **persistent alert** (stays until you click OK);
+  "Pi finished" is a banner that auto-dismisses.
+- Each notification is labelled with its source: the room name (folder
+  basename) for containers, `host` for a host session; override with
+  `PI_NOTIFY_LABEL`.
+- The extension is baked into the image from `pi/extensions/`, so **rebuild**
+  (`build.sh` / `agent-attach --build`) to pick it up in an existing image.
+- The first notification may require allowing the terminal / Script Editor in
+  **System Settings → Notifications**.
+
 ## Skills
 
 Skills reach the container from two sources, merged in
@@ -131,3 +173,8 @@ the next launch with **no rebuild**. To also bake it into the image for fresh
   (`container-name.sh`), and `port-forward.sh` matches sidecars by exact name
   glob rather than Docker's loose `name=` regex filter (so folders like `app`
   vs `myapp` can't cross-match).
+- **pi-lens auto-format is disabled in the image.** `~/.pi-lens/config.json`
+  ships `format.enabled: false`, so pi-lens never reformats files on its own —
+  formatting is the project's job (e.g. `eslint_d` as configured in the repo).
+  A repo opts back in with `"format": { "enabled": true }` in its own
+  `.pi-lens.json`.

@@ -81,12 +81,20 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     PUPPETEER_CACHE_DIR=/opt/puppeteer-cache
 
 # ── Node tools (LSP servers, formatters, linters) ────────────────
-RUN bun install -g \
-  eslint_d stylelint \
-  typescript-language-server bash-language-server \
-  vscode-langservers-extracted @angular/language-server \
-  @angular/cli playwright puppeteer \
-  agent-browser skills \
+# Retry loop: Angular publishes @angular/cli before its @angular-devkit/*
+# deps, so an unversioned install can hit a registry-propagation window
+# where `latest` resolves but the just-published transitive deps do not.
+RUN for i in 1 2 3; do \
+      bun install -g \
+        eslint_d stylelint \
+        typescript-language-server bash-language-server \
+        vscode-langservers-extracted @angular/language-server \
+        @angular/cli playwright puppeteer \
+        agent-browser skills \
+        && break; \
+      echo "Node tools install attempt $i failed, retrying..."; sleep 5; \
+      [ "$i" -lt 3 ] || { echo "FATAL: node tools install failed after 3 attempts"; exit 1; }; \
+    done \
   && corepack enable \
   && chmod +x /opt/bun/install/global/node_modules/agent-browser/bin/agent-browser-* \
   && AB_ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') \
@@ -181,10 +189,9 @@ ENV PATH="/home/agent/go/bin:${PATH}"
 # invalidate the heavy installs). Seed a minimal config now; the finalize
 # step below merges the installed `packages` back in. No `npmCommand` is
 # set, so pi falls back to its default `npm` backend.
-RUN mkdir -p /home/agent/.pi/agent/npm /home/agent/.pi/agent/sessions \
-  && printf '%s\n' \
-       '{"packages":["npm:pi-mcp-adapter","npm:pi-lens","npm:@narumitw/pi-goal","npm:pi-agents-talk-to-each-other"]}' \
-       > /home/agent/.pi/agent/settings.json \
+RUN BASE_PKGS='{"packages":["npm:pi-mcp-adapter","npm:pi-lens","npm:@narumitw/pi-goal","npm:pi-agents-talk-to-each-other"]}' \
+  && mkdir -p /home/agent/.pi/agent/npm /home/agent/.pi/agent/sessions \
+  && printf '%s\n' "$BASE_PKGS" > /home/agent/.pi/agent/settings.json \
   && printf '%s\n' '{"name":"pi-extensions","private":true}' \
        > /home/agent/.pi/agent/npm/package.json
 
@@ -279,6 +286,16 @@ RUN jq '.mcpServers["web-search"] = {"command": "node", "args": ["/opt/web-searc
        > /tmp/pi-settings.merged \
   && mv /tmp/pi-settings.merged /home/agent/.pi/agent/settings.json \
   && rm -rf /tmp/pi-config /tmp/pi-pkg-meta.json
+
+# ── pi-lens default posture ──────────────────────────────────────
+# Auto-format OFF by default in the container. pi-lens's formatter
+# auto-detect would otherwise reformat files with its own Biome/Prettier
+# fallback even when the project only declares eslint_d, so formatting is
+# left to the project's own tooling. A repo can opt back in with
+# `{"format": {"enabled": true}}` in its own `.pi-lens.json`.
+RUN mkdir -p /home/agent/.pi-lens \
+  && printf '%s\n' '{"format":{"enabled":false}}' \
+       > /home/agent/.pi-lens/config.json
 
 # ── Pre-trust workspace + sessions volume ──────────────────────
 # Mount sessions at runtime: -v ~/.agent-sessions:/home/agent/.pi/agent/sessions

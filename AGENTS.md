@@ -104,6 +104,7 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `gtk-2.0/*`, `htop/*`, `tmux/plugins`, `nvim/lazy-lock.json`,
   `.DS_Store`, `kilo/opencode.jsonc`, `kilo/kilo.jsonc`,
   `pi/sessions/`, `pi/npm/node_modules/`, `pi/auth.json`,
+  `pi/models.json`, `pi/mcp.json`,
   `pi/mcp-cache.json`, `pi/mcp-onboarding.json`,
   `pi/models-store.json`, `pi/trust.json`, `.agents`
 

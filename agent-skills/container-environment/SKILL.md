@@ -46,6 +46,12 @@ survive has to live in the workspace or the sessions/skills volumes.
 
 See `dotfiles-agent/Dockerfile` for the authoritative list.
 
+pi-lens ships with auto-format **disabled** in the image
+(`~/.pi-lens/config.json` → `format.enabled: false`), so formatting is left to
+each project's own tooling (e.g. `eslint_d`). A repo can opt pi-lens
+formatting back in with `"format": { "enabled": true }` in its own
+`.pi-lens.json`.
+
 ## Durable vs ephemeral
 
 | Storage | Survives recreate? |
