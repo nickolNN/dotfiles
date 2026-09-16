@@ -138,6 +138,11 @@ Notes:
 - Each notification is labelled with its source: the room name (folder
   basename) for containers, `host` for a host session; override with
   `PI_NOTIFY_LABEL`.
+- The persistent alert offers an **Attach** button that reopens the room's
+  tmux session when the agent was launched inside tmux; it's silently omitted
+  when tmux (or alacritty) isn't present.
+- Message bodies are flattened from markdown to plain text and trimmed at a
+  word boundary, so a cut never strands `**`/`]`/`)` fragments.
 - The extension is baked into the image from `pi/extensions/`, so **rebuild**
   (`build.sh` / `agent-attach --build`) to pick it up in an existing image.
 - The first notification may require allowing the terminal / Script Editor in

@@ -214,10 +214,15 @@ RUN git config --global protocol.version 2 \
        "vercel-labs/agent-browser:skills/agent-browser" \
        "juliusbrussee/caveman:skills/caveman" \
        "mattpocock/skills:skills/engineering/domain-modeling" \
-       "mattpocock/skills:skills/engineering/grill-with-docs" \
+       "mattpocock/skills:skills/engineering/code-review" \
+       "mattpocock/skills:skills/engineering/wayfinder" \
+       "mattpocock/skills:skills/engineering/codebase-design" \
+       "max4c/skills:skills/grill-me" \
        "mattpocock/skills:skills/productivity/handoff" \
+       "mattpocock/skills:skills/productivity/to-questionnaire" \
+       "mattpocock/skills:skills/productivity/teach" \
        "joneshong-skills/writing-great-skills:." \
-       "anthropics/skills:skills/frontend-design" \
+       "vercel-labs/agent-skills:skills/web-design-guidelines" \
        "dietrichgebert/ponytail:skills/ponytail" \
   && repos="" \
   && for entry; do \
@@ -274,6 +279,12 @@ RUN jq '.mcpServers["web-search"] = {"command": "node", "args": ["/opt/web-searc
   && tar --exclude='./npm' -C /tmp/pi-config -cf - . \
      | tar -C /home/agent/.pi/agent -xf - \
   && rm -f /home/agent/.pi/agent/extensions/permissions.ts \
+  # Rewrite localhost/127.0.0.1 → host.docker.internal in mcp.json URLs
+  # so MCP bridges running on the host are reachable from the container.
+  && mv /home/agent/.pi/agent/mcp.json /tmp/mcp-in.json \
+  && jq 'walk(if type == "object" and has("url") then .url |= gsub("://(?<host>localhost|127\\.0\\.0\\.1)(?<rest>[:/])"; "://host.docker.internal\(.rest)") else . end)' \
+       /tmp/mcp-in.json > /home/agent/.pi/agent/mcp.json \
+  && rm -f /tmp/mcp-in.json \
   # Host pi/ config may carry ~/.pi/agent/bin/{fd,rg} downloaded for the HOST
   # arch (e.g. macOS arm64 Mach-O). pi picks bin/ first by existence only,
   # so a wrong-arch binary shadows system fd/fdfind and silently breaks

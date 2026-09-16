@@ -139,6 +139,22 @@ if [ -d "${SKILLS_DIR}" ]; then
   docker cp "${SKILLS_DIR}/." "${CONTAINER}:/home/agent/.agents/skills/"
 fi
 
+# ── Record tmux session for desktop-notification "Attach" ────────
+# Hop-back target for the persistent "Pi needs you" alert. Runs only
+# inside tmux; silently a no-op otherwise (no tmux, or launched from a
+# bare shell). The host bridge reads ~/.pi-notify/<room>.attach.
+record_tmux_session() {
+  if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+    local session
+    session="$(tmux display-message -p '#{session_name}' 2>/dev/null || true)"
+    if [ -n "$session" ]; then
+      mkdir -p "$HOME/.pi-notify"
+      printf '%s\n' "$session" >"$HOME/.pi-notify/${ROOM}.attach"
+    fi
+  fi
+}
+record_tmux_session
+
 # ── Set default room + launch pi ─────────────────────────────────
 # Extensions are installed/updated at build time (Dockerfile). Don't re-run
 # `pi update --extensions` here: it was a full network npm install on every

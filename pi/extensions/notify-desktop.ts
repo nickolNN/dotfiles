@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Desktop notifications for Pi.
  *
@@ -11,8 +12,13 @@
  * basename) inside a container, or "host" for a host session. Override with
  * PI_NOTIFY_LABEL, PI_NOTIFY_URL, and PI_NOTIFY_PORT.
  *
- * "Pi needs you" is sent as a persistent alert (stays until dismissed);
- * "Pi finished" is an auto-dismissing banner.
+ * "Pi needs you" is sent as a persistent alert (stays until dismissed; the
+ * bridge can offer an "Attach" button to hop back to the room's tmux
+ * session). "Pi finished" is an auto-dismissing banner with no buttons.
+ *
+ * Message bodies are flattened from markdown to plain text BEFORE trimming,
+ * so truncation can never strand a `**bold**`, `[link]`, `]`, `)`, or other
+ * markdown fragment.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -62,16 +68,56 @@ function extractText(content: unknown): string {
   return "";
 }
 
-function summarize(text: string, max = 140): string {
-  const flat = text.replace(/\s+/g, " ").trim();
+/**
+ * Flatten common markdown to plain text. macOS notifications can't render
+ * rich text, so this removes the syntax rather than trying to map it. Runs
+ * on the FULL body before trimming.
+ */
+function toPlainText(md: string): string {
+  return md
+    .replace(/```[^\n]*[\s\S]*?```/g, " ")
+    .replace(/(^|[\s(])`([^`]+)`/g, "$1$2")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s{0,3}([-*_])([ \t]*\1){2,}[ \t]*$/gm, "")
+    .replace(/^\s{0,3}[-*+]\s+/gm, "")
+    .replace(/^\s{0,3}\d+[.)]\s+/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(\*|_)(.*?)\1/g, "$2")
+    .replace(/~~(.*?)~~/g, "$1")
+    .replace(/^\s*\|?[\s\-:|]+\|?\s*$/gm, " ")
+    .replace(/^\s*\|/gm, "")
+    .replace(/\|\s*$/gm, "")
+    .replace(/\|/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Trim to a word boundary without leaving dangling punctuation/quotes/
+ * brackets at the cut, then append an ellipsis.
+ */
+function truncatePlain(plain: string, max = 140): string {
+  const flat = plain.replace(/\s+/g, " ").trim();
   if (flat.length <= max) return flat;
-  return `${flat.slice(0, max - 1)}…`;
+  const cut = flat.slice(0, max - 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  const atBoundary = lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut;
+  const cleaned = atBoundary.replace(/[\s,;:.!?()[\]{}<>"'«»…–—-]+$/u, "");
+  return `${cleaned}…`;
+}
+
+function summarize(md: string, max = 140): string {
+  return truncatePlain(toPlainText(md), max);
 }
 
 async function notify(
   title: string,
   message: string,
   style: "notification" | "alert" = "notification",
+  room = "",
 ): Promise<void> {
   try {
     const controller = new AbortController();
@@ -79,7 +125,7 @@ async function notify(
     await fetch(`${baseUrl()}/notify`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title, message, style }),
+      body: JSON.stringify({ title, message, style, room }),
       signal: controller.signal,
     });
     clearTimeout(timer);
@@ -101,13 +147,21 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("agent_settled", async () => {
     const title = `${label} · Pi finished`;
-    await notify(title, summarize(lastAssistantText) || "Pi is idle.");
+    await notify(
+      title,
+      summarize(lastAssistantText) || "Pi is idle.",
+      "notification",
+      label,
+    );
     lastAssistantText = "";
   });
 
   pi.on("ui_prompt_start", async (event: any) => {
-    const reason = [event?.title, event?.kind].filter(Boolean).join(" · ");
+    const reason = summarize(
+      [event?.title, event?.kind].filter(Boolean).join(" · "),
+      120,
+    );
     const title = `${label} · Pi needs you`;
-    await notify(title, reason || "Waiting for input…", "alert");
+    await notify(title, reason || "Waiting for input…", "alert", label);
   });
 }

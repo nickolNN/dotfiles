@@ -8,8 +8,8 @@ Usage: port-forward.sh [-f FOLDER] up   HOST:GUEST [HOST:GUEST ...]
        port-forward.sh [-f FOLDER] down [HOST[:GUEST] ...]   # omit = remove all
        port-forward.sh [-f FOLDER] list
 
-  Temporarily publish a host port into a RUNNING agent container by
-  attaching a shared-network-namespace sidecar. No container restart.
+  Temporarily forward a host port into a RUNNING container via a
+  lightweight socat relay sidecar. No container restart needed.
 
   -f FOLDER    Derive the target container from FOLDER (default: \$PWD).
   HOST:GUEST   Host port to bind  →  port the dev server listens on
@@ -79,10 +79,35 @@ require_running() {
 do_up() {
   if [ $# -eq 0 ]; then usage; fi
   require_running
-  local spec name mapping state
+
+  # Resolve target container IP and network so the relay sidecar can
+  # reach it. Default bridge containers talk via IP; user-defined
+  # networks also support DNS, but IP is universal.
+  local target_ip target_net
+  target_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CONTAINER}" | awk '{print $1}')
+  target_net=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "${CONTAINER}" | awk '{print $1}')
+
+  if [ -z "${target_ip}" ]; then
+    echo "✗ Cannot determine IP of ${CONTAINER} — is it attached to a network?" >&2
+    exit 1
+  fi
+
+  # Ensure the tiny socat relay image is available.
+  if ! docker image inspect alpine/socat >/dev/null 2>&1; then
+    echo "→ Pulling alpine/socat (tiny relay image, ~5MB)..."
+    docker pull alpine/socat >/dev/null || {
+      echo "✗ Failed to pull alpine/socat. Check Docker connectivity." >&2
+      exit 1
+    }
+  fi
+
+  local spec name mapping host_port guest_port state net_arg
   for spec in "$@"; do
     mapping="$(normalize_port "${spec}")"
+    host_port=$(echo "${mapping}" | cut -d: -f1)
+    guest_port=$(echo "${mapping}" | cut -d: -f2)
     name="$(sidecar_name "${spec}")"
+
     if docker inspect -f . "${name}" >/dev/null 2>&1; then
       state="$(docker inspect -f '{{.State.Status}}' "${name}" 2>/dev/null || true)"
       if [ "${state}" = "running" ]; then
@@ -92,12 +117,20 @@ do_up() {
       echo "→ Replacing stale ${name}..."
       docker rm -f "${name}" >/dev/null
     fi
-    echo "→ Forwarding ${mapping} into ${CONTAINER} (${name})..."
+
+    # Attach to the same network as the target so the relay can reach
+    # the container IP. Default bridge needs no explicit --network.
+    net_arg=""
+    if [ -n "${target_net}" ] && [ "${target_net}" != "bridge" ]; then
+      net_arg="--network=${target_net}"
+    fi
+
+    echo "→ Forwarding ${mapping} → ${CONTAINER} (${target_ip}:${guest_port}, ${name})..."
     docker run -d --name "${name}" \
-      --network "container:${CONTAINER}" \
-      -p "${mapping}" \
-      --entrypoint sleep \
-      "${IMAGE}" infinity >/dev/null
+      ${net_arg} \
+      -p "${host_port}:${guest_port}" \
+      alpine/socat \
+      "TCP-LISTEN:${guest_port},fork,reuseaddr" "TCP:${target_ip}:${guest_port}" >/dev/null
   done
 }
 
