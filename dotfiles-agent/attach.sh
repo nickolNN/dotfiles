@@ -121,9 +121,25 @@ if [ "${NEED_CREATE}" = true ]; then
   # makes Docker auto-create a DIRECTORY that can't mount over the image's
   # baked-in ~/.gitconfig file -> OCI "not a directory".
   MOUNTS=(-v "${FOLDER}:/home/agent/workspace")
+
+  # Shadow host directories that should stay host-only (node_modules, etc.)
+  # with a tmpfs — hides the host copy, starts empty, disappears on stop.
+  # Mount it owned by the agent user (host uid/gid — the image is aligned
+  # via AGENT_UID/AGENT_GID) so installs can actually write to it; Docker's
+  # tmpfs default is root-owned and the agent user would hit EACCES.
+  # Extend via AGENT_SHADOW_DIRS: space-separated workspace-relative names.
+  for dir in node_modules ${AGENT_SHADOW_DIRS:-}; do
+    [ -n "$dir" ] || continue
+    MOUNTS+=(--tmpfs "/home/agent/workspace/${dir}:exec,uid=$(id -u),gid=$(id -g),mode=755")
+  done
+
   [ -f "${HOME}/.gitconfig" ] && MOUNTS+=(-v "${HOME}/.gitconfig:/home/agent/.gitconfig:ro")
   [ -d "${HOME}/.ssh" ] && MOUNTS+=(-v "${HOME}/.ssh:/home/agent/.ssh:ro")
+  # Sessions and long-term memory are both one shared volume per name, so
+  # every room's agent sees the same history and the same brain. The image
+  # pre-creates both dirs so a fresh volume is seeded agent-owned.
   MOUNTS+=(-v "agent-sessions:/home/agent/.pi/agent/sessions")
+  MOUNTS+=(-v "agent-memory:/home/agent/.pi/agent/memory")
 
   docker run -d --name "${CONTAINER}" \
     ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
@@ -153,9 +169,11 @@ fi
 
 # ── Auto dependency install ────────────────────────────────────
 # Prefer bun (in-image, ~5-10× faster than npm); fall back to npm.
+# node_modules is now a container-private volume — check inside the
+# container (not the host) to decide whether to install.
 if [ "${NO_INSTALL}" = false ] &&
   [ -f "${FOLDER}/package.json" ] &&
-  [ ! -d "${FOLDER}/node_modules" ]; then
+  docker exec "${CONTAINER}" bash -c '[ -z "$(ls -A /home/agent/workspace/node_modules 2>/dev/null)" ]'; then
   echo "→ Installing dependencies (bun)..."
   docker exec -w /home/agent/workspace "${CONTAINER}" \
     bash -c 'if command -v bun >/dev/null 2>&1; then bun install || npm install --legacy-peer-deps; else npm install --legacy-peer-deps; fi'

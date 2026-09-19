@@ -79,7 +79,7 @@ Rules:
   the container's live `docker inspect` mapping and recreates **only on
   mismatch**. Re-running with no `-p` leaves existing ports untouched, so a bare
   `agent-attach` never clobbers a container that already has ports.
-- recreation is cheap and safe: workspace + sessions are volumes; skills are re-synced from the repo on every launch
+- recreation is cheap and safe: workspace + sessions + memory are volumes; skills are re-synced from the repo on every launch
 
 ### 2. Ad-hoc forwards — `agent-fwd`
 
@@ -109,6 +109,38 @@ Notes:
   and recreate forever
 - the in-container dev server must listen on `0.0.0.0` (not `127.0.0.1`) for
   host access to reach it
+
+## Workspace isolation
+
+By default the container mounts the host folder read-write, which means
+`node_modules` (and its native binaries, caches, etc.) would be shared between
+host and container — the container could modify or corrupt host dependencies.
+
+To prevent this, `agent-spawn` and `agent-attach` **shadow `node_modules`** with
+a tmpfs (in-memory). The host's `node_modules` is hidden from the container;
+the tmpfs starts empty and vanishes when the container stops. It's mounted
+owned by the agent user (host uid/gid, which the image is aligned to via
+`AGENT_UID`/`AGENT_GID`), so installs can write to it — Docker's tmpfs default
+is root-owned, which would make `bun install` fail with `EACCES`.
+
+On first attach, if `package.json` exists and the container's `node_modules` is
+empty, `bun install` (or `npm install`) runs automatically. Stopping the
+container discards it — the next launch installs fresh.
+
+Note: Docker needs the tmpfs target to exist and will create an **empty**
+`node_modules` directory on the host if it's missing. It's always empty (the
+tmpfs lives above it) and is gitignored in practice, so it's harmless.
+
+### Extending the shadow list
+
+Set `AGENT_SHADOW_DIRS` to a space-separated list of workspace-relative
+directory names to also isolate from the host:
+
+```bash
+AGENT_SHADOW_DIRS=".next dist .turbo" agent-spawn
+```
+
+Each entry gets its own tmpfs and is fully private to the container.
 
 ## Desktop notifications
 
@@ -153,7 +185,7 @@ Notes:
 Skills reach the container from two sources, merged in
 `/home/agent/.agents/skills`:
 
-- **Remote skills** (agent-browser, caveman, frontend-design, ponytail, …) are
+- **Remote skills** (agent-browser, caveman, glyph, ponytail, …) are
   cloned into the image at build time and baked in.
 - **Repo skills** in `agent-skills/` are also baked in by the Dockerfile, and —
   because the image is only rebuilt on demand — `agent-spawn` / `agent-attach`
@@ -163,6 +195,53 @@ So a new skill (a `SKILL.md` dropped under `agent-skills/<name>/`) shows up on
 the next launch with **no rebuild**. To also bake it into the image for fresh
 `docker run` / `docker compose` containers, run `build.sh` (or
 `agent-attach --build`).
+
+## Long-term memory
+
+Pi remembers across sessions with
+[`pi-memory`](https://pi.dev/packages/pi-memory) — plain-markdown
+`MEMORY.md`, daily logs, and a scratchpad. The store path comes from
+`PI_MEMORY_DIR`, which the image sets to `~/.pi/agent/memory`, so
+`docker exec` shells and the agent agree on it.
+
+Durable storage follows the sessions pattern: **one shared Docker volume**
+(`agent-memory`) mounted at that path in every container, so all rooms
+share a single brain — the same way every room shares `agent-sessions`.
+
+Implementation notes:
+
+- the image pre-creates `~/.pi/agent/memory` (`mkdir -p`, owned by
+  `agent`). A named volume mounted at a path the image does *not* have
+  comes up `root:root`, and the agent user then cannot write to it.
+- the mount point is the memory subdir, never `~/.pi/agent` itself: a
+  volume there would shadow the baked `settings.json`, `models.json`,
+  `mcp.json`, and `npm/` (the installed packages).
+- `pi-memory` is installed at build time from the `BASE_PKGS` seed, using
+  the same `pi update --extensions` run as the other extensions.
+
+Caveats:
+
+- `pi-memory` has **no per-project scoping** — everything it learns is
+  global, so "use pnpm in this repo" is visible from every other repo.
+  Per-repo facts belong in that repo's `AGENTS.md`.
+- `memory_search` uses [qmd](https://github.com/tobi/qmd), installed in
+  the image via `npm`. BM25 keyword search works offline; the vector
+  ("semantic"/"deep") modes download their GGUF models on first use —
+  into the container's throwaway layer, so a recreated container
+  downloads them again.
+- the host keeps its own store at `~/.config/pi/memory` (`PI_MEMORY_DIR`
+  in `~/.zshrc`) — the volume is container-only. For one brain across
+  host *and* containers, swap the volume mount for a bind of that dir:
+  `-v "$HOME/.config/pi/memory:/home/agent/.pi/agent/memory"`.
+- markdown memory is bind-safe; SQLite-backed extensions (e.g.
+  `pi-hermes-memory`) are not — keep those on a named volume.
+- concurrent rooms write the same files and the extension takes no lock.
+  Writes are small appends, so at worst an update is lost, never
+  corrupted.
+
+Rebuild (`build.sh` / `agent-attach --build`), then **recreate** existing
+containers (`agent-stop`) — a container created before this change keeps
+its old mount set and would keep memory inside the throwaway layer.
 
 ## Design notes
 

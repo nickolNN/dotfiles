@@ -106,6 +106,11 @@ RUN for i in 1 2 3; do \
      fi \
   && find /opt/bun/install/global/node_modules -type f -path '*/bin/*' -exec chmod +x {} +
 
+# ── qmd (BM25 search backend for pi-memory) ─────────────────────
+# npm (not bun): better-sqlite3 ships prebuilt N-API binaries that real
+# Node 24 resolves, while bun's node-ABI handling fails its install script.
+RUN npm install -g @tobilu/qmd
+
 # ── Browser-automation browsers ────────────────────────────────
 # Install apt libs via the globally-installed playwright CLI (no npx fetch).
 RUN playwright install-deps chromium firefox webkit \
@@ -189,8 +194,9 @@ ENV PATH="/home/agent/go/bin:${PATH}"
 # invalidate the heavy installs). Seed a minimal config now; the finalize
 # step below merges the installed `packages` back in. No `npmCommand` is
 # set, so pi falls back to its default `npm` backend.
-RUN BASE_PKGS='{"packages":["npm:pi-mcp-adapter","npm:pi-lens","npm:@narumitw/pi-goal","npm:pi-agents-talk-to-each-other"]}' \
+RUN BASE_PKGS='{"packages":["npm:pi-mcp-adapter","npm:pi-lens","npm:@narumitw/pi-goal","npm:pi-agents-talk-to-each-other","npm:pi-memory"]}' \
   && mkdir -p /home/agent/.pi/agent/npm /home/agent/.pi/agent/sessions \
+               /home/agent/.pi/agent/memory \
   && printf '%s\n' "$BASE_PKGS" > /home/agent/.pi/agent/settings.json \
   && printf '%s\n' '{"name":"pi-extensions","private":true}' \
        > /home/agent/.pi/agent/npm/package.json
@@ -224,6 +230,7 @@ RUN git config --global protocol.version 2 \
        "joneshong-skills/writing-great-skills:." \
        "vercel-labs/agent-skills:skills/web-design-guidelines" \
        "dietrichgebert/ponytail:skills/ponytail" \
+       "yonatangross/orchestkit:src/skills/glyph" \
   && repos="" \
   && for entry; do \
        r="${entry%%:*}"; \
@@ -308,9 +315,22 @@ RUN mkdir -p /home/agent/.pi-lens \
   && printf '%s\n' '{"format":{"enabled":false}}' \
        > /home/agent/.pi-lens/config.json
 
-# ── Pre-trust workspace + sessions volume ──────────────────────
-# Mount sessions at runtime: -v ~/.agent-sessions:/home/agent/.pi/agent/sessions
-RUN mkdir -p /home/agent/.pi/agent/sessions \
+# ── Pre-trust workspace + sessions/memory volumes ─────────────
+# Mount sessions at runtime: -v agent-sessions:/home/agent/.pi/agent/sessions
+# Mount memory at runtime:  -v agent-memory:/home/agent/.pi/agent/memory
+#
+# Both dirs MUST exist in the image before a volume is mounted over them:
+# Docker seeds a new named volume from the image's content (ownership
+# included), but a volume at a path the image lacks comes up root:root and
+# the agent user cannot write to it.
+#
+# The memory dir is deliberately NOT ~/.pi/agent itself — a volume there
+# would shadow the baked settings.json/models.json/mcp.json/npm and break
+# the package setup installed above.
+RUN mkdir -p /home/agent/.pi/agent/sessions /home/agent/.pi/agent/memory \
   && echo '{"/home/agent/workspace":true}' > /home/agent/.pi/agent/trust.json
+# pi-memory stores MEMORY.md + daily logs here (env var, not config file).
+ENV PI_MEMORY_DIR=/home/agent/.pi/agent/memory
 VOLUME /home/agent/.pi/agent/sessions
+VOLUME /home/agent/.pi/agent/memory
 

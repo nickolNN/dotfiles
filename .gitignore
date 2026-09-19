@@ -18,6 +18,7 @@ pi/npm/*
 !pi/npm/package.json
 pi/auth.json
 pi/sessions/
+pi/memory/
 pi/mcp-cache.json
 pi/mcp-onboarding.json
 pi/models-store.json

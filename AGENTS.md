@@ -21,7 +21,7 @@
 
 - Prefix is `Ctrl-a` (not Ctrl-b), mapped in `tmux/tmux.conf`
 - Alacritty launches tmux on startup
-  (`alacritty/alagritty.toml:21`) — tmux is always the outer
+  (`alacritty/alacritty.toml:21`) — tmux is always the outer
   shell
 - Pane nav: `Ctrl-a h/j/k/l`; split: `Ctrl-a "` (horizontal), `Ctrl-a %` (vertical)
 - `Ctrl-a a` sends prefix (needed in nested tmux sessions)
@@ -71,8 +71,12 @@
 - `pi/settings.json`, `pi/web-search.json`, `pi/themes/`, `pi/extensions/`
   tracked
 - `pi/models.json` gitignored — holds literal API keys, never commit
-- Runtime data (sessions, npm, auth, caches) gitignored via
-  `pi/.gitignore` — lives in the same dir but never committed
+- Long-term memory is `pi-memory` (listed in `pi/settings.json`): the host
+  store is `~/.config/pi/memory`, set via `PI_MEMORY_DIR` in `~/.zshrc`;
+  container agents write to the shared `agent-memory` Docker volume
+  instead (`dotfiles-agent/README.md` → "Long-term memory")
+- Runtime data (sessions, memory, npm, auth, caches) gitignored via the
+  root `.gitignore` — lives in the same dir but never committed
 - Old `~/.pi/agent/` is superseded; `PI_CODING_AGENT_DIR`
   redirects Pi to `~/.config/pi`
 
@@ -103,7 +107,7 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
 - `yarn/*`, `zed/*`, `configstore/*`, `neofetch/*`,
   `gtk-2.0/*`, `htop/*`, `tmux/plugins`, `nvim/lazy-lock.json`,
   `.DS_Store`, `kilo/opencode.jsonc`, `kilo/kilo.jsonc`,
-  `pi/sessions/`, `pi/npm/node_modules/`, `pi/auth.json`,
+  `pi/sessions/`, `pi/memory/`, `pi/npm/node_modules/`, `pi/auth.json`,
   `pi/models.json`, `pi/mcp.json`,
   `pi/mcp-cache.json`, `pi/mcp-onboarding.json`,
   `pi/models-store.json`, `pi/trust.json`, `.agents`

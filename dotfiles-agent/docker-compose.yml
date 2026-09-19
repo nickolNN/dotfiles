@@ -18,9 +18,18 @@ services:
       # `docker exec ... git config` instead.
       - "${HOME}/.ssh:/home/agent/.ssh:ro"
       - agent-sessions:/home/agent/.pi/agent/sessions
+      # Long-term memory: ONE volume shared by every room, so all agents
+      # (and all repos) share a single brain — see README "Long-term memory".
+      - agent-memory:/home/agent/.pi/agent/memory
+    # Shadow the host's node_modules: private in-memory dir, gone on stop.
+    # Must be owned by the agent user (AGENT_UID/AGENT_GID build args), else
+    # Docker's root-owned tmpfs default makes installs hit EACCES.
+    tmpfs:
+      - /home/agent/workspace/node_modules:exec,uid=${AGENT_UID:-1000},gid=${AGENT_GID:-1000},mode=755
     ports: []
     stdin_open: true
     tty: true
 
 volumes:
   agent-sessions:
+  agent-memory:

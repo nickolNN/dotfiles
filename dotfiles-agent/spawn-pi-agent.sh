@@ -88,13 +88,29 @@ create_container() {
   [ ${#USER_PORTS[@]} -gt 0 ] && echo "→ Ports: ${USER_PORTS[*]}"
 
   local MOUNTS=(-v "${FOLDER}:/home/agent/workspace")
+
+  # Shadow host directories that should stay host-only (node_modules, etc.)
+  # with a tmpfs — hides the host copy, starts empty, disappears on stop.
+  # Mount it owned by the agent user (host uid/gid — the image is aligned
+  # via AGENT_UID/AGENT_GID) so installs can actually write to it; Docker's
+  # tmpfs default is root-owned and the agent user would hit EACCES.
+  # Extend via AGENT_SHADOW_DIRS: space-separated workspace-relative names.
+  for dir in node_modules ${AGENT_SHADOW_DIRS:-}; do
+    [ -n "$dir" ] || continue
+    MOUNTS+=(--tmpfs "/home/agent/workspace/${dir}:exec,uid=$(id -u),gid=$(id -g),mode=755")
+  done
+
   # Only bind host git/ssh config when it actually exists. A missing source
   # makes Docker auto-create a DIRECTORY, which then can't be mounted over
   # the container's existing file (~/.gitconfig is baked in by the build's
   # `git config --global protocol.version 2`) -> OCI "not a directory".
   [ -f "${HOME}/.gitconfig" ] && MOUNTS+=(-v "${HOME}/.gitconfig:/home/agent/.gitconfig:ro")
   [ -d "${HOME}/.ssh" ] && MOUNTS+=(-v "${HOME}/.ssh:/home/agent/.ssh:ro")
+  # Sessions and long-term memory are both one shared volume per name, so
+  # every room's agent sees the same history and the same brain. The image
+  # pre-creates both dirs so a fresh volume is seeded agent-owned.
   MOUNTS+=(-v "agent-sessions:/home/agent/.pi/agent/sessions")
+  MOUNTS+=(-v "agent-memory:/home/agent/.pi/agent/memory")
 
   docker run -d --name "${CONTAINER}" \
     ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
@@ -117,7 +133,7 @@ elif [ "${STATE}" != "running" ]; then
   # A `docker start` failure means the container was created with a stale
   # mount (e.g. an old unconditional ~/.gitconfig bind). Recreate it rather
   # than loop on the same error — its only durable state is in the image +
-  # the workspace/sessions volumes, so this is safe and self-healing.
+  # the workspace/sessions/memory volumes, so this is safe and self-healing.
   if ! docker start "${CONTAINER}" >/dev/null; then
     echo "→ Start failed (stale mount?) — recreating ${CONTAINER}..."
     docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true

@@ -40,9 +40,10 @@ survive has to live in the workspace or the sessions/skills volumes.
   puppeteer with chromium/firefox/webkit
 - the pi coding agent itself + `pi-lens`, `pi-mcp-adapter`, `pi-goal`,
   `pi-agents-talk-to-each-other`, `web-search-mcp`
-- skills: agent-browser, caveman, clean-code, domain-modeling,
-  frontend-design, geo-bypass, grill-with-docs, handoff, ponytail,
-  writing-great-skills, this one
+- skills (17): agent-browser, caveman, clean-code, code-review,
+  codebase-design, container-environment, domain-modeling, geo-bypass,
+  glyph, grill-me, handoff, ponytail, teach, to-questionnaire, wayfinder,
+  web-design-guidelines, writing-great-skills
 
 See `dotfiles-agent/Dockerfile` for the authoritative list.
 
