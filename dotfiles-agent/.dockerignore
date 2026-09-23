@@ -1,0 +1,32 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+.gitmodules
+.github
+
+# Dependencies (never needed inside the image)
+node_modules
+**/node_modules
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+*.swo
+.vscode
+.idea
+*.iml
+
+# Python / build caches
+**/__pycache__
+**/.cache
+*.pyc
+
+# Self & compose (Dockerfile is read via -f, not from the context)
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+compose*.yml

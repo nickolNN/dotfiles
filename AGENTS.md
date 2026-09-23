@@ -89,11 +89,6 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
 
 - `dotfiles-agent/` builds the `dotfiles-agent` image (node 24, Go, neovim,
   bun, LSPs, browsers, pi + skills); uid/gid-aligned to the host user
-- Containers: `node_modules` shadowed by per-room persistent volume
-  (`agent-node-modules-<room>`, nocopy + staleness guard), `agent-cache`
-  volume persists `~/.cache` (npm/jest/qmd), `--memory=10g` cap
-  (`AGENT_MEMORY_LIMIT`), internal CA + `/etc/gitconfig safe.directory`
-  baked in; `pi/extensions/*` re-synced from the repo on every launch
 - Aliases (via `dotfiles-agent/install-aliases.sh`): `agent-spawn`,
   `agent-attach`, `agent-fwd`, `agent-stop`
 - Containers are per-directory (`container-name.sh`); durable state is in
@@ -118,8 +113,7 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `pi/sessions/`, `pi/memory/`, `pi/npm/node_modules/`, `pi/auth.json`,
   `pi/models.json`, `pi/mcp.json`,
   `pi/mcp-cache.json`, `pi/mcp-onboarding.json`,
-  `pi/models-store.json`, `pi/trust.json`, `dotfiles-agent/certs/`,
-  `.agents`, `pi/*.sh`
+  `pi/models-store.json`, `pi/trust.json`, `pi/*.sh`, `.agents`
 
 ## Branches
 

@@ -49,23 +49,6 @@
 - Invalid file: fix in place after finding the correct schema;
   delete only when certain it's wrong AND replacement is ready.
 
-## Memory
-
-- Every `memory_write` entry MUST include at least one
-  `#tag` (e.g. `#decision`, `#preference`, `#lesson`,
-  `#bug`) and at least one `[[link]]` for cross-reference
-  (e.g. `[[auth-strategy]]`, `[[container-setup]]`).
-- Use distinctive, specific terms — never generic labels
-  like "the config" or "that tool" when a name exists.
-- `memory_search` defaults to `mode: "keyword"`. BM25 is
-  instant and needs no qmd models. Only fall back to
-  `mode: "semantic"` or `mode: "deep"` when keyword
-  search returns nothing relevant — semantic/deep fire up
-  CPU embedding models that are slow inside containers.
-- Write entries as self-contained facts: include the
-  concrete name, path, error message, or command that
-  future-you would search for.
-
 ## Context & token efficiency
 
 Context is write-once cache: everything emitted is re-read every
