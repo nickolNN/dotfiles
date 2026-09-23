@@ -315,6 +315,58 @@ RUN mkdir -p /home/agent/.pi-lens \
   && printf '%s\n' '{"format":{"enabled":false}}' \
        > /home/agent/.pi-lens/config.json
 
+# ── Internal CA + system gitconfig + durable cache volume ───────
+# P0-B: the @kc registry (artifactory-nn.atmosphere.yadro.com) is served with
+# a chain rooted at the self-signed CN=T-SPB-CA (server sends the
+# intermediates; the bundle is root-only, leaf excluded). Baked WHEN PRESENT
+# (see the conditional below) so npm works in a fresh container with zero
+# agent intervention; strict-ssl stays on. The bundle is gitignored —
+# build.sh warns (does not fail) when it's missing, so public-registry-only
+# machines build the same Dockerfile unchanged.
+# P0-C: virtiofs intermittently stats the workspace mount as root:root while
+# the agent user is uid 502, so git aborts with "dubious ownership". The
+# host ~/.gitconfig is a read-only bind and ~/.config is overlay, so the
+# only durable writable location is the SYSTEM config.
+# P2: ~/.cache becomes a shared named volume (npm cache, jest TMPDIR, qmd
+# models). The image pre-creates it agent-owned so Docker seeds the fresh
+# volume from this content instead of bringing it up root:root.
+USER root
+# The certs dir is committed-empty (.gitkeep) and the pem is gitignored,
+# so the COPY always succeeds; machines without the internal CA simply
+# build without it (NOTE below) — NODE_EXTRA_CA_CERTS then points at a
+# nonexistent path, which node treats as a no-op (measured).
+COPY dotfiles-agent/certs/ /tmp/agent-certs/
+RUN mkdir -p /usr/local/share/ca-certificates /home/agent/.certs \
+  && if [ -s /tmp/agent-certs/yadro-ca.pem ]; then \
+       cp /tmp/agent-certs/yadro-ca.pem /usr/local/share/ca-certificates/yadro-ca.crt \
+       && cp /tmp/agent-certs/yadro-ca.pem /home/agent/.certs/yadro-ca.pem \
+       && update-ca-certificates; \
+     else \
+       echo "NOTE: no certs/yadro-ca.pem — building without the internal registry CA (public-registry-only image)"; \
+     fi \
+  && rm -rf /tmp/agent-certs \
+  && printf '[safe]\n\tdirectory = *\n' > /etc/gitconfig \
+  && mkdir -p /home/agent/.cache/npm /home/agent/.cache/tmp \
+  && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.cache /home/agent/.certs
+USER agent
+# NODE_EXTRA_CA_CERTS: explicit belt for npm/node (the system store above is
+# the braces for curl/openssl/go). ~/.certs/yadro-ca.pem is kept because
+# project docs/scripts reference that path. npm_config_cache + TMPDIR move
+# the expensive caches onto the durable volume; jest's default cacheDirectory
+# derives from os.tmpdir(), so the repo's /tmp jest caches land there too.
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/yadro-ca.crt \
+    npm_config_cache=/home/agent/.cache/npm \
+    TMPDIR=/home/agent/.cache/tmp
+# R3 (round 2): explicit opt-in targets for repo configs. jest has no env
+# support for cacheDirectory — a project wanting it sets
+# `cacheDirectory: process.env.JEST_CACHE_DIRECTORY` (undefined elsewhere,
+# CI unaffected); without that line the TMPDIR default above already lands
+# jest's cache on the volume. ESLINT_CACHE is advisory: eslint reads no env,
+# it needs `--cache --cache-location "$ESLINT_CACHE"` in the invocation.
+ENV JEST_CACHE_DIRECTORY=/home/agent/.cache/jest \
+    ESLINT_CACHE=/home/agent/.cache/eslint/.eslintcache
+VOLUME /home/agent/.cache
+
 # ── Pre-trust workspace + sessions/memory volumes ─────────────
 # Mount sessions at runtime: -v agent-sessions:/home/agent/.pi/agent/sessions
 # Mount memory at runtime:  -v agent-memory:/home/agent/.pi/agent/memory
@@ -333,4 +385,5 @@ RUN mkdir -p /home/agent/.pi/agent/sessions /home/agent/.pi/agent/memory \
 ENV PI_MEMORY_DIR=/home/agent/.pi/agent/memory
 VOLUME /home/agent/.pi/agent/sessions
 VOLUME /home/agent/.pi/agent/memory
+VOLUME /home/agent/.cache
 

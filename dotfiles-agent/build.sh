@@ -25,6 +25,21 @@ if [[ "$missing" -ne 0 ]]; then
   exit 1
 fi
 
+# The internal-registry CA bundle is OPTIONAL: machines that never talk to
+# @kc/artifactory (public registries only) build fine without it — the
+# image then ships stock CAs and the Dockerfile prints a NOTE. When it IS
+# present it is baked into the trust stores. On a YADRO host, regenerate
+# from the macOS keychain with:
+#   security find-certificate -c "T-SPB-CA" -p /Library/Keychains/System.keychain \
+#     > dotfiles-agent/certs/yadro-ca.pem
+if [[ ! -s dotfiles-agent/certs/yadro-ca.pem ]]; then
+  printf 'WARNING: dotfiles-agent/certs/yadro-ca.pem missing or empty —\n'
+  printf '  the image will NOT trust the internal registry CA; npm ci\n'
+  printf '  against @kc fails with SELF_SIGNED_CERT_IN_CHAIN.\n'
+  # The Dockerfile COPYs the certs dir unconditionally; ensure it exists.
+  mkdir -p dotfiles-agent/certs
+fi
+
 docker build \
   ${NO_CACHE} \
   --platform "linux/${ARCH}" \

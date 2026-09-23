@@ -21,11 +21,18 @@ services:
       # Long-term memory: ONE volume shared by every room, so all agents
       # (and all repos) share a single brain — see README "Long-term memory".
       - agent-memory:/home/agent/.pi/agent/memory
-    # Shadow the host's node_modules: private in-memory dir, gone on stop.
-    # Must be owned by the agent user (AGENT_UID/AGENT_GID build args), else
-    # Docker's root-owned tmpfs default makes installs hit EACCES.
+      # Durable caches: npm cache, jest cache (TMPDIR), qmd models.
+      - agent-cache:/home/agent/.cache
+      # node_modules shadowing: this declarative alternative keeps the
+      # old tmpfs shadow (safe but throwaway). The primary path —
+      # spawn-pi-agent.sh / attach.sh — mounts a PERSISTENT per-room
+      # volume (agent-node-modules-<container>, nocopy) instead; compose
+      # cannot express per-room volume names (no top-level key
+      # interpolation), so add a long-syntax volume with nocopy: true by
+      # hand if you need compose + persistence for one room.
     tmpfs:
       - /home/agent/workspace/node_modules:exec,uid=${AGENT_UID:-1000},gid=${AGENT_GID:-1000},mode=755
+    mem_limit: ${AGENT_MEMORY_LIMIT:-10g}
     ports: []
     stdin_open: true
     tty: true
@@ -33,3 +40,4 @@ services:
 volumes:
   agent-sessions:
   agent-memory:
+  agent-cache:

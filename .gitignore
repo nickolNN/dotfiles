@@ -24,6 +24,8 @@ pi/mcp-onboarding.json
 pi/models-store.json
 pi/trust.json
 pi/web-search-cache/
+dotfiles-agent/certs/*
+!dotfiles-agent/certs/.gitkeep
 @herdr/
 !@herdr/config.toml
 
