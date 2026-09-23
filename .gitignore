@@ -23,6 +23,7 @@ pi/mcp-cache.json
 pi/mcp-onboarding.json
 pi/models-store.json
 pi/trust.json
+pi/*.sh
 pi/web-search-cache/
 dotfiles-agent/certs/*
 !dotfiles-agent/certs/.gitkeep

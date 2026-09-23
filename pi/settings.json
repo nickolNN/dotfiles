@@ -11,7 +11,7 @@
   "showCacheMissNotices": true,
   "compaction": {
     "enabled": true,
-    "reserveTokens": 142144,
+    "reserveTokens": 14688,
     "keepRecentTokens": 30000
   },
   "packages": [

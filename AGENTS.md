@@ -71,6 +71,9 @@
 - `pi/settings.json`, `pi/web-search.json`, `pi/themes/`, `pi/extensions/`
   tracked
 - `pi/models.json` gitignored — holds literal API keys, never commit
+- `pi/sync-home-pc-models.sh` — patches `contextWindow` in `models.json`
+  from the live home-pc llama-swap `/v1/models`; run after changing a
+  preset on the PC
 - Long-term memory is `pi-memory` (listed in `pi/settings.json`): the host
   store is `~/.config/pi/memory`, set via `PI_MEMORY_DIR` in `~/.zshrc`;
   container agents write to the shared `agent-memory` Docker volume
@@ -116,7 +119,7 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `pi/models.json`, `pi/mcp.json`,
   `pi/mcp-cache.json`, `pi/mcp-onboarding.json`,
   `pi/models-store.json`, `pi/trust.json`, `dotfiles-agent/certs/`,
-  `.agents`
+  `.agents`, `pi/*.sh`
 
 ## Branches
 
