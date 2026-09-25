@@ -111,6 +111,7 @@ create_container() {
   # pre-creates both dirs so a fresh volume is seeded agent-owned.
   MOUNTS+=(-v "agent-sessions:/home/agent/.pi/agent/sessions")
   MOUNTS+=(-v "agent-memory:/home/agent/.pi/agent/memory")
+  MOUNTS+=(-v "agent-rooms:/home/agent/.pi/agent/rooms")
 
   docker run -d --name "${CONTAINER}" \
     ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
@@ -171,10 +172,23 @@ record_tmux_session() {
 }
 record_tmux_session
 
+# ── Ensure rooms volume is writable (uid may drift across image rebuilds) ──
+docker run --rm -u root -v agent-rooms:/dest "${IMAGE}" \
+  chown -R agent:dialout /dest/ 2>/dev/null || true
+
 # ── Set default room + launch pi ─────────────────────────────────
 # Extensions are installed/updated at build time (Dockerfile). Don't re-run
 # `pi update --extensions` here: it was a full network npm install on every
 # launch. Skip the startup pi.dev version check too.
 echo "→ Launching pi agent in room «${ROOM}»..."
 exec docker exec -it -w /home/agent/workspace "${CONTAINER}" \
-  bash -c "mkdir -p ~/.pi/agent/rooms && echo '{\"defaultRoom\":\"${ROOM}\"}' > ~/.pi/agent/rooms/config.json && export PI_SKIP_VERSION_CHECK=1; exec pi"
+  bash -c "
+    mkdir -p ~/.pi/agent/rooms/${ROOM} && \
+    if [ -f ~/.pi/agent/rooms/config.json ]; then \
+      jq --arg room \"${ROOM}\" '.defaultRoom = \$room' \
+        ~/.pi/agent/rooms/config.json > /tmp/rc.json && \
+      mv /tmp/rc.json ~/.pi/agent/rooms/config.json; \
+    else \
+      echo '{\"defaultRoom\":\"${ROOM}\"}' > ~/.pi/agent/rooms/config.json; \
+    fi && \
+    export PI_SKIP_VERSION_CHECK=1; exec pi"

@@ -328,9 +328,15 @@ RUN mkdir -p /home/agent/.pi-lens \
 # would shadow the baked settings.json/models.json/mcp.json/npm and break
 # the package setup installed above.
 RUN mkdir -p /home/agent/.pi/agent/sessions /home/agent/.pi/agent/memory \
+      /home/agent/.pi/agent/rooms \
   && echo '{"/home/agent/workspace":true}' > /home/agent/.pi/agent/trust.json
 # pi-memory stores MEMORY.md + daily logs here (env var, not config file).
 ENV PI_MEMORY_DIR=/home/agent/.pi/agent/memory
+# Disable background qmd embedding — the GGUF models peak container/host CPU
+# with no GPU passthrough from macOS. Keyword (BM25) search still works; the
+# agent defaults to it (see GLOBAL_AGENTS.md). Set to "background" to re-enable.
+ENV PI_MEMORY_QMD_UPDATE=off
 VOLUME /home/agent/.pi/agent/sessions
 VOLUME /home/agent/.pi/agent/memory
+VOLUME /home/agent/.pi/agent/rooms
 

@@ -225,10 +225,12 @@ Caveats:
   global, so "use pnpm in this repo" is visible from every other repo.
   Per-repo facts belong in that repo's `AGENTS.md`.
 - `memory_search` uses [qmd](https://github.com/tobi/qmd), installed in
-  the image via `npm`. BM25 keyword search works offline; the vector
-  ("semantic"/"deep") modes download their GGUF models on first use —
-  into the container's throwaway layer, so a recreated container
-  downloads them again.
+  the image via `npm`. BM25 keyword search is fast (~30ms) and works
+  offline without any models. The image sets `PI_MEMORY_QMD_UPDATE=off`
+  to disable background embedding — GGUF models peak host CPU with no
+  GPU passthrough from Docker Desktop on macOS. The agent defaults to
+  keyword search; semantic/deep requires `qmd embed` manually and
+  re-enabling with `PI_MEMORY_QMD_UPDATE=background`.
 - the host keeps its own store at `~/.config/pi/memory` (`PI_MEMORY_DIR`
   in `~/.zshrc`) — the volume is container-only. For one brain across
   host *and* containers, swap the volume mount for a bind of that dir:
