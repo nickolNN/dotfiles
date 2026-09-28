@@ -6,7 +6,7 @@
   ],
   "defaultProvider": "bailian-token-plan-personal",
   "defaultModel": "deepseek-v4.1-flash",
-  "defaultThinkingLevel": "low",
+  "defaultThinkingLevel": "high",
   "externalEditor": "nvim",
   "showCacheMissNotices": true,
   "compaction": {
