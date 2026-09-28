@@ -13,7 +13,7 @@ kilo/kilo.jsonc
 .agents
 skills-candidates/
 pi/models.json
-pi/mcp.json
+pi/mcp-adapter.json
 pi/npm/*
 !pi/npm/package.json
 pi/auth.json
