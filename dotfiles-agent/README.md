@@ -170,9 +170,19 @@ Notes:
 - Each notification is labelled with its source: the room name (folder
   basename) for containers, `host` for a host session; override with
   `PI_NOTIFY_LABEL`.
-- The persistent alert offers an **Attach** button that reopens the room's
-  tmux session when the agent was launched inside tmux; it's silently omitted
-  when tmux (or alacritty) isn't present.
+- The alert is **focus-aware**: the bridge shows it immediately only when the
+  room is *not* on screen (Alacritty not frontmost, or the room's tmux session
+  has no attached client). If you're looking right at the room, it waits a
+  grace period (`PI_NOTIFY_ALERT_DELAY_MS`, default `120000`) and alerts only
+  if you still haven't answered — replying cancels the pending alert. The
+  reply body is `deferred`/`shown`, which is how the extension knows whether
+  to arm the retry.
+- The alert **body carries more context** than the banner: the prompt
+  title/kind, the tail of Pi's last message (what it's asking about), and the
+  working directory plus how long it has waited — rendered as separate lines
+  (banners stay a single flattened line).
+- On the host, Pi records its own tmux session under `~/.pi-notify/` so focus
+  detection works there too; containers record it from `spawn-pi-agent.sh`.
 - Message bodies are flattened from markdown to plain text and trimmed at a
   word boundary, so a cut never strands `**`/`]`/`)` fragments.
 - The extension is baked into the image from `pi/extensions/`, so **rebuild**

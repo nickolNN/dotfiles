@@ -271,27 +271,30 @@ COPY --chown=agent:agent agent-skills/ /home/agent/.agents/skills/
 
 # ── Finalize pi config → ~/.pi/agent/ ───────────────────────────
 # Overwrite (or create) the web-search entry in the CONTAINER's config copy.
-# The host mcp.json is host-specific (stale macOS paths, varies per machine,
-# entry may be missing or disabled), so the image does not trust it.
+# The host mcp-adapter.json is host-specific (stale macOS paths, varies per
+# machine, entry may be missing or disabled), so the image does not trust it.
 # env points the server's bundled playwright at the shared browser cache
 # (its pinned playwright-core resolves builds from PLAYWRIGHT_BROWSERS_PATH;
 # without it it falls back to an empty ~/.cache/ms-playwright and every
 # search dies with "Search engine: None; 0 results").
 RUN jq '.mcpServers["web-search"] = {"command": "node", "args": ["/opt/web-search-mcp/dist/index.js"], "disabled": false, "env": {"PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright"}}' \
-    /tmp/pi-config/mcp.json > /tmp/pi-config/mcp.json.new \
-  && mv /tmp/pi-config/mcp.json.new /tmp/pi-config/mcp.json \
+    /tmp/pi-config/mcp-adapter.json > /tmp/pi-config/mcp-adapter.json.new \
+  && mv /tmp/pi-config/mcp-adapter.json.new /tmp/pi-config/mcp-adapter.json \
   && mkdir -p /home/agent/.pi/agent \
   # Copy host config but exclude any host-arch `npm/` (macOS binaries) so it
   # can't clobber the container packages installed above.
   && tar --exclude='./npm' -C /tmp/pi-config -cf - . \
      | tar -C /home/agent/.pi/agent -xf - \
   && rm -f /home/agent/.pi/agent/extensions/permissions.ts \
-  # Rewrite localhost/127.0.0.1 → host.docker.internal in mcp.json URLs
-  # so MCP bridges running on the host are reachable from the container.
-  && mv /home/agent/.pi/agent/mcp.json /tmp/mcp-in.json \
+  # Rewrite localhost/127.0.0.1 → host.docker.internal in mcp-adapter.json
+  # URLs so MCP bridges running on the host are reachable from the container.
+  && mv /home/agent/.pi/agent/mcp-adapter.json /tmp/mcp-in.json \
   && jq 'walk(if type == "object" and has("url") then .url |= gsub("://(?<host>localhost|127\\.0\\.0\\.1)(?<rest>[:/])"; "://host.docker.internal\(.rest)") else . end)' \
-       /tmp/mcp-in.json > /home/agent/.pi/agent/mcp.json \
+       /tmp/mcp-in.json > /home/agent/.pi/agent/mcp-adapter.json \
   && rm -f /tmp/mcp-in.json \
+  # pi-mcp-adapter creates a default mcp.json during package install;
+  # the host now ships mcp-adapter.json — remove the stale file.
+  && rm -f /home/agent/.pi/agent/mcp.json \
   # Host pi/ config may carry ~/.pi/agent/bin/{fd,rg} downloaded for the HOST
   # arch (e.g. macOS arm64 Mach-O). pi picks bin/ first by existence only,
   # so a wrong-arch binary shadows system fd/fdfind and silently breaks
@@ -325,8 +328,8 @@ RUN mkdir -p /home/agent/.pi-lens \
 # the agent user cannot write to it.
 #
 # The memory dir is deliberately NOT ~/.pi/agent itself — a volume there
-# would shadow the baked settings.json/models.json/mcp.json/npm and break
-# the package setup installed above.
+# would shadow the baked settings.json/models.json/mcp-adapter.json/npm
+# and break the package setup installed above.
 RUN mkdir -p /home/agent/.pi/agent/sessions /home/agent/.pi/agent/memory \
       /home/agent/.pi/agent/rooms \
   && echo '{"/home/agent/workspace":true}' > /home/agent/.pi/agent/trust.json
