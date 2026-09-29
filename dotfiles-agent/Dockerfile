@@ -32,18 +32,26 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 
 # ── Go tools (parallel) ────────────────────────────────────────
 ENV GOBIN=/usr/local/bin
-RUN for i in 1 2 3; do \
-    pids="" \
-    && go install github.com/go-delve/delve/cmd/dlv@latest & pids="$pids $!" \
-    && go install golang.org/x/tools/cmd/goimports@latest & pids="$pids $!" \
-    && go install golang.org/x/tools/gopls@latest & pids="$pids $!" \
-    && go install github.com/fe3dback/go-arch-lint@latest & pids="$pids $!" \
-    && go install github.com/parvez3019/go-swagger3@latest & pids="$pids $!" \
-    && fails=0; for p in $pids; do wait $p || fails=$((fails+1)); done \
-    && [ $fails -eq 0 ] && break; \
-    echo "Go tools attempt $i had $fails failure(s), retrying..."; sleep 5; \
-    [ "$i" -lt 3 ] || { echo "FATAL: Go tools install failed after 3 attempts ($fails failures)"; exit 1; }; \
-  done
+RUN for pkg in \
+      github.com/go-delve/delve/cmd/dlv@latest \
+      golang.org/x/tools/cmd/goimports@latest \
+      golang.org/x/tools/gopls@latest \
+      github.com/parvez3019/go-swagger3@latest; do \
+      for i in 1 2 3; do \
+        go install "$pkg" && break; \
+        echo "go install $pkg attempt $i failed, retrying..."; sleep 5; \
+        [ "$i" -lt 3 ] || { echo \"FATAL: go install $pkg failed after 3 attempts\"; exit 1; }; \
+      done; \
+    done \
+  # go-arch-lint: optional dev tool, known to lag behind bleeding-edge Go
+  # releases. Try once; a failure must not block the image build.
+  && go install github.com/fe3dback/go-arch-lint@latest \
+     || echo 'WARNING: go-arch-lint not installed (likely Go version skew)' \
+  # The compiled binaries live in $GOBIN; the module + build caches and the
+  # /tmp/go-build* dirs the parallel installs left behind are ~850MB of pure
+  # build residue. Clean them in THIS layer (a later rm would only whiteout).
+  && go clean -cache -modcache \
+  && rm -rf /tmp/go-build*
 
 # ── golangci-lint ─────────────────────────────────────────────────
 RUN . /etc/environment \
@@ -77,8 +85,7 @@ RUN for i in 1 2 3; do \
 ENV PATH="/opt/bun/bin:${PATH}"
 
 # ── Shared, world-readable caches for tools installed as root ────
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
-    PUPPETEER_CACHE_DIR=/opt/puppeteer-cache
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 # ── Node tools (LSP servers, formatters, linters) ────────────────
 # Retry loop: Angular publishes @angular/cli before its @angular-devkit/*
@@ -104,28 +111,34 @@ RUN for i in 1 2 3; do \
      else \
        echo "WARNING: agent-browser native binary not found"; \
      fi \
-  && find /opt/bun/install/global/node_modules -type f -path '*/bin/*' -exec chmod +x {} +
+  && find /opt/bun/install/global/node_modules -type f -path '*/bin/*' -exec chmod +x {} + \
+  # agent-browser ships a native binary per platform; keep only the one this
+  # image can run (glibc linux on the target arch) and drop ~100MB of
+  # win32/darwin/musl builds.
+  && find "$(dirname "$AGENT_BROWSER_BIN")" -maxdepth 1 -type f \
+       -name 'agent-browser-*' ! -name "agent-browser-linux-${AB_ARCH}" -delete
 
 # ── qmd (BM25 search backend for pi-memory) ─────────────────────
 # npm (not bun): better-sqlite3 ships prebuilt N-API binaries that real
 # Node 24 resolves, while bun's node-ABI handling fails its install script.
-RUN npm install -g @tobilu/qmd
+RUN npm install -g @tobilu/qmd \
+  && npm cache clean --force
 
 # ── Browser-automation browsers ────────────────────────────────
 # Install apt libs via the globally-installed playwright CLI (no npx fetch).
 RUN playwright install-deps chromium firefox webkit \
-  && mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" "$PUPPETEER_CACHE_DIR" \
-  && chmod 777 "$PLAYWRIGHT_BROWSERS_PATH" "$PUPPETEER_CACHE_DIR" \
+  && mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" \
+  && chmod 777 "$PLAYWRIGHT_BROWSERS_PATH" \
   && for i in 1 2 3; do \
        playwright install chromium firefox webkit && break; \
        echo "Playwright browser install attempt $i failed, retrying..."; sleep 5; \
        [ "$i" -lt 3 ] || { echo "FATAL: playwright install failed after 3 attempts"; exit 1; }; \
      done \
-  && for i in 1 2 3; do \
-       puppeteer browsers install chrome && break; \
-       echo "Puppeteer browser install attempt $i failed, retrying..."; sleep 5; \
-       [ "$i" -lt 3 ] || { echo "FATAL: puppeteer browsers install failed after 3 attempts"; exit 1; }; \
-     done \
+  # Puppeteer's Chrome-for-Testing would duplicate the Playwright Chromium
+  # installed just above. The puppeteer API stays available, but resolves the
+  # shared system Chromium via PUPPETEER_EXECUTABLE_PATH (set with the
+  # agent-browser ENV further down) instead of downloading ~660MB more.
+  #
   # agent-browser needs a discoverable Chrome/Chromium binary.
   # Chrome for Testing has no Linux ARM64 build, so install
   # system Chromium (Debian bookworm ships one) and point
@@ -155,19 +168,66 @@ RUN git clone --depth 1 https://github.com/mrkrsl/web-search-mcp.git /opt/web-se
   && cd /opt/web-search-mcp \
   && bun install \
   && bun run build \
-  # This repo pins an older playwright-core (1.54.2 → chromium-1181 /
-  # firefox-1489), while the global playwright above already installed the
-  # newer revisions (1234/1538) into PLAYWRIGHT_BROWSERS_PATH. Skip the
-  # duplicate browser download and alias the pinned revision names onto
-  # the newer builds — Playwright resolves builds purely by directory
-  # name. Guarded so it is a no-op if the pinned revision ever exists.
+  # This repo pins an older playwright-core, while the global playwright
+  # above installed newer revisions into PLAYWRIGHT_BROWSERS_PATH. Skip the
+  # duplicate browser download and alias the pinned revision names onto the
+  # installed builds — Playwright resolves builds purely by directory name.
+  # Both sides are derived at build time so a Playwright bump can't leave
+  # the aliases dangling: the pinned names come from the repo's own
+  # browsers.json, the targets are the newest installed dir of each kind.
+  #
+  # chromium needs extra care: versions ≥1.63 lay out the binary at
+  # chrome-linux-arm64/chrome (or -x64), while 1.54.2 expects the generic
+  # chrome-linux/chrome. A bare top-level symlink doesn't bridge the inner
+  # arch-suffix. For chromium we create a thunk directory with inner aliases;
+  # other browsers (firefox, webkit, ffmpeg) get a plain symlink.
+  && PW_BROWSERS_JSON=/opt/web-search-mcp/node_modules/playwright-core/browsers.json \
   && cd "$PLAYWRIGHT_BROWSERS_PATH" \
-  && for pair in \
-       "chromium-1181 chromium-1234" \
-       "chromium_headless_shell-1181 chromium_headless_shell-1234" \
-       "firefox-1489 firefox-1538"; \
-     do set -- $pair; [ -e "$1" ] || ln -s "$2" "$1"; done \
-  && chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"
+  && jq -r '.browsers[] | select(.installByDefault) | "\(.name) \(.revision)"' \
+       "$PW_BROWSERS_JSON" \
+     | while read -r name rev; do \
+         base="$(printf '%s' "$name" | tr '-' '_')"; \
+         dir="${base}-${rev}"; \
+         [ -e "$dir" ] && continue; \
+         target="$(find . -maxdepth 1 -mindepth 1 -type d -name "${base}-*" | sort -V | tail -n1)"; \
+         if [ -z "$target" ]; then continue; fi; \
+         case "$base" in \
+           chromium*) \
+             # Inner layout changed from chrome-linux/{chrome,headless_shell}
+             # to chrome-linux-<arch>/chrome with headless in a separate dir.
+             # The headless_shell entry (chromium_headless_shell) also needs
+             # a thunk — the 1.54.2 inner path chrome-linux/headless_shell
+             # resolves to chrome-headless-shell-linux-<arch>/ in 1.63.
+             # Try a thunk dir with inner aliases; if the expected layout is
+             # absent, fall back to plain symlink so the build doesn't break.
+             { mkdir -p "$dir/chrome-linux" && \
+               if [ "$base" = "chromium" ]; then \
+                 # Main chromium: chrome from own dir, headless_shell from
+                 # the separate headless_shell dir
+                 src_chrome="$(find "$target" -maxdepth 2 -name chrome \
+                                -not -path '*/nacl*' | head -n1)" && \
+                 hs_src_dir="$(find . -maxdepth 1 -type d \
+                                -name 'chromium_headless_shell-*' | sort -V | tail -n1)"; \
+               else \
+                 # chromium_headless_shell: only headless_shell, from own dir
+                 src_chrome=""; \
+                 hs_src_dir="$target"; \
+               fi && \
+               { [ -z "$src_chrome" ] || \
+                 ln -sf "../../${src_chrome#./}" "$dir/chrome-linux/chrome"; } && \
+               src_hs="$(find "$hs_src_dir" -maxdepth 2 \
+                          -name 'chrome-headless-shell' | head -n1)" && \
+               [ -n "$src_hs" ] && \
+               ln -sf "../../${src_hs#./}" "$dir/chrome-linux/headless_shell" && \
+               echo "  alias $dir -> thunk"; } || \
+             { rm -rf "$dir" && ln -sfn "${target#./}" "$dir" && \
+               printf '  WARNING: chromium thunk failed for %s, fallback symlink %s -> %s\n' \
+                 "$dir" "$dir" "${target#./}"; };; \
+           *) \
+             ln -sfn "${target#./}" "$dir" && \
+             echo "  alias $dir -> ${target#./}";; \
+         esac; \
+       done
 
 # ── UID/GID alignment with host ──────────────────────────────────
 ARG AGENT_UID=1000
@@ -180,9 +240,13 @@ RUN groupmod -o -g $AGENT_GID node \
 # Point agent-browser at system Chromium (Chrome for Testing has no ARM64).
 # --no-sandbox is required to launch Chromium inside a container.
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
-    AGENT_BROWSER_ARGS="--no-sandbox,--disable-dev-shm-usage"
+    AGENT_BROWSER_ARGS="--no-sandbox,--disable-dev-shm-usage" \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-RUN bun install -g @earendil-works/pi-coding-agent
+RUN bun install -g @earendil-works/pi-coding-agent \
+  # Drop the download cache (keep the dir: it stays world-writable for
+  # unprivileged future `bun install`s).
+  && rm -rf "${BUN_INSTALL_CACHE_DIR:?}"/*
 
 USER agent
 WORKDIR /home/agent
@@ -209,7 +273,8 @@ RUN for i in 1 2 3; do \
       pi update --extensions --no-approve && break; \
       echo "Pi packages attempt $i failed, retrying..."; sleep 5; \
       [ "$i" -lt 3 ] || { echo "FATAL: pi package install failed after 3 attempts"; exit 1; }; \
-    done
+    done \
+  && rm -rf /home/agent/.npm
 
 # ── Remote skills: parallel git clone --depth 1 ─────────────────
 # (no skills CLI → no simple-git hangs). Format: repo:subpath.

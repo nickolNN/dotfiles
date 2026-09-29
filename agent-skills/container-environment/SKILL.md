@@ -36,8 +36,9 @@ survive has to live in the workspace or the sessions/skills volumes.
   `typescript-language-server`, `bash-language-server`, `gopls`,
   `golangci-lint`, `delve`, …
 - CLI: `git`, `gh`, `jq`, `ripgrep`/`rg`, `fd`, `fzf`, `htop`, `unzip`
-- browser automation: `agent-browser` (system Chromium), playwright +
-  puppeteer with chromium/firefox/webkit
+- browser automation: `agent-browser` (system Chromium), playwright
+  (chromium/firefox/webkit), puppeteer (shares the system Chromium via
+  `PUPPETEER_EXECUTABLE_PATH`)
 - the pi coding agent itself + `pi-lens`, `pi-mcp-adapter`, `pi-goal`,
   `pi-agents-talk-to-each-other`, `web-search-mcp`
 - skills (17): agent-browser, caveman, clean-code, code-review,
