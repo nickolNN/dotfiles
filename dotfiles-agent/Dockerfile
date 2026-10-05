@@ -279,6 +279,7 @@ RUN for i in 1 2 3; do \
 # ── Remote skills: parallel git clone --depth 1 ─────────────────
 # (no skills CLI → no simple-git hangs). Format: repo:subpath.
 RUN git config --global protocol.version 2 \
+  && git config --global --add safe.directory /home/agent/workspace \
   && export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
   && TMP=/tmp/skills-clone-$$ && mkdir -p "$TMP" "$HOME/.agents/skills" \
   && set -- \
@@ -288,11 +289,14 @@ RUN git config --global protocol.version 2 \
        "mattpocock/skills:skills/engineering/code-review" \
        "mattpocock/skills:skills/engineering/wayfinder" \
        "mattpocock/skills:skills/engineering/codebase-design" \
-       "max4c/skills:skills/grill-me" \
+       "mattpocock/skills:skills/engineering/improve-codebase-architecture" \
+       "mattpocock/skills:skills/engineering/tdd" \
+       "mattpocock/skills:skills/engineering/retro" \
+       "mattpocock/skills:skills/productivity/grill-me" \
        "mattpocock/skills:skills/productivity/handoff" \
        "mattpocock/skills:skills/productivity/to-questionnaire" \
        "mattpocock/skills:skills/productivity/teach" \
-       "joneshong-skills/writing-great-skills:." \
+       "mattpocock/skills:skills/productivity/writing-great-skills" \
        "vercel-labs/agent-skills:skills/web-design-guidelines" \
        "dietrichgebert/ponytail:skills/ponytail" \
        "yonatangross/orchestkit:src/skills/glyph" \

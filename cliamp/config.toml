@@ -1,0 +1,5 @@
+theme = ""
+
+eq_preset = "Rock"
+eq = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+visualizer = "ClassicPeak"

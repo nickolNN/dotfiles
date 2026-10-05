@@ -4,10 +4,11 @@ set -euo pipefail
 # ── Usage ────────────────────────────────────────────────────────
 usage() {
   cat <<EOF
-Usage: attach.sh [-p HOST:GUEST]... [--build] [--no-install] [FOLDER] [-- CMD...]
+Usage: attach.sh [-p HOST:GUEST]... [--network-host] [--build] [--no-install] [FOLDER] [-- CMD...]
 
   FOLDER      Path to mount as /home/agent/workspace (default: \$PWD)
   -p HOST:GUEST  Publish host:container port (bare PORT ≡ PORT:PORT). Repeatable.
+  --network-host  Use host network (all container ports exposed, no -p needed).
   --build     Force rebuild the image even if it exists.
   --no-install  Skip auto dependency install when package.json detected.
   CMD         Command to run (default: bash). Use "pi" for pi agent.
@@ -20,6 +21,7 @@ IMAGE="dotfiles-agent"
 
 # ── Parse args ───────────────────────────────────────────────────
 USER_PORTS=()
+NETWORK_HOST=false
 FORCE_BUILD=false
 NO_INSTALL=false
 FOLDER=""
@@ -29,6 +31,10 @@ while [ $# -gt 0 ]; do
   -p | --port)
     USER_PORTS+=("$2")
     shift 2
+    ;;
+  --network-host)
+    NETWORK_HOST=true
+    shift
     ;;
   --build)
     FORCE_BUILD=true
@@ -55,6 +61,13 @@ while [ $# -gt 0 ]; do
     ;;
   esac
 done
+
+# ── Guards ───────────────────────────────────────────────────────
+if [ "${NETWORK_HOST}" = true ] && [ ${#USER_PORTS[@]} -gt 0 ]; then
+  echo "ERROR: --network-host and -p are incompatible. With host networking," >&2
+  echo "       all container ports are already on the host — drop -p." >&2
+  exit 1
+fi
 
 FOLDER="$(realpath "${FOLDER:-$PWD}")"
 CMD=("${@:-bash}")
@@ -90,6 +103,19 @@ ports_match() {
   [ "$(desired_ports)" = "$(current_ports "${CONTAINER}")" ]
 }
 
+current_network() {
+  docker inspect -f '{{.HostConfig.NetworkMode}}' "$1" 2>/dev/null || echo ""
+}
+
+network_match() {
+  local cur="$(current_network "${CONTAINER}")"
+  if [ "${NETWORK_HOST}" = true ]; then
+    [ "${cur}" = "host" ]
+  else
+    [ "${cur}" != "host" ]
+  fi
+}
+
 # ── Build image if needed ────────────────────────────────────────
 if [ "${FORCE_BUILD}" = true ] || ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
   echo "→ Building ${IMAGE} image..."
@@ -104,6 +130,11 @@ if [ -z "${STATE}" ]; then
   NEED_CREATE=true
 elif [ ${#USER_PORTS[@]} -gt 0 ] && ! ports_match; then
   echo "→ Port map changed (${USER_PORTS[*]}) — recreating ${CONTAINER}..."
+  docker rm -f "${CONTAINER}" >/dev/null
+  NEED_CREATE=true
+elif ! network_match; then
+  cur_net="$(current_network "${CONTAINER}")"
+  echo "→ Network mode changed (${cur_net} → host) — recreating ${CONTAINER}..."
   docker rm -f "${CONTAINER}" >/dev/null
   NEED_CREATE=true
 fi
@@ -147,8 +178,14 @@ if [ "${NEED_CREATE}" = true ]; then
   MOUNTS+=(-v "agent-sessions:/home/agent/.pi/agent/sessions")
   MOUNTS+=(-v "agent-memory:/home/agent/.pi/agent/memory")
 
+  NET_ARGS=()
+  if [ "${NETWORK_HOST}" = true ]; then
+    NET_ARGS+=(--network host)
+  fi
+
   docker run -d --name "${CONTAINER}" \
     ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
+    ${NET_ARGS[@]+"${NET_ARGS[@]}"} \
     "${MOUNTS[@]}" \
     --entrypoint sleep \
     "${IMAGE}" \

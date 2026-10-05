@@ -4,6 +4,8 @@ configstore/*
 neofetch/*
 gtk-2.0/*
 htop/*
+cliamp/*
+!cliamp/config.toml
 tmux/plugins
 nvim/lazy-lock.json
 .DS_Store
@@ -17,6 +19,8 @@ pi/mcp.json
 pi/npm/*
 !pi/npm/package.json
 pi/auth.json
+pi/mcp-auth.json
+pi/mcp.log*
 pi/sessions/
 pi/memory/
 pi/mcp-auth.json

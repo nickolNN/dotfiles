@@ -41,10 +41,12 @@ survive has to live in the workspace or the sessions/skills volumes.
   `PUPPETEER_EXECUTABLE_PATH`)
 - the pi coding agent itself + `pi-lens`, `pi-goal`,
   `pi-agents-talk-to-each-other`, `web-search-mcp`
-- skills (17): agent-browser, caveman, clean-code, code-review,
-  codebase-design, container-environment, domain-modeling, geo-bypass,
-  glyph, grill-me, handoff, ponytail, teach, to-questionnaire, wayfinder,
-  web-design-guidelines, writing-great-skills
+- baked skills (18): agent-browser, caveman, clean-code, code-review,
+  codebase-design, domain-modeling, glyph, grill-me, handoff,
+  improve-codebase-architecture, ponytail, retro, tdd, teach,
+  to-questionnaire, wayfinder, web-design-guidelines, writing-great-skills
+- repo skills (3, re-synced every launch): container-environment,
+  coordinator, geo-bypass
 
 See `dotfiles-agent/Dockerfile` for the authoritative list.
 

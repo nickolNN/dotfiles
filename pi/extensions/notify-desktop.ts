@@ -30,7 +30,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const PORT = Number(process.env.PI_NOTIFY_PORT || 49151);
@@ -50,21 +50,7 @@ function baseUrl(): string {
 function sourceLabel(): string {
   const env = process.env.PI_NOTIFY_LABEL?.trim();
   if (env) return env;
-  if (!IN_CONTAINER) return "host";
-  try {
-    const cfg = JSON.parse(
-      readFileSync(
-        `${process.env.HOME || "/home/agent"}/.pi/agent/rooms/config.json`,
-        "utf8",
-      ),
-    );
-    if (typeof cfg?.defaultRoom === "string" && cfg.defaultRoom.trim()) {
-      return cfg.defaultRoom.trim();
-    }
-  } catch {
-    /* no persisted room */
-  }
-  return "container";
+  return IN_CONTAINER ? "container" : "host";
 }
 
 /**

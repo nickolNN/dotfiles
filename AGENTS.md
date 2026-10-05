@@ -68,6 +68,12 @@
 - `kilo/AGENTS.md` → symlink to `GLOBAL_AGENTS.md`
 - `pi/mcp.json` — MCP server definitions (kilo has its own copy in
   `kilo/kilo.jsonc`) — gitignored
+- MCP uses pi 0.99's built-in support (`pi mcp list`, `/mcp`); the old
+  `pi-mcp-adapter` extension and its `mcp-adapter.json` files are gone.
+  Schema notes: disabled servers use `enabled: false` (not the adapter's
+  `disabled`), and a project `<repo>/.pi/mcp.json` entry *replaces* the
+  global entry of the same name — no merge — so it must carry its own
+  `command`/`url` and cannot be a bare enable/disable stub
 - `pi/settings.json`, `pi/web-search.json`, `pi/themes/`, `pi/extensions/`
   tracked
 - `pi/models.json` gitignored — holds literal API keys, never commit
@@ -111,8 +117,7 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `gtk-2.0/*`, `htop/*`, `tmux/plugins`, `nvim/lazy-lock.json`,
   `.DS_Store`, `kilo/opencode.jsonc`, `kilo/kilo.jsonc`,
   `pi/sessions/`, `pi/memory/`, `pi/npm/node_modules/`, `pi/auth.json`,
-  `pi/models.json`, `pi/mcp.json`,
-  `pi/mcp-auth.json`, `pi/mcp.log`,
+  `pi/models.json`, `pi/mcp.json`, `pi/mcp-auth.json`, `pi/mcp.log*`,
   `pi/models-store.json`, `pi/trust.json`, `pi/*.sh`, `.agents`
 
 ## Branches
