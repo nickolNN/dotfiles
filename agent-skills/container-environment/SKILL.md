@@ -39,7 +39,7 @@ survive has to live in the workspace or the sessions/skills volumes.
 - browser automation: `agent-browser` (system Chromium), playwright
   (chromium/firefox/webkit), puppeteer (shares the system Chromium via
   `PUPPETEER_EXECUTABLE_PATH`)
-- the pi coding agent itself + `pi-lens`, `pi-mcp-adapter`, `pi-goal`,
+- the pi coding agent itself + `pi-lens`, `pi-goal`,
   `pi-agents-talk-to-each-other`, `web-search-mcp`
 - skills (17): agent-browser, caveman, clean-code, code-review,
   codebase-design, container-environment, domain-modeling, geo-bypass,

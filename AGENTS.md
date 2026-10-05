@@ -66,7 +66,7 @@
 - `GLOBAL_AGENTS.md` — shared agent rules (agent-agnostic)
 - `pi/AGENTS.md` → symlink to `GLOBAL_AGENTS.md`
 - `kilo/AGENTS.md` → symlink to `GLOBAL_AGENTS.md`
-- `pi/mcp-adapter.json` — MCP server definitions (kilo has its own copy in
+- `pi/mcp.json` — MCP server definitions (kilo has its own copy in
   `kilo/kilo.jsonc`) — gitignored
 - `pi/settings.json`, `pi/web-search.json`, `pi/themes/`, `pi/extensions/`
   tracked
@@ -111,8 +111,8 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `gtk-2.0/*`, `htop/*`, `tmux/plugins`, `nvim/lazy-lock.json`,
   `.DS_Store`, `kilo/opencode.jsonc`, `kilo/kilo.jsonc`,
   `pi/sessions/`, `pi/memory/`, `pi/npm/node_modules/`, `pi/auth.json`,
-  `pi/models.json`, `pi/mcp-adapter.json`,
-  `pi/mcp-cache.json`, `pi/mcp-onboarding.json`,
+  `pi/models.json`, `pi/mcp.json`,
+  `pi/mcp-auth.json`, `pi/mcp.log`,
   `pi/models-store.json`, `pi/trust.json`, `pi/*.sh`, `.agents`
 
 ## Branches

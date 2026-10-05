@@ -37,7 +37,7 @@ See the `Dockerfile` for the full list and the reasoning behind each layer.
 and fails fast if they're missing:
 
 - `pi/models.json` — models + API keys; the image is unusable without it
-- `pi/mcp-adapter.json` — MCP server definitions the image rewrites at build time
+- `pi/mcp.json` — MCP server definitions the image rewrites at build time
 
 ## Quick start
 
@@ -225,7 +225,7 @@ Implementation notes:
   comes up `root:root`, and the agent user then cannot write to it.
 - the mount point is the memory subdir, never `~/.pi/agent` itself: a
   volume there would shadow the baked `settings.json`, `models.json`,
-  `mcp-adapter.json`, and `npm/` (the installed packages).
+  `mcp.json`, and `npm/` (the installed packages).
 - `pi-memory` is installed at build time from the `BASE_PKGS` seed, using
   the same `pi update --extensions` run as the other extensions.
 

@@ -13,14 +13,14 @@ kilo/kilo.jsonc
 .agents
 skills-candidates/
 pi/models.json
-pi/mcp-adapter.json
+pi/mcp.json
 pi/npm/*
 !pi/npm/package.json
 pi/auth.json
 pi/sessions/
 pi/memory/
-pi/mcp-cache.json
-pi/mcp-onboarding.json
+pi/mcp-auth.json
+pi/mcp.log
 pi/models-store.json
 pi/trust.json
 pi/*.sh
