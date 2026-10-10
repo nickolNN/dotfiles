@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
+  ExecutionPlan,
   Iteration,
   PipelineStep,
   SessionEvent,
@@ -814,5 +815,140 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
+  });
+});
+
+describe('runIteration — resolve как комната (multi-agent)', () => {
+  const refineWith = (execution: ExecutionPlan): StepExecutionResult => ({
+    step: 'refine',
+    exitCode: 0,
+    report: { status: 'pass', summary: 'plan', execution },
+    stdout: '',
+    stderr: '',
+  });
+
+  const resolveWith = (summary: string): StepExecutionResult => ({
+    step: 'resolve',
+    exitCode: 0,
+    report: { status: 'pass', summary },
+    stdout: `${summary} out`,
+    stderr: '',
+  });
+
+  it('refine room(2) → 2 воркера + 1 координатор; отчёт = координатора', async () => {
+    const { deps, store, pi, sse } = makeDeps();
+    const events: SSEEvent[] = [];
+    sse.subscribe('iter-1', (event) => events.push(event));
+    pi.enqueue(
+      refineWith({
+        mode: 'room',
+        executors: 2,
+        decomposition: ['a', 'b'],
+      }),
+    );
+    pi.enqueue(resolveWith('worker0'));
+    pi.enqueue(resolveWith('worker1'));
+    pi.enqueue(resolveWith('coordinator'));
+
+    const result = await runIteration(deps, makeInput(['refine', 'resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
+
+    // refine + 2 workers + coordinator = 4 pi-вызова (3 на resolve-часть).
+    expect(pi.calls).toHaveLength(4);
+    const resolveRunId = store.runs[1].id;
+    expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRunId}/worker/0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`${resolveRunId}/worker/1`);
+    expect(pi.calls[3].options?.stepRunId).toBe(resolveRunId);
+
+    // Итоговый report шага — от координатора (единственный решающий).
+    expect(JSON.parse(store.outputs[1].report)).toMatchObject({
+      status: 'pass',
+      summary: 'coordinator',
+    });
+
+    // Воркер-промпты: своя подзадача, peer не lead; план refine доехал.
+    expect(pi.calls[1].prompt).toContain('Sub-task 1 of 2: a');
+    expect(pi.calls[2].prompt).toContain('Sub-task 2 of 2: b');
+    expect(pi.calls[1].prompt).toContain('NOT the lead');
+    expect(pi.calls[1].prompt).toContain('Refined plan');
+
+    // Координатор видит сводки работников и принимает финальное решение.
+    expect(pi.calls[3].prompt).toContain('LEAD');
+    expect(pi.calls[3].prompt).toContain('worker0');
+    expect(pi.calls[3].prompt).toContain('worker1');
+
+    // onWorkerStart публикует system-лог о старте работника.
+    const systemData = events
+      .filter((event) => event.type === 'log' && event.stream === 'system')
+      .map((event) => event.data);
+    expect(systemData).toContain('worker 1/2: a');
+    expect(systemData).toContain('worker 2/2: b');
+  });
+
+  it('room + aborted воркер → координатор НЕ стартует, итерация cancelled', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(
+      refineWith({
+        mode: 'room',
+        executors: 2,
+        decomposition: ['a', 'b'],
+      }),
+    );
+    pi.enqueue({
+      ...resolveWith('worker0'),
+      exitCode: 1,
+      report: { status: 'fail', summary: 'aborted' },
+      aborted: true,
+    });
+    pi.enqueue(resolveWith('worker1'));
+
+    const result = await runIteration(deps, makeInput(['refine', 'resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
+    // refine + 2 воркера = 3 вызова; координатор после abort не запускался.
+    expect(pi.calls).toHaveLength(3);
+    const resolveRunId = store.runs[1].id;
+    expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRunId}/worker/0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`${resolveRunId}/worker/1`);
+    expect(store.runs[1].status).toBe('aborted');
+    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:aborted']);
+  });
+
+  it('refine single/без execution → resolve один pi-вызов', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(pass('refine'));
+    pi.enqueue(pass('resolve'));
+
+    const result = await runIteration(deps, makeInput(['refine', 'resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
+    expect(pi.calls).toHaveLength(2);
+    expect(pi.calls[1].options?.stepRunId).toBe(store.runs[1].id);
+    expect(pi.calls[1].prompt).not.toContain('NOT the lead');
+  });
+
+  it('refine execution single с executors — всё равно один вызов', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(refineWith({ mode: 'single', executors: 4 }));
+    pi.enqueue(pass('resolve'));
+
+    await runIteration(deps, makeInput(['refine', 'resolve']));
+
+    expect(pi.calls).toHaveLength(2);
+    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
+  });
+
+  it('steps без refine → resolve single, один вызов', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+
+    const result = await runIteration(deps, makeInput(['resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual(['resolve#1:success']);
+    expect(pi.calls).toHaveLength(1);
   });
 });

@@ -313,6 +313,23 @@ export interface StepRunWithLog extends StepRun {
 
 export type StepReportStatus = 'pass' | 'fail' | 'blocked';
 
+/**
+ * Рекомендация refine о том, КАК исполнять resolve. Refine — единственная
+ * точка принятия решения о топологии прогона; движок распоряжается им
+ * детерминированно (см. planExecutionMode): комната создаётся только при
+ * явном `mode: room` с осмысленным числом исполнителей, иначе — один агент.
+ */
+export interface ExecutionPlan {
+  /** 'single' — один агент-исполнитель; 'room' — координатор + исполнители. */
+  mode: 'single' | 'room';
+  /** Количество исполнителей для комнаты (>= 2). */
+  executors?: number;
+  /** Декомпозиция на подзадачи (по одной на исполнителя); опциональна. */
+  decomposition?: string[];
+  /** Обоснование выбора топологии (для человека/логирования). */
+  rationale?: string;
+}
+
 export interface StepReportScenario {
   name: string;
   status: 'pass' | 'fail';
@@ -329,6 +346,11 @@ export interface StepReport {
   summary: string;
   scenarios?: StepReportScenario[];
   findings?: StepReportFinding[];
+  /**
+   * Топология исполнения следующего шага (только refine). Отсутствует у
+   * review/test/pr и у refine, который не делает рекомендацию.
+   */
+  execution?: ExecutionPlan;
 }
 
 export interface StepExecutionResult {

@@ -6,6 +6,7 @@ import type {
   StepReportStatus,
   StepRunStatus,
 } from './types';
+import { parseExecutionPlan } from './execution';
 
 const VALID_REPORT_STATUSES: readonly StepReportStatus[] = [
   'pass',
@@ -116,6 +117,9 @@ export function parseStepReport(json: string): StepReport | null {
       : {}),
     ...(Array.isArray(obj.findings)
       ? { findings: obj.findings as StepReportFinding[] }
+      : {}),
+    ...(parseExecutionPlan(obj.execution)
+      ? { execution: parseExecutionPlan(obj.execution) as import('./types').ExecutionPlan }
       : {}),
   };
 }

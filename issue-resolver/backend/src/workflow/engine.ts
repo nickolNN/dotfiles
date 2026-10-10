@@ -3,11 +3,13 @@ import { join } from 'node:path';
 import type {
   ContainerSpec,
   DesiredResult,
+  ExecutionPlan,
   Iteration,
   PipelineStep,
   SessionEvent,
   SessionStats,
   SSEEvent,
+  StepExecutionResult,
   StepOutput,
   StepReport,
   StepRun,
@@ -18,6 +20,7 @@ import type {
 import {
   nextStepDecision,
   parseStepReport,
+  planExecutionMode,
   stepRunStatusFromResult,
 } from '@issue-resolver/shared';
 import type { ContainerController } from '../docker/controller';
@@ -33,6 +36,7 @@ import {
   workspaceHostDirFor,
 } from '../workspace/paths';
 import { buildStepPrompt } from './prompts';
+import { runRoomResolve } from './room';
 
 /** Канонический порядок исполнения шагов пайплайна. */
 const PIPELINE_STEP_ORDER: readonly PipelineStep[] = [
@@ -253,6 +257,10 @@ export async function runIteration(
   let attempt = 1;
   // Фидбек прошлого упавшего шага (review/test) для следующего resolve.
   let feedback: string | null = null;
+  // Рекомендация refine о топологии resolve: план (summary) и execution.
+  // Заполняется только успешным refine-шагом; до него — null (single).
+  let refinedPlan: string | null = null;
+  let refinedExecution: ExecutionPlan | null = null;
 
   while (stepIndex < steps.length) {
     const step = steps[stepIndex];
@@ -270,40 +278,71 @@ export async function runIteration(
       stepStatusEvent(issue.id, iteration.id, stepRun.id, 'running'),
     );
 
-    const result = await deps.pi.run(
-      containerName,
-      buildStepPrompt({
-        step,
-        issueTitle: issue.title,
-        description: input.description ?? '',
-        jiraText: input.jiraText ?? null,
-        context: iteration.context,
-        feedback,
-        repoPaths,
-        desiredResult: issue.desiredResult,
-        previousOutcome: input.previousOutcome,
-        attachmentPaths: input.attachmentPaths ?? [],
-      }),
-      {
-        model: (input.step_models?.[step] ?? input.model) || undefined,
-        cwd: deps.local ? workspaceHostDir : workspaceContainerPath,
-        stepRunId: stepRun.id,
-        iterationId: iteration.id,
-        registry: deps.control,
-        onStdout: (chunk) =>
-          deps.sse.publish(
-            streamEvent(issue.id, iteration.id, stepRun.id, 'stdout', chunk),
-          ),
-        onStderr: (chunk) =>
-          deps.sse.publish(
-            streamEvent(issue.id, iteration.id, stepRun.id, 'stderr', chunk),
-          ),
-        onEvent: (event) =>
-          deps.sse.publish(
-            stepEvent(issue.id, iteration.id, stepRun.id, event),
-          ),
-      },
-    );
+    // Общий prompt-контекст шага: одинаков для single-resolve и работников
+    // комнаты (у комнаты отличие только в buildRoom* промптах).
+    const promptContext = {
+      issueTitle: issue.title,
+      description: input.description ?? '',
+      jiraText: input.jiraText ?? null,
+      context: iteration.context,
+      feedback,
+      repoPaths,
+      desiredResult: issue.desiredResult,
+      previousOutcome: input.previousOutcome,
+      attachmentPaths: input.attachmentPaths ?? [],
+    };
+    const model = (input.step_models?.[step] ?? input.model) || undefined;
+    const runOptions = {
+      model,
+      cwd: deps.local ? workspaceHostDir : workspaceContainerPath,
+      iterationId: iteration.id,
+      registry: deps.control,
+      onStdout: (chunk: string) =>
+        deps.sse.publish(
+          streamEvent(issue.id, iteration.id, stepRun.id, 'stdout', chunk),
+        ),
+      onStderr: (chunk: string) =>
+        deps.sse.publish(
+          streamEvent(issue.id, iteration.id, stepRun.id, 'stderr', chunk),
+        ),
+      onEvent: (event: SessionEvent) =>
+        deps.sse.publish(stepEvent(issue.id, iteration.id, stepRun.id, event)),
+    };
+
+    // Детерминированная развилка: комната — только если успешный refine явно
+    // рекомендовал room с >= 2 исполнителями; иначе один агент.
+    const isRoomResolve: boolean =
+      step === 'resolve' && planExecutionMode(refinedExecution) === 'room';
+
+    const result: StepExecutionResult = isRoomResolve
+      ? await runRoomResolve(
+          deps.pi,
+          {
+            containerName,
+            execution: refinedExecution as ExecutionPlan,
+            ...promptContext,
+            refinedPlan,
+          },
+          {
+            ...runOptions,
+            stepRunId: stepRun.id,
+            onWorkerStart: (item, total) =>
+              deps.sse.publish(
+                streamEvent(
+                  issue.id,
+                  iteration.id,
+                  stepRun.id,
+                  'system',
+                  `worker ${item.index + 1}/${total}: ${item.task}`,
+                ),
+              ),
+          },
+        )
+      : await deps.pi.run(
+          containerName,
+          buildStepPrompt({ step, ...promptContext, refinedPlan }),
+          { ...runOptions, stepRunId: stepRun.id },
+        );
 
     // Отчёт шага — источник истины в рабочей папке задачи. В RPC-режиме
     // `result.report` всегда null, поэтому отдаём приоритет файлу
@@ -327,6 +366,13 @@ export async function runIteration(
       stats: result.stats ?? null,
     });
     deps.sse.publish(stepStatusEvent(issue.id, iteration.id, stepRun.id, status));
+
+    // Успешный refine — единственный источник рекомендации о топологии
+    // resolve: план для промпта и execution для развилки single/room.
+    if (step === 'refine' && status === 'success') {
+      refinedPlan = report?.summary || null;
+      refinedExecution = report?.execution ?? null;
+    }
 
     if (status === 'aborted') {
       return { iterationStatus: 'cancelled', needsInput: false };

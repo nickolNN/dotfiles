@@ -43,6 +43,44 @@ describe('parseStepReport', () => {
     ]);
   });
 
+  it('keeps a valid execution plan', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({
+        status: 'pass',
+        summary: 'ok',
+        execution: {
+          mode: 'room',
+          executors: 2,
+          decomposition: ['a', 'b'],
+        },
+      }),
+    );
+
+    expect(parsed?.execution).toEqual({
+      mode: 'room',
+      executors: 2,
+      decomposition: ['a', 'b'],
+    });
+  });
+
+  it('omits execution when the field is absent', () => {
+    expect(
+      parseStepReport('{"status":"pass","summary":"ok"}'),
+    ).not.toHaveProperty('execution');
+  });
+
+  it('omits a broken execution plan', () => {
+    expect(
+      parseStepReport(
+        JSON.stringify({
+          status: 'pass',
+          summary: 'ok',
+          execution: { mode: 'nope' },
+        }),
+      ),
+    ).not.toHaveProperty('execution');
+  });
+
   it('accepts blocked as a valid status', () => {
     expect(parseStepReport('{"status":"blocked","summary":"need creds"}')).toEqual({
       status: 'blocked',

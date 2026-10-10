@@ -1,6 +1,11 @@
 import type { PipelineStep } from '@issue-resolver/shared';
 import { describe, expect, it } from 'vitest';
-import { buildStepPrompt } from '../src/workflow/prompts';
+import {
+  buildRoomCoordinatorPrompt,
+  buildRoomWorkerPrompt,
+  buildStepPrompt,
+  type RoomPromptInput,
+} from '../src/workflow/prompts';
 
 const base = {
   issueTitle: 'Поправить вход в личный кабинет',
@@ -8,6 +13,7 @@ const base = {
   jiraText: 'Текст из Jira' as string | null,
   context: 'Пользователь не может войти после сброса пароля.',
   feedback: null as string | null,
+  refinedPlan: null as string | null,
   repoPaths: ['/workspaces/issue-1/app', '/workspaces/issue-1/lib'],
   desiredResult: undefined as 'md' | 'html' | 'pr' | undefined,
   attachmentPaths: undefined as string[] | undefined,
@@ -174,5 +180,61 @@ describe('buildStepPrompt', () => {
       'Uploaded files',
     );
     expect(prompt('resolve')).not.toContain('Uploaded files');
+  });
+});
+
+describe('refine execution & room prompts', () => {
+  const roomInput: RoomPromptInput = {
+    issueTitle: base.issueTitle,
+    description: base.description,
+    jiraText: base.jiraText,
+    context: base.context,
+    feedback: null,
+    refinedPlan: 'План: сделать X, затем Y',
+    repoPaths: base.repoPaths,
+    desiredResult: 'md',
+    previousOutcome: null,
+    attachmentPaths: [],
+  };
+
+  it('refine: asks for an execution recommendation incl. room', () => {
+    const text = prompt('refine');
+
+    expect(text).toContain('execution');
+    expect(text).toContain('room');
+    expect(text).toContain('single');
+  });
+
+  it('resolve: refinedPlan renders the "Refined plan" section', () => {
+    const text = prompt('resolve', { refinedPlan: 'План из refine' });
+
+    expect(text).toContain('Refined plan');
+    expect(text).toContain('План из refine');
+  });
+
+  it('worker prompt: peer, not the lead, writes .issue-worker-result-0.json', () => {
+    const text = buildRoomWorkerPrompt(
+      roomInput,
+      { index: 0, task: 'frontend part' },
+      2,
+    );
+
+    expect(text).toContain('NOT the lead');
+    expect(text).toContain('.issue-worker-result-0.json');
+    expect(text).toContain('frontend part');
+    expect(text).toContain('Sub-task 1 of 2');
+  });
+
+  it('coordinator prompt: LEAD takes the FINAL decision + worker summaries', () => {
+    const text = buildRoomCoordinatorPrompt(roomInput, [
+      { index: 0, summary: 'frontend done' },
+      { index: 1, summary: 'backend done' },
+    ]);
+
+    expect(text).toContain('LEAD');
+    expect(text).toContain('FINAL');
+    expect(text).toContain('frontend done');
+    expect(text).toContain('backend done');
+    expect(text).toContain('.issue-step-result.json');
   });
 });

@@ -124,21 +124,78 @@ describe('InMemoryStepSessionRegistry', () => {
     expect(spy.aborts).toEqual([]);
   });
 
-  it('перерегистрация iteration ведёт на новый stepRunId; stale unregister его не сносит', () => {
+  it('multi-session: steerByIteration/abortByIteration broadcast на все сессии', () => {
     const registry = new InMemoryStepSessionRegistry();
     const first = spyControl();
     const second = spyControl();
     registry.register('run-1', 'iter-1', first.control);
     registry.register('run-2', 'iter-1', second.control);
 
-    expect(registry.steerByIteration('iter-1', 'second')).toBe(true);
-    expect(second.steers).toEqual(['second']);
-    expect(first.steers).toEqual([]);
+    expect(registry.steerByIteration('iter-1', 'all')).toBe(true);
+    expect(registry.abortByIteration('iter-1')).toBe(true);
 
-    // Удаление уже неактивного run-1 не должно ломать обратную ссылку на run-2.
+    // Broadcast: обе сессии итерации получили и steer, и abort.
+    expect(first.steers).toEqual(['all']);
+    expect(second.steers).toEqual(['all']);
+    expect(first.aborts).toHaveLength(1);
+    expect(second.aborts).toHaveLength(1);
+  });
+
+  it('multi-session: unregister одной оставляет hasByIteration, последней — снимает', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('run-1', 'iter-1', spyControl().control);
+    registry.register('run-2', 'iter-1', spyControl().control);
+
     registry.unregister('run-1');
-    expect(registry.steerByIteration('iter-1', 'still-second')).toBe(true);
-    expect(second.steers).toEqual(['second', 'still-second']);
+    expect(registry.hasByIteration('iter-1')).toBe(true);
+
+    registry.unregister('run-2');
+    expect(registry.hasByIteration('iter-1')).toBe(false);
+    expect(registry.abortByIteration('iter-1')).toBe(false);
+  });
+
+  it('anchor: prompt/send/respond идут на последнюю зарегистрированную сессию', async () => {
+    const registry = new InMemoryStepSessionRegistry();
+    const first = spyControl();
+    const second = spyControl();
+    registry.register('run-1', 'iter-1', first.control);
+    registry.register('run-2', 'iter-1', second.control);
+
+    await registry.promptByIteration('iter-1', 'anchor');
+    await registry.sendByIteration('iter-1', { type: 'get_state' });
+    registry.respondByIteration('iter-1', { id: 'ui-1', value: 'y' });
+
+    // Anchor = последняя зарегистрированная (в фазе room — координатор).
+    expect(second.prompts).toEqual([{ message: 'anchor' }]);
+    expect(second.commands).toEqual([{ type: 'get_state' }]);
+    expect(second.responses).toEqual([{ id: 'ui-1', value: 'y' }]);
+    expect(first.prompts).toEqual([]);
+    expect(first.commands).toEqual([]);
+    expect(first.responses).toEqual([]);
+  });
+
+  it('anchor: после снятия последней сессии якорем становится предыдущая', async () => {
+    const registry = new InMemoryStepSessionRegistry();
+    const first = spyControl();
+    const second = spyControl();
+    registry.register('run-1', 'iter-1', first.control);
+    registry.register('run-2', 'iter-1', second.control);
+
+    registry.unregister('run-2');
+    expect(registry.steerByIteration('iter-1', 'now-first')).toBe(true);
+    expect(first.steers).toEqual(['now-first']);
+    expect(second.steers).toEqual([]);
+  });
+
+  it('single-режим: одна сессия — поведение как раньше (без регресса)', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    const spy = spyControl();
+    registry.register('run-1', 'iter-1', spy.control);
+
+    expect(registry.steerByIteration('iter-1', 'hi')).toBe(true);
+    expect(registry.abortByIteration('iter-1')).toBe(true);
+    expect(spy.steers).toEqual(['hi']);
+    expect(spy.aborts).toHaveLength(1);
   });
 
   it('promptByIteration/sendByIteration резолвят активную сессию; без → null', async () => {
