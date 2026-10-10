@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Iteration } from '@issue-resolver/shared';
+import { isIterationActive } from '@issue-resolver/shared';
 import { eq, max } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/client';
@@ -184,6 +185,14 @@ export async function iterationsRoutes(
         .get();
       if (!source) {
         return reply.status(404).send({ error: 'iteration not found' });
+      }
+
+      // Повторить можно только завершённую/проваленную/отменённую итерацию.
+      // Активную (running) или ещё не стартовавшую (pending) копировать нельзя.
+      if (isIterationActive(source.status)) {
+        return reply
+          .status(409)
+          .send({ error: 'cannot repeat an active iteration' });
       }
 
       const issue = db

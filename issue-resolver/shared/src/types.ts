@@ -71,6 +71,14 @@ export interface IssueFile {
   created_at: string; // ISO 8601
 }
 
+/** Файл, порождённый агентом в рабочей папке завершённой итерации. */
+export interface WorkspaceFile {
+  name: string; // basename файла
+  rel_path: string; // путь от корня рабочей папки (posix, '/' разделитель)
+  size: number; // байты
+  mime_type: string | null; // content-type
+}
+
 export interface Issue {
   id: string;
   title: string;
@@ -366,19 +374,37 @@ export interface StepRunWithLog extends StepRun {
 
 export type StepReportStatus = 'pass' | 'fail' | 'blocked';
 
+/** Топология исполнения resolve, рекомендованная refine. */
+export type ExecutionMode = 'single' | 'room' | 'stages';
+
+/** Один этап последовательного исполнения плана (mode: 'stages'). */
+export interface ExecutionStage {
+  /** 1-based порядок исполнения. */
+  index: number;
+  name?: string;
+  task?: string;
+  /** Число параллельных воркеров этапа (>= 1). */
+  executors?: number;
+  /** Подзадачи, по одной на воркера. */
+  decomposition?: string[];
+}
+
 /**
  * Рекомендация refine о том, КАК исполнять resolve. Refine — единственная
  * точка принятия решения о топологии прогона; движок распоряжается им
- * детерминированно (см. planExecutionMode): комната создаётся только при
- * явном `mode: room` с осмысленным числом исполнителей, иначе — один агент.
+ * детерминированно (см. planExecutionMode): комната — только при явном
+ * `mode: room` с осмысленным числом исполнителей, staged-план — при
+ * `mode: stages` с 2+ валидными этапами, иначе — один агент.
  */
 export interface ExecutionPlan {
-  /** 'single' — один агент-исполнитель; 'room' — координатор + исполнители. */
-  mode: 'single' | 'room';
+  /** 'single' — один агент; 'room' — координатор + исполнители; 'stages' — последовательный план. */
+  mode: ExecutionMode;
   /** Количество исполнителей для комнаты (>= 2). */
   executors?: number;
   /** Декомпозиция на подзадачи (по одной на исполнителя); опциональна. */
   decomposition?: string[];
+  /** Этапы (только mode: 'stages'), в порядке исполнения. */
+  stages?: ExecutionStage[];
   /** Обоснование выбора топологии (для человека/логирования). */
   rationale?: string;
 }
@@ -395,6 +421,10 @@ export interface RoomAgent {
   index: number | null;
   /** Человекочитаемая подпись вкладки («Воркер 1», «Координатор»). */
   label: string;
+  /** Номер этапа (1-based) staged-режима; null у обычной комнаты. */
+  stage?: number | null;
+  /** Имя этапа staged-режима; null/отсутствует иначе. */
+  stageName?: string | null;
   status: 'running' | 'finished' | 'aborted' | 'failed';
   /** ISO-таймстамп регистрации агента; null для записей без тайминга. */
   startedAt: string | null;

@@ -11,6 +11,7 @@ import type {
   RoomAgent,
   SessionCommand,
   SessionControlSnapshot,
+  WorkspaceFile,
 } from '@issue-resolver/shared';
 import type { StepRunWithEvents } from './session-events';
 
@@ -392,6 +393,35 @@ export async function deleteIssue(id: string): Promise<void> {
 /** URL содержимого файла (inline/download, отдаётся бэкендом). */
 export function fileContentUrl(fileId: string): string {
   return `${API_BASE}/files/${fileId}/content`;
+}
+
+/** URL списка файлов, порождённых агентом в рабочей папке завершённой итерации. */
+export function resultFilesUrl(issueId: string): string {
+  return `${API_BASE}/issues/${issueId}/result/files`;
+}
+
+/** URL содержимого порождённого файла (attachment, отдаётся бэкендом). */
+export function resultFileContentUrl(
+  issueId: string,
+  relPath: string,
+): string {
+  return `${API_BASE}/issues/${issueId}/result/files/content?path=${encodeURIComponent(relPath)}`;
+}
+
+/** URL архива (tar.gz) со всеми порождёнными файлами и результатом. */
+export function resultFilesArchiveUrl(issueId: string): string {
+  return `${API_BASE}/issues/${issueId}/result/files/archive`;
+}
+
+/** Список порождённых файлов последней completed-итерации. */
+export async function getResultFiles(
+  issueId: string,
+): Promise<WorkspaceFile[]> {
+  const response = await fetch(resultFilesUrl(issueId));
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as WorkspaceFile[];
 }
 
 /**

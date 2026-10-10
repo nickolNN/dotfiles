@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type {
   DesiredResult,
   Issue,
@@ -32,6 +32,12 @@ import {
   saveUpload,
   type UploadInput,
 } from '../workspace/attachments';
+import { createTarGz, type ArchiveEntry } from '../workspace/archive';
+import {
+  listWorkspaceFiles,
+  mimeForFilename,
+  workspaceFilePathFor,
+} from '../workspace/workspace-files';
 import { readRequestPayload } from './multipart';
 import {
   containerNameFor,
@@ -359,6 +365,139 @@ export async function issuesRoutes(
           `attachment; filename="${result.filename}"`,
         )
         .send(result.body);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/result/files`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const issue = findIssue(id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+      if (latestCompletedIterationId(db, id) === null) {
+        return reply.status(404).send({ error: 'result not found' });
+      }
+
+      const artifact = resultArtifactFor(issue.desired_result ?? 'md');
+      return listWorkspaceFiles(
+        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+        id,
+        new Set([artifact?.filename ?? '']),
+      );
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/result/files/archive`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const issue = findIssue(id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+      const latest = latestCompletedIterationId(db, id);
+      if (latest === null) {
+        return reply.status(404).send({ error: 'result not found' });
+      }
+
+      const root = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
+      const artifact = resultArtifactFor(issue.desired_result ?? 'md');
+      const files = await listWorkspaceFiles(
+        root,
+        id,
+        new Set([artifact?.filename ?? '']),
+      );
+
+      const entries: ArchiveEntry[] = [];
+      for (const file of files) {
+        const abs = workspaceFilePathFor(root, id, file.rel_path);
+        if (!abs) {
+          continue;
+        }
+        try {
+          entries.push({
+            name: file.name,
+            relPath: file.rel_path,
+            body: await readFile(abs),
+          });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      // Артефакт результата живёт в снапшоте `.iteration-results`, а не в
+      // рабочей папке, поэтому добавляем его отдельно.
+      if (artifact) {
+        const result = await readArtifactFrom(
+          iterationResultDirFor(root, id, latest),
+          artifact,
+        );
+        if (result) {
+          entries.push({
+            name: artifact.filename,
+            relPath: artifact.filename,
+            body: Buffer.from(result.body),
+          });
+        }
+      }
+
+      if (entries.length === 0) {
+        return reply.status(404).send({ error: 'result not found' });
+      }
+
+      const buf = await createTarGz(entries);
+      return reply
+        .type('application/gzip')
+        .header(
+          'Content-Disposition',
+          `attachment; filename="issue-${id}.tar.gz"`,
+        )
+        .send(buf);
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    `${ROUTE_PATH}/:id/result/files/content`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const issue = findIssue(id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+      if (latestCompletedIterationId(db, id) === null) {
+        return reply.status(404).send({ error: 'result not found' });
+      }
+
+      // Guard: только внутри рабочей папки задачи (защита от traversal).
+      const path = workspaceFilePathFor(
+        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+        id,
+        request.query.path ?? '',
+      );
+      if (!path) {
+        return reply.status(404).send({ error: 'file not found' });
+      }
+
+      let body: Buffer;
+      try {
+        body = await readFile(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return reply.status(404).send({ error: 'file not found' });
+        }
+        throw error;
+      }
+
+      const name = basename(path);
+      return reply
+        .type(mimeForFilename(name) ?? 'application/octet-stream')
+        .header('Content-Disposition', attachmentDisposition(name))
+        .send(body);
     },
   );
 

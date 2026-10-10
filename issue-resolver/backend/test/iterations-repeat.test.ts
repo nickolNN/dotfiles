@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { buildApp } from '../src/app';
 import { createDb } from '../src/db/client';
 import {
@@ -11,6 +12,7 @@ import {
   listByIteration,
 } from '../src/db/issue-files.repo';
 import { FakePiRunner } from '../src/pi/runner';
+import { issues, iterations } from '../src/db/schema';
 
 const ISSUES = '/issue-resolver/api/v1/issues';
 const ITERATIONS = '/issue-resolver/api/v1/iterations';
@@ -69,6 +71,24 @@ async function waitFor<T>(
   }
 }
 
+/** Ждёт, пока итерация перейдёт в терминальный статус (повтор разрешён). */
+async function waitForTerminalIteration(
+  db: ReturnType<typeof createDb>,
+  iterationId: string,
+): Promise<string> {
+  return waitFor(() => {
+    const row = db
+      .select()
+      .from(iterations)
+      .where(eq(iterations.id, iterationId))
+      .get();
+    const status = row?.status;
+    return status && status !== 'running' && status !== 'pending'
+      ? status
+      : undefined;
+  });
+}
+
 function makeEnv(): {
   db: ReturnType<typeof createDb>;
   root: string;
@@ -122,7 +142,7 @@ describe('POST /iterations/:id/repeat', () => {
   });
 
   it('копирует параметры/запрос, берёт следующий number и отдаёт полный Iteration (201)', async () => {
-    const { pi, app, cleanup } = makeEnv();
+    const { db, pi, app, cleanup } = makeEnv();
     try {
       const issueId = await createIssue(app, {
         title: 'Повтор',
@@ -147,6 +167,9 @@ describe('POST /iterations/:id/repeat', () => {
       expect(created.statusCode).toBe(201);
       const source = created.json();
       expect(source.number).toBe(2);
+
+      // Исходная итерация должна завершиться до repeat — повтор активной запрещён.
+      await waitForTerminalIteration(db, source.id);
 
       const repeat = await app.inject({
         method: 'POST',
@@ -233,6 +256,9 @@ describe('POST /iterations/:id/repeat', () => {
       expect(sourceFiles).toHaveLength(1);
       expect(sourceFiles[0].rel_path).toBe('attachments/iteration-2/note.txt');
 
+      // Дожидаемся терминального статуса исходной итерации до repeat.
+      await waitForTerminalIteration(db, source.id as string);
+
       // Файл уровня задачи (iteration_id IS NULL) — дублировать нельзя.
       await insertMany(db, [
         {
@@ -271,4 +297,52 @@ describe('POST /iterations/:id/repeat', () => {
       await cleanup();
     }
   });
+
+  it.each(['running', 'pending'] as const)(
+    'активная итерация (%s) → 409, повтор запрещён',
+    async (status) => {
+      const { db, app, cleanup } = makeEnv();
+      try {
+        const now = new Date().toISOString();
+        const issueId = randomUUID();
+        db.insert(issues)
+          .values({
+            id: issueId,
+            title: 'Активная',
+            jira_issue_url: null,
+            pipeline_steps: ['resolve'],
+            container_name: null,
+            status: 'completed',
+            created_at: now,
+            updated_at: now,
+          })
+          .run();
+
+        db.insert(iterations)
+          .values({
+            id: 'active-iteration',
+            issue_id: issueId,
+            number: 1,
+            context: '',
+            steps: ['resolve'],
+            status,
+            created_at: now,
+            updated_at: now,
+          })
+          .run();
+
+        const response = await app.inject({
+          method: 'POST',
+          url: `${ITERATIONS}/active-iteration/repeat`,
+        });
+
+        expect(response.statusCode).toBe(409);
+        expect(response.json()).toEqual({
+          error: 'cannot repeat an active iteration',
+        });
+      } finally {
+        await cleanup();
+      }
+    },
+  );
 });

@@ -78,15 +78,18 @@ export function statusOfIssue(iterations: Iteration[]): TaskStatus | null {
 }
 
 /**
+ * Активная итерация: ещё выполняется (`running`) или запущена, но не
+ * стартовала (`pending`). Повтор/начало новой по такой итерации запрещены.
+ */
+export function isIterationActive(status: TaskStatus): boolean {
+  return status === 'running' || status === 'pending';
+}
+
+/**
  * Можно ли начать новую итерацию: итераций нет либо последняя
  * (max number) завершена, провалена или отменена.
  */
 export function canStartIteration(iterations: Iteration[]): boolean {
   const status = statusOfIssue(iterations);
-  return (
-    status === null ||
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'cancelled'
-  );
+  return status === null || !isIterationActive(status);
 }

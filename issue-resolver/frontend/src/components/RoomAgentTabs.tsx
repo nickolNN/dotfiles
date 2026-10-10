@@ -46,10 +46,20 @@ const STATUS_COLOR: Record<RoomAgent['status'], string> = {
   failed: '#FF0033',
 };
 
-/** Стабильный порядок вкладок: воркеры по индексу, координатор — последним. */
+/**
+ * Стабильный порядок вкладок.
+ *
+ * В staged-режиме агенты группируются по этапу: сначала этап 1 (воркеры,
+ * затем координатор этапа), потом этап 2, …; в самом конце — финальный
+ * координатор и обычная комната (у них `stage` = null → MAX_SAFE_INTEGER).
+ * Внутри этапа: воркеры раньше координатора, затем по `index`.
+ */
 function sortAgents(agents: RoomAgent[]): RoomAgent[] {
   const roleRank = (agent: RoomAgent) => (agent.role === 'worker' ? 0 : 1);
+  const stageRank = (agent: RoomAgent) =>
+    agent.stage ?? Number.MAX_SAFE_INTEGER;
   return [...agents].sort((a, b) => {
+    if (stageRank(a) !== stageRank(b)) return stageRank(a) - stageRank(b);
     if (roleRank(a) !== roleRank(b)) return roleRank(a) - roleRank(b);
     return (
       (a.index ?? Number.MAX_SAFE_INTEGER) -
@@ -58,9 +68,17 @@ function sortAgents(agents: RoomAgent[]): RoomAgent[] {
   });
 }
 
-/** Подпись вкладки: у координатора явно помечаем роль (lead). */
+/**
+ * Подпись вкладки: номер этапа уже приходит в label от бэкенда («Этап N · …»),
+ * поэтому staged-агентов не трогаем. « (lead)» добавляем только финальному
+ * координатору (stage == null), как и раньше.
+ */
 function tabLabel(agent: RoomAgent): string {
-  if (agent.role === 'coordinator' && !/lead/i.test(agent.label)) {
+  if (
+    agent.role === 'coordinator' &&
+    (agent.stage === null || agent.stage === undefined) &&
+    !/lead/i.test(agent.label)
+  ) {
     return `${agent.label} (lead)`;
   }
   return agent.label;
@@ -137,8 +155,9 @@ function pickDefaultAgentId(
  * сосуществуют N воркеров и координатор. Выбор вкладки переключает живой
  * `SessionView` ИМЕННО этого агента (свой per-agent SSE-поток).
  *
- * Родитель (карточка шага) рендерит компонент только при
- * `execution.mode === 'room'`; для single-режима остаётся обычная сессия.
+ * Родитель (карточка шага) рендерит компонент при
+ * `execution.mode === 'room'` или `'stages'`; для single-режима остаётся
+ * обычная сессия.
  */
 export default function RoomAgentTabs({
   iterationId,

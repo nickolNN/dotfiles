@@ -110,6 +110,30 @@ describe('parseStepReport', () => {
     });
   });
 
+  it('keeps a valid staged execution plan', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({
+        status: 'pass',
+        summary: 'ok',
+        execution: {
+          mode: 'stages',
+          stages: [
+            { index: 1, name: 'Сбор', executors: 2, decomposition: ['a', 'b'] },
+            { index: 2, task: 'починить' },
+          ],
+        },
+      }),
+    );
+
+    expect(parsed?.execution).toEqual({
+      mode: 'stages',
+      stages: [
+        { index: 1, name: 'Сбор', executors: 2, decomposition: ['a', 'b'] },
+        { index: 2, task: 'починить' },
+      ],
+    });
+  });
+
   it('omits execution when the field is absent', () => {
     expect(
       parseStepReport('{"status":"pass","summary":"ok"}'),

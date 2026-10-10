@@ -1,5 +1,6 @@
 import type {
   ExecutionPlan,
+  NormalizedStage,
   RoomWorkItem,
   SessionEvent,
   StepExecutionResult,
@@ -7,6 +8,7 @@ import type {
 import {
   clampExecutors,
   DEFAULT_MAX_ROOM_EXECUTORS,
+  planExecutionStages,
   planRoomWorkItems,
 } from '@issue-resolver/shared';
 import type { PiRunner } from '../pi/runner';
@@ -14,6 +16,9 @@ import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry'
 import {
   buildRoomCoordinatorPrompt,
   buildRoomWorkerPrompt,
+  buildStageCoordinatorPrompt,
+  buildStageWorkerPrompt,
+  buildStagedFinalCoordinatorPrompt,
   type RoomPromptInput,
   type WorkerSummary,
 } from './prompts';
@@ -48,20 +53,117 @@ export interface RoomResolveOptions {
   ) => void;
 }
 
-/** Дескриптор воркера: `index` в RoomAgent — 1-based, id — per-agent stepRunId. */
-const workerAgent = (baseStepRunId: string, index: number): RoomAgentInfo => ({
-  id: `${baseStepRunId}/worker/${index}`,
-  role: 'worker',
-  index: index + 1,
-  label: `Воркер ${index + 1}`,
+/**
+ * Дескриптор воркера: `index` в RoomAgent — 1-based, id — per-agent stepRunId.
+ * Со `stage` (staged-режим) id/подпись включают номер этапа, а воркер
+ * нумеруется 1-based внутри этапа.
+ */
+const workerAgent = (
+  baseStepRunId: string,
+  index: number,
+  stage?: NormalizedStage,
+): RoomAgentInfo =>
+  stage
+    ? {
+        id: `${baseStepRunId}/stage/${stage.index}/worker/${index + 1}`,
+        role: 'worker',
+        index: index + 1,
+        label: `Этап ${stage.index} · Воркер ${index + 1}`,
+        stage: stage.index,
+        stageName: stage.name,
+      }
+    : {
+        id: `${baseStepRunId}/worker/${index}`,
+        role: 'worker',
+        index: index + 1,
+        label: `Воркер ${index + 1}`,
+      };
+
+/**
+ * Дескриптор координатора: без `stage` — финальный lead шага (id = stepRunId);
+ * со `stage` — координатор этапа staged-режима (`<stepRunId>/stage/<i>/coordinator`).
+ */
+const coordinatorAgent = (
+  stepRunId: string,
+  stage?: NormalizedStage,
+): RoomAgentInfo =>
+  stage
+    ? {
+        id: `${stepRunId}/stage/${stage.index}/coordinator`,
+        role: 'coordinator',
+        index: null,
+        label: `Этап ${stage.index} · Координатор`,
+        stage: stage.index,
+        stageName: stage.name,
+      }
+    : {
+        id: stepRunId,
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+      };
+
+/** Терминальный abort-результат resolve (общий для room и staged). */
+const abortedResolveResult = (): StepExecutionResult => ({
+  step: 'resolve',
+  exitCode: 1,
+  report: { status: 'fail', summary: 'aborted' },
+  stdout: '',
+  stderr: '',
+  events: [],
+  stats: null,
+  aborted: true,
 });
 
-const coordinatorAgent = (stepRunId: string): RoomAgentInfo => ({
-  id: stepRunId,
-  role: 'coordinator',
-  index: null,
-  label: 'Координатор',
-});
+/** Описывает один запуск pi-агента комнаты (воркер или координатор). */
+interface AgentRun {
+  stepRunId: string;
+  agent: RoomAgentInfo;
+  prompt: string;
+}
+
+/** Запускает pi-агента с прокидкой per-agent стрима/событий в общие колбэки. */
+function runAgent(
+  pi: PiRunner,
+  input: RoomResolveInput,
+  options: RoomResolveOptions,
+  run: AgentRun,
+): Promise<StepExecutionResult> {
+  return pi.run(input.containerName, run.prompt, {
+    model: options.model,
+    thinkingLevel: options.thinkingLevel,
+    cwd: options.cwd,
+    stepRunId: run.stepRunId,
+    iterationId: options.iterationId,
+    issueId: options.issueId,
+    registry: options.registry,
+    agent: run.agent,
+    onStdout: (chunk) => options.onStdout?.(chunk, run.agent),
+    onStderr: (chunk) => options.onStderr?.(chunk, run.agent),
+    onEvent: (event) => options.onEvent?.(event, run.agent),
+  });
+}
+
+/** Дескриптор одного воркера: дескриптор агента, его id, подзадача и промпт. */
+interface WorkerJob extends AgentRun {
+  item: RoomWorkItem;
+}
+
+/** Запускает N воркеров параллельно, переиспользуется комнатой и этапами. */
+async function runWorkersParallel(
+  pi: PiRunner,
+  input: RoomResolveInput,
+  options: RoomResolveOptions,
+  jobs: WorkerJob[],
+  total: number,
+): Promise<StepExecutionResult[]> {
+  return Promise.all(
+    jobs.map((job) => {
+      options.onWorkerStart?.(job.item, total, job.agent);
+      return runAgent(pi, input, options, job);
+    }),
+  );
+}
 
 /**
  * Прогон resolve в режиме комнаты: N работников параллельно решают свои
@@ -81,45 +183,23 @@ export async function runRoomResolve(
   );
   const workItems = planRoomWorkItems(input.execution, count);
 
-  const workers = await Promise.all(
-    workItems.map((item) => {
-      const stepRunId = `${options.stepRunId}/worker/${item.index}`;
-      const agent = workerAgent(options.stepRunId, item.index);
-      options.onWorkerStart?.(item, count, agent);
-      return pi.run(
-        input.containerName,
-        buildRoomWorkerPrompt(input, item, count),
-        {
-          model: options.model,
-          thinkingLevel: options.thinkingLevel,
-          cwd: options.cwd,
-          stepRunId,
-          iterationId: options.iterationId,
-          issueId: options.issueId,
-          registry: options.registry,
-          agent,
-          onStdout: (chunk) => options.onStdout?.(chunk, agent),
-          onStderr: (chunk) => options.onStderr?.(chunk, agent),
-          onEvent: (event) => options.onEvent?.(event, agent),
-        },
-      );
-    }),
-  );
+  const jobs: WorkerJob[] = workItems.map((item) => {
+    const agent = workerAgent(options.stepRunId, item.index);
+    return {
+      stepRunId: agent.id,
+      agent,
+      item,
+      prompt: buildRoomWorkerPrompt(input, item, count),
+    };
+  });
+
+  const workers = await runWorkersParallel(pi, input, options, jobs, count);
 
   // Пользователь прервал итерацию (abort идёт broadcast во все сессии):
   // координатора НЕ запускаем — иначе он допишет отчёт и итерация
   // завершится `completed` вместо `cancelled`.
   if (workers.some((worker) => worker.aborted === true)) {
-    return {
-      step: 'resolve',
-      exitCode: 1,
-      report: { status: 'fail', summary: 'aborted' },
-      stdout: '',
-      stderr: '',
-      events: [],
-      stats: null,
-      aborted: true,
-    };
+    return abortedResolveResult();
   }
 
   const summaries: WorkerSummary[] = workers.map((worker, index) => ({
@@ -128,24 +208,100 @@ export async function runRoomResolve(
       worker.report?.summary ?? `(see .issue-worker-result-${index}.json)`,
   }));
 
-  return pi.run(
-    input.containerName,
-    buildRoomCoordinatorPrompt(input, summaries),
-    {
-      model: options.model,
-      thinkingLevel: options.thinkingLevel,
-      cwd: options.cwd,
-      stepRunId: options.stepRunId,
-      iterationId: options.iterationId,
-      issueId: options.issueId,
-      registry: options.registry,
-      agent: coordinatorAgent(options.stepRunId),
-      onStdout: (chunk) =>
-        options.onStdout?.(chunk, coordinatorAgent(options.stepRunId)),
-      onStderr: (chunk) =>
-        options.onStderr?.(chunk, coordinatorAgent(options.stepRunId)),
-      onEvent: (event) =>
-        options.onEvent?.(event, coordinatorAgent(options.stepRunId)),
-    },
+  const agent = coordinatorAgent(options.stepRunId);
+  return runAgent(pi, input, options, {
+    stepRunId: agent.id,
+    agent,
+    prompt: buildRoomCoordinatorPrompt(input, summaries),
+  });
+}
+
+/**
+ * Прогон resolve в режиме последовательных этапов (`mode: 'stages'`). Этапы
+ * исполняются СТРОГО по порядку: воркеры этапа (параллельно, если executors
+ * >= 2) → координатор этапа, пишущий `.issue-stage-<i>.json`; для executors = 1
+ * этап выполняет один агент. После всех этапов финальный lead интегрирует их
+ * исходы и пишет итоговый `.issue-step-result.json`. Abort на любом этапе
+ * немедленно завершает шаг без следующих этапов и финального координатора.
+ */
+export async function runStagedResolve(
+  pi: PiRunner,
+  input: RoomResolveInput,
+  options: RoomResolveOptions,
+): Promise<StepExecutionResult> {
+  const stages = planExecutionStages(
+    input.execution,
+    input.maxExecutors ?? DEFAULT_MAX_ROOM_EXECUTORS,
   );
+  const outcomes: { stage: NormalizedStage; outcome: string }[] = [];
+
+  for (const stage of stages) {
+    if (stage.executors >= 2) {
+      const workItems: RoomWorkItem[] = stage.decomposition.map(
+        (task, index) => ({ index, task }),
+      );
+      const jobs: WorkerJob[] = workItems.map((item) => {
+        const agent = workerAgent(options.stepRunId, item.index, stage);
+        return {
+          stepRunId: agent.id,
+          agent,
+          item,
+          prompt: buildStageWorkerPrompt(input, stage, item, stage.executors),
+        };
+      });
+
+      const workers = await runWorkersParallel(
+        pi,
+        input,
+        options,
+        jobs,
+        stage.executors,
+      );
+      if (workers.some((worker) => worker.aborted === true)) {
+        return abortedResolveResult();
+      }
+
+      const summaries: WorkerSummary[] = workers.map((worker, index) => ({
+        index,
+        summary:
+          worker.report?.summary ??
+          `(see .issue-stage-${stage.index}-worker-${index + 1}.json)`,
+      }));
+
+      const agent = coordinatorAgent(options.stepRunId, stage);
+      const result = await runAgent(pi, input, options, {
+        stepRunId: agent.id,
+        agent,
+        prompt: buildStageCoordinatorPrompt(input, stage, summaries),
+      });
+      if (result.aborted === true) return abortedResolveResult();
+      outcomes.push({
+        stage,
+        outcome:
+          result.report?.summary ?? `(see .issue-stage-${stage.index}.json)`,
+      });
+      continue;
+    }
+
+    // executors === 1: один агент выполняет весь этап и пишет `.issue-stage-<i>.json`.
+    const agent = coordinatorAgent(options.stepRunId, stage);
+    const result = await runAgent(pi, input, options, {
+      stepRunId: agent.id,
+      agent,
+      prompt: buildStageCoordinatorPrompt(input, stage, []),
+    });
+    if (result.aborted === true) return abortedResolveResult();
+    outcomes.push({
+      stage,
+      outcome:
+        result.report?.summary ?? `(see .issue-stage-${stage.index}.json)`,
+    });
+  }
+
+  const agent = coordinatorAgent(options.stepRunId);
+  return runAgent(pi, input, options, {
+    stepRunId: agent.id,
+    agent,
+    prompt: buildStagedFinalCoordinatorPrompt(input, outcomes),
+  });
 }

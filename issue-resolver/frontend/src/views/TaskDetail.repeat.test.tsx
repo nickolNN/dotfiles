@@ -96,6 +96,30 @@ describe('TaskDetail — кнопка «↻ Повторить»', () => {
     );
   });
 
+  it('активная итерация (running/pending) — кнопка Повторить disabled', async () => {
+    const list = [
+      makeIteration({ id: 'iter-1', number: 1, status: 'completed' }),
+      makeIteration({ id: 'iter-2', number: 2, status: 'running' }),
+      makeIteration({ id: 'iter-3', number: 3, status: 'pending' }),
+    ];
+    stubFetch(
+      () => list,
+      () => Promise.resolve(jsonResponse(makeIteration())),
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const buttons = screen.getAllByTestId<HTMLButtonElement>(
+      'repeat-iteration',
+    );
+    expect(buttons).toHaveLength(3);
+    // Список сортируется свежая-сначала: #3 pending, #2 running, #1 completed.
+    expect(buttons[0]).toBeDisabled();
+    expect(buttons[1]).toBeDisabled();
+    expect(buttons[2]).not.toBeDisabled();
+  });
+
   it('клик → POST /iterations/<id>/repeat и обновляет список, новая выбрана', async () => {
     let list = [makeIteration({ id: 'iter-1', number: 1 })];
     const created = makeIteration({ id: 'iter-2', number: 2 });

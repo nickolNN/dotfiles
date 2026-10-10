@@ -10,7 +10,22 @@ import { HttpMrClient } from './pr/mr';
 import { DEFAULT_WORKSPACE_ROOT } from './workspace/paths';
 
 const DEFAULT_DOCKER_SOCKET = '/var/run/docker.sock';
-const DEFAULT_LOCAL_WORKSPACE_ROOT = '/home/agent/.issue-resolver/workspaces';
+
+/**
+ * Дефолтный корень workspace-папок в локальном режиме (без Docker).
+ *
+ * Лежит на host-bind-mount `/home/agent/workspace` (virtiofs), поэтому
+ * артефакты задач (`report.html`/`index.html` и т.п.) переживают
+ * пересоздание контейнера/комнаты, и download-эндпоинты не отдают 404.
+ *
+ * Почему не `/home/agent/.issue-resolver`: этот каталог живёт на
+ * эфемерном overlay-слое контейнера и исчезает при рестарте комнаты
+ * (durable volume'ами в `.pi` покрыты только memory/rooms/sessions).
+ *
+ * Переопределяется env `ISSUE_RESOLVER_WORKSPACE_ROOT` (см. buildDepsFromEnv).
+ */
+const DEFAULT_LOCAL_WORKSPACE_ROOT =
+  '/home/agent/workspace/.issue-resolver/workspaces';
 
 /**
  * Продуктовая фабрика deps. Без `ISSUE_RESOLVER_USE_REAL=1` возвращает пустой

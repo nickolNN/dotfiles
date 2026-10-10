@@ -115,6 +115,65 @@ afterEach(() => {
 });
 
 describe('RoomAgentTabs — вкладки агентов комнаты', () => {
+  it('staged-режим: вкладки группируются по этапу, финальный координатор — последним', async () => {
+    const staged: RoomAgent[] = [
+      makeAgent({
+        id: 'stage-2/worker/0',
+        index: 1,
+        label: 'Этап 2 · Воркер 1',
+        stage: 2,
+      } as Partial<RoomAgent>),
+      makeAgent({
+        id: 'stage-1/coordinator',
+        role: 'coordinator',
+        index: null,
+        label: 'Этап 1 · Координатор',
+        stage: 1,
+      } as Partial<RoomAgent>),
+      makeAgent({
+        id: 'stage-1/worker/1',
+        index: 2,
+        label: 'Этап 1 · Воркер 2',
+        stage: 1,
+      } as Partial<RoomAgent>),
+      makeAgent({
+        id: 'stage-1/worker/0',
+        index: 1,
+        label: 'Этап 1 · Воркер 1',
+        stage: 1,
+      } as Partial<RoomAgent>),
+      makeAgent({
+        id: 'final',
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        stage: null,
+      } as Partial<RoomAgent>),
+    ];
+    stubFetch(staged);
+
+    render(<RoomAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('room-agents');
+
+    const tabs = screen.getAllByTestId('room-agent-tab');
+    // Порядок: этап 1 (воркеры 1,2, затем координатор этапа) → этап 2 →
+    // финальный координатор (stage=null).
+    expect(tabs.map((tab) => tab.getAttribute('data-agent-id'))).toEqual([
+      'stage-1/worker/0',
+      'stage-1/worker/1',
+      'stage-1/coordinator',
+      'stage-2/worker/0',
+      'final',
+    ]);
+    expect(tabs[0]).toHaveTextContent('Этап 1 · Воркер 1');
+    expect(tabs[1]).toHaveTextContent('Этап 1 · Воркер 2');
+    expect(tabs[2]).toHaveTextContent('Этап 1 · Координатор');
+    // Координатор этапа — не финальный, «(lead)» ему не добавляем.
+    expect(tabs[2]).not.toHaveTextContent('(lead)');
+    expect(tabs[3]).toHaveTextContent('Этап 2 · Воркер 1');
+    expect(tabs[4]).toHaveTextContent('Координатор (lead)');
+  });
+
   it('рендерит воркеров по порядку и координатора с пометкой (lead)', async () => {
     stubFetch(AGENTS);
 

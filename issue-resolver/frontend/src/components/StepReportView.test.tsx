@@ -208,6 +208,39 @@ describe('StepReportView — структурированный отчёт', () 
     ).toHaveTextContent('много контекста');
   });
 
+  it('execution stages: рендерит нумерованный список этапов', () => {
+    render(
+      <StepReportView
+        raw={JSON.stringify({
+          status: 'pass',
+          summary: 's',
+          execution: {
+            mode: 'stages',
+            stages: [
+              {
+                index: 1,
+                name: 'Сбор контекста',
+                executors: 2,
+                task: 'собрать',
+              },
+              { index: 2, task: 'починить' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    const stages = screen.getByTestId('step-report-execution-stages');
+    const items = stages.querySelectorAll('li');
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent('Сбор контекста');
+    expect(items[0]).toHaveTextContent('2 исп.');
+    expect(items[0]).toHaveTextContent('собрать');
+    // Без name — дефолт «Этап N»; task без executors.
+    expect(items[1]).toHaveTextContent('Этап 2');
+    expect(items[1]).toHaveTextContent('починить');
+  });
+
   it('execution single без опциональных полей рендерит только mode', () => {
     render(
       <StepReportView

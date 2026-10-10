@@ -254,6 +254,27 @@ export default function StepReportView({ raw }: StepReportViewProps) {
                 <AgentMarkdown>{execution.rationale}</AgentMarkdown>
               </div>
             )}
+            {execution.mode === 'stages' &&
+              execution.stages &&
+              execution.stages.length > 0 && (
+                <div className="text-[#00FF41]/85">
+                  этапы:
+                  <ol
+                    data-testid="step-report-execution-stages"
+                    className="mt-1 list-decimal space-y-0.5 pl-5 text-[#00FF41]/80"
+                  >
+                    {execution.stages.map((stage, i) => (
+                      <li key={i}>
+                        {stage.name ?? `Этап ${i + 1}`}
+                        {typeof stage.executors === 'number'
+                          ? ` — ${stage.executors} исп.`
+                          : ''}
+                        {stage.task ? `: ${stage.task}` : ''}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
           </div>
         </section>
       )}

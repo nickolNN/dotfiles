@@ -1,5 +1,6 @@
 import type {
   DesiredResult,
+  NormalizedStage,
   PipelineStep,
   RoomWorkItem,
 } from '@issue-resolver/shared';
@@ -11,6 +12,8 @@ export interface StepPromptInput {
   description: string;
   /** Jira issue text (or null if absent/unavailable). */
   jiraText: string | null;
+  /** Контекст для шага review (review_context итерации; пусто/undefined — секция не выводится). */
+  reviewContext?: string | null;
   context: string;
   feedback: string | null;
   repoPaths: string[];
@@ -77,12 +80,21 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
       'clear, SKIP questions and go straight to the plan.',
       'Order: (questions → answers) → plan. Then, based on the answers received, build an implementation plan.',
       'Step outcome: refined context and a plan for the following steps.',
+      'Also write the implementation plan as human-readable Markdown to `plan.md` at the',
+      'root of the working folder (in addition to `.issue-step-result.json`).',
       'Execution topology: recommend how the resolve step should execute by adding an',
       '"execution" object to .issue-step-result.json:',
-      '{ "mode": "single" | "room", "executors": <N>, "decomposition": ["sub-task", ...], "rationale": "..." }.',
+      '{ "mode": "single" | "room" | "stages", "executors": <N>, "decomposition": ["sub-task", ...], "stages": [ ... ], "rationale": "..." }.',
       '- "single": the implementation is simple enough for ONE agent to do alone.',
       '- "room": needs a coordinator (lead) plus N worker agents (2 <= N <= 4). Provide',
       '  a decomposition with exactly one sub-task per worker.',
+      '- "stages": a sequential plan of 2+ ordered stages executed one after another.',
+      '  Each stage runs either a single agent or 1..4 parallel workers, and after all',
+      '  stages a final coordinator integrates every stage outcome:',
+      '  { "mode": "stages", "stages": [ { "index": 1, "name": "...", "task": "...",',
+      '    "executors": N, "decomposition": ["...", ...] }, ... ], "rationale": "..." }',
+      '  (indexes are 1..N in execution order; for executors > 1 provide one',
+      '  decomposition entry per worker, otherwise a single agent runs the stage).',
       'Only the coordinator (lead) ever makes the final pass/fail decision for the step.',
     ].join('\n'),
 
@@ -124,9 +136,16 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
     ].join('\n');
   },
 
-  review: () =>
+  review: (input) =>
     [
       'Role: independent reviewer, do NOT continue the implementation.',
+      ...(input.reviewContext
+        ? [
+            'Reviewer context (focus points, regression risks, or acceptance',
+            'criteria from the task owner):',
+            input.reviewContext,
+          ]
+        : []),
       'You are allowed to run build, tests, and the browser (Playwright / agent-browser).',
       'Verify the real behavior of the application, not just reading code.',
       'Format the result in `.issue-step-result.json`:',
@@ -324,6 +343,238 @@ export function buildRoomCoordinatorPrompt(
     'Instructions:',
     "- Integrate the workers' changes, resolve conflicts between them, and finish the implementation.",
     '- You are the ONLY one allowed to conclude the step. Workers do not decide pass/fail.',
+    '- Decide pass/fail/blocked based on the integrated result, and write the FINAL',
+    '  .issue-step-result.json at the working-folder root:',
+    '  { "status": "pass|fail|blocked", "summary": "...", "scenarios": [ ... ], "findings": [ ... ] }.',
+    '- Do NOT push and do NOT create an MR — the backend publishes.',
+    'Output contract:',
+    '`.issue-step-result.json` is the single source of truth for this step result.',
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Промпт воркера этапа staged-режима: решает свою подзадачу этапа параллельно
+ * другим воркерам; пишет `.issue-stage-<index>-worker-<w>.json`, но НЕ финальное
+ * решение (ни этапа, ни шага).
+ */
+export function buildStageWorkerPrompt(
+  input: RoomPromptInput,
+  stage: NormalizedStage,
+  item: RoomWorkItem,
+  total: number,
+): string {
+  const worker = item.index + 1;
+  const lines: string[] = [
+    `Role: worker agent (executor) of stage ${stage.index} ("${stage.name}") in a staged agent room. You are a peer, NOT the lead.`,
+    'The stage coordinator and the final lead alone make pass/fail decisions — never you.',
+    `Stage ${stage.index} task: ${stage.task}`,
+    `Sub-task ${worker} of ${total}: ${item.task}`,
+    `Task: ${input.issueTitle}`,
+    `Issue description: ${input.description}`,
+    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
+    'Iteration context:',
+    input.context,
+  ];
+
+  if (input.refinedPlan) {
+    lines.push('', 'Refined plan (follow it):', input.refinedPlan);
+  }
+
+  const attachments = input.attachmentPaths ?? [];
+  if (attachments.length > 0) {
+    lines.push(
+      '',
+      'Uploaded files (already in the working folder):',
+      ...attachments.map((path) => `- ${path}`),
+    );
+  }
+
+  if (input.repoPaths.length > 0) {
+    lines.push(
+      '',
+      'Repositories (working paths):',
+      ...input.repoPaths.map((path) => `- ${path}`),
+    );
+  } else {
+    lines.push(
+      '',
+      'There are no repositories — write your work files into the task working folder.',
+    );
+  }
+
+  if (input.feedback !== null) {
+    lines.push('', `Previous step feedback: ${input.feedback}`);
+  }
+
+  lines.push(
+    '',
+    'Instructions:',
+    `- Solve ONLY sub-task ${worker} of stage ${stage.index}. Do not touch files outside its scope.`,
+    '- You are allowed to edit code and write files. Build/test/commit/push are FORBIDDEN.',
+    '- Report your OWN sub-task outcome (not the stage, not the step) by writing the file',
+    `  .issue-stage-${stage.index}-worker-${worker}.json at the working-folder root:`,
+    '  { "status": "pass|fail|blocked", "summary": "..." }.',
+    '- The stage coordinator integrates the workers; the final lead decides the step.',
+    'Output contract:',
+    `.issue-stage-${stage.index}-worker-${worker}.json is required; without it your sub-task is incomplete.`,
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Промпт координатора этапа staged-режима: интегрирует воркеров СВОЕГО этапа и
+ * пишет `.issue-stage-<index>.json`; финальное решение шага принимает отдельный
+ * финальный lead. Итоги предыдущих этапов читаются из общей памяти комнаты.
+ */
+export function buildStageCoordinatorPrompt(
+  input: RoomPromptInput,
+  stage: NormalizedStage,
+  workers: WorkerSummary[],
+): string {
+  const lines: string[] = [
+    `Role: coordinator (integrator) of stage ${stage.index} ("${stage.name}") in a staged agent room.`,
+    `You integrate the workers of stage ${stage.index} ONLY; the FINAL pass/fail decision for the step belongs to the final lead.`,
+    `Stage ${stage.index} task: ${stage.task}`,
+    `Task: ${input.issueTitle}`,
+    `Issue description: ${input.description}`,
+    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
+    'Iteration context:',
+    input.context,
+  ];
+
+  if (input.refinedPlan) {
+    lines.push('', 'Refined plan (follow it):', input.refinedPlan);
+  }
+
+  if (input.repoPaths.length > 0) {
+    lines.push(
+      '',
+      'Repositories (working paths):',
+      ...input.repoPaths.map((path) => `- ${path}`),
+    );
+  } else {
+    lines.push(
+      '',
+      'There are no repositories — the stage deliverables are files in the task working folder.',
+    );
+  }
+
+  if (input.feedback !== null) {
+    lines.push('', `Previous step feedback: ${input.feedback}`);
+  }
+
+  if (workers.length > 0) {
+    lines.push(
+      '',
+      `Worker sub-task reports of stage ${stage.index} (read the full files .issue-stage-${stage.index}-worker-<w>.json in the working folder):`,
+      ...workers.map(
+        (worker) => `  worker ${worker.index + 1}: ${worker.summary}`,
+      ),
+    );
+  } else {
+    lines.push(
+      '',
+      'There are no worker agents for this stage: perform the stage task YOURSELF',
+      'and produce the stage result directly.',
+    );
+  }
+
+  lines.push(
+    '',
+    'Shared room memory:',
+    '- Previous stages publish their outcomes to the shared room memory. Read them',
+    '  BEFORE integrating by using the `memory_read` tool and the `memory_search` tool',
+    '  (tags `#issue-resolver`, `[[stage-N]]`), in addition to the working-folder files.',
+    '- When your stage is done, write a short stage outcome to the shared memory with',
+    `  the \`memory_write\` tool: tags \`#issue-resolver\` and \`[[stage-${stage.index}]]\`.`,
+    '',
+    'Instructions:',
+    "- Integrate the workers' changes for YOUR stage, resolve conflicts between them, and finish the stage implementation.",
+    `- Write the stage outcome to .issue-stage-${stage.index}.json at the working-folder root:`,
+    '  { "status": "pass|fail|blocked", "summary": "..." }.',
+    '- This is NOT the final step result: do NOT write .issue-step-result.json.',
+    '- Do NOT push and do NOT create an MR — the backend publishes.',
+    'Output contract:',
+    `.issue-stage-${stage.index}.json is required; without it the stage is incomplete.`,
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Промпт финального lead staged-режима: интегрирует исходы ВСЕХ этапов и ОДИН
+ * пишет deliverable (`report.html`/`report.md` по desiredResult) и финальный
+ * `.issue-step-result.json`.
+ */
+export function buildStagedFinalCoordinatorPrompt(
+  input: RoomPromptInput,
+  stages: { stage: NormalizedStage; outcome: string }[],
+): string {
+  const lines: string[] = [
+    'Role: final coordinator (LEAD) of this staged agent room. You integrate the',
+    'outcomes of ALL stages below and take the FINAL decision whether the resolve',
+    'step passed.',
+    `Task: ${input.issueTitle}`,
+    `Issue description: ${input.description}`,
+    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
+    'Iteration context:',
+    input.context,
+  ];
+
+  if (input.refinedPlan) {
+    lines.push('', 'Refined plan (follow it):', input.refinedPlan);
+  }
+
+  if (input.repoPaths.length > 0) {
+    lines.push(
+      '',
+      'Repositories (working paths):',
+      ...input.repoPaths.map((path) => `- ${path}`),
+    );
+  } else {
+    lines.push(
+      '',
+      'There are no repositories — the deliverables are files in the task working folder.',
+    );
+  }
+
+  if (input.feedback !== null) {
+    lines.push('', `Previous step feedback: ${input.feedback}`);
+  }
+
+  if (input.desiredResult === 'html') {
+    lines.push(
+      '',
+      'Write the deliverable as a single self-contained `report.html` at the',
+      'working-folder root (inline CSS/JS/images via data URIs) — a styled',
+      'standalone page to share. In addition to `.issue-step-result.json`.',
+    );
+  } else if (input.desiredResult === 'md') {
+    lines.push(
+      '',
+      'Write the deliverable as `report.md` at the working-folder root — a',
+      'Markdown document. Plain Markdown, no HTML wrapper. In addition to `.issue-step-result.json`.',
+    );
+  }
+
+  lines.push(
+    '',
+    'Stage outcomes (read the full files .issue-stage-<index>.json in the working folder):',
+    ...stages.map(
+      ({ stage, outcome }) =>
+        `  stage ${stage.index} (${stage.name}): ${outcome}`,
+    ),
+    '',
+    'Shared room memory:',
+    '- Each stage published a short outcome to the shared room memory. Read them with',
+    '  the `memory_read` / `memory_search` tools (tags `#issue-resolver`, `[[stage-N]]`),',
+    '  in addition to the working-folder files.',
+    '- When the resolve step is finished, write the overall resolve outcome to the',
+    '  shared memory with the `memory_write` tool: tags `#issue-resolver` and `[[resolve]]`.',
+    '',
+    'Instructions:',
+    '- Integrate the stage outcomes, resolve conflicts between stages, and finalize the implementation.',
+    '- You are the ONLY one allowed to conclude the step.',
     '- Decide pass/fail/blocked based on the integrated result, and write the FINAL',
     '  .issue-step-result.json at the working-folder root:',
     '  { "status": "pass|fail|blocked", "summary": "...", "scenarios": [ ... ], "findings": [ ... ] }.',

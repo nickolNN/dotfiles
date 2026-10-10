@@ -1,8 +1,11 @@
-import type { PipelineStep } from '@issue-resolver/shared';
+import type { NormalizedStage, PipelineStep } from '@issue-resolver/shared';
 import { describe, expect, it } from 'vitest';
 import {
   buildRoomCoordinatorPrompt,
   buildRoomWorkerPrompt,
+  buildStageCoordinatorPrompt,
+  buildStageWorkerPrompt,
+  buildStagedFinalCoordinatorPrompt,
   buildStepPrompt,
   type RoomPromptInput,
 } from '../src/workflow/prompts';
@@ -18,6 +21,7 @@ const base = {
   desiredResult: undefined as 'md' | 'html' | 'pr' | undefined,
   attachmentPaths: undefined as string[] | undefined,
   previousOutcome: null as string | null,
+  reviewContext: null as string | null,
 };
 
 function prompt(
@@ -117,6 +121,20 @@ describe('buildStepPrompt', () => {
     expect(text).toContain('independent reviewer');
     expect(text).toContain('.issue-step-result.json');
     expect(text).toContain('Playwright');
+  });
+
+  it('review: review_context renders the "Reviewer context" section; empty/other steps — no section', () => {
+    const withContext = prompt('review', {
+      reviewContext: 'Особое внимание к авторизации после сброса пароля',
+    });
+
+    expect(withContext).toContain('Reviewer context');
+    expect(withContext).toContain('Особое внимание к авторизации после сброса пароля');
+
+    expect(prompt('review')).not.toContain('Reviewer context');
+    expect(prompt('resolve', { reviewContext: 'X' })).not.toContain(
+      'Reviewer context',
+    );
   });
 
   it('pr: PR role + push/MR ban', () => {
@@ -240,5 +258,86 @@ describe('refine execution & room prompts', () => {
     expect(text).toContain('frontend done');
     expect(text).toContain('backend done');
     expect(text).toContain('.issue-step-result.json');
+  });
+});
+
+describe('staged prompts', () => {
+  const stage: NormalizedStage = {
+    index: 1,
+    name: 'Сбор контекста',
+    task: 'собрать контекст',
+    executors: 2,
+    decomposition: ['frontend', 'backend'],
+  };
+
+  const roomInput: RoomPromptInput = {
+    issueTitle: base.issueTitle,
+    description: base.description,
+    jiraText: base.jiraText,
+    context: base.context,
+    feedback: null,
+    refinedPlan: 'План: сделать X, затем Y',
+    repoPaths: base.repoPaths,
+    desiredResult: 'md',
+    previousOutcome: null,
+    attachmentPaths: [],
+  };
+
+  it('refine: mentions the plan.md artifact and the stages mode', () => {
+    const text = prompt('refine');
+
+    expect(text).toContain('plan.md');
+    expect(text).toContain('stages');
+    expect(text).toContain('.issue-step-result.json');
+  });
+
+  it('stage worker: stage name, peer-not-lead, own stage-worker file', () => {
+    const text = buildStageWorkerPrompt(
+      roomInput,
+      stage,
+      { index: 1, task: 'backend' },
+      2,
+    );
+
+    expect(text).toContain('NOT the lead');
+    expect(text).toContain('Сбор контекста');
+    expect(text).toContain('Sub-task 2 of 2: backend');
+    expect(text).toContain('.issue-stage-1-worker-2.json');
+    expect(text).not.toContain('.issue-step-result.json');
+  });
+
+  it('stage coordinator: integrates workers, stage file, shared memory read/write', () => {
+    const text = buildStageCoordinatorPrompt(roomInput, stage, [
+      { index: 0, summary: 'frontend done' },
+      { index: 1, summary: 'backend done' },
+    ]);
+
+    expect(text).toContain('Сбор контекста');
+    expect(text).toContain('frontend done');
+    expect(text).toContain('backend done');
+    expect(text).toContain('.issue-stage-1.json');
+    expect(text).toContain('memory_read');
+    expect(text).toContain('memory_search');
+    expect(text).toContain('memory_write');
+    expect(text).toContain('[[stage-1]]');
+  });
+
+  it('final lead: integrates all stage outcomes, deliverable + final report + memory', () => {
+    const text = buildStagedFinalCoordinatorPrompt(roomInput, [
+      { stage, outcome: 'stage 1 done' },
+      {
+        stage: { ...stage, index: 2, name: 'Починка', executors: 1 },
+        outcome: 'stage 2 done',
+      },
+    ]);
+
+    expect(text).toContain('LEAD');
+    expect(text).toContain('FINAL');
+    expect(text).toContain('stage 1 done');
+    expect(text).toContain('stage 2 done');
+    expect(text).toContain('report.md');
+    expect(text).toContain('.issue-step-result.json');
+    expect(text).toContain('memory_write');
+    expect(text).toContain('[[resolve]]');
   });
 });

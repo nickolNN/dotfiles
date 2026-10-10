@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_ROOM_EXECUTORS,
   parseExecutionPlan,
   planExecutionMode,
+  planExecutionStages,
   planRoomWorkItems,
 } from '../src/execution';
 import type { ExecutionPlan } from '../src/types';
@@ -128,5 +129,168 @@ describe('planRoomWorkItems', () => {
       { index: 1, task: 'Sub-task 2' },
       { index: 2, task: 'Sub-task 3' },
     ]);
+  });
+});
+
+describe('parseExecutionPlan — stages', () => {
+  it('parses a valid staged plan', () => {
+    expect(
+      parseExecutionPlan({
+        mode: 'stages',
+        stages: [
+          {
+            index: 1,
+            name: 'Сбор',
+            task: 'собрать',
+            executors: 2,
+            decomposition: ['a', 'b'],
+          },
+          { index: 2, task: 'починить' },
+        ],
+        rationale: 'два этапа',
+      }),
+    ).toEqual({
+      mode: 'stages',
+      stages: [
+        {
+          index: 1,
+          name: 'Сбор',
+          task: 'собрать',
+          executors: 2,
+          decomposition: ['a', 'b'],
+        },
+        { index: 2, task: 'починить' },
+      ],
+      rationale: 'два этапа',
+    });
+  });
+
+  it('drops invalid stage entries and garbage fields', () => {
+    expect(
+      parseExecutionPlan({
+        mode: 'stages',
+        stages: [
+          { index: 1, name: '', executors: 2, decomposition: ['ok', '', 7] },
+          'nope',
+          { task: 'no index' },
+          { index: 2.5, task: 'non-int index' },
+          { index: 2, executors: 0 },
+          { index: 3, task: 'real' },
+        ],
+      }),
+    ).toEqual({
+      mode: 'stages',
+      stages: [
+        { index: 1, executors: 2, decomposition: ['ok'] },
+        { index: 3, task: 'real' },
+      ],
+    });
+  });
+
+  it('keeps a single-stage plan (degradation decided by planExecutionMode)', () => {
+    expect(
+      parseExecutionPlan({ mode: 'stages', stages: [{ index: 1 }] }),
+    ).toEqual({ mode: 'stages', stages: [{ index: 1 }] });
+  });
+});
+
+describe('planExecutionMode — stages', () => {
+  it('stages with 2+ valid stages → stages', () => {
+    expect(
+      planExecutionMode({ mode: 'stages', stages: [{ index: 1 }, { index: 2 }] }),
+    ).toBe('stages');
+  });
+
+  it('stages with fewer than 2 valid stages → single', () => {
+    expect(planExecutionMode({ mode: 'stages', stages: [{ index: 1 }] })).toBe(
+      'single',
+    );
+    expect(planExecutionMode({ mode: 'stages', stages: [] })).toBe('single');
+    expect(planExecutionMode({ mode: 'stages' })).toBe('single');
+    expect(
+      planExecutionMode({
+        mode: 'stages',
+        stages: [{ index: 1 }, { index: 2.5 }],
+      }),
+    ).toBe('single');
+  });
+});
+
+describe('planExecutionStages', () => {
+  it('returns [] when not staged or fewer than 2 valid stages', () => {
+    expect(planExecutionStages(null)).toEqual([]);
+    expect(planExecutionStages(undefined)).toEqual([]);
+    expect(planExecutionStages({ mode: 'single' })).toEqual([]);
+    expect(planExecutionStages({ mode: 'room' })).toEqual([]);
+    expect(
+      planExecutionStages({ mode: 'stages', stages: [{ index: 1 }] }),
+    ).toEqual([]);
+    expect(planExecutionStages({ mode: 'stages' })).toEqual([]);
+  });
+
+  it('renumbers 1..N and fills name/task/decomposition fallbacks', () => {
+    const stages = planExecutionStages({
+      mode: 'stages',
+      stages: [
+        { index: 5, executors: 2, decomposition: ['a'] },
+        { index: 9, name: 'Build', task: 'build it', executors: 1 },
+      ],
+    });
+
+    expect(stages).toEqual([
+      {
+        index: 1,
+        name: 'Этап 1',
+        task: 'Stage 1',
+        executors: 2,
+        decomposition: ['a', 'Sub-task 2'],
+      },
+      {
+        index: 2,
+        name: 'Build',
+        task: 'build it',
+        executors: 1,
+        decomposition: ['Sub-task 1'],
+      },
+    ]);
+  });
+
+  it('clamps executors to [1..max] and backfills decomposition', () => {
+    const stages = planExecutionStages(
+      {
+        mode: 'stages',
+        stages: [
+          { index: 1, executors: 99, decomposition: [] },
+          { index: 2, executors: 0 },
+          { index: 3 },
+        ],
+      },
+      3,
+    );
+
+    expect(stages).toHaveLength(2);
+    expect(stages[0]).toEqual({
+      index: 1,
+      name: 'Этап 1',
+      task: 'Stage 1',
+      executors: 3,
+      decomposition: ['Sub-task 1', 'Sub-task 2', 'Sub-task 3'],
+    });
+    expect(stages[1]).toEqual({
+      index: 2,
+      name: 'Этап 2',
+      task: 'Stage 2',
+      executors: 1,
+      decomposition: ['Sub-task 1'],
+    });
+  });
+
+  it('drops invalid entries before counting the 2-stage minimum', () => {
+    expect(
+      planExecutionStages({
+        mode: 'stages',
+        stages: [{ index: 1 }, 'x', { index: 2.5 }],
+      }),
+    ).toEqual([]);
   });
 });

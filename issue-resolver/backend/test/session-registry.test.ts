@@ -225,6 +225,8 @@ describe('InMemoryStepSessionRegistry', () => {
         role: 'worker',
         index: 1,
         label: 'Воркер 1',
+        stage: null,
+        stageName: null,
         status: 'running',
         startedAt: expect.any(String),
         stats: null,
@@ -234,6 +236,8 @@ describe('InMemoryStepSessionRegistry', () => {
         role: 'worker',
         index: 2,
         label: 'Воркер 2',
+        stage: null,
+        stageName: null,
         status: 'running',
         startedAt: expect.any(String),
         stats: null,
@@ -243,6 +247,8 @@ describe('InMemoryStepSessionRegistry', () => {
         role: 'coordinator',
         index: null,
         label: 'Координатор',
+        stage: null,
+        stageName: null,
         status: 'running',
         startedAt: expect.any(String),
         stats: null,
@@ -274,7 +280,52 @@ describe('InMemoryStepSessionRegistry', () => {
         role: 'coordinator',
         index: null,
         label: 'Координатор',
+        stage: null,
+        stageName: null,
         status: 'finished',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+    ]);
+  });
+
+  it('listAgents: stage/stageName агента комнаты попадают в снимок', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base/stage/1/worker/0', 'iter-stage', spyControl().control, {
+      id: 'base/stage/1/worker/0',
+      role: 'worker',
+      index: 1,
+      label: 'Этап 1 · Воркер 1',
+      stage: 1,
+      stageName: 'Сбор контекста',
+    });
+    registry.register('base', 'iter-stage', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    expect(registry.listAgents('iter-stage')).toEqual([
+      {
+        id: 'base/stage/1/worker/0',
+        role: 'worker',
+        index: 1,
+        label: 'Этап 1 · Воркер 1',
+        stage: 1,
+        stageName: 'Сбор контекста',
+        status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+      {
+        id: 'base',
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        stage: null,
+        stageName: null,
+        status: 'running',
         startedAt: expect.any(String),
         stats: null,
       },

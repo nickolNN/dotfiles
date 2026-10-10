@@ -43,6 +43,10 @@ export interface RoomAgentInfo {
   role: RoomAgent['role'];
   index: number | null;
   label: string;
+  /** Номер этапа staged-режима (1-based); null/отсутствует у обычной комнаты. */
+  stage?: number | null;
+  /** Имя этапа staged-режима; null/отсутствует иначе. */
+  stageName?: string | null;
 }
 
 export interface StepSessionRegistry {
@@ -181,8 +185,8 @@ function buildAgentStats(entry: AgentEntry): SessionStats | null {
   const base = entry.lastStats;
   if (!entry.usageSeen && !base) return null;
   return {
-    ...(base?.sessionId !== undefined ? { sessionId: base.sessionId } : {}),
-    ...(base?.model !== undefined ? { model: base.model } : {}),
+    ...(base?.sessionId === undefined ? {} : { sessionId: base.sessionId }),
+    ...(base?.model === undefined ? {} : { model: base.model }),
     userMessages: base?.userMessages ?? 0,
     assistantMessages: base?.assistantMessages ?? 0,
     toolCalls: base?.toolCalls ?? 0,
@@ -256,6 +260,8 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
           role: agent.role,
           index: agent.index,
           label: agent.label,
+          stage: agent.stage ?? null,
+          stageName: agent.stageName ?? null,
           status: 'running',
           startedAt: new Date().toISOString(),
           stats: null,

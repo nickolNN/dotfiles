@@ -81,12 +81,15 @@ Backend по умолчанию поднимается с in-memory фейкам
 | `GET /issues/:id` | — | `Issue` / `404 { error }` |
 | `GET /issues/:id/result` | — | результат задачи inline: `report.md` (`text/markdown`) или `report.html` (`text/html`); нет файла → `404 { error: 'result not found' }` |
 | `GET /issues/:id/result/download` | — | тот же файл как `Content-Disposition: attachment; filename="report.md"` (или `report.html`) / `404` |
+| `GET /issues/:id/result/files` | — | `WorkspaceFile[]` (порождённые файлы последней completed-итерации из рабочей папки; исключены `attachments/`, скрытые `.`-пути и сам артефакт результата) / `404` |
+| `GET /issues/:id/result/files/content?path=<rel_path>` | — | содержимое файла как `Content-Disposition: attachment` / `404` |
 | `GET /issues/:id/iterations` | — | `Iteration[]` (по `number` возр.) / `404` |
 | `POST /issues/:id/iterations` | `{ context, review_context?, is_review_need?, steps?, model? }` (JSON) **или** multipart (`payload` + `files`) | `201 Iteration`; запускает прогон в фоне; файлы итерации — в `attachments/iteration-<n>/` |
 | `GET /issues/:id/files` | — | `IssueFile[]` (загруженные файлы задачи; `rel_path` от корня рабочей папки, `iteration_id` для группировки) / `404` |
 | `DELETE /files/:fileId` | — | `204`; удаляет строку и файл с диска (best-effort, guard от path traversal) / `404` |
 | `GET /files/:fileId/content` | — | `200` содержимое файла: `Content-Type: <mime_type>` (fallback `application/octet-stream`) + `Content-Disposition: attachment; filename="…"` (safe ASCII + `filename*=UTF-8''…`) / `404` (нет строки, файла или путь вне `attachments/`) |
 | `GET /iterations/:id/step-runs` | — | `StepRunWithLog[]` (порядок шагов конвейера, внутри шага `attempt` возр.; сырой лог шага) / `404` |
+| `POST /iterations/:id/repeat` | — | `201 Iteration` — копия: те же `context`/`steps`/модели/вложения, `number = max+1`, запускает прогон в фоне. Только для завершённой/проваленной/отменённой итерации; активную (`running`/`pending`) → `409 { error: 'cannot repeat an active iteration' }` / `404` |
 | `GET /iterations/:id/agents` | — | `RoomAgent[]` (агенты комнаты resolve: воркеры по `index` 1..N + координатор последним; `id`, `role: 'worker' \| 'coordinator'`, `index`, `label`, `status`, `startedAt`, `stats`) / `404` |
 | `GET /iterations/:id/agents/stream?agentId=` | — | SSE: события сессии одного агента комнаты (`?agentId=<RoomAgent.id>`) / `400` (нет `agentId`) |
 | `GET /issues/:id/stream` | — | SSE: `data: <SSEEvent JSON>\n\n` |
@@ -152,7 +155,9 @@ Backend по умолчанию поднимается с in-memory фейкам
 `create_mr: true` хотя бы у одного репозитория в конец добавляется `pr`, но
 итоговое наличие `pr` определяется `desired_result` (см. выше).
 `is_review_need`/`review_context` хранятся на итерации, `Issue.description`
-хранит исходный `additional_context`.
+хранит исходный `additional_context`. `is_review_need` управляет только
+составом конвейера (вставка `review`+`test`); `review_context` дополнительно
+попадает в промпт шага `review` (секция «Reviewer context»), когда не пуст.
 
 `SSEEvent`: `{ type: 'log' | 'step_status' | 'step_event' | 'iteration_status',
 issueId, iterationId, stepRunId?, stream?, data, ts }`.
@@ -190,18 +195,36 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   репозиториев + `context` итерации — задаёт уточняющие вопросы (вывод в живой
   лог), затем по ответам строит план. Текст Jira докачивается на прогоне через
   `jira.fetchIssue`; ошибка Jira деградирует до `null` и шаг не падает.
-- **Room-режим (параллельные агенты)**: `refine` — шаг планирования: его отчёт
-  может нести `execution` (`{ mode: 'single' | 'room', executors?,
-  decomposition? }`), но `room` валиден только при `executors >= 2`; иначе (нет
-  плана, битый или `single`) — всегда один агент. Топологию детерминированно
-  решает движок (`planExecutionMode` + `clampExecutors`, потолок
-  `DEFAULT_MAX_ROOM_EXECUTORS = 4`), а не сами агенты. В `room`-`resolve` N
-  воркеров параллельно решают подзадачи и пишут каждый свой
-  `.issue-worker-result-<i>.json`, затем координатор (lead, запускается
-  последним и держит финальный `pass`/`fail`) интегрирует их и пишет итоговый
-  `.issue-step-result.json`. У каждого агента свой `RoomAgent.id` (`<stepRunId>`
-  у координатора, `<stepRunId>/worker/<i>` у воркеров) и отдельный per-agent
-  SSE (`/agents/stream?agentId=`), а `RoomAgent` несёт `startedAt` (ISO) и
+- **Room-режим (последовательные/параллельные агенты)**: `refine` — шаг
+  планирования: его отчёт может нести `execution` (`{ mode: 'single' | 'room' |
+  'stages', executors?, decomposition?, stages?, rationale? }`), а также пишет
+  человекочитаемый план в `plan.md` в корне рабочей папки. Топологию
+  детерминированно решает движок (`planExecutionMode`, потолок
+  `DEFAULT_MAX_ROOM_EXECUTORS = 4`), а не сами агенты:
+  - `room` валиден только при `executors >= 2`; N воркеров параллельно решают
+    подзадачи и пишут каждый свой `.issue-worker-result-<i>.json`, затем
+    координатор (lead, запускается последним и держит финальный `pass`/`fail`)
+    интегрирует их и пишет итоговый `.issue-step-result.json`.
+  - `stages` валиден при 2+ валидных этапах в `execution.stages`
+    (элемент — `{ index, name?, task?, executors?, decomposition? }`). Этапы
+    исполняются строго последовательно: на этапе с `executors >= 2` воркеры
+    работают параллельно, затем координатор этапа пишет
+    `.issue-stage-<i>.json` (воркеры — `.issue-stage-<i>-worker-<w>.json`);
+    этап с одним исполнителем выполняет один агент; после всех этапов
+    финальный lead интегрирует исходы и ОДИН пишет deliverable
+    (`report.md`/`report.html` по `desired_result`) и итоговый
+    `.issue-step-result.json`. `planExecutionStages` перенумеровывает этапы
+    1..N, зажимает `executors` в `[1..max]` и добивает `decomposition` до
+    ровно `executors` пунктов; abort на любом этапе немедленно завершает шаг.
+    Координатор этапа и финальный lead дополнительно читают итоги предыдущих
+    этапов через общую память комнаты (`memory_read`/`memory_search`) и пишут
+    свой итог (`memory_write`, теги `#issue-resolver`/`[[stage-N]]`).
+  - иначе (нет плана, битый, `single`, < 2 валидных этапов) — один агент.
+  В `room`/`stages` у каждого агента свой `RoomAgent.id` (`<stepRunId>` у
+  финального координатора, `<stepRunId>/worker/<i>` у воркеров комнаты,
+  `<stepRunId>/stage/<s>/worker/<w>` и `<stepRunId>/stage/<s>/coordinator` у
+  staged-агентов) и отдельный per-agent SSE (`/agents/stream?agentId=`), а
+  `RoomAgent` несёт `stage`/`stageName` (staged-режим), `startedAt` (ISO) и
   агрегированные `stats` (токены/cost/context из usage/stats-событий его
   сессии).
 - **Цикл фидбека**: провал `review`/`test` откатывает конвейер на `resolve` с
@@ -291,8 +314,10 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   `SessionView` и его статистика (токены/cost/контекст + ⏱ длительность), а над
   вкладками — итог по всему шагу (суммарные токены/cost и wall-time от первого
   старта). Режим определяется по последнему `refine`-отчёту
-  (`parseStepReport(report).execution.mode === 'room'`), иначе — обычная
-  одиночная сессия. Под карточкой шага
+  (`parseStepReport(report).execution.mode === 'room'` либо `'stages'`); в
+  `stages` вкладки группируются по этапам (`stage`/`stageName`, сначала этап 1
+  с его воркерами и координатором, затем этап 2, …; финальный координатор —
+  последним), иначе — обычная одиночная сессия. Под карточкой шага
   (`data-testid="step-run-log"`) — строка статистики: длительность (⏱; у
   активного шага тикает `now - created_at`), токены из `run.stats` в формате
   `<модель> · ^<input> · v<output> · кеш<cacheRead+cacheWrite> · N вызовов`
@@ -331,7 +356,12 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   «Скачать» (`/issues/:id/result/download`). Обе кнопки активны только когда
   `resolve`-шаг уже оставил непустой `.issue-step-result.json` (до этого —
   `disabled`/`aria-disabled`, чтобы не бить в 404 «результат ещё не создан»);
-  отсутствие `desired_result`/`pr` скрывает их совсем.
+  отсутствие `desired_result`/`pr` скрывает их совсем. Рядом с «Скачать»
+  появляются отдельные ссылки скачивания файлов, порождённых агентом в рабочей
+  папке последней completed-итерации (`GET /issues/:id/result/files/content`,
+  список — `GET /issues/:id/result/files`): каждый файл — своя ссылка
+  `Скачать <имя>` с размером; служебные `.`-пути, `attachments/` и сам артефакт
+  результата исключены, пустой список ничего не рендерит.
 
 Статусы — из `shared`:
 

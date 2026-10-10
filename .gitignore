@@ -33,3 +33,4 @@ dotfiles-agent/certs/
 node_modules/
 .vitest/
 
+.issue-resolver/

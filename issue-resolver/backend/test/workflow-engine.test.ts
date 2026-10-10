@@ -934,6 +934,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         role: 'worker',
         index: 1,
         label: 'Воркер 1',
+        stage: null,
+        stageName: null,
         status: 'running',
         startedAt: expect.any(String),
         stats: null,
@@ -943,6 +945,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         role: 'worker',
         index: 2,
         label: 'Воркер 2',
+        stage: null,
+        stageName: null,
         status: 'running',
         startedAt: expect.any(String),
         stats: null,
@@ -952,6 +956,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         role: 'coordinator',
         index: null,
         label: 'Координатор',
+        stage: null,
+        stageName: null,
         status: 'running',
         startedAt: expect.any(String),
         stats: null,
@@ -1030,6 +1036,51 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     expect(pi.calls).toHaveLength(2);
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
+  });
+
+  it('refine stages(2) → этапы последовательно + финальный lead; отчёт = final', async () => {
+    const { deps, store, pi, control } = makeDeps();
+    pi.enqueue(
+      refineWith({
+        mode: 'stages',
+        stages: [
+          {
+            index: 1,
+            name: 'Сбор',
+            task: 'собрать',
+            executors: 2,
+            decomposition: ['a', 'b'],
+          },
+          { index: 2, name: 'Починка', task: 'починить', executors: 1 },
+        ],
+      }),
+    );
+    pi.enqueue(resolveWith('s1w1'));
+    pi.enqueue(resolveWith('s1w2'));
+    pi.enqueue(resolveWith('s1coord'));
+    pi.enqueue(resolveWith('s2'));
+    pi.enqueue(resolveWith('final'));
+
+    const result = await runIteration(deps, makeInput(['refine', 'resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
+
+    const resolveRunId = store.runs[1].id;
+    expect(pi.calls.slice(1).map((call) => call.options?.stepRunId)).toEqual([
+      `${resolveRunId}/stage/1/worker/1`,
+      `${resolveRunId}/stage/1/worker/2`,
+      `${resolveRunId}/stage/1/coordinator`,
+      `${resolveRunId}/stage/2/coordinator`,
+      resolveRunId,
+    ]);
+    expect(JSON.parse(store.outputs[1].report)).toMatchObject({
+      status: 'pass',
+      summary: 'final',
+    });
+    expect(control.listAgents('iter-1').map((agent) => agent.stage)).toEqual([
+      1, 1, 1, 2, null,
+    ]);
   });
 
   it('steps без refine → resolve single, один вызов', async () => {

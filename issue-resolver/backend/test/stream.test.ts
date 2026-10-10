@@ -318,6 +318,8 @@ describe('GET /iterations/:id/agents', () => {
         role: 'worker',
         index: 1,
         label: 'Воркер 1',
+        stage: null,
+        stageName: null,
         status: 'running',
         startedAt: expect.any(String),
         stats: {
@@ -337,6 +339,8 @@ describe('GET /iterations/:id/agents', () => {
         role: 'coordinator',
         index: null,
         label: 'Координатор',
+        stage: null,
+        stageName: null,
         status: 'running',
         startedAt: expect.any(String),
         stats: null,

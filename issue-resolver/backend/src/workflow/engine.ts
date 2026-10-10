@@ -6,6 +6,7 @@ import type {
   ExecutionPlan,
   Iteration,
   PipelineStep,
+  RoomWorkItem,
   SessionEvent,
   SessionStats,
   SSEEvent,
@@ -38,7 +39,7 @@ import {
   workspaceHostDirFor,
 } from '../workspace/paths';
 import { buildStepPrompt } from './prompts';
-import { runRoomResolve } from './room';
+import { runRoomResolve, runStagedResolve } from './room';
 
 /** Канонический порядок исполнения шагов пайплайна. */
 const PIPELINE_STEP_ORDER: readonly PipelineStep[] = [
@@ -297,6 +298,7 @@ export async function runIteration(
       description: input.description ?? '',
       jiraText: input.jiraText ?? null,
       context: iteration.context,
+      reviewContext: iteration.review_context ?? '',
       feedback,
       repoPaths,
       desiredResult: issue.desiredResult,
@@ -341,41 +343,56 @@ export async function runIteration(
         ),
     };
 
-    // Детерминированная развилка: комната — только если успешный refine явно
-    // рекомендовал room с >= 2 исполнителями; иначе один агент.
-    const isRoomResolve: boolean =
-      step === 'resolve' && planExecutionMode(refinedExecution) === 'room';
+    // Детерминированная развилка топологии resolve: refine рекомендует
+    // single|room|stages, движок распоряжается (см. planExecutionMode).
+    const topology =
+      step === 'resolve' ? planExecutionMode(refinedExecution) : 'single';
+    const onWorkerStart = (
+      item: RoomWorkItem,
+      total: number,
+      agent: RoomAgentInfo,
+    ): void =>
+      deps.sse.publish(
+        streamEvent(
+          issue.id,
+          iteration.id,
+          stepRun.id,
+          'system',
+          `worker ${item.index + 1}/${total}: ${item.task}`,
+          agent.id,
+        ),
+      );
 
-    const result: StepExecutionResult = isRoomResolve
-      ? await runRoomResolve(
-          deps.pi,
-          {
-            containerName,
-            execution: refinedExecution as ExecutionPlan,
-            ...promptContext,
-            refinedPlan,
-          },
-          {
-            ...runOptions,
-            stepRunId: stepRun.id,
-            onWorkerStart: (item, total, agent) =>
-              deps.sse.publish(
-                streamEvent(
-                  issue.id,
-                  iteration.id,
-                  stepRun.id,
-                  'system',
-                  `worker ${item.index + 1}/${total}: ${item.task}`,
-                  agent.id,
-                ),
-              ),
-          },
-        )
-      : await deps.pi.run(
+    let result: StepExecutionResult;
+    if (topology === 'room') {
+      result = await runRoomResolve(
+        deps.pi,
+        {
           containerName,
-          buildStepPrompt({ step, ...promptContext, refinedPlan }),
-          { ...runOptions, stepRunId: stepRun.id },
-        );
+          execution: refinedExecution as ExecutionPlan,
+          ...promptContext,
+          refinedPlan,
+        },
+        { ...runOptions, stepRunId: stepRun.id, onWorkerStart },
+      );
+    } else if (topology === 'stages') {
+      result = await runStagedResolve(
+        deps.pi,
+        {
+          containerName,
+          execution: refinedExecution as ExecutionPlan,
+          ...promptContext,
+          refinedPlan,
+        },
+        { ...runOptions, stepRunId: stepRun.id, onWorkerStart },
+      );
+    } else {
+      result = await deps.pi.run(
+        containerName,
+        buildStepPrompt({ step, ...promptContext, refinedPlan }),
+        { ...runOptions, stepRunId: stepRun.id },
+      );
+    }
 
     // Отчёт шага — источник истины в рабочей папке задачи. В RPC-режиме
     // `result.report` всегда null, поэтому отдаём приоритет файлу

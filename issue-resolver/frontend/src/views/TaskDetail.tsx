@@ -13,9 +13,10 @@ import type {
   StepThinkingLevels,
   StepRunStatus,
   ThinkingLevel,
+  WorkspaceFile,
 } from '@issue-resolver/shared';
 import { formatDateTime, formatRelativeTime } from '@issue-resolver/shared';
-import { canStartIteration, parseStepReport } from '@issue-resolver/shared';
+import { canStartIteration, isIterationActive, parseStepReport } from '@issue-resolver/shared';
 import {
   abortIteration,
   createIteration,
@@ -27,9 +28,12 @@ import {
   getIterationControl,
   getModels,
   getQuestionAnswers,
+  getResultFiles,
   getStepRuns,
   promptIteration,
   repeatIteration,
+  resultFileContentUrl,
+  resultFilesArchiveUrl,
   sendIterationCommand,
   sendIterationMessage,
   sendUiResponse,
@@ -42,7 +46,7 @@ import {
 } from '../api/session-events';
 import AgentMarkdown from '../components/AgentMarkdown';
 import AutoScrollBox from '../components/AutoScrollBox';
-import FilePicker from '../components/FilePicker';
+import FilePicker, { formatFileSize } from '../components/FilePicker';
 import IssueFilesList from '../components/IssueFilesList';
 import MarkdownEditor from '../components/MarkdownEditor';
 import RoomAgentTabs from '../components/RoomAgentTabs';
@@ -94,9 +98,10 @@ function isRoomIteration(runs: StepRunWithEvents[]): boolean {
   const latestRefine = runs
     .filter((run) => run.step === 'refine')
     .sort((a, b) => b.attempt - a.attempt)[0];
-  return (
-    parseStepReport(latestRefine?.report ?? '')?.execution?.mode === 'room'
-  );
+  const mode = parseStepReport(latestRefine?.report ?? '')?.execution?.mode;
+  // staged-резолв (последовательные этапы) отображается теми же вкладками
+  // комнаты: агенты несут `stage`, порядок/подписи разбирает RoomAgentTabs.
+  return mode === 'room' || mode === 'stages';
 }
 
 /** Интерактивный вопрос живой pi-сессии (`extension_ui_request`). */
@@ -321,6 +326,20 @@ interface TaskDetailProps {
   autoOpenResult?: boolean;
 }
 
+/**
+ * Имя файла результата для атрибута `download`: без него браузер при 404
+ * (JSON-тело) сохранял бы `download.json` вместо осмысленного имени.
+ */
+function resultFilenameFor(desiredResult: Issue['desired_result']): string {
+  switch (desiredResult) {
+    case 'html':
+      return 'report.html';
+    case 'pr':
+      return 'result.json';
+    default:
+      return 'report.md';
+  }
+}
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
@@ -341,7 +360,9 @@ export default function TaskDetail({
   const [context, setContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [issueFiles, setIssueFiles] = useState<IssueFile[]>([]);
-  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
+  // Файлы, порождённые агентом в рабочей папке последней completed-итерации
+  // (кроме самого артефакта результата).
+  const [resultFiles, setResultFiles] = useState<WorkspaceFile[]>([]);  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
   const [stepModels, setStepModels] = useState<StepModels>({});
   const [stepThinkingLevels, setStepThinkingLevels] =
@@ -813,6 +834,27 @@ export default function TaskDetail({
   const resultReady =
     state.status === 'ready' &&
     state.iterations.some((iteration) => iteration.status === 'completed');
+
+  // Список порождённых файлов. Best-effort: сеть/не-2xx → пустой список,
+  // чтобы шапка не падала. Перезагружается с refreshTick (терминал итерации,
+  // новая итерация) и когда результат становится готов.
+  useEffect(() => {
+    if (!issueId || !resultReady) {
+      setResultFiles([]);
+      return;
+    }
+    let cancelled = false;
+    getResultFiles(issueId)
+      .then((list) => {
+        if (!cancelled) setResultFiles(list);
+      })
+      .catch(() => {
+        if (!cancelled) setResultFiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [issueId, resultReady, refreshTick]);
   // Room-режим итерации: последний refine рекомендовал комнату. Для активного
   // resolve карточка шага показывает вкладки агентов вместо одной сессии.
   const roomIteration =
@@ -1047,6 +1089,12 @@ export default function TaskDetail({
 
   async function handleRepeat(iteration: Iteration) {
     if (!issueId) return;
+    if (isIterationActive(iteration.status)) {
+      setRepeatError(
+        'Нельзя повторить активную итерацию — дождитесь её завершения или отмены.',
+      );
+      return;
+    }
     setRepeatError(null);
     setRepeatingId(iteration.id);
 
@@ -1281,33 +1329,77 @@ export default function TaskDetail({
               </span>
             </div>
             {resultAvailable && (
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  data-testid="open-result"
-                  disabled={!resultReady}
-                  onClick={() => void openResult()}
-                  className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#003B00] disabled:hover:text-[#00FF41]"
-                >
-                  Показать результат
-                </button>
-                <a
-                  data-testid="download-result"
-                  href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
-                  download
-                  aria-disabled={resultReady ? undefined : true}
-                  tabIndex={resultReady ? undefined : -1}
-                  onClick={(event) => {
-                    if (!resultReady) event.preventDefault();
-                  }}
-                  className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium ${
-                    resultReady
-                      ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
-                      : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
-                  }`}
-                >
-                  Скачать
-                </a>
+              <div className="mt-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="open-result"
+                    disabled={!resultReady}
+                    onClick={() => void openResult()}
+                    className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#003B00] disabled:hover:text-[#00FF41]"
+                  >
+                    Показать результат
+                  </button>
+                  <a
+                    data-testid="download-result"
+                    href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
+                    download={resultFilenameFor(state.issue.desired_result)}
+                    aria-disabled={resultReady ? undefined : true}
+                    tabIndex={resultReady ? undefined : -1}
+                    onClick={(event) => {
+                      if (!resultReady) event.preventDefault();
+                    }}
+                    className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium ${
+                      resultReady
+                        ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
+                        : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
+                    }`}
+                  >
+                    Скачать
+                  </a>
+                  <a
+                    data-testid="download-archive"
+                    href={resultFilesArchiveUrl(state.issue.id)}
+                    download={`issue-${state.issue.id}.tar.gz`}
+                    aria-disabled={resultReady ? undefined : true}
+                    tabIndex={resultReady ? undefined : -1}
+                    onClick={(event) => {
+                      if (!resultReady) event.preventDefault();
+                    }}
+                    className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium ${
+                      resultReady
+                        ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
+                        : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
+                    }`}
+                  >
+                    Скачать всё (.tar.gz)
+                  </a>
+                </div>
+                {resultReady && resultFiles.length > 0 && (
+                  <ul
+                    data-testid="result-files"
+                    className="mt-2 flex flex-col items-start gap-1"
+                  >
+                    {resultFiles.map((file) => (
+                      <li key={file.rel_path}>
+                        <a
+                          data-testid="result-file-download"
+                          href={resultFileContentUrl(
+                            state.issue.id,
+                            file.rel_path,
+                          )}
+                          download={file.name}
+                          className="min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]"
+                        >
+                          Скачать {file.name}
+                          <span className="ml-2 text-[#00FF41]/50">
+                            {formatFileSize(file.size)}
+                          </span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
             {state.issue.jira_issue_url && (
@@ -1581,7 +1673,10 @@ export default function TaskDetail({
                       <button
                         type="button"
                         data-testid="repeat-iteration"
-                        disabled={repeatingId === iteration.id}
+                        disabled={
+                          repeatingId === iteration.id ||
+                          isIterationActive(iteration.status)
+                        }
                         onClick={(event) => {
                           event.stopPropagation();
                           void handleRepeat(iteration);
