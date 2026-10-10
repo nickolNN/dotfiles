@@ -101,6 +101,9 @@ Notes:
   first)
 - forwards are disposable sidecars named `<container>-fwd-<hostport>`; they're
   cleaned up by `agent-stop` too
+- `issue-resolver/bin/up.sh` (in-container) starts the issue-resolver backend
+  (`:8080`) + Vite (`:5173`) and prints the exact host command to publish the
+  UI — `agent-fwd up 5173:5173`
 
 ### Gotchas
 

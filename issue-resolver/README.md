@@ -29,13 +29,21 @@ cd frontend && npm run dev -- --host 0.0.0.0 --port 5173
 cd e2e && npx playwright test
 ```
 
-**Лаунчер `bin/service.sh`.** `start|stop|restart|status` поднимает/гасит backend
-+ frontend; режим задаётся `IR_MODE=local|docker` (дефолт `local`), PID-файлы и
-логи — в `/tmp` (переопределяются `IR_PID_DIR`/`IR_LOG_DIR`).
+**Лаунчер одной командой — `bin/up.sh`.** Поднимает backend + frontend через
+`bin/service.sh`, ждёт готовности (порт + `GET /ping` → `{"ok":true}`, Vite отдаёт
+`/`) до ~15 с (переопределяется `IR_UP_WAIT_SECS`), при неудаче печатает
+`tail -n 20` соответствующего лога и выходит с non-zero. Идемпотентен: если сервисы
+уже слушают — сообщает об этом и всё равно печатает host-команду публикации.
+Публикацию порта сам сделать не может (в dev-контейнере нет docker CLI/`docker.sock`).
+
+**Ручное управление — `bin/service.sh`.** `start|stop|restart|status` поднимает/
+гасит backend + frontend; режим задаётся `IR_MODE=local|docker` (дефолт `local`),
+PID-файлы и логи — в `/tmp` (переопределяются `IR_PID_DIR`/`IR_LOG_DIR`).
 
 **Доступ по локальной сети (LAN).** Backend слушает `0.0.0.0:8080`, Vite —
 `0.0.0.0:5173` и проксирует `/issue-resolver` на `localhost:8080`, поэтому
-наружу достаточно опубликовать один порт UI. `agent-fwd up 5173:5173`
+наружу достаточно опубликовать один порт UI. `bin/up.sh` в конце работы печатает
+готовую host-команду. `agent-fwd up 5173:5173`
 (на хосте, где есть Docker CLI и `docker.sock`) поднимает sidecar, публикующий
 `5173` контейнера на `0.0.0.0` хоста — UI открывается по `http://<host-IP>:5173`.
 Сам бэкенд наружу не выводится. Внутри dev-контейнера docker CLI/`docker.sock`
