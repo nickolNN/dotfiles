@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { SessionStats } from '@issue-resolver/shared';
 import AgentMarkdown from './AgentMarkdown';
 import SessionStatsBar from './SessionStatsBar';
@@ -61,6 +61,9 @@ interface AnalyzedEvents {
   visible: SessionEvent[];
   partialByCallId: Map<string, string>;
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>;
+  /** Ответы пользователя по id вопроса (`question_answered`) — для закрепления
+   * выбранной опции в блоке вопроса. */
+  answersByQuestionId: Map<string, string>;
   bashText: string | null;
   chrome: SessionChrome;
 }
@@ -73,8 +76,9 @@ interface AnalyzedEvents {
  *
  * Служебные события прозрачности (`usage`, `stats`, `queue`, `thinking_level`,
  * `session_info`, `status`, `widget`, `title`, `tool_update`, `bash`,
- * `editor_text`) не рисуются «голыми» строками: они собираются в отдельную
- * обвязку (шапка/очередь/статусы/виджеты/футер) или баннеры.
+ * `editor_text`, `question_answered`) не рисуются «голыми» строками: они
+ * собираются в отдельную обвязку (шапка/очередь/статусы/виджеты/футер) или
+ * баннеры, а ответы на вопросы — в `Map<questionId, answer>`.
  */
 export default function SessionView({
   events,
@@ -86,8 +90,14 @@ export default function SessionView({
   onRecallQueued,
 }: SessionViewProps) {
   const analyzed = useMemo(() => analyzeEvents(events), [events]);
-  const { visible, partialByCallId, resultByCallId, bashText, chrome } =
-    analyzed;
+  const {
+    visible,
+    partialByCallId,
+    resultByCallId,
+    answersByQuestionId,
+    bashText,
+    chrome,
+  } = analyzed;
 
   useDocumentTitle(chrome.title);
 
@@ -126,6 +136,7 @@ export default function SessionView({
           event={event}
           partialByCallId={partialByCallId}
           resultByCallId={resultByCallId}
+          answersByQuestionId={answersByQuestionId}
           isLast={index === visible.length - 1}
         />
       ))}
@@ -149,6 +160,7 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
     string,
     { isError: boolean; durationMs: number | null }
   >();
+  const answersByQuestionId = new Map<string, string>();
   const bashDeltas: string[] = [];
   const statuses = new Map<string, string>();
   const widgetsAbove = new Map<string, string[]>();
@@ -165,6 +177,10 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
       case 'usage':
       case 'stats':
         // Живут только в футере статистики.
+        break;
+      case 'question_answered':
+        // Ответ на вопрос: закрепляем в блоке вопроса, отдельной строки нет.
+        answersByQuestionId.set(event.questionId, event.answer);
         break;
       case 'tool_update':
         partialByCallId.set(event.toolCallId, event.partialText);
@@ -226,6 +242,7 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
     visible,
     partialByCallId,
     resultByCallId,
+    answersByQuestionId,
     bashText: bashDeltas.length > 0 ? bashDeltas.join('') : null,
     chrome: {
       sessionName,
@@ -361,11 +378,13 @@ function SessionEventItem({
   event,
   partialByCallId,
   resultByCallId,
+  answersByQuestionId,
   isLast,
 }: {
   event: SessionEvent;
   partialByCallId: Map<string, string>;
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>;
+  answersByQuestionId: Map<string, string>;
   isLast: boolean;
 }) {
   switch (event.type) {
@@ -380,7 +399,12 @@ function SessionEventItem({
       return <ThinkingBlock thinking={event.thinking} streaming={isLast} />;
 
     case 'question':
-      return <QuestionBlock event={event} />;
+      return (
+        <QuestionBlock
+          event={event}
+          answer={answersByQuestionId.get(event.id)}
+        />
+      );
 
     case 'tool_use': {
       const result = resultByCallId.get(event.toolCallId);
@@ -432,7 +456,19 @@ function SessionEventItem({
   }
 }
 
-function QuestionBlock({ event }: { event: QuestionEvent }) {
+function QuestionBlock({
+  event,
+  answer,
+}: {
+  event: QuestionEvent;
+  answer?: string;
+}) {
+  const options = event.options ?? [];
+  // Подсвечиваем опцию только если ответ ей точно соответствует; введённый
+  // текст (не совпавший ни с одной опцией) показываем строкой без подсветки.
+  const selected =
+    answer !== undefined && options.includes(answer) ? answer : null;
+
   return (
     <div data-testid="session-question" className="session-question">
       <div className="session-question-head">
@@ -448,12 +484,39 @@ function QuestionBlock({ event }: { event: QuestionEvent }) {
       {event.message && (
         <p className="session-question-message">{event.message}</p>
       )}
-      {event.options && event.options.length > 0 && (
+      {options.length > 0 && (
         <p
           data-testid="session-question-options"
           className="session-question-options"
         >
-          {event.options.join(' / ')}
+          {options.map((option, index) => (
+            <Fragment key={`${index}-${option}`}>
+              {index > 0 && ' / '}
+              <span
+                data-testid="session-question-option"
+                data-selected={
+                  selected === null ? 'false' : String(option === selected)
+                }
+                className={
+                  selected === null
+                    ? undefined
+                    : option === selected
+                      ? 'font-bold text-[#00FF41]'
+                      : 'text-[#00FF41]/40'
+                }
+              >
+                {option}
+              </span>
+            </Fragment>
+          ))}
+        </p>
+      )}
+      {answer !== undefined && (
+        <p
+          data-testid="session-question-answer"
+          className="session-question-answer mt-1 font-bold text-[#00FF41]"
+        >
+          Ответ: {answer}
         </p>
       )}
     </div>
