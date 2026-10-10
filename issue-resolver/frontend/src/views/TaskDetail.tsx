@@ -49,6 +49,7 @@ import SessionStatsBar, {
   TokenDownIcon,
   TokenUpIcon,
 } from '../components/SessionStatsBar';
+import StepReportView from '../components/StepReportView';
 import { statusColor, stepStatusColor } from '../theme';
 
 const STEP_OPTIONS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
@@ -1864,7 +1865,7 @@ export default function TaskDetail({
                       data-testid="modal-report"
                       className="border border-[#008F11] bg-[#000200] p-2"
                     >
-                      <AgentMarkdown>{expandedStepRun.report}</AgentMarkdown>
+                      <StepReportView raw={expandedStepRun.report} />
                     </div>
                   </section>
                 )}
