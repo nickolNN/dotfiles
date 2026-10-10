@@ -37,9 +37,14 @@ describe('buildStepPrompt', () => {
 
     expect(text).toContain('Поправить вход в личный кабинет');
     expect(text).toContain('HARD-RULES');
-    expect(text).toContain('commit');
-    expect(text).toContain('push');
+    expect(text.toLowerCase()).toContain('commit');
+    expect(text.toLowerCase()).toContain('push');
     expect(text).toContain('/workspaces/issue-1/app');
+    // Самопроверка разрешена, публикация — нет (резолв больше не запрещает build/test/typecheck).
+    expect(text).toContain('build/tests/typecheck');
+    expect(text).not.toContain(
+      'running build, test, commit, or push is forbidden',
+    );
   });
 
   it('resolve: with repos — install dependencies; without repos — write files into the working folder', () => {
@@ -245,6 +250,10 @@ describe('refine execution & room prompts', () => {
     expect(text).toContain('.issue-worker-result-0.json');
     expect(text).toContain('frontend part');
     expect(text).toContain('Sub-task 1 of 2');
+    // Самопроверка разрешена, публикация — нет.
+    expect(text).toContain('build/tests/typecheck');
+    expect(text).toContain('Commit/push are forbidden');
+    expect(text).not.toContain('Build/test/commit/push are FORBIDDEN');
   });
 
   it('coordinator prompt: LEAD takes the FINAL decision + worker summaries', () => {
@@ -304,6 +313,10 @@ describe('staged prompts', () => {
     expect(text).toContain('Sub-task 2 of 2: backend');
     expect(text).toContain('.issue-stage-1-worker-2.json');
     expect(text).not.toContain('.issue-step-result.json');
+    // Самопроверка разрешена, публикация — нет.
+    expect(text).toContain('build/tests/typecheck');
+    expect(text).toContain('Commit/push are forbidden');
+    expect(text).not.toContain('Build/test/commit/push are FORBIDDEN');
   });
 
   it('stage coordinator: integrates workers, stage file, shared memory read/write', () => {

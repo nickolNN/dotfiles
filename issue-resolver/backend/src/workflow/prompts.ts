@@ -141,8 +141,8 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
             'Plain Markdown, no HTML wrapper. In addition to `.issue-step-result.json`.',
           ]
         : []),
-      'HARD-RULES: running build, test, commit, or push is forbidden —',
-      'you are only allowed to edit code. Verification and publishing are done by other steps.',
+      'HARD-RULES: you may run build/tests/typecheck to verify your own changes.',
+      'Commit and push are forbidden — publishing is done by the pr step/backend.',
     ].join('\n');
   },
 
@@ -280,7 +280,7 @@ export function buildRoomWorkerPrompt(
     '',
     'Instructions:',
     '- Solve ONLY your sub-task above. Do not touch files outside its scope.',
-    '- You are allowed to edit code and write files. Build/test/commit/push are FORBIDDEN.',
+    '- You are allowed to edit code, write files, and run build/tests/typecheck to verify your own work. Commit/push are forbidden (publishing is done by the backend).',
     '- Report your OWN sub-task outcome (not the whole step) by writing the file',
     `  .issue-worker-result-${item.index}.json at the working-folder root:`,
     '  { "status": "pass|fail|blocked", "summary": "..." }.',
@@ -421,7 +421,7 @@ export function buildStageWorkerPrompt(
     '',
     'Instructions:',
     `- Solve ONLY sub-task ${worker} of stage ${stage.index}. Do not touch files outside its scope.`,
-    '- You are allowed to edit code and write files. Build/test/commit/push are FORBIDDEN.',
+    '- You are allowed to edit code, write files, and run build/tests/typecheck to verify your own work. Commit/push are forbidden (publishing is done by the backend).',
     '- Report your OWN sub-task outcome (not the stage, not the step) by writing the file',
     `  .issue-stage-${stage.index}-worker-${worker}.json at the working-folder root:`,
     '  { "status": "pass|fail|blocked", "summary": "..." }.',
