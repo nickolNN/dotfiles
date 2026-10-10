@@ -226,6 +226,8 @@ describe('InMemoryStepSessionRegistry', () => {
         index: 1,
         label: 'Воркер 1',
         status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
       },
       {
         id: 'base/worker/1',
@@ -233,6 +235,8 @@ describe('InMemoryStepSessionRegistry', () => {
         index: 2,
         label: 'Воркер 2',
         status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
       },
       {
         id: 'base',
@@ -240,6 +244,8 @@ describe('InMemoryStepSessionRegistry', () => {
         index: null,
         label: 'Координатор',
         status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
       },
     ]);
 
@@ -269,8 +275,172 @@ describe('InMemoryStepSessionRegistry', () => {
         index: null,
         label: 'Координатор',
         status: 'finished',
+        startedAt: expect.any(String),
+        stats: null,
       },
     ]);
+  });
+
+  it('recordEvent: usage агрегируется в stats, cost null пока его не было', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base/worker/0', 'iter-3', spyControl().control, {
+      id: 'base/worker/0',
+      role: 'worker',
+      index: 1,
+      label: 'Воркер 1',
+    });
+
+    // До событий — тайминг есть, телеметрии нет.
+    const before = registry.listAgents('iter-3')[0];
+    expect(before.startedAt).toEqual(expect.any(String));
+    expect(before.stats).toBeNull();
+
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 10, output: 2, cacheRead: 3, cacheWrite: 1, total: 16 },
+      cost: null,
+    });
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0, total: 6 },
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 },
+    });
+
+    expect(registry.listAgents('iter-3')[0].stats).toEqual({
+      userMessages: 0,
+      assistantMessages: 0,
+      toolCalls: 0,
+      toolResults: 0,
+      totalMessages: 0,
+      tokens: { input: 15, output: 3, cacheRead: 3, cacheWrite: 1, total: 22 },
+      cost: 3,
+      contextUsage: null,
+    });
+  });
+
+  it('recordEvent: кумулятивные снапшоты одного ответа схлопываются, ответы суммируются', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base/worker/0', 'iter-cumulative', spyControl().control, {
+      id: 'base/worker/0',
+      role: 'worker',
+      index: 1,
+      label: 'Воркер 1',
+    });
+
+    // Ответ 1: total растёт 50 → 100 (кумулятив) — берём последний снапшот.
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 40, output: 10, cacheRead: 0, cacheWrite: 0, total: 50 },
+      cost: null,
+    });
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 80, output: 20, cacheRead: 0, cacheWrite: 0, total: 100 },
+      cost: null,
+    });
+    // Ответ 2: total упал → новая граница, предыдущий ответ суммируется.
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, total: 5 },
+      cost: null,
+    });
+
+    expect(registry.listAgents('iter-cumulative')[0].stats?.tokens).toEqual({
+      input: 84,
+      output: 21,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 105,
+    });
+  });
+
+  it('recordEvent: последнее stats-событие даёт contextUsage/счётчики/model; токены — из usage', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base', 'iter-4', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    registry.recordEvent('base', {
+      type: 'usage',
+      usage: { input: 7, output: 1, cacheRead: 0, cacheWrite: 0, total: 8 },
+      cost: null,
+    });
+    registry.recordEvent('base', {
+      type: 'stats',
+      stats: {
+        model: 'Claude Sonnet 4',
+        userMessages: 2,
+        assistantMessages: 3,
+        toolCalls: 4,
+        toolResults: 5,
+        totalMessages: 5,
+        tokens: { input: 999, output: 999, cacheRead: 0, cacheWrite: 0, total: 1998 },
+        cost: 42,
+        contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 },
+      },
+    });
+
+    const stats = registry.listAgents('iter-4')[0].stats;
+    expect(stats).toMatchObject({
+      model: 'Claude Sonnet 4',
+      userMessages: 2,
+      assistantMessages: 3,
+      toolCalls: 4,
+      toolResults: 5,
+      totalMessages: 5,
+      tokens: { input: 7, output: 1, cacheRead: 0, cacheWrite: 0, total: 8 },
+      contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 },
+    });
+  });
+
+  it('recordEvent: без usage токены/cost берутся из stats-события', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base', 'iter-5', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    registry.recordEvent('base', {
+      type: 'stats',
+      stats: {
+        userMessages: 0,
+        assistantMessages: 1,
+        toolCalls: 0,
+        toolResults: 0,
+        totalMessages: 1,
+        tokens: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0, total: 7 },
+        cost: 0,
+        contextUsage: null,
+      },
+    });
+
+    expect(registry.listAgents('iter-5')[0].stats).toMatchObject({
+      tokens: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0, total: 7 },
+      cost: 0,
+    });
+  });
+
+  it('recordEvent: не-агентская (single) сессия игнорируется', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('run-single', 'iter-6', spyControl().control);
+
+    registry.recordEvent('run-single', {
+      type: 'usage',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      cost: null,
+    });
+    registry.recordEvent('unknown', {
+      type: 'usage',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      cost: null,
+    });
+
+    expect(registry.listAgents('iter-6')).toEqual([]);
   });
 
   it('listAgents: FIFO-эвикция при >64 итерациях с агентами', () => {

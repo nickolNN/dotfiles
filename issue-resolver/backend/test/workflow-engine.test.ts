@@ -894,6 +894,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         index: 1,
         label: 'Воркер 1',
         status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
       },
       {
         id: `${resolveRunId}/worker/1`,
@@ -901,6 +903,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         index: 2,
         label: 'Воркер 2',
         status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
       },
       {
         id: resolveRunId,
@@ -908,6 +912,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         index: null,
         label: 'Координатор',
         status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
       },
     ]);
 

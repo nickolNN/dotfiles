@@ -346,6 +346,14 @@ export interface RoomAgent {
   /** Человекочитаемая подпись вкладки («Воркер 1», «Координатор»). */
   label: string;
   status: 'running' | 'finished' | 'aborted' | 'failed';
+  /** ISO-таймстамп регистрации агента; null для записей без тайминга. */
+  startedAt: string | null;
+  /**
+   * Агрегированные токены/cost/context агента: usage-события его сессии,
+   * поверх — последнее `stats`-событие (`get_session_stats`). null, пока
+   * телеметрии нет (агент не запускался или не эмитил usage/stats).
+   */
+  stats: SessionStats | null;
 }
 
 export interface StepReportScenario {

@@ -726,14 +726,17 @@ export class RpcPiRunner implements PiRunner {
               { stdio: ['pipe', 'pipe', 'pipe'] },
             );
 
+      const { registry, stepRunId, iterationId } = options;
       let statsHandler: (() => void) | undefined;
       const parser = new RpcSessionParser({
         onStdout: options.onStdout,
-        onEvent: options.onEvent,
+        onEvent: (event) => {
+          options.onEvent?.(event);
+          // Телеметрия агента комнаты: usage/stats для `listAgents().stats`.
+          if (registry && stepRunId) registry.recordEvent(stepRunId, event);
+        },
         onStats: () => statsHandler?.(),
       });
-
-      const { registry, stepRunId, iterationId } = options;
       let stderr = '';
       let buffer = '';
       let settled = false;

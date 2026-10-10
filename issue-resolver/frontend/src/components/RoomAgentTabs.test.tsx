@@ -11,6 +11,8 @@ function makeAgent(overrides: Partial<RoomAgent> = {}): RoomAgent {
     index: 1,
     label: 'Воркер 1',
     status: 'running',
+    startedAt: null,
+    stats: null,
     ...overrides,
   };
 }

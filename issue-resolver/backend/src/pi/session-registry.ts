@@ -3,6 +3,9 @@ import type {
   PromptMode,
   PromptResult,
   RoomAgent,
+  SessionEvent,
+  SessionStats,
+  SessionUsage,
 } from '@issue-resolver/shared';
 
 /**
@@ -105,11 +108,90 @@ export interface StepSessionRegistry {
    * сессии (single-режим) в список не попадают.
    */
   listAgents(iterationId: string): RoomAgent[];
+  /**
+   * Записывает событие сессии агента комнаты для телеметрии `listAgents().stats`.
+   * Не-агентские сессии (single-режим) молча игнорируются; прочие типы событий
+   * не интересуют — учитываются только `usage` и `stats`.
+   */
+  recordEvent(stepRunId: string, event: SessionEvent): void;
 }
 
 interface SessionEntry {
   iterationId: string;
   control: StepSessionControl;
+}
+
+/**
+ * Телеметрия агента комнаты: агрегат `usage`-событий (токены/cost) и
+ * последнее `stats`-событие (`get_session_stats`) для контекста и счётчиков.
+ * Держим агрегат, а не весь буфер событий — реестр не должен расти с длиной
+ * сессии.
+ */
+interface AgentEntry {
+  /** Публичный дескриптор без `stats` (считается в `listAgents`). */
+  agent: RoomAgent;
+  /** Сумма токенов ЗАВЕРШЁННЫХ ответов (`usage` кумулятивен внутри ответа). */
+  usage: SessionUsage;
+  /** Снапшот текущего (последнего) ответа; null — ответов ещё не было. */
+  pending: SessionUsage | null;
+  /** Было ли хотя бы одно `usage`-событие (иначе токены берём из stats). */
+  usageSeen: boolean;
+  /** Сумма cost завершённых ответов; null — ни один не нёс cost. */
+  cost: number | null;
+  /** cost текущего ответа; null — неизвестен. */
+  pendingCost: number | null;
+  lastStats: SessionStats | null;
+}
+
+const zeroUsage = (): SessionUsage => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+});
+
+const addUsage = (target: SessionUsage, source: SessionUsage): void => {
+  target.input += source.input;
+  target.output += source.output;
+  target.cacheRead += source.cacheRead;
+  target.cacheWrite += source.cacheWrite;
+  target.total += source.total;
+};
+
+/** Токены агента: завершённые ответы + текущий снапшот. */
+function aggregateUsage(entry: AgentEntry): SessionUsage {
+  const total = { ...entry.usage };
+  if (entry.pending) addUsage(total, entry.pending);
+  return total;
+}
+
+/** Стоимость агента: завершённые ответы + текущий снапшот; null без cost. */
+function aggregateCost(entry: AgentEntry): number | null {
+  if (entry.pendingCost === null) return entry.cost;
+  return (entry.cost ?? 0) + entry.pendingCost;
+}
+
+/**
+ * Собирает `SessionStats` агента: токены/cost — из агрегата `usage`-событий,
+ * контекст/счётчики/model — из последнего `stats`-события. null, пока
+ * телеметрии нет вовсе.
+ */
+function buildAgentStats(entry: AgentEntry): SessionStats | null {
+  const base = entry.lastStats;
+  if (!entry.usageSeen && !base) return null;
+  return {
+    ...(base?.sessionId !== undefined ? { sessionId: base.sessionId } : {}),
+    ...(base?.model !== undefined ? { model: base.model } : {}),
+    userMessages: base?.userMessages ?? 0,
+    assistantMessages: base?.assistantMessages ?? 0,
+    toolCalls: base?.toolCalls ?? 0,
+    toolResults: base?.toolResults ?? 0,
+    totalMessages: base?.totalMessages ?? 0,
+    tokens: entry.usageSeen ? aggregateUsage(entry) : (base?.tokens ?? zeroUsage()),
+    cost: entry.usageSeen ? aggregateCost(entry) : (base?.cost ?? null),
+    contextUsage: base?.contextUsage ?? null,
+  };
 }
 
 /** Потолок числа итераций с сохранёнными агентами (защита от утечки памяти). */
@@ -129,7 +211,12 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
   private readonly byStepRun = new Map<string, SessionEntry>();
   private readonly activeByIteration = new Map<string, Set<string>>();
   // Агенты комнаты переживают unregister (статус остаётся для вкладок).
-  private readonly agentsByIteration = new Map<string, Map<string, RoomAgent>>();
+  private readonly agentsByIteration = new Map<
+    string,
+    Map<string, AgentEntry>
+  >();
+  // Быстрый доступ к телеметрии агента по его адресу (per-agent stepRunId).
+  private readonly agentEntryByStepRun = new Map<string, AgentEntry>();
   register(
     stepRunId: string,
     iterationId: string,
@@ -154,16 +241,34 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
         while (this.agentsByIteration.size > MAX_TRACKED_AGENT_ITERATIONS) {
           const oldest = this.agentsByIteration.keys().next().value;
           if (oldest === undefined) break;
+          const evicted = this.agentsByIteration.get(oldest);
           this.agentsByIteration.delete(oldest);
+          if (evicted) {
+            for (const evictedStepRunId of evicted.keys()) {
+              this.agentEntryByStepRun.delete(evictedStepRunId);
+            }
+          }
         }
       }
-      agents.set(stepRunId, {
-        id: stepRunId,
-        role: agent.role,
-        index: agent.index,
-        label: agent.label,
-        status: 'running',
-      });
+      const entry: AgentEntry = {
+        agent: {
+          id: stepRunId,
+          role: agent.role,
+          index: agent.index,
+          label: agent.label,
+          status: 'running',
+          startedAt: new Date().toISOString(),
+          stats: null,
+        },
+        usage: zeroUsage(),
+        pending: null,
+        usageSeen: false,
+        cost: null,
+        pendingCost: null,
+        lastStats: null,
+      };
+      agents.set(stepRunId, entry);
+      this.agentEntryByStepRun.set(stepRunId, entry);
     }
   }
 
@@ -172,7 +277,7 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
     if (!entry) return;
     this.byStepRun.delete(stepRunId);
     const agent = this.agentsByIteration.get(entry.iterationId)?.get(stepRunId);
-    if (agent) agent.status = status;
+    if (agent) agent.agent.status = status;
     const sessions = this.activeByIteration.get(entry.iterationId);
     if (!sessions) return;
     sessions.delete(stepRunId);
@@ -182,8 +287,35 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
 
   listAgents(iterationId: string): RoomAgent[] {
     const agents = this.agentsByIteration.get(iterationId);
+    if (!agents) return [];
     // Копии: вызывающий не должен мутировать внутреннее состояние реестра.
-    return agents ? [...agents.values()].map((agent) => ({ ...agent })) : [];
+    return [...agents.values()].map((entry) => ({
+      ...entry.agent,
+      stats: buildAgentStats(entry),
+    }));
+  }
+
+  recordEvent(stepRunId: string, event: SessionEvent): void {
+    const entry = this.agentEntryByStepRun.get(stepRunId);
+    if (!entry) return;
+    if (event.type === 'usage') {
+      // `usage` кумулятивен ВНУТРИ ответа и сбрасывается на новом: падение
+      // total — граница ответа, фиксируем предыдущий снапшот и начинаем новый.
+      // Иначе берём последний (максимальный) снапшот того же ответа.
+      if (entry.pending && event.usage.total < entry.pending.total) {
+        addUsage(entry.usage, entry.pending);
+        if (entry.pendingCost !== null) {
+          entry.cost = (entry.cost ?? 0) + entry.pendingCost;
+        }
+        entry.pending = null;
+        entry.pendingCost = null;
+      }
+      entry.pending = { ...event.usage };
+      if (event.cost) entry.pendingCost = event.cost.total;
+      entry.usageSeen = true;
+      return;
+    }
+    if (event.type === 'stats') entry.lastStats = event.stats;
   }
 
   steer(stepRunId: string, text: string): boolean {

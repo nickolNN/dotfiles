@@ -283,6 +283,26 @@ describe('GET /iterations/:id/agents', () => {
       index: null,
       label: 'Координатор',
     });
+    // Телеметрия воркера: usage-токены + последний stats-событие (контекст/model).
+    control.recordEvent(`${iterationId}/worker/0`, {
+      type: 'usage',
+      usage: { input: 12, output: 3, cacheRead: 0, cacheWrite: 0, total: 15 },
+      cost: null,
+    });
+    control.recordEvent(`${iterationId}/worker/0`, {
+      type: 'stats',
+      stats: {
+        model: 'test-model',
+        userMessages: 0,
+        assistantMessages: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        totalMessages: 0,
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        cost: null,
+        contextUsage: { tokens: 50, contextWindow: 200, percent: 25 },
+      },
+    });
     const app = buildApp(db, { control });
     openApps.push(app);
 
@@ -299,6 +319,18 @@ describe('GET /iterations/:id/agents', () => {
         index: 1,
         label: 'Воркер 1',
         status: 'running',
+        startedAt: expect.any(String),
+        stats: {
+          model: 'test-model',
+          userMessages: 0,
+          assistantMessages: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          totalMessages: 0,
+          tokens: { input: 12, output: 3, cacheRead: 0, cacheWrite: 0, total: 15 },
+          cost: null,
+          contextUsage: { tokens: 50, contextWindow: 200, percent: 25 },
+        },
       },
       {
         id: iterationId,
@@ -306,6 +338,8 @@ describe('GET /iterations/:id/agents', () => {
         index: null,
         label: 'Координатор',
         status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
       },
     ]);
 

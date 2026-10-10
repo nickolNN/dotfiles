@@ -87,6 +87,8 @@ const AGENTS: RoomAgent[] = [
     index: 1,
     label: 'Воркер 1',
     status: 'running',
+    startedAt: null,
+    stats: null,
   },
   {
     id: 'run-resolve/worker/1',
@@ -94,6 +96,8 @@ const AGENTS: RoomAgent[] = [
     index: 2,
     label: 'Воркер 2',
     status: 'running',
+    startedAt: null,
+    stats: null,
   },
 ];
 
