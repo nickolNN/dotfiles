@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import type { Issue, Iteration } from '@issue-resolver/shared';
+import type { Issue, Iteration, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 
 const RESULT_URL = '/issue-resolver/api/v1/issues/issue-1/result';
@@ -42,6 +42,27 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
   };
 }
 
+function makeStepRun(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog {
+  return {
+    id: 'run-1',
+    iteration_id: 'iter-1',
+    step: 'resolve',
+    attempt: 1,
+    status: 'success',
+    context: '',
+    feedback: null,
+    created_at: '2026-10-09T00:00:00.000Z',
+    updated_at: '2026-10-09T00:00:00.000Z',
+    stdout: '',
+    stderr: '',
+    events: [],
+    stats: null,
+    report: '{"status":"pass","summary":"ok"}',
+    screenshots_dir: null,
+    ...overrides,
+  };
+}
+
 function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response;
 }
@@ -57,14 +78,20 @@ function textResponse(
   } as Response;
 }
 
-/** fetch-мок: /result отдаёт resultResponse, остальное — issue/iterations. */
+/** fetch-мок: /result отдаёт resultResponse, остальное — issue/iterations/
+ * step-runs. По умолчанию resolve-прогон уже с отчётом — кнопки результата
+ * активны; тесты про неготовый результат передают свой список шагов. */
 function stubFetch(
   issue: Issue,
   resultResponse: () => Promise<Response> | Response,
+  stepRuns: StepRunWithLog[] = [makeStepRun()],
 ) {
   const iteration = makeIteration();
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith('/step-runs')) {
+      return Promise.resolve(jsonResponse(stepRuns));
+    }
     if (url.endsWith('/result')) {
       return Promise.resolve(resultResponse());
     }
@@ -75,6 +102,13 @@ function stubFetch(
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
+}
+
+/** Ждёт, пока step-runs загрузятся и гейт включит кнопку, затем кликает. */
+async function clickOpenResult(): Promise<void> {
+  const button = screen.getByTestId('open-result');
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
 }
 
 afterEach(() => {
@@ -103,6 +137,41 @@ describe('TaskDetail — просмотр результата', () => {
     expect(download).toHaveAttribute('download');
   });
 
+  it('resolve-шаг без report → кнопки результата disabled', async () => {
+    stubFetch(
+      makeIssue({ desired_result: 'md' }),
+      () => textResponse('# Итог'),
+      [makeStepRun({ report: '' })],
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const open = await screen.findByTestId('open-result');
+    await waitFor(() => expect(open).toBeDisabled());
+    const download = screen.getByTestId('download-result');
+    expect(download).toHaveAttribute('aria-disabled', 'true');
+    expect(download.className).toContain('cursor-not-allowed');
+  });
+
+  it('resolve-шаг с report → кнопки результата активны', async () => {
+    stubFetch(
+      makeIssue({ desired_result: 'md' }),
+      () => textResponse('# Итог'),
+      [makeStepRun()],
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const open = await screen.findByTestId('open-result');
+    await waitFor(() => expect(open).toBeEnabled());
+    expect(screen.getByTestId('download-result')).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
   it('md: клик открывает модалку и рендерит markdown результата', async () => {
     const fetchMock = stubFetch(makeIssue({ desired_result: 'md' }), () =>
       textResponse('## Итог\nвсё хорошо'),
@@ -110,7 +179,7 @@ describe('TaskDetail — просмотр результата', () => {
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
-    fireEvent.click(screen.getByTestId('open-result'));
+    await clickOpenResult();
 
     const modal = await screen.findByTestId('result-modal');
     const markdown = await within(modal).findByTestId('result-markdown');
@@ -128,7 +197,7 @@ describe('TaskDetail — просмотр результата', () => {
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
-    fireEvent.click(screen.getByTestId('open-result'));
+    await clickOpenResult();
 
     expect(
       await screen.findByText('Результат ещё не создан'),
@@ -142,7 +211,7 @@ describe('TaskDetail — просмотр результата', () => {
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
-    fireEvent.click(screen.getByTestId('open-result'));
+    await clickOpenResult();
 
     const modal = await screen.findByTestId('result-modal');
     const frame = within(modal).getByTitle('Результат');
@@ -170,7 +239,7 @@ describe('TaskDetail — просмотр результата', () => {
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
-    fireEvent.click(screen.getByTestId('open-result'));
+    await clickOpenResult();
     expect(await screen.findByTestId('result-modal')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('result-modal-close'));

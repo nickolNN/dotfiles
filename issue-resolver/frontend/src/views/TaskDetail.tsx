@@ -759,6 +759,15 @@ export default function TaskDetail({
     state.status === 'ready' &&
     (state.issue.desired_result === 'md' ||
       state.issue.desired_result === 'html');
+  // Готов ли результат задачи: документ пишет шаг resolve (report.md/html +
+  // `.issue-step-result.json`). Пока ни один resolve-прогон не оставил
+  // валидный отчёт, кнопки результата неактивны — иначе «Показать»/«Скачать»
+  // бьют в 404. `parseStepReport` отсекает пустое/битое и устаревшее `"null"`.
+  const resultReady =
+    stepRuns.status === 'ready' &&
+    stepRuns.stepRuns.some(
+      (run) => run.step === 'resolve' && parseStepReport(run.report ?? '') !== null,
+    );
   const hint = !context.trim()
     ? 'Укажи контекст для новой итерации.'
     : selectedSteps.includes('review')
@@ -1164,8 +1173,9 @@ export default function TaskDetail({
                 <button
                   type="button"
                   data-testid="open-result"
+                  disabled={!resultReady}
                   onClick={() => void openResult()}
-                  className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208]"
+                  className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#003B00] disabled:hover:text-[#00FF41]"
                 >
                   Показать результат
                 </button>
@@ -1173,7 +1183,16 @@ export default function TaskDetail({
                   data-testid="download-result"
                   href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
                   download
-                  className="min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]"
+                  aria-disabled={resultReady ? undefined : true}
+                  tabIndex={resultReady ? undefined : -1}
+                  onClick={(event) => {
+                    if (!resultReady) event.preventDefault();
+                  }}
+                  className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium ${
+                    resultReady
+                      ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
+                      : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
+                  }`}
                 >
                   Скачать
                 </a>
