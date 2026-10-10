@@ -77,11 +77,15 @@ describe('buildStepPrompt', () => {
     expect(fallback).not.toContain('report.md');
   });
 
-  it('refine: invokes grill-me (and to-questionnaire)', () => {
+  it('refine: asks via the `question` tool with options, not stdout/skills', () => {
     const text = prompt('refine');
 
-    expect(text).toContain('grill-me');
-    expect(text).toContain('to-questionnaire');
+    expect(text).toContain('`question` TOOL');
+    expect(text).toContain('options');
+    expect(text).toContain('BLOCKS until the user answers');
+    expect(text).not.toContain('stdout');
+    expect(text).not.toContain('grill-me');
+    expect(text).not.toContain('to-questionnaire');
   });
 
   it('refine: full context (description + Jira) + questions → plan', () => {
