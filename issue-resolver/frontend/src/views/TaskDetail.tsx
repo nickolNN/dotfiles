@@ -554,6 +554,12 @@ export default function TaskDetail({
             ...current,
             [stepRunId]: status,
           }));
+          // Снапшот `stepRuns` не знает о новом прогоне (движок создаёт
+          // step_run на каждый шаг: refine→resolve), а `step_status` несёт
+          // только stepRunId без step/attempt — без перечитки карточка
+          // нового шага не отрисуется. Перечитываем и на терминальном
+          // статусе: он же подтягивает отчёт завершившегося шага.
+          setRefreshTick((tick) => tick + 1);
         }
       },
       onIterationStatus: (event) => {

@@ -158,6 +158,75 @@ describe('TaskDetail — live SSE', () => {
     expect(calls.iterations).toBe(1);
   });
 
+  it('step_status нового прогона (refine→resolve) → список шагов перезапрашивается, Resolve появляется', async () => {
+    const issue = makeIssue({ pipeline_steps: ['refine', 'resolve'] });
+    const iteration = makeIteration({ steps: ['refine', 'resolve'] });
+    const refineRun = {
+      id: 'run-refine',
+      iteration_id: 'iter-1',
+      step: 'refine',
+      attempt: 1,
+      status: 'success',
+      context: '',
+      feedback: null,
+      created_at: '2026-10-09T00:00:00.000Z',
+      updated_at: '2026-10-09T00:00:00.000Z',
+      stdout: '',
+      stderr: '',
+      events: [],
+      stats: null,
+      report: null,
+      screenshots_dir: null,
+    };
+    const resolveRun = {
+      ...refineRun,
+      id: 'run-resolve',
+      step: 'resolve',
+      status: 'running',
+    };
+    let runs = [refineRun];
+    const stepRunCalls = { count: 0 };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/step-runs')) {
+        stepRunCalls.count += 1;
+        return Promise.resolve(jsonResponse(runs));
+      }
+      if (url.endsWith('/iterations')) {
+        return Promise.resolve(jsonResponse([iteration]));
+      }
+      return Promise.resolve(jsonResponse(issue));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+    const steps = within(await screen.findByTestId('iteration-steps'));
+    expect(await steps.findByText('Refine')).toBeInTheDocument();
+    expect(steps.queryByText('Resolve')).toBeNull();
+
+    // Движок создал новый прогон resolve и опубликовал `running` (только
+    // stepRunId, без step/attempt) — без перечитки списка его не отрисовать.
+    runs = [refineRun, resolveRun];
+    act(() => {
+      FakeEventSource.instances[0].emit({
+        type: 'step_status',
+        issueId: 'issue-1',
+        iterationId: 'iter-1',
+        stepRunId: 'run-resolve',
+        data: 'running',
+        ts: '2026-10-09T00:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId('iteration-steps')).getByText('Resolve'),
+      ).toBeInTheDocument();
+    });
+    expect(stepRunCalls.count).toBeGreaterThanOrEqual(2);
+  });
+
   it('модалка: новые события авто-скроллят вывод вниз', async () => {
     const issue = makeIssue();
     const iteration = makeIteration();
