@@ -3,6 +3,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import type {
   Issue,
   Iteration,
+  SessionSpeed,
   SessionStats,
   StepRunWithLog,
 } from '@issue-resolver/shared';
@@ -11,6 +12,10 @@ import TaskDetail, {
   shortPath,
   stepChangedFiles,
 } from './TaskDetail';
+import {
+  formatAvgSpeed,
+  formatInstantSpeed,
+} from '../components/SessionStatsBar';
 import type { SessionEvent } from '../api/session-events';
 
 function makeIssue(): Issue {
@@ -402,5 +407,95 @@ describe('TaskDetail — статистика карточки шага', () => 
     expect(screen.getByTestId('step-screenshots')).toHaveTextContent(
       'shots/run-1',
     );
+  });
+
+  it('live usage со speed → step-speed с мгновенной и средней', async () => {
+    stubFetch([
+      makeStepRun({
+        status: 'running',
+        stats: null,
+        events: [
+          {
+            type: 'usage',
+            usage: {
+              input: 1500,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 1500,
+            },
+            cost: null,
+            speed: { tokensPerSecond: 63.5, avgTokensPerSecond: 42 },
+          },
+        ],
+      }),
+    ]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    const tokens = await screen.findByTestId('step-tokens');
+    const speed = within(tokens).getByTestId('step-speed');
+    expect(speed).toHaveTextContent('63.5 t/s');
+    expect(speed).toHaveTextContent('avg 42 t/s');
+    // Существующие сегменты не сломаны.
+    expect(within(tokens).getByTestId('session-token-in')).toHaveTextContent(
+      '1.5k',
+    );
+    expect(tokens).toHaveTextContent('0 вызовов');
+  });
+
+  it('speed только с мгновенной (avg null) → без «avg»', async () => {
+    // Общий тип SessionSpeed требует оба поля, но футер защитно обрабатывает
+    // частичное окно (avg ещё не посчитано) — моделируем null-приведением.
+    stubFetch([
+      makeStepRun({
+        status: 'running',
+        stats: null,
+        events: [
+          {
+            type: 'usage',
+            usage: {
+              input: 1500,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 1500,
+            },
+            cost: null,
+            speed: {
+              tokensPerSecond: 63.5,
+              avgTokensPerSecond: null as unknown as number,
+            },
+          },
+        ],
+      }),
+    ]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    const speed = within(await screen.findByTestId('step-tokens')).getByTestId(
+      'step-speed',
+    );
+    expect(speed).toHaveTextContent('63.5 t/s');
+    expect(speed).not.toHaveTextContent('avg');
+  });
+
+  it('stats без speed → step-speed отсутствует', async () => {
+    stubFetch([makeStepRun({ stats: makeStats() })]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    const tokens = await screen.findByTestId('step-tokens');
+    expect(within(tokens).queryByTestId('step-speed')).toBeNull();
+    // Существующие сегменты не сломаны.
+    expect(tokens).toHaveTextContent('Claude Sonnet 4');
+    expect(within(tokens).getByTestId('session-token-in')).toHaveTextContent(
+      '1.2k',
+    );
+    expect(tokens).toHaveTextContent('3 вызовов');
+  });
+
+  it('формат скорости: мгновенная — 1 знак, средняя — Math.round', () => {
+    expect(formatInstantSpeed(63.5)).toBe('63.5');
+    expect(formatInstantSpeed(42)).toBe('42.0');
+    expect(formatAvgSpeed(42.4)).toBe('42');
+    expect(formatAvgSpeed(42.6)).toBe('43');
   });
 });

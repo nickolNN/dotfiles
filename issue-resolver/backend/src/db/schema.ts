@@ -3,7 +3,9 @@ import type {
   PipelineStep,
   StepModels,
   StepRunStatus,
+  StepThinkingLevels,
   TaskStatus,
+  ThinkingLevel,
 } from '@issue-resolver/shared';
 import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
@@ -20,6 +22,10 @@ export const issues = sqliteTable('issues', {
     .$type<PipelineStep[]>()
     .notNull(),
   step_models: text('step_models', { mode: 'json' }).$type<StepModels>(),
+  thinking_level: text('thinking_level').$type<ThinkingLevel>(),
+  step_thinking_levels: text('step_thinking_levels', { mode: 'json' }).$type<
+    StepThinkingLevels
+  >(),
   container_name: text('container_name'),
   source: text('source'),
   status: text('status').$type<TaskStatus>().notNull(),
@@ -59,6 +65,10 @@ export const iterations = sqliteTable(
     steps: text('steps', { mode: 'json' }).$type<PipelineStep[]>().notNull(),
     model: text('model'),
     step_models: text('step_models', { mode: 'json' }).$type<StepModels>(),
+    thinking_level: text('thinking_level').$type<ThinkingLevel>(),
+    step_thinking_levels: text('step_thinking_levels', { mode: 'json' }).$type<
+      StepThinkingLevels
+    >(),
     status: text('status').$type<TaskStatus>().notNull(),
     created_at: text('created_at').notNull(),
     updated_at: text('updated_at').notNull(),

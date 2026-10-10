@@ -10,7 +10,9 @@ import type {
   SessionCommand,
   SessionControlSnapshot,
   StepModels,
+  StepThinkingLevels,
   StepRunStatus,
+  ThinkingLevel,
 } from '@issue-resolver/shared';
 import { formatDateTime, formatRelativeTime } from '@issue-resolver/shared';
 import { canStartIteration, parseStepReport } from '@issue-resolver/shared';
@@ -45,12 +47,15 @@ import MarkdownEditor from '../components/MarkdownEditor';
 import RoomAgentTabs from '../components/RoomAgentTabs';
 import SessionView from '../components/SessionView';
 import SessionStatsBar, {
+  formatAvgSpeed,
+  formatInstantSpeed,
   formatTokens,
   resolveFooter,
   TokenDownIcon,
   TokenUpIcon,
 } from '../components/SessionStatsBar';
 import StepReportView from '../components/StepReportView';
+import { thinkingLevelsFor } from '../constants/thinking-levels';
 import { statusColor, stepStatusColor } from '../theme';
 
 const STEP_OPTIONS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
@@ -287,6 +292,27 @@ const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
 const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
 
+interface MergeRequest {
+  repository_url?: string;
+  url?: string;
+  title?: string;
+  message?: string;
+}
+
+/** Разбор PR-результата `result.json` вида {"merge_requests":[{...}]}.
+ * Возвращает null, если текст не JSON или поле не массив — тогда рендерим
+ * его сырым текстом, не роняя модалку. */
+function parseMergeRequests(text: string): MergeRequest[] | null {
+  try {
+    const parsed = JSON.parse(text) as { merge_requests?: unknown };
+    return Array.isArray(parsed?.merge_requests)
+      ? (parsed.merge_requests as MergeRequest[])
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 interface TaskDetailProps {
   issueId?: string | null;
   onBack?: () => void;
@@ -317,6 +343,8 @@ export default function TaskDetail({
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
   const [stepModels, setStepModels] = useState<StepModels>({});
+  const [stepThinkingLevels, setStepThinkingLevels] =
+    useState<StepThinkingLevels>({});
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -773,16 +801,15 @@ export default function TaskDetail({
   const resultAvailable =
     state.status === 'ready' &&
     (state.issue.desired_result === 'md' ||
-      state.issue.desired_result === 'html');
-  // Готов ли результат задачи: документ пишет шаг resolve (report.md/html +
-  // `.issue-step-result.json`). Пока ни один resolve-прогон не оставил
-  // валидный отчёт, кнопки результата неактивны — иначе «Показать»/«Скачать»
-  // бьют в 404. `parseStepReport` отсекает пустое/битое и устаревшее `"null"`.
+      state.issue.desired_result === 'html' ||
+      state.issue.desired_result === 'pr');
+  // Готов ли результат задачи: эндпоинт отдаёт результат последней
+  // completed-итерации, а снапшот создаётся в момент её завершения. Значит
+  // готовность = есть хоть одна завершённая итерация (не важно, что лежит
+  // в отчёте resolve-шага).
   const resultReady =
-    stepRuns.status === 'ready' &&
-    stepRuns.stepRuns.some(
-      (run) => run.step === 'resolve' && parseStepReport(run.report ?? '') !== null,
-    );
+    state.status === 'ready' &&
+    state.iterations.some((iteration) => iteration.status === 'completed');
   // Room-режим итерации: последний refine рекомендовал комнату. Для активного
   // resolve карточка шага показывает вкладки агентов вместо одной сессии.
   const roomIteration =
@@ -813,6 +840,30 @@ export default function TaskDetail({
       const next: StepModels = { ...current };
       if (value) {
         next[step] = value;
+      } else {
+        delete next[step];
+      }
+      return next;
+    });
+
+    // Смена модели сбрасывает уровень, несовместимый с её thinkingLevels.
+    const allowed = value
+      ? thinkingLevelsFor(models.find((model) => model.id === value))
+      : [];
+    setStepThinkingLevels((current) => {
+      const level = current[step];
+      if (!level || (value && allowed.includes(level))) return current;
+      const next: StepThinkingLevels = { ...current };
+      delete next[step];
+      return next;
+    });
+  }
+
+  function updateStepThinkingLevel(step: PipelineStep, value: string) {
+    setStepThinkingLevels((current) => {
+      const next: StepThinkingLevels = { ...current };
+      if (value) {
+        next[step] = value as ThinkingLevel;
       } else {
         delete next[step];
       }
@@ -877,6 +928,15 @@ export default function TaskDetail({
       ),
     ) as StepModels;
 
+    // В тело идут только thinking-уровни выбранных шагов.
+    const activeStepThinkingLevels = Object.fromEntries(
+      Object.entries(stepThinkingLevels).filter(
+        ([step]) =>
+          chosenSteps.has(step as PipelineStep) &&
+          (step !== 'pr' || prAvailable),
+      ),
+    ) as StepThinkingLevels;
+
     const request: CreateIterationRequest = {
       context,
       is_review_need: selectedSteps.includes('review'),
@@ -884,6 +944,10 @@ export default function TaskDetail({
       steps: effectiveSteps.length > 0 ? effectiveSteps : undefined,
       step_models:
         Object.keys(activeStepModels).length > 0 ? activeStepModels : undefined,
+      step_thinking_levels:
+        Object.keys(activeStepThinkingLevels).length > 0
+          ? activeStepThinkingLevels
+          : undefined,
     };
 
     setFormError(null);
@@ -1070,8 +1134,9 @@ export default function TaskDetail({
     setResultText(null);
     setResultError(null);
     if (state.status !== 'ready') return;
-    // HTML отдаётся как есть через iframe; markdown (md) тянем текстом.
-    if (state.issue.desired_result !== 'md') return;
+    // HTML отдаётся как есть через iframe; markdown (md) и PR-результат
+    // (`result.json`) тянем текстом и рендерим сами.
+    if (state.issue.desired_result === 'html') return;
 
     setResultLoading(true);
     try {
@@ -1306,13 +1371,18 @@ export default function TaskDetail({
                       isResolve || (!prBlocked && selectedSteps.includes(step.value));
                     const modelEnabled =
                       chosenSteps.has(step.value) && !prBlocked;
+                    const selectedModel = models.find(
+                      (model) => model.id === stepModels[step.value],
+                    );
+                    const thinkingLevels = thinkingLevelsFor(selectedModel);
+                    const thinkingEnabled = Boolean(stepModels[step.value]);
                     return (
                       <div
                         key={step.value}
                         className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                       >
                         <div className="flex flex-col">
-                          <label className="flex items-center gap-2 text-sm text-[#00FF41]/80">
+                          <label className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80">
                             <input
                               type="checkbox"
                               className="accent-[#00FF41]"
@@ -1337,22 +1407,44 @@ export default function TaskDetail({
                           )}
                         </div>
                         {modelEnabled && (
-                          <select
-                            aria-label={`Модель для шага ${step.label}`}
-                            className={`${inputClass} sm:w-64`}
-                            value={stepModels[step.value] ?? ''}
-                            onChange={(event) =>
-                              updateStepModel(step.value, event.target.value)
-                            }
-                            disabled={modelsLoading}
-                          >
-                            <option value="">По умолчанию</option>
-                            {models.map((model) => (
-                              <option key={model.id} value={model.id}>
-                                {model.name ?? model.id}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <select
+                              aria-label={`Модель для шага ${step.label}`}
+                              className={`${inputClass} sm:w-64`}
+                              value={stepModels[step.value] ?? ''}
+                              onChange={(event) =>
+                                updateStepModel(step.value, event.target.value)
+                              }
+                              disabled={modelsLoading}
+                            >
+                              <option value="">По умолчанию</option>
+                              {models.map((model) => (
+                                <option key={model.id} value={model.id}>
+                                  {model.name ?? model.id}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              aria-label={`Уровень размышления для шага ${step.label}`}
+                              className={`${inputClass} sm:w-40`}
+                              value={stepThinkingLevels[step.value] ?? ''}
+                              onChange={(event) =>
+                                updateStepThinkingLevel(
+                                  step.value,
+                                  event.target.value,
+                                )
+                              }
+                              disabled={!thinkingEnabled}
+                            >
+                              <option value="">По умолчанию</option>
+                              {thinkingEnabled &&
+                                thinkingLevels.map((level) => (
+                                  <option key={level} value={level}>
+                                    {level}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
                         )}
                       </div>
                     );
@@ -1730,6 +1822,33 @@ export default function TaskDetail({
                                             ·
                                           </span>{' '}
                                           {footer.toolCalls ?? 0} вызовов
+                                          {(footer.tokensPerSecond !== null ||
+                                            footer.avgTokensPerSecond !==
+                                              null) && (
+                                            <>
+                                              {' '}
+                                              <span className="session-stats-sep">
+                                                ·
+                                              </span>{' '}
+                                              <span data-testid="step-speed">
+                                                {footer.tokensPerSecond !==
+                                                  null &&
+                                                  `${formatInstantSpeed(
+                                                    footer.tokensPerSecond,
+                                                  )} t/s`}
+                                                {footer.tokensPerSecond !==
+                                                  null &&
+                                                  footer.avgTokensPerSecond !==
+                                                    null &&
+                                                  ' · '}
+                                                {footer.avgTokensPerSecond !==
+                                                  null &&
+                                                  `avg ${formatAvgSpeed(
+                                                    footer.avgTokensPerSecond,
+                                                  )} t/s`}
+                                              </span>
+                                            </>
+                                          )}
                                         </span>
                                       )}
                                       <span data-testid="step-files">
@@ -1817,6 +1936,45 @@ export default function TaskDetail({
                   title="Результат"
                   className="h-full w-full border border-[#008F11] bg-white"
                 />
+              ) : state.issue.desired_result === 'pr' && resultText !== null ? (
+                (() => {
+                  const mergeRequests = parseMergeRequests(resultText);
+                  if (mergeRequests === null) {
+                    return (
+                      <pre
+                        data-testid="result-raw"
+                        className="whitespace-pre-wrap break-words text-sm text-[#00FF41]/80"
+                      >
+                        {resultText}
+                      </pre>
+                    );
+                  }
+                  return (
+                    <ul data-testid="result-mr-list" className="space-y-4">
+                      {mergeRequests.map((item, index) => (
+                        <li
+                          key={`${item.url ?? item.title ?? index}`}
+                          data-testid="result-mr-item"
+                          className="border border-[#008F11] p-3"
+                        >
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="break-all text-[#00FF41] underline"
+                          >
+                            {item.url || item.title}
+                          </a>
+                          {item.message ? (
+                            <p className="mt-2 whitespace-pre-wrap break-words text-sm text-[#00FF41]/80">
+                              {item.message}
+                            </p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  );
+                })()
               ) : resultLoading ? (
                 <p className="text-sm text-[#00FF41]/60">
                   Загрузка результата…

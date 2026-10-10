@@ -10,6 +10,8 @@ import type {
 /** Опции запуска pi-раннера внутри контейнера. */
 export interface PiRunOptions {
   model?: string;
+  /** Уровень размышления pi (`--thinking`): off|minimal|low|medium|high|xhigh|max. */
+  thinkingLevel?: string;
   cwd?: string;
   tools?: string[];
   timeoutMs?: number;
@@ -17,6 +19,8 @@ export interface PiRunOptions {
   stepRunId?: string;
   /** id итерации: адрес живой сессии по итерации. */
   iterationId?: string;
+  /** id задачи (issue): комната агента → `issue-<issueId>`. */
+  issueId?: string;
   /** Реестр живых сессий для steer/abort. */
   registry?: import('../pi/session-registry').StepSessionRegistry;
   /** Дескриптор агента комнаты (worker/coordinator) для `listAgents`. */

@@ -299,6 +299,7 @@ describe('runIteration — один шаг', () => {
     const options = pi.calls[0].options;
     expect(options?.stepRunId).toBe(store.runs[0].id);
     expect(options?.iterationId).toBe('iter-1');
+    expect(options?.issueId).toBe('issue-1');
     expect(options?.registry).toBe(deps.control);
   });
 
@@ -635,6 +636,46 @@ describe('runIteration — per-step модели', () => {
     await runIteration(deps, makeInput(['resolve']));
 
     expect(pi.calls[0].options?.model).toBeUndefined();
+  });
+});
+
+describe('runIteration — уровни размышления', () => {
+  it('step_thinking_levels[step] переопределяет общий thinking_level', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('review'));
+
+    await runIteration(deps, {
+      ...makeInput(['resolve', 'review']),
+      thinking_level: 'medium',
+      step_thinking_levels: { review: 'high' },
+    });
+
+    expect(pi.calls.map((call) => call.options?.thinkingLevel)).toEqual([
+      'medium',
+      'high',
+    ]);
+  });
+
+  it('шаг без step_thinking_levels берёт общий thinking_level', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+
+    await runIteration(deps, {
+      ...makeInput(['resolve']),
+      thinking_level: 'low',
+    });
+
+    expect(pi.calls[0].options?.thinkingLevel).toBe('low');
+  });
+
+  it('без step_thinking_levels и без thinking_level → undefined (дефолт pi)', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+
+    await runIteration(deps, makeInput(['resolve']));
+
+    expect(pi.calls[0].options?.thinkingLevel).toBeUndefined();
   });
 });
 

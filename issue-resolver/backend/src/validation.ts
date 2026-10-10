@@ -11,6 +11,22 @@ export const PIPELINE_STEPS = [
 /** Частичная карта «шаг → id модели»: ключи строго из PIPELINE_STEPS. */
 const stepModelsSchema = z.record(z.enum(PIPELINE_STEPS), z.string());
 
+/** Уровень размышления pi: словарь CLI-флага `--thinking`. */
+const thinkingLevelSchema = z.enum([
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
+
+/** Частичная карта «шаг → уровень размышления»; ключи из PIPELINE_STEPS. */
+const stepThinkingLevelsSchema = z
+  .record(z.enum(PIPELINE_STEPS), thinkingLevelSchema)
+  .optional();
+
 const repoLocationSchema = z
   .string()
   .refine((value) => z.string().url().safeParse(value).success, {
@@ -41,6 +57,8 @@ export const createIssueRequestSchema = z
     pipeline_steps: z.array(z.enum(PIPELINE_STEPS)).optional(),
     model: z.string().optional(),
     step_models: stepModelsSchema.optional(),
+    thinking_level: thinkingLevelSchema.optional(),
+    step_thinking_levels: stepThinkingLevelsSchema,
   })
   .refine(
     (data) => Boolean(data.title?.trim()) || Boolean(data.jira_issue_url),
@@ -66,6 +84,8 @@ export const createIterationRequestSchema = z.object({
   steps: z.array(z.enum(PIPELINE_STEPS)).optional(),
   model: z.string().optional(),
   step_models: stepModelsSchema.optional(),
+  thinking_level: thinkingLevelSchema.optional(),
+  step_thinking_levels: stepThinkingLevelsSchema,
 });
 
 export function formatZodError(error: z.ZodError): string {

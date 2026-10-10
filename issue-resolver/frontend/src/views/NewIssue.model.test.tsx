@@ -85,11 +85,15 @@ describe('NewIssue — селектор модели (per-step)', () => {
 
     render(<NewIssue />);
 
-    // Всегда отмечен только resolve → один селектор с одним набором опций.
+    // Всегда отмечен только resolve → один селектор модели + один селектор
+    // thinking level (у каждого своя опция «По умолчанию»).
     expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(1);
     expect(screen.getAllByRole('option', { name: 'm2' })).toHaveLength(1);
-    expect(screen.getAllByRole('option', { name: 'По умолчанию' })).toHaveLength(1);
+    expect(screen.getAllByRole('option', { name: 'По умолчанию' })).toHaveLength(2);
     expect(screen.getByLabelText('Модель для шага Resolve')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Уровень размышления для шага Resolve'),
+    ).toBeInTheDocument();
 
     // Отмечаем ещё два шага — появляются их селекторы.
     fireEvent.click(screen.getByLabelText('Refine'));

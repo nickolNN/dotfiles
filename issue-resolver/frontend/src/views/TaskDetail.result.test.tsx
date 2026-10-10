@@ -79,14 +79,15 @@ function textResponse(
 }
 
 /** fetch-мок: /result отдаёт resultResponse, остальное — issue/iterations/
- * step-runs. По умолчанию resolve-прогон уже с отчётом — кнопки результата
- * активны; тесты про неготовый результат передают свой список шагов. */
+ * step-runs. Готовность результата определяется статусом итерации (снапшот
+ * создаётся на completed), поэтому тесты неготового результата передают
+ * свой список итераций; по умолчанию одна completed-итерация. */
 function stubFetch(
   issue: Issue,
   resultResponse: () => Promise<Response> | Response,
   stepRuns: StepRunWithLog[] = [makeStepRun()],
+  iterations: Iteration[] = [makeIteration()],
 ) {
-  const iteration = makeIteration();
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith('/step-runs')) {
@@ -96,7 +97,7 @@ function stubFetch(
       return Promise.resolve(resultResponse());
     }
     if (url.endsWith('/iterations')) {
-      return Promise.resolve(jsonResponse([iteration]));
+      return Promise.resolve(jsonResponse(iterations));
     }
     return Promise.resolve(jsonResponse(issue));
   });
@@ -137,11 +138,12 @@ describe('TaskDetail — просмотр результата', () => {
     expect(download).toHaveAttribute('download');
   });
 
-  it('resolve-шаг без report → кнопки результата disabled', async () => {
+  it('итерация без completed → кнопки результата disabled', async () => {
     stubFetch(
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
       [makeStepRun({ report: '' })],
+      [makeIteration({ status: 'failed' })],
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -154,11 +156,31 @@ describe('TaskDetail — просмотр результата', () => {
     expect(download.className).toContain('cursor-not-allowed');
   });
 
-  it('resolve-шаг с report → кнопки результата активны', async () => {
+  it('пустой список итераций → кнопки результата disabled', async () => {
     stubFetch(
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
       [makeStepRun()],
+      [],
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const open = await screen.findByTestId('open-result');
+    await waitFor(() => expect(open).toBeDisabled());
+    expect(screen.getByTestId('download-result')).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it('iteration completed + пустой report → кнопки всё равно активны', async () => {
+    stubFetch(
+      makeIssue({ desired_result: 'md' }),
+      () => textResponse('# Итог'),
+      [makeStepRun({ report: '' })],
+      [makeIteration({ status: 'completed' })],
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -246,16 +268,67 @@ describe('TaskDetail — просмотр результата', () => {
     expect(screen.queryByTestId('result-modal')).toBeNull();
   });
 
-  it('desired_result pr → кнопок результата нет', async () => {
+  it('desired_result pr → кнопки результата есть и ведут на /result/download', async () => {
     stubFetch(makeIssue({ desired_result: 'pr' }), () =>
-      textResponse('# Итог'),
+      textResponse('{"merge_requests":[]}'),
     );
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    expect(screen.queryByTestId('open-result')).toBeNull();
-    expect(screen.queryByTestId('download-result')).toBeNull();
+    const open = await screen.findByTestId('open-result');
+    await waitFor(() => expect(open).toBeEnabled());
+    expect(screen.getByTestId('download-result')).toHaveAttribute(
+      'href',
+      '/issue-resolver/api/v1/issues/issue-1/result/download',
+    );
+  });
+
+  it('pr: модалка рендерит список MR из result.json', async () => {
+    const payload = JSON.stringify({
+      merge_requests: [
+        {
+          repository_url: 'https://x/repo.git',
+          url: 'https://x/-/merge_requests/1',
+          title: 'Fix',
+          message: 'описание MR',
+        },
+      ],
+    });
+    const fetchMock = stubFetch(makeIssue({ desired_result: 'pr' }), () =>
+      textResponse(payload),
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+    await clickOpenResult();
+
+    const modal = await screen.findByTestId('result-modal');
+    const list = await within(modal).findByTestId('result-mr-list');
+    const item = within(list).getByTestId('result-mr-item');
+    const link = within(item).getByRole('link');
+    expect(link).toHaveAttribute('href', 'https://x/-/merge_requests/1');
+    expect(link).toHaveTextContent('https://x/-/merge_requests/1');
+    expect(item).toHaveTextContent('описание MR');
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).endsWith('/result')),
+    ).toBe(true);
+  });
+
+  it('pr: невалидный JSON → сырой текст, без падения', async () => {
+    stubFetch(makeIssue({ desired_result: 'pr' }), () =>
+      textResponse('не json'),
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+    await clickOpenResult();
+
+    const modal = await screen.findByTestId('result-modal');
+    expect(await within(modal).findByTestId('result-raw')).toHaveTextContent(
+      'не json',
+    );
+    expect(within(modal).queryByTestId('result-mr-list')).toBeNull();
   });
 
   it('desired_result не задан → кнопок результата нет', async () => {

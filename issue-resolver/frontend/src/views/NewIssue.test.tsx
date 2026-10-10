@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Issue } from '@issue-resolver/shared';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { Issue, ModelDescriptor } from '@issue-resolver/shared';
 import NewIssue from './NewIssue';
+
+/** Модели с разными наборами thinking-уровней (m2 не поддерживает 'high'). */
+const thinkingModels: ModelDescriptor[] = [
+  { id: 'm1', name: 'Model One', thinkingLevels: ['off', 'low', 'high'] },
+  { id: 'm2', name: 'Model Two', thinkingLevels: ['off', 'max'] },
+];
 
 const createdIssue: Issue = {
   id: 'issue-1',
@@ -13,6 +19,31 @@ const createdIssue: Issue = {
   created_at: '2026-10-09T00:00:00.000Z',
   updated_at: '2026-10-09T00:00:00.000Z',
 };
+
+/** GET /models → thinkingModels, POST /issues → созданная задача. */
+function stubThinkingFetch() {
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/models')) {
+      return Promise.resolve({ ok: true, json: async () => thinkingModels });
+    }
+    if (init?.method === 'POST') {
+      return Promise.resolve({ ok: true, json: async () => createdIssue });
+    }
+    return Promise.resolve({ ok: true, json: async () => createdIssue });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+function postBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const postCall = fetchMock.mock.calls.find(
+    ([, init]) => (init as RequestInit | undefined)?.method === 'POST',
+  );
+  expect(postCall).toBeTruthy();
+  const [, init] = postCall as [string, RequestInit];
+  return JSON.parse(String(init.body)) as Record<string, unknown>;
+}
 
 afterEach(() => {
   cleanup();
@@ -572,6 +603,139 @@ describe('NewIssue', () => {
         String((postCall as [string, RequestInit])[1].body),
       );
       expect(body.pipeline_steps).toEqual(['refine', 'resolve']);
+    });
+  });
+
+  it('селектор thinking level disabled без выбранной модели; с моделью — её thinkingLevels', async () => {
+    stubThinkingFetch();
+
+    render(<NewIssue />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    const resolveLevel = screen.getByLabelText(
+      'Уровень размышления для шага Resolve',
+    ) as HTMLSelectElement;
+    expect(resolveLevel).toBeDisabled();
+    expect(within(resolveLevel).getAllByRole('option')).toHaveLength(1);
+    expect(
+      within(resolveLevel).getByRole('option', { name: 'По умолчанию' }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Модель для шага Resolve'), {
+      target: { value: 'm1' },
+    });
+
+    expect(resolveLevel).toBeEnabled();
+    expect(
+      within(resolveLevel)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['По умолчанию', 'off', 'low', 'high']);
+  });
+
+  it('выбор thinking level для выбранной модели → payload.step_thinking_levels', async () => {
+    const fetchMock = stubThinkingFetch();
+
+    render(<NewIssue />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    fireEvent.change(screen.getByLabelText('Заголовок'), {
+      target: { value: 'Fix login bug' },
+    });
+    fireEvent.change(screen.getByLabelText('Модель для шага Resolve'), {
+      target: { value: 'm1' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Уровень размышления для шага Resolve'),
+      { target: { value: 'high' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    await waitFor(() => {
+      const body = postBody(fetchMock);
+      expect(body.step_thinking_levels).toEqual({ resolve: 'high' });
+      // Глобальный thinking_level формой не отправляется.
+      expect(body.thinking_level).toBeUndefined();
+    });
+  });
+
+  it('смена модели сбрасывает несовместимый thinking level', async () => {
+    const fetchMock = stubThinkingFetch();
+
+    render(<NewIssue />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    fireEvent.change(screen.getByLabelText('Заголовок'), {
+      target: { value: 'Fix login bug' },
+    });
+    const modelSelect = screen.getByLabelText('Модель для шага Resolve');
+    const levelSelect = screen.getByLabelText(
+      'Уровень размышления для шага Resolve',
+    ) as HTMLSelectElement;
+
+    fireEvent.change(modelSelect, { target: { value: 'm1' } });
+    fireEvent.change(levelSelect, { target: { value: 'high' } });
+    expect(levelSelect.value).toBe('high');
+
+    // m2 не поддерживает 'high' → уровень сбрасывается, опции — уровни m2.
+    fireEvent.change(modelSelect, { target: { value: 'm2' } });
+    expect(levelSelect.value).toBe('');
+    expect(within(levelSelect).queryByRole('option', { name: 'high' })).toBeNull();
+    expect(
+      within(levelSelect).getByRole('option', { name: 'max' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    await waitFor(() => {
+      const body = postBody(fetchMock);
+      expect(body.step_thinking_levels).toBeUndefined();
+    });
+  });
+
+  it('без выбора thinking level поля step_thinking_levels в payload нет', async () => {
+    const fetchMock = stubThinkingFetch();
+
+    render(<NewIssue />);
+
+    fireEvent.change(screen.getByLabelText('Заголовок'), {
+      target: { value: 'Fix login bug' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    await waitFor(() => {
+      const body = postBody(fetchMock);
+      expect(body.step_thinking_levels).toBeUndefined();
+    });
+  });
+
+  it('снятый шаг с выбранным thinking level отфильтровывается из payload', async () => {
+    const fetchMock = stubThinkingFetch();
+
+    render(<NewIssue />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    fireEvent.change(screen.getByLabelText('Заголовок'), {
+      target: { value: 'Fix login bug' },
+    });
+
+    // Отмечаем refine, выбираем модель и уровень, затем снимаем шаг.
+    fireEvent.click(screen.getByLabelText('Refine'));
+    fireEvent.change(screen.getByLabelText('Модель для шага Refine'), {
+      target: { value: 'm1' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Уровень размышления для шага Refine'),
+      { target: { value: 'high' } },
+    );
+    fireEvent.click(screen.getByLabelText('Refine'));
+    expect(screen.queryByLabelText('Уровень размышления для шага Refine')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    await waitFor(() => {
+      const body = postBody(fetchMock);
+      expect(body.step_thinking_levels).toBeUndefined();
     });
   });
 

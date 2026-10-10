@@ -9,6 +9,7 @@ import {
   type SessionCost,
   type SessionEvent,
   type SessionQuestion,
+  type SessionSpeed,
   type SessionStats,
   type SessionUsage,
   type StepExecutionResult,
@@ -127,6 +128,13 @@ const normalizeCost = (raw: unknown): SessionCost | null => {
   };
 };
 
+/** Порог средней скорости, мс: раньше оценка нестабильна и не показывается. */
+const SPEED_MIN_ELAPSED_MS = 1000;
+/** Минимальный интервал между выборками мгновенной скорости, мс. */
+const SPEED_MIN_INTERVAL_MS = 250;
+/** Коэффициент экспоненциального сглаживания мгновенной скорости. */
+const SPEED_SMOOTHING_ALPHA = 0.3;
+
 /** Число из необязательного поля события; нечисловое/не-конечное → null. */
 const numberOrNull = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -220,6 +228,12 @@ export class RpcSessionParser {
   /** Отображаемое имя модели из `get_state` (нет в `get_session_stats`). */
   private modelValue: string | null = null;
   private lastUsageTotal: number | null = null;
+  /** Wall-clock старт сессии: первое ассистентское message_start/usage. */
+  private sessionStartMs: number | null = null;
+  /** Последняя подтверждённая выборка output для мгновенной скорости. */
+  private speedSample: { output: number; tsMs: number } | null = null;
+  /** Сглаженная мгновенная скорость; null — выборок ещё не было. */
+  private smoothedTps: number | null = null;
 
   constructor(handler: RpcParseHandlers = {}) {
     this.handler = handler;
@@ -344,12 +358,13 @@ export class RpcSessionParser {
       if (event.command === 'get_session_stats') {
         const stats = parseSessionStats(event.data, this.modelValue);
         if (stats) {
-          this.statsValue = stats;
           // Живой футер: каждое обновление статистики уходит событием в SSE
           // (`message_update.usage` у части провайдеров нулевое до конца стрима).
           // push до onStats: финальный ответ может сразу финализировать прогон.
-          this.push({ type: 'stats', stats });
-          this.handler.onStats?.(stats);
+          const withSpeed = this.withStatsSpeed(stats, Date.now());
+          this.statsValue = withSpeed;
+          this.push({ type: 'stats', stats: withSpeed });
+          this.handler.onStats?.(withSpeed);
         }
       }
       return;
@@ -362,6 +377,7 @@ export class RpcSessionParser {
       const role = asRecord(event.message)?.role;
       // Не-ассистентское сообщение (user) блоками ассистента не является — пропуск.
       if (typeof role === 'string' && role !== 'assistant') return;
+      this.markSessionStart();
       this.flush();
       this.textByIndex.clear();
       this.textOrder.length = 0;
@@ -619,16 +635,76 @@ export class RpcSessionParser {
     // инструментов не должен попадать в stdout (прозу).
   }
 
+  /** Фиксирует старт сессии для wall-clock (первое ассистентское событие). */
+  private markSessionStart(now: number = Date.now()): void {
+    if (this.sessionStartMs === null) this.sessionStartMs = now;
+  }
+
   /** Нормализует и эмитит `usage` из `message_update` с дедупом по total. */
   private handleUsage(raw: unknown): void {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
     const obj = raw as Record<string, unknown>;
     const usage = normalizeUsage(obj);
+    // Первое usage-событие могло прийти без message_start — засекаем старт.
+    const now = Date.now();
+    this.markSessionStart(now);
     // Кумулятивное usage почти не меняется между дельтами — не дублируем,
     // пока total не вырос (в т.ч. первый нулевой снапшот пропускаем один раз).
     if (this.lastUsageTotal === usage.total) return;
     this.lastUsageTotal = usage.total;
-    this.push({ type: 'usage', usage, cost: normalizeCost(obj.cost) });
+    const speed = this.computeSpeed(usage, now);
+    this.push({
+      type: 'usage',
+      usage,
+      cost: normalizeCost(obj.cost),
+      ...(speed ? { speed } : {}),
+    });
+  }
+
+  /**
+   * Скорость генерации по текущему usage: мгновенная (Δ output / Δt, сглажена
+   * экспоненциально) и средняя (output / wall-clock сессии). null, пока средняя
+   * недостоверна (elapsed < 1s или output = 0) — тогда `speed` не прикладываем.
+   */
+  private computeSpeed(usage: SessionUsage, now: number): SessionSpeed | null {
+    if (this.sessionStartMs === null) return null;
+
+    // Якорь/пересчёт мгновенной: только на выросшем output и не чаще 250мс,
+    // иначе держим прошлую оценку (без скачка к 0 на коротких ступеньках).
+    const sample = this.speedSample;
+    if (sample === null) {
+      this.speedSample = { output: usage.output, tsMs: now };
+    } else if (
+      usage.output > sample.output &&
+      now - sample.tsMs >= SPEED_MIN_INTERVAL_MS
+    ) {
+      const deltaSec = (now - sample.tsMs) / 1000;
+      const tps = (usage.output - sample.output) / deltaSec;
+      this.smoothedTps =
+        this.smoothedTps === null
+          ? tps
+          : this.smoothedTps +
+            SPEED_SMOOTHING_ALPHA * (tps - this.smoothedTps);
+      this.speedSample = { output: usage.output, tsMs: now };
+    }
+
+    const elapsedMs = now - this.sessionStartMs;
+    if (elapsedMs < SPEED_MIN_ELAPSED_MS || usage.output <= 0) return null;
+    const avg = usage.output / (elapsedMs / 1000);
+    return { tokensPerSecond: this.smoothedTps ?? avg, avgTokensPerSecond: avg };
+  }
+
+  /** Прикладывает среднюю скорость к stats, когда она достоверна. */
+  private withStatsSpeed(stats: SessionStats, now: number): SessionStats {
+    if (this.sessionStartMs === null) return stats;
+    const elapsedMs = now - this.sessionStartMs;
+    if (elapsedMs < SPEED_MIN_ELAPSED_MS || stats.tokens.output <= 0) {
+      return stats;
+    }
+    return {
+      ...stats,
+      avgTokensPerSecond: stats.tokens.output / (elapsedMs / 1000),
+    };
   }
 
   /** Авторитетный текст `thinking_end`: ThinkingContent {thinking} или строка. */
@@ -701,15 +777,21 @@ export class RpcPiRunner implements PiRunner {
     options: PiRunOptions = {},
   ): Promise<StepExecutionResult> {
     const modelArgs = options.model ? ['--model', options.model] : [];
+    const thinkingArgs = options.thinkingLevel
+      ? ['--thinking', options.thinkingLevel]
+      : [];
+    // Комната агента per-task: `issue-<issueId>`; иначе штатный defaultRoom.
+    const room = options.issueId ? `issue-${options.issueId}` : undefined;
 
     return new Promise<StepExecutionResult>((resolve, reject) => {
       // stdin-пайп держим открытым до финализации: закрытие stdin обрывает pi
       // до agent_settled.
       const child =
         this.transport === 'local'
-          ? spawn('pi', ['--mode', 'rpc', ...modelArgs], {
+          ? spawn('pi', ['--mode', 'rpc', ...modelArgs, ...thinkingArgs], {
               cwd: options.cwd,
               stdio: ['pipe', 'pipe', 'pipe'],
+              ...(room ? { env: { ...process.env, PI_AGENT_ROOM: room } } : {}),
             })
           : spawn(
               'docker',
@@ -717,11 +799,13 @@ export class RpcPiRunner implements PiRunner {
                 'exec',
                 '-i',
                 ...(options.cwd ? ['-w', options.cwd] : []),
+                ...(room ? ['-e', `PI_AGENT_ROOM=${room}`] : []),
                 containerName,
                 'pi',
                 '--mode',
                 'rpc',
                 ...modelArgs,
+                ...thinkingArgs,
               ],
               { stdio: ['pipe', 'pipe', 'pipe'] },
             );

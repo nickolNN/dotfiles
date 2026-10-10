@@ -3,10 +3,12 @@ import type {
   Iteration,
   PipelineStep,
   StepModels,
+  StepThinkingLevels,
+  ThinkingLevel,
 } from '@issue-resolver/shared';
 import { extractIssueKeyFromUrl } from '@issue-resolver/shared';
 import { and, eq } from 'drizzle-orm';
-import { readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Db } from '../db/client';
 import { listAttachableRelPaths } from '../db/issue-files.repo';
@@ -26,7 +28,12 @@ import type { MrClient } from '../pr/mr';
 import type { SseHub } from '../sse/hub';
 import type { RunIterationResult, StepRunStore } from '../workflow/engine';
 import { runIteration } from '../workflow/engine';
-import { DEFAULT_WORKSPACE_ROOT, workspaceHostDirFor } from '../workspace/paths';
+import {
+  DEFAULT_WORKSPACE_ROOT,
+  iterationResultDirFor,
+  resultArtifactFor,
+  workspaceHostDirFor,
+} from '../workspace/paths';
 
 /** Порты, нужные сервису прогона итерации (совпадают с WorkflowDeps без store). */
 export interface IterationRunDeps {
@@ -75,6 +82,10 @@ export interface RunIssueIterationInput {
   model?: string;
   /** Пер-шаговые модели: `step_models[step]` переопределяет `model`. */
   step_models?: StepModels;
+  /** Общий уровень размышления-фолбек для всех шагов. */
+  thinking_level?: ThinkingLevel;
+  /** Пер-шаговые уровни размышления; приоритет над `thinking_level`. */
+  step_thinking_levels?: StepThinkingLevels;
   mrToken?: string;
 }
 
@@ -156,6 +167,35 @@ async function readResultDocument(
     return await readFile(path, 'utf8');
   } catch {
     return null;
+  }
+}
+
+/**
+ * Снапшот результата успешно завершённой итерации: копирует артефакт
+ * (report.md/html или result.json) в
+ * `<workspaceRoot>/<issueId>/.iteration-results/<iterationId>`.
+ * Best-effort: нет исходного файла — нет снапшота, без падения.
+ */
+async function snapshotIterationResult(
+  workspaceRoot: string,
+  issueId: string,
+  iterationId: string,
+  desiredResult: DesiredResult | undefined,
+): Promise<void> {
+  const artifact = resultArtifactFor(desiredResult);
+  if (!artifact) {
+    return;
+  }
+  const source = join(
+    workspaceHostDirFor(workspaceRoot, issueId),
+    artifact.filename,
+  );
+  const targetDir = iterationResultDirFor(workspaceRoot, issueId, iterationId);
+  try {
+    await mkdir(targetDir, { recursive: true });
+    await copyFile(source, join(targetDir, artifact.filename));
+  } catch {
+    // best-effort снапшот: отсутствие/ошибка копирования не роняет итерацию.
   }
 }
 
@@ -309,6 +349,8 @@ export async function runIssueIteration(
         repositories: input.repositories,
         model: input.model,
         step_models: input.step_models,
+        thinking_level: input.thinking_level,
+        step_thinking_levels: input.step_thinking_levels,
         mrToken: input.mrToken,
         description: input.issue.description ?? '',
         jiraText,
@@ -341,6 +383,17 @@ export async function runIssueIteration(
       ts: failedAt,
     });
     return { iterationStatus: 'failed', needsInput: false };
+  }
+
+  // Снапшот результата по итерациям: только для успешно завершённых итераций,
+  // best-effort (сам факт снапшота не влияет на статус).
+  if (result.iterationStatus === 'completed') {
+    await snapshotIterationResult(
+      deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+      input.issue.id,
+      input.iteration.id,
+      input.issue.desiredResult,
+    );
   }
 
   const finishedAt = new Date().toISOString();

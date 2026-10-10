@@ -29,10 +29,13 @@ export interface RoomResolveInput extends RoomPromptInput {
 /** Опции прогона комнаты: модель/cwd, адрес шага и живые колбэки. */
 export interface RoomResolveOptions {
   model?: string;
+  /** Уровень размышления pi, общий для работников и координатора. */
+  thinkingLevel?: string;
   cwd?: string;
   /** stepRunId ШАГА resolve; работники получают `${stepRunId}/worker/<i>`. */
   stepRunId: string;
   iterationId: string;
+  issueId?: string;
   registry?: StepSessionRegistry;
   onStdout?: (chunk: string, agent: RoomAgentInfo) => void;
   onStderr?: (chunk: string, agent: RoomAgentInfo) => void;
@@ -88,9 +91,11 @@ export async function runRoomResolve(
         buildRoomWorkerPrompt(input, item, count),
         {
           model: options.model,
+          thinkingLevel: options.thinkingLevel,
           cwd: options.cwd,
           stepRunId,
           iterationId: options.iterationId,
+          issueId: options.issueId,
           registry: options.registry,
           agent,
           onStdout: (chunk) => options.onStdout?.(chunk, agent),
@@ -128,9 +133,11 @@ export async function runRoomResolve(
     buildRoomCoordinatorPrompt(input, summaries),
     {
       model: options.model,
+      thinkingLevel: options.thinkingLevel,
       cwd: options.cwd,
       stepRunId: options.stepRunId,
       iterationId: options.iterationId,
+      issueId: options.issueId,
       registry: options.registry,
       agent: coordinatorAgent(options.stepRunId),
       onStdout: (chunk) =>

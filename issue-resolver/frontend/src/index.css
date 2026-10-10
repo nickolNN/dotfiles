@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+/* Tailwind v4 preflight не ставит cursor:pointer на <button>, поэтому
+   возвращаем его глобально для всех кликабельных элементов. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  [role="tab"]:not(:disabled),
+  [role="switch"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
 :root {
   color-scheme: dark;
 }

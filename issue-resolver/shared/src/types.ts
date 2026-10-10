@@ -19,6 +19,22 @@ export type DesiredResult = 'md' | 'html' | 'pr';
 /** Пер-шаговые модели: ключ — шаг пайплайна, значение — id модели pi. */
 export type StepModels = Partial<Record<PipelineStep, string>>;
 
+/**
+ * Уровень размышления pi (reasoning effort): словарь CLI-флага `--thinking` и
+ * RPC-команды `set_thinking_level`. Не задан — поведение pi по умолчанию.
+ */
+export type ThinkingLevel =
+  | 'off'
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max';
+
+/** Пер-шаговые уровни размышления: ключ — шаг, значение — уровень. */
+export type StepThinkingLevels = Partial<Record<PipelineStep, ThinkingLevel>>;
+
 export type StepRunStatus =
   | 'pending'
   | 'running'
@@ -69,6 +85,10 @@ export interface Issue {
   pipeline_steps: PipelineStep[];
   /** Пер-шаговые модели задачи (фолбек ниже — общий model). */
   step_models?: StepModels;
+  /** Общий уровень размышления-фолбек для всех шагов. */
+  thinking_level?: ThinkingLevel | null;
+  /** Пер-шаговые уровни размышления; приоритет над `thinking_level`. */
+  step_thinking_levels?: StepThinkingLevels;
   status: TaskStatus;
   created_at: string;
   updated_at: string;
@@ -89,6 +109,10 @@ export interface Iteration {
   model?: string | null;
   /** Пер-шаговые модели: `step_models[step]` переопределяет `model`. */
   step_models?: StepModels;
+  /** Общий уровень размышления-фолбек для всех шагов. */
+  thinking_level?: ThinkingLevel | null;
+  /** Пер-шаговые уровни размышления; приоритет над `thinking_level`. */
+  step_thinking_levels?: StepThinkingLevels;
   created_at: string;
   updated_at: string;
 }
@@ -115,6 +139,10 @@ export interface CreateIssueRequest {
   model?: string;
   /** Модель на конкретный шаг; имеет приоритет над `model`. */
   step_models?: StepModels;
+  /** Общий уровень размышления-фолбек для всех шагов. */
+  thinking_level?: ThinkingLevel;
+  /** Уровень размышления на конкретный шаг; приоритет над `thinking_level`. */
+  step_thinking_levels?: StepThinkingLevels;
 }
 
 export interface CreateIterationRequest {
@@ -126,6 +154,10 @@ export interface CreateIterationRequest {
   model?: string;
   /** Модель на конкретный шаг; имеет приоритет над `model`. */
   step_models?: StepModels;
+  /** Общий уровень размышления-фолбек для всех шагов. */
+  thinking_level?: ThinkingLevel;
+  /** Уровень размышления на конкретный шаг; приоритет над `thinking_level`. */
+  step_thinking_levels?: StepThinkingLevels;
 }
 
 export interface StepRun {
@@ -159,6 +191,16 @@ export interface SessionCost {
 }
 
 /**
+ * Скорость генерации сессии (токены/сек). `tokensPerSecond` — мгновенная
+ * (Δ output / Δt по последним usage-событиям); `avgTokensPerSecond` — средняя
+ * (Σ output / всё wall-clock время сессии).
+ */
+export interface SessionSpeed {
+  tokensPerSecond: number;
+  avgTokensPerSecond: number;
+}
+
+/**
  * Интерактивный вопрос расширения pi (`extension_ui_request`): select/confirm/
  * input/editor. `id` адресует ответ обратно в живую сессию.
  */
@@ -181,7 +223,13 @@ export type CompactionReason = 'manual' | 'threshold' | 'overflow';
 export type SessionEvent =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string }
-  | { type: 'usage'; usage: SessionUsage; cost: SessionCost | null }
+  | {
+      type: 'usage';
+      usage: SessionUsage;
+      cost: SessionCost | null;
+      /** Скорость генерации; отсутствует до порога (elapsed < 1s или output = 0). */
+      speed?: SessionSpeed;
+    }
   | { type: 'stats'; stats: SessionStats }
   | ({ type: 'question' } & SessionQuestion)
   // Ответ пользователя на интерактивный вопрос: `answer` — выбранная метка
@@ -284,6 +332,8 @@ export interface SessionStats {
     contextWindow: number;
     percent: number | null;
   } | null;
+  /** Средняя скорость по сессии (токены/сек); отсутствует, пока неизвестна. */
+  avgTokensPerSecond?: number;
 }
 
 export interface StepOutput {
@@ -442,4 +492,6 @@ export interface ModelDescriptor {
   provider?: string;
   name?: string;
   contextWindow?: number;
+  /** Уровни размышления, поддерживаемые моделью; для недумающей — ['off']. */
+  thinkingLevels?: ThinkingLevel[];
 }

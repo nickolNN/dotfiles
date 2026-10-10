@@ -24,7 +24,11 @@ function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   };
 }
 
-function usageEvent(total: number, costTotal: number | null): SessionEvent {
+function usageEvent(
+  total: number,
+  costTotal: number | null,
+  speed?: { tokensPerSecond: number; avgTokensPerSecond: number },
+): SessionEvent {
   return {
     type: 'usage',
     usage: { input: total, output: 0, cacheRead: 0, cacheWrite: 0, total },
@@ -38,6 +42,7 @@ function usageEvent(total: number, costTotal: number | null): SessionEvent {
             cacheWrite: 0,
             total: costTotal,
           },
+    ...(speed ? { speed } : {}),
   };
 }
 
@@ -172,5 +177,65 @@ describe('SessionStatsBar', () => {
       'session-stats',
       'pinned-footer',
     );
+  });
+
+  it('live-usage со speed показывает мгновенную и среднюю (1 знак / округление)', () => {
+    render(
+      <SessionStatsBar
+        events={[usageEvent(1500, 0.0021, { tokensPerSecond: 63.5, avgTokensPerSecond: 42.4 })]}
+      />,
+    );
+
+    const bar = screen.getByTestId('session-stats');
+    expect(within(bar).getByTestId('session-speed')).toHaveTextContent(
+      '63.5 t/s · avg 42 t/s',
+    );
+    // Существующие сегменты не сломаны.
+    expect(tokenIn(bar)).toHaveTextContent('1.5k');
+    expect(bar).toHaveTextContent('кеш 0');
+  });
+
+  it('live-usage без speed не рендерит сегмент скорости', () => {
+    render(<SessionStatsBar events={[usageEvent(1500, 0.0021)]} />);
+
+    expect(
+      within(screen.getByTestId('session-stats')).queryByTestId('session-speed'),
+    ).toBeNull();
+  });
+
+  it('stats без avgTokensPerSecond не рендерит сегмент скорости', () => {
+    render(<SessionStatsBar events={[]} stats={makeStats()} />);
+
+    expect(
+      within(screen.getByTestId('session-stats')).queryByTestId('session-speed'),
+    ).toBeNull();
+  });
+
+  it('stats с avgTokensPerSecond рендерит только среднюю', () => {
+    render(
+      <SessionStatsBar
+        events={[]}
+        stats={makeStats({ avgTokensPerSecond: 42.6 })}
+      />,
+    );
+
+    const speed = within(screen.getByTestId('session-stats')).getByTestId(
+      'session-speed',
+    );
+    expect(speed).toHaveTextContent('avg 43 t/s');
+    expect(speed).not.toHaveTextContent('t/s ·');
+  });
+
+  it('live-stats-событие с avgTokensPerSecond рендерит только среднюю', () => {
+    const statsEvent: SessionEvent = {
+      type: 'stats',
+      stats: makeStats({ avgTokensPerSecond: 41.2 }),
+    };
+    render(<SessionStatsBar events={[statsEvent]} />);
+
+    const speed = within(screen.getByTestId('session-stats')).getByTestId(
+      'session-speed',
+    );
+    expect(speed).toHaveTextContent('avg 41 t/s');
   });
 });

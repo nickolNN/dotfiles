@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionEvent, SessionStats } from '@issue-resolver/shared';
 import { RpcSessionParser } from '../src/pi/rpc-runner';
 
@@ -816,5 +816,98 @@ describe('RpcSessionParser', () => {
 
     expect(parser.stdout()).toBe('');
     expect(parser.events()).toEqual([]);
+  });
+});
+
+describe('RpcSessionParser — скорость генерации (speed)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const usage = (parser: RpcSessionParser, output: number, total: number): void => {
+    parser.handle({ type: 'message_update', usage: { output, totalTokens: total } });
+  };
+
+  it('usage после 1s несёт speed: мгновенная (Δ) и средняя (wall-clock)', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    usage(parser, 10, 10); // якорь мгновенной, elapsed 0 → speed нет
+    vi.advanceTimersByTime(1000);
+    usage(parser, 30, 40); // Δ20/1s, средняя 30/1s
+
+    expect(events.at(-1)).toEqual({
+      type: 'usage',
+      usage: { input: 0, output: 30, cacheRead: 0, cacheWrite: 0, total: 40 },
+      cost: null,
+      speed: { tokensPerSecond: 20, avgTokensPerSecond: 30 },
+    });
+  });
+
+  it('speed отсутствует до порога: elapsed < 1s или output = 0', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    usage(parser, 0, 5); // output = 0
+    vi.advanceTimersByTime(500);
+    usage(parser, 10, 15); // elapsed 500мс < 1s
+
+    expect(events[0]).not.toHaveProperty('speed');
+    expect(events[1]).not.toHaveProperty('speed');
+  });
+
+  it('дедуп по total сохраняется: дубль не эмитится, speed не дублируется', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    usage(parser, 10, 10);
+    vi.advanceTimersByTime(1500);
+    usage(parser, 20, 30);
+    usage(parser, 20, 30); // тот же total — дубль
+
+    expect(events).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({ speed: { avgTokensPerSecond: 20 / 1.5 } });
+  });
+
+  it('stats-событие несёт avgTokensPerSecond по wall-clock сессии', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const seen: unknown[] = [];
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({
+      onStats: (stats) => seen.push(stats),
+      onEvent: (event) => events.push(event),
+    });
+
+    usage(parser, 10, 10); // старт сессии
+    vi.advanceTimersByTime(2000);
+    parser.handle({
+      type: 'response',
+      command: 'get_session_stats',
+      success: true,
+      data: { tokens: { output: 50 } },
+    });
+
+    expect(parser.stats()?.avgTokensPerSecond).toBe(25);
+    expect(seen).toEqual([parser.stats()]);
+    expect(events.at(-1)).toEqual({ type: 'stats', stats: parser.stats() });
+  });
+
+  it('stats без старта сессии не несёт avgTokensPerSecond', () => {
+    const parser = new RpcSessionParser();
+    parser.handle({
+      type: 'response',
+      command: 'get_session_stats',
+      success: true,
+      data: { tokens: { output: 50 } },
+    });
+
+    expect(parser.stats()).not.toHaveProperty('avgTokensPerSecond');
   });
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
@@ -503,6 +503,177 @@ describe('POST /issues — фоновый прогон конвейера', () =
       expect(pi.calls.length).toBeGreaterThan(0);
     } finally {
       await app.close();
+    }
+  });
+});
+
+describe('runIssueIteration — снапшот результата итерации', () => {
+  it('completed + md: report.md копируется в .iteration-results/<iterId>/report.md', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const root = mkdtempSync(join(tmpdir(), 'issue-resolver-'));
+    try {
+      mkdirSync(join(root, issueId), { recursive: true });
+      writeFileSync(join(root, issueId, 'report.md'), '# Итог', 'utf8');
+      const { deps, pi } = makeDeps();
+      deps.workspaceRoot = root;
+      pi.enqueue(pass('resolve'));
+
+      const result = await runIssueIteration(db, deps, {
+        issue: {
+          id: issueId,
+          title: 'Wiring задача',
+          pipelineSteps: ['resolve'],
+          desiredResult: 'md',
+        },
+        iteration: {
+          id: iteration.id,
+          issueId,
+          number: iteration.number,
+          context: iteration.context,
+          steps: iteration.steps,
+        },
+        repositories,
+      });
+
+      expect(result).toEqual({
+        iterationStatus: 'completed',
+        needsInput: false,
+      });
+      const snapshot = join(
+        root,
+        issueId,
+        '.iteration-results',
+        iteration.id,
+        'report.md',
+      );
+      expect(existsSync(snapshot)).toBe(true);
+      expect(readFileSync(snapshot, 'utf8')).toBe('# Итог');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('failed: снапшот не создаётся', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const root = mkdtempSync(join(tmpdir(), 'issue-resolver-'));
+    try {
+      mkdirSync(join(root, issueId), { recursive: true });
+      writeFileSync(join(root, issueId, 'report.md'), '# Итог', 'utf8');
+      const { deps, pi } = makeDeps();
+      deps.workspaceRoot = root;
+      pi.enqueue(fail('resolve'));
+
+      const result = await runIssueIteration(db, deps, {
+        issue: {
+          id: issueId,
+          title: 'Wiring задача',
+          pipelineSteps: ['resolve'],
+          desiredResult: 'md',
+        },
+        iteration: {
+          id: iteration.id,
+          issueId,
+          number: iteration.number,
+          context: iteration.context,
+          steps: iteration.steps,
+        },
+        repositories,
+      });
+
+      expect(result).toEqual({
+        iterationStatus: 'failed',
+        needsInput: false,
+      });
+      expect(
+        existsSync(
+          join(root, issueId, '.iteration-results', iteration.id, 'report.md'),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pr без create_mr: result.json не создаётся (guard)", async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const root = mkdtempSync(join(tmpdir(), 'issue-resolver-'));
+    try {
+      const { deps, pi } = makeDeps();
+      deps.workspaceRoot = root;
+      pi.enqueue(pass('resolve'));
+
+      const result = await runIssueIteration(db, deps, {
+        issue: {
+          id: issueId,
+          title: 'Wiring задача',
+          pipelineSteps: ['resolve'],
+          desiredResult: 'pr',
+        },
+        iteration: {
+          id: iteration.id,
+          issueId,
+          number: iteration.number,
+          context: iteration.context,
+          steps: iteration.steps,
+        },
+        repositories: [],
+      });
+
+      expect(result).toEqual({
+        iterationStatus: 'completed',
+        needsInput: false,
+      });
+      expect(
+        existsSync(
+          join(root, issueId, '.iteration-results', iteration.id, 'result.json'),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('completed без report.md в корне: не падает, снапшота нет', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const root = mkdtempSync(join(tmpdir(), 'issue-resolver-'));
+    try {
+      mkdirSync(join(root, issueId), { recursive: true });
+      const { deps, pi } = makeDeps();
+      deps.workspaceRoot = root;
+      pi.enqueue(pass('resolve'));
+
+      const result = await runIssueIteration(db, deps, {
+        issue: {
+          id: issueId,
+          title: 'Wiring задача',
+          pipelineSteps: ['resolve'],
+          desiredResult: 'md',
+        },
+        iteration: {
+          id: iteration.id,
+          issueId,
+          number: iteration.number,
+          context: iteration.context,
+          steps: iteration.steps,
+        },
+        repositories,
+      });
+
+      expect(result).toEqual({
+        iterationStatus: 'completed',
+        needsInput: false,
+      });
+      expect(
+        existsSync(
+          join(root, issueId, '.iteration-results', iteration.id, 'report.md'),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

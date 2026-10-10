@@ -1,10 +1,16 @@
 import { useMemo } from 'react';
-import type { SessionStats, SessionUsage } from '@issue-resolver/shared';
+import type {
+  SessionSpeed,
+  SessionStats,
+  SessionUsage,
+} from '@issue-resolver/shared';
 import type { SessionEvent } from '../api/session-events';
 
 /** Последнее usage из стрима (легаси-источник до первого `stats`). */
 interface LiveUsage {
   usage: SessionUsage;
+  /** Скорость генерации из того же `message_update` (может отсутствовать). */
+  speed?: SessionSpeed;
 }
 
 /** Нормализованные поля строки статистики (live-stats, live-usage или prop). */
@@ -15,6 +21,10 @@ export interface FooterData {
   input: number;
   output: number;
   cached: number;
+  /** Мгновенная скорость генерации (live-usage `speed`), иначе null. */
+  tokensPerSecond: number | null;
+  /** Средняя скорость генерации (stats или live-usage `speed`), иначе null. */
+  avgTokensPerSecond: number | null;
   /** Число вызовов инструментов из stats/usage; 0, если данных нет. */
   toolCalls?: number;
 }
@@ -79,7 +89,9 @@ export default function SessionStatsBar({
 
   if (!footer) return null;
 
-  const { model, percent, input, output, cached } = footer;
+  const { model, percent, input, output, cached, tokensPerSecond, avgTokensPerSecond } =
+    footer;
+  const showSpeed = tokensPerSecond !== null || avgTokensPerSecond !== null;
 
   return (
     <div
@@ -115,6 +127,16 @@ export default function SessionStatsBar({
       </span>
       <span className="session-stats-sep">·</span>
       <span>кеш {formatTokens(cached)}</span>
+      {showSpeed && (
+        <>
+          <span className="session-stats-sep">·</span>
+          <span data-testid="session-speed">
+            {tokensPerSecond !== null && `${formatInstantSpeed(tokensPerSecond)} t/s`}
+            {tokensPerSecond !== null && avgTokensPerSecond !== null && ' · '}
+            {avgTokensPerSecond !== null && `avg ${formatAvgSpeed(avgTokensPerSecond)} t/s`}
+          </span>
+        </>
+      )}
     </div>
   );
 }
@@ -124,7 +146,7 @@ function lastLiveUsage(events: SessionEvent[]): LiveUsage | null {
   let live: LiveUsage | null = null;
   for (const event of events) {
     if (event.type === 'usage') {
-      live = { usage: event.usage };
+      live = { usage: event.usage, speed: event.speed };
     }
   }
   return live;
@@ -158,6 +180,9 @@ export function resolveFooter(
       input: liveStats.tokens.input,
       output: liveStats.tokens.output,
       cached: liveStats.tokens.cacheRead + liveStats.tokens.cacheWrite,
+      // `stats` несёт только среднее; мгновенную скорость даёт live-usage.
+      tokensPerSecond: null,
+      avgTokensPerSecond: finiteOrNull(liveStats.avgTokensPerSecond),
       toolCalls: liveStats.toolCalls,
     };
   }
@@ -169,6 +194,9 @@ export function resolveFooter(
       input: live.usage.input,
       output: live.usage.output,
       cached: live.usage.cacheRead + live.usage.cacheWrite,
+      // Оба значения приходят вместе в `speed` живого usage-события.
+      tokensPerSecond: finiteOrNull(live.speed?.tokensPerSecond),
+      avgTokensPerSecond: finiteOrNull(live.speed?.avgTokensPerSecond),
       toolCalls: stats?.toolCalls ?? 0,
     };
   }
@@ -179,10 +207,27 @@ export function resolveFooter(
       input: stats.tokens.input,
       output: stats.tokens.output,
       cached: stats.tokens.cacheRead + stats.tokens.cacheWrite,
+      tokensPerSecond: null,
+      avgTokensPerSecond: finiteOrNull(stats.avgTokensPerSecond),
       toolCalls: stats.toolCalls,
     };
   }
   return null;
+}
+
+/** Мгновенная скорость генерации: один знак после запятой (63.5 → "63.5"). */
+export function formatInstantSpeed(value: number): string {
+  return value.toFixed(1);
+}
+
+/** Средняя скорость генерации: округление до целого (63.5 → "64"). */
+export function formatAvgSpeed(value: number): string {
+  return String(Math.round(value));
+}
+
+/** Возвращает число, если оно конечное, иначе null (нет данных). */
+function finiteOrNull(value: number | undefined | null): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 /** Компактный формат токенов: 950 → "950", 105000 → "105k", 1200000 → "1.2M". */

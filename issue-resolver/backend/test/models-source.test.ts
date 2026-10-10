@@ -42,4 +42,100 @@ describe('modelSourceFromEnv', () => {
     });
     expect(await source.list()).toEqual([]);
   });
+
+  it('reasoning:false → thinkingLevels ["off"] (даже при заданном map)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ir-models-'));
+    const file = path.join(dir, 'models.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        providers: {
+          p: {
+            models: [
+              {
+                id: 'plain',
+                reasoning: false,
+                thinkingLevelMap: { off: 'none', high: 'high' },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const [model] = await modelSourceFromEnv({ PI_MODELS_PATH: file }).list();
+    expect(model.thinkingLevels).toEqual(['off']);
+    // Сырые входные поля наружу не уходят.
+    expect(model).not.toHaveProperty('reasoning');
+    expect(model).not.toHaveProperty('thinkingLevelMap');
+  });
+
+  it('reasoning:true + thinkingLevelMap → только поддержанные (null отсекается)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ir-models-'));
+    const file = path.join(dir, 'models.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        providers: {
+          p: {
+            models: [
+              {
+                id: 'think',
+                reasoning: true,
+                thinkingLevelMap: {
+                  off: 'none',
+                  minimal: null,
+                  low: 'low',
+                  xhigh: 'xhigh',
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const [model] = await modelSourceFromEnv({ PI_MODELS_PATH: file }).list();
+    // off/low поддержаны (не null), medium/high не заданы → поддержаны,
+    // minimal=null отсечён, xhigh задан, max не задан → отсечён.
+    expect(model.thinkingLevels).toEqual([
+      'off',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+    ]);
+  });
+
+  it('reasoning:true без thinkingLevelMap → без xhigh/max', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ir-models-'));
+    const file = path.join(dir, 'models.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        providers: {
+          p: { models: [{ id: 'think', reasoning: true }] },
+        },
+      }),
+    );
+
+    const [model] = await modelSourceFromEnv({ PI_MODELS_PATH: file }).list();
+    expect(model.thinkingLevels).toEqual([
+      'off',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+    ]);
+  });
+
+  it('flat MODELS_JSON с thinkingLevels → прокидывается (только валидные)', async () => {
+    const source = modelSourceFromEnv({
+      MODELS_JSON: JSON.stringify([
+        { id: 'a', thinkingLevels: ['low', 'bogus', 'high'] },
+      ]),
+    });
+    const [model] = await source.list();
+    expect(model.thinkingLevels).toEqual(['low', 'high']);
+  });
 });

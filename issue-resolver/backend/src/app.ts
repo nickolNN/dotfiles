@@ -108,7 +108,7 @@ export function buildApp(
 
   app.register(async (instance) => {
     await issuesRoutes(instance, db, runDeps, jira);
-    await iterationsRoutes(instance, db);
+    await iterationsRoutes(instance, db, runDeps);
     await controlRoutes(instance, runDeps.control);
     await streamRoutes(instance, db, runDeps.sse, runDeps.control);
   });

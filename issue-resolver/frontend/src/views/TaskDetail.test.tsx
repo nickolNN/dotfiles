@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import type { Issue, Iteration } from '@issue-resolver/shared';
+import type { Issue, Iteration, ModelDescriptor } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 import {
   getMarkdownEditorValue,
@@ -64,6 +64,12 @@ function makeStepRun(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+/** Модели с разными наборами thinking-уровней (m2 не поддерживает 'high'). */
+const thinkingModels: ModelDescriptor[] = [
+  { id: 'm1', name: 'Model One', thinkingLevels: ['off', 'low', 'high'] },
+  { id: 'm2', name: 'Model Two', thinkingLevels: ['off', 'max'] },
+];
 
 function jsonResponse(
   body: unknown,
@@ -468,6 +474,199 @@ describe('TaskDetail', () => {
         String((postCall as [string, RequestInit])[1].body),
       );
       expect(body.step_models).toBeUndefined();
+    });
+  });
+
+  it('«Новая итерация»: thinking level disabled без модели, с моделью — её уровни', async () => {
+    const issue = makeIssue();
+    const iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/models')) {
+        return Promise.resolve(jsonResponse(thinkingModels));
+      }
+      if (url.endsWith('/iterations')) {
+        return Promise.resolve(jsonResponse(iterations));
+      }
+      return Promise.resolve(jsonResponse(issue));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    const levelSelect = screen.getByLabelText(
+      'Уровень размышления для шага Resolve',
+    ) as HTMLSelectElement;
+    expect(levelSelect).toBeDisabled();
+    expect(within(levelSelect).getAllByRole('option')).toHaveLength(1);
+    expect(
+      within(levelSelect).getByRole('option', { name: 'По умолчанию' }),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Модель для шага Resolve'), {
+      target: { value: 'm1' },
+    });
+    expect(levelSelect).toBeEnabled();
+    expect(
+      within(levelSelect)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['По умолчанию', 'off', 'low', 'high']);
+  });
+
+  it('«Новая итерация» шлёт step_thinking_levels для модели с выбранным уровнем', async () => {
+    const issue = makeIssue();
+    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/models')) {
+          return Promise.resolve(jsonResponse(thinkingModels));
+        }
+        if (url.endsWith('/iterations')) {
+          if (init?.method === 'POST') {
+            const created = makeIteration({
+              id: 'iter-2',
+              number: 2,
+              status: 'pending',
+              context: 'ctx',
+            });
+            iterations = [...iterations, created];
+            return Promise.resolve(jsonResponse(created, { status: 201 }));
+          }
+          return Promise.resolve(jsonResponse(iterations));
+        }
+        return Promise.resolve(jsonResponse(issue));
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    fireEvent.click(screen.getByLabelText('Refine'));
+    fireEvent.change(screen.getByLabelText('Модель для шага Refine'), {
+      target: { value: 'm1' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Уровень размышления для шага Refine'),
+      { target: { value: 'high' } },
+    );
+    setMarkdownEditorValue('Контекст итерации', 'ctx');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Запустить новую итерацию' }),
+    );
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([, init]) => init?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(
+        String((postCall as [string, RequestInit])[1].body),
+      );
+      expect(body.step_thinking_levels).toEqual({ refine: 'high' });
+      // Глобальный thinking_level формой не отправляется.
+      expect(body.thinking_level).toBeUndefined();
+    });
+  });
+
+  it('«Новая итерация»: смена модели сбрасывает несовместимый thinking level', async () => {
+    const issue = makeIssue();
+    const iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/models')) {
+        return Promise.resolve(jsonResponse(thinkingModels));
+      }
+      if (url.endsWith('/iterations')) {
+        return Promise.resolve(jsonResponse(iterations));
+      }
+      return Promise.resolve(jsonResponse(issue));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    const modelSelect = screen.getByLabelText('Модель для шага Resolve');
+    const levelSelect = screen.getByLabelText(
+      'Уровень размышления для шага Resolve',
+    ) as HTMLSelectElement;
+    fireEvent.change(modelSelect, { target: { value: 'm1' } });
+    fireEvent.change(levelSelect, { target: { value: 'high' } });
+    expect(levelSelect.value).toBe('high');
+
+    // m2 не поддерживает 'high' → уровень сбрасывается, опции — уровни m2.
+    fireEvent.change(modelSelect, { target: { value: 'm2' } });
+    expect(levelSelect.value).toBe('');
+    expect(
+      within(levelSelect).queryByRole('option', { name: 'high' }),
+    ).toBeNull();
+    expect(
+      within(levelSelect).getByRole('option', { name: 'max' }),
+    ).toBeInTheDocument();
+  });
+
+  it('«По умолчанию» и снятый шаг не попадают в step_thinking_levels', async () => {
+    const issue = makeIssue();
+    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/models')) {
+          return Promise.resolve(jsonResponse(thinkingModels));
+        }
+        if (url.endsWith('/iterations')) {
+          if (init?.method === 'POST') {
+            const created = makeIteration({
+              id: 'iter-2',
+              number: 2,
+              status: 'pending',
+              context: 'ctx',
+            });
+            iterations = [...iterations, created];
+            return Promise.resolve(jsonResponse(created, { status: 201 }));
+          }
+          return Promise.resolve(jsonResponse(iterations));
+        }
+        return Promise.resolve(jsonResponse(issue));
+      },
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    // Отмечаем Refine, выбираем модель и уровень, затем снимаем шаг.
+    fireEvent.click(screen.getByLabelText('Refine'));
+    fireEvent.change(screen.getByLabelText('Модель для шага Refine'), {
+      target: { value: 'm1' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Уровень размышления для шага Refine'),
+      { target: { value: 'high' } },
+    );
+    fireEvent.click(screen.getByLabelText('Refine'));
+    expect(
+      screen.queryByLabelText('Уровень размышления для шага Refine'),
+    ).toBeNull();
+
+    setMarkdownEditorValue('Контекст итерации', 'ctx');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Запустить новую итерацию' }),
+    );
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([, init]) => init?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      const body = JSON.parse(
+        String((postCall as [string, RequestInit])[1].body),
+      );
+      expect(body.step_thinking_levels).toBeUndefined();
     });
   });
 

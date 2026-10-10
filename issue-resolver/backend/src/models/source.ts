@@ -2,10 +2,56 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import type { ModelDescriptor } from '@issue-resolver/shared';
+import type { ModelDescriptor, ThinkingLevel } from '@issue-resolver/shared';
 
 export interface ModelSource {
   list(): Promise<ModelDescriptor[]>;
+}
+
+/** Канонический порядок уровней размышления pi. */
+const EXTENDED_THINKING_LEVELS: readonly ThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
+
+const THINKING_LEVELS: ReadonlySet<string> = new Set(EXTENDED_THINKING_LEVELS);
+
+/** Строка → ThinkingLevel, если это валидный уровень; иначе null. */
+function toThinkingLevel(value: unknown): ThinkingLevel | null {
+  return typeof value === 'string' && THINKING_LEVELS.has(value)
+    ? (value as ThinkingLevel)
+    : null;
+}
+
+/** Объект-карта из unknown; массивы/примитивы → undefined. */
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * Авторитетная формула pi `getSupportedThinkingLevels`:
+ * не-думающая модель → ['off']; иначе EXTENDED-фильтр, где level с `null`
+ * отсекается, `xhigh`/`max` поддержаны только при непустом маппинге, остальные
+ * (не заданные/строковые) — поддержаны. Возвращает только валидные ThinkingLevel.
+ */
+function supportedThinkingLevels(
+  record: Record<string, unknown>,
+): ThinkingLevel[] {
+  if (!record.reasoning) return ['off'];
+  const map = asRecord(record.thinkingLevelMap);
+  return EXTENDED_THINKING_LEVELS.filter((level) => {
+    const mapped = map?.[level];
+    if (mapped === null) return false;
+    if (level === 'xhigh' || level === 'max') return mapped !== undefined;
+    return true;
+  });
 }
 
 export class ConfigModelSource implements ModelSource {
@@ -34,6 +80,13 @@ function sanitizeModels(input: unknown): ModelDescriptor[] {
     if (typeof record.name === 'string') model.name = record.name;
     if (typeof record.contextWindow === 'number') {
       model.contextWindow = record.contextWindow;
+    }
+    // Плоская форма может быть уже-дескрипторной: прокидываем только валидные
+    // ThinkingLevel, не раскрывая сырые reasoning/thinkingLevelMap.
+    if (Array.isArray(record.thinkingLevels)) {
+      model.thinkingLevels = record.thinkingLevels
+        .map(toThinkingLevel)
+        .filter((level): level is ThinkingLevel => level !== null);
     }
     models.push(model);
   }
@@ -64,6 +117,9 @@ function modelsFromPiConfig(input: unknown): ModelDescriptor[] {
       if (typeof record.contextWindow === 'number') {
         model.contextWindow = record.contextWindow;
       }
+      // reasoning/thinkingLevelMap остаются сырыми входными полями и наружу не
+      // отдаются — только производный набор поддерживаемых уровней.
+      model.thinkingLevels = supportedThinkingLevels(record);
       out.push(model);
     }
   }

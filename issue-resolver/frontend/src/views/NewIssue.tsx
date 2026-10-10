@@ -7,6 +7,8 @@ import type {
   PipelineStep,
   RepositoryInput,
   StepModels,
+  StepThinkingLevels,
+  ThinkingLevel,
 } from '@issue-resolver/shared';
 import {
   createIssue,
@@ -15,6 +17,7 @@ import {
 } from '../api/client';
 import FilePicker from '../components/FilePicker';
 import MarkdownEditor from '../components/MarkdownEditor';
+import { thinkingLevelsFor } from '../constants/thinking-levels';
 
 /** Шаг пайплайна: одна строка = чекбокс шага + inline-селектор его модели. */
 const MODEL_STEPS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
@@ -61,6 +64,8 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   const [showJira, setShowJira] = useState(false);
   const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
   const [stepModels, setStepModels] = useState<StepModels>({});
+  const [stepThinkingLevels, setStepThinkingLevels] =
+    useState<StepThinkingLevels>({});
   const [desiredResult, setDesiredResult] = useState<DesiredResult>('md');
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -143,6 +148,30 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       }
       return next;
     });
+
+    // Смена модели сбрасывает уровень, несовместимый с её thinkingLevels.
+    const allowed = value
+      ? thinkingLevelsFor(models.find((model) => model.id === value))
+      : [];
+    setStepThinkingLevels((current) => {
+      const level = current[step];
+      if (!level || (value && allowed.includes(level))) return current;
+      const next: StepThinkingLevels = { ...current };
+      delete next[step];
+      return next;
+    });
+  }
+
+  function updateStepThinkingLevel(step: PipelineStep, value: string) {
+    setStepThinkingLevels((current) => {
+      const next: StepThinkingLevels = { ...current };
+      if (value) {
+        next[step] = value as ThinkingLevel;
+      } else {
+        delete next[step];
+      }
+      return next;
+    });
   }
 
   // Модель шага доступна только когда шаг отмечен (resolve отмечен всегда).
@@ -165,6 +194,13 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       ),
     ) as StepModels;
 
+    // В тело идут только thinking-уровни выбранных шагов.
+    const activeStepThinkingLevels = Object.fromEntries(
+      Object.entries(stepThinkingLevels).filter(([step]) =>
+        chosenSteps.has(step as PipelineStep),
+      ),
+    ) as StepThinkingLevels;
+
     const payload: CreateIssueRequest = {
       title,
       jira_issue_url: jiraIssueUrl.trim() || undefined,
@@ -176,6 +212,10 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       pipeline_steps: PIPELINE_ORDER.filter((step) => chosenSteps.has(step)),
       step_models:
         Object.keys(activeStepModels).length > 0 ? activeStepModels : undefined,
+      step_thinking_levels:
+        Object.keys(activeStepThinkingLevels).length > 0
+          ? activeStepThinkingLevels
+          : undefined,
     };
 
     try {
@@ -383,7 +423,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
               return (
                 <label
                   key={option.value}
-                  className="flex items-center gap-2 text-sm text-[#00FF41]/80"
+                  className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80"
                 >
                   <input
                     type="radio"
@@ -417,12 +457,17 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
               const isResolve = step.value === 'resolve';
               const checked = isResolve || selectedSteps.includes(step.value);
               const modelEnabled = chosenSteps.has(step.value);
+              const selectedModel = models.find(
+                (model) => model.id === stepModels[step.value],
+              );
+              const thinkingLevels = thinkingLevelsFor(selectedModel);
+              const thinkingEnabled = Boolean(stepModels[step.value]);
               return (
                 <div
                   key={step.value}
                   className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <label className="flex items-center gap-2 text-sm text-[#00FF41]/80">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80">
                     <input
                       type="checkbox"
                       className="accent-[#00FF41]"
@@ -433,22 +478,41 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
                     {isResolve ? 'Resolve (всегда)' : step.label}
                   </label>
                   {modelEnabled && (
-                    <select
-                      aria-label={`Модель для шага ${step.label}`}
-                      className={`${inputClass} sm:w-64`}
-                      value={stepModels[step.value] ?? ''}
-                      onChange={(event) =>
-                        updateStepModel(step.value, event.target.value)
-                      }
-                      disabled={modelsLoading}
-                    >
-                      <option value="">По умолчанию</option>
-                      {models.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.name ?? model.id}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <select
+                        aria-label={`Модель для шага ${step.label}`}
+                        className={`${inputClass} sm:w-64`}
+                        value={stepModels[step.value] ?? ''}
+                        onChange={(event) =>
+                          updateStepModel(step.value, event.target.value)
+                        }
+                        disabled={modelsLoading}
+                      >
+                        <option value="">По умолчанию</option>
+                        {models.map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.name ?? model.id}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        aria-label={`Уровень размышления для шага ${step.label}`}
+                        className={`${inputClass} sm:w-40`}
+                        value={stepThinkingLevels[step.value] ?? ''}
+                        onChange={(event) =>
+                          updateStepThinkingLevel(step.value, event.target.value)
+                        }
+                        disabled={!thinkingEnabled}
+                      >
+                        <option value="">По умолчанию</option>
+                        {thinkingEnabled &&
+                          thinkingLevels.map((level) => (
+                            <option key={level} value={level}>
+                              {level}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
                   )}
                 </div>
               );

@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS issues (
   jira_issue_url TEXT,
   pipeline_steps TEXT NOT NULL,
   step_models TEXT,
+  thinking_level TEXT,
+  step_thinking_levels TEXT,
   container_name TEXT,
   source TEXT,
   status TEXT NOT NULL,
@@ -53,6 +55,8 @@ CREATE TABLE IF NOT EXISTS iterations (
   steps TEXT NOT NULL,
   model TEXT,
   step_models TEXT,
+  thinking_level TEXT,
+  step_thinking_levels TEXT,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -148,6 +152,12 @@ function ensureIterationColumns(sqlite: Database.Database): void {
   if (!columns.has('step_models')) {
     sqlite.exec('ALTER TABLE iterations ADD COLUMN step_models TEXT');
   }
+  if (!columns.has('thinking_level')) {
+    sqlite.exec('ALTER TABLE iterations ADD COLUMN thinking_level TEXT');
+  }
+  if (!columns.has('step_thinking_levels')) {
+    sqlite.exec('ALTER TABLE iterations ADD COLUMN step_thinking_levels TEXT');
+  }
 }
 
 function ensureIssueRepositoryColumns(sqlite: Database.Database): void {
@@ -179,6 +189,12 @@ function ensureIssueColumns(sqlite: Database.Database): void {
   }
   if (!columns.has('step_models')) {
     sqlite.exec('ALTER TABLE issues ADD COLUMN step_models TEXT');
+  }
+  if (!columns.has('thinking_level')) {
+    sqlite.exec('ALTER TABLE issues ADD COLUMN thinking_level TEXT');
+  }
+  if (!columns.has('step_thinking_levels')) {
+    sqlite.exec('ALTER TABLE issues ADD COLUMN step_thinking_levels TEXT');
   }
   if (!columns.has('desired_result')) {
     sqlite.exec(

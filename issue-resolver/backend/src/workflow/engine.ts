@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   ContainerSpec,
@@ -15,7 +15,9 @@ import type {
   StepRun,
   StepModels,
   StepRunStatus,
+  StepThinkingLevels,
   TaskStatus,
+  ThinkingLevel,
 } from '@issue-resolver/shared';
 import {
   nextStepDecision,
@@ -119,6 +121,10 @@ export interface RunIterationInput {
   model?: string;
   /** Пер-шаговые модели: `step_models[step]` переопределяет `model`. */
   step_models?: StepModels;
+  /** Общий уровень размышления-фолбек для всех шагов. */
+  thinking_level?: ThinkingLevel;
+  /** Пер-шаговые уровни размышления; приоритет над `thinking_level`. */
+  step_thinking_levels?: StepThinkingLevels;
   /** Токен для MR/PR (в проде — из secrets). */
   mrToken?: string;
   /** Описание задачи для промпта. */
@@ -298,10 +304,14 @@ export async function runIteration(
       attachmentPaths: input.attachmentPaths ?? [],
     };
     const model = (input.step_models?.[step] ?? input.model) || undefined;
+    const thinkingLevel =
+      (input.step_thinking_levels?.[step] ?? input.thinking_level) || undefined;
     const runOptions = {
       model,
+      thinkingLevel,
       cwd: deps.local ? workspaceHostDir : workspaceContainerPath,
       iterationId: iteration.id,
+      issueId: issue.id,
       registry: deps.control,
       onStdout: (chunk: string, agent?: RoomAgentInfo) =>
         deps.sse.publish(
@@ -449,8 +459,18 @@ export async function runIteration(
   return { iterationStatus: 'completed', needsInput: false };
 }
 
+/** Артефакт результата MR для снапшота итерации (result.json). */
+export interface MrResultArtifact {
+  repositoryUrl: string;
+  mrUrl: string;
+  title: string;
+  description: string;
+}
+
 /**
  * Успешный pr-шаг: для каждого репозитория commit/push, затем создание MR.
+ * Возвращает артефакты созданных MR (пустой массив — ничего не создано) и
+ * best-effort пишет `result.json` в корень рабочей папки задачи.
  * Вызывается только при `step === 'pr' && status === 'success'`.
  */
 async function publishPrResult(
@@ -459,7 +479,7 @@ async function publishPrResult(
   repoWorkspaces: GitPrepareResult['repoWorkspaces'],
   description: string,
   stepRunId: string,
-): Promise<void> {
+): Promise<MrResultArtifact[]> {
   const baseBranchByUrl = new Map(
     input.repositories.map((repo) => [repo.repository_url, repo.base_branch]),
   );
@@ -470,9 +490,11 @@ async function publishPrResult(
     ]),
   );
 
+  const artifacts: MrResultArtifact[] = [];
+
   // Нет репозиториев — нечего коммитить/пушить и не для чего создавать MR.
   if (repoWorkspaces.length === 0) {
-    return;
+    return artifacts;
   }
 
   for (const workspace of repoWorkspaces) {
@@ -504,6 +526,12 @@ async function publishPrResult(
       token: input.mrToken ?? '',
       source: detectGitHost(workspace.repoUrl),
     });
+    artifacts.push({
+      repositoryUrl: workspace.repoUrl,
+      mrUrl: mr.mrUrl,
+      title: input.issue.title,
+      description,
+    });
     deps.sse.publish(
       streamEvent(
         input.issue.id,
@@ -514,4 +542,34 @@ async function publishPrResult(
       ),
     );
   }
+
+  // Best-effort: результат pr-шага как обычный артефакт для снапшота итерации.
+  if (artifacts.length > 0) {
+    try {
+      const dir = workspaceHostDirFor(
+        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+        input.issue.id,
+      );
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, 'result.json'),
+        JSON.stringify(
+          {
+            merge_requests: artifacts.map((a) => ({
+              repository_url: a.repositoryUrl,
+              url: a.mrUrl,
+              title: a.title,
+              message: a.description,
+            })),
+          },
+          null,
+          2,
+        ),
+      );
+    } catch {
+      // Отсутствие файла не должно ронять итерацию.
+    }
+  }
+
+  return artifacts;
 }
