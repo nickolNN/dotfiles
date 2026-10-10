@@ -74,7 +74,7 @@ function insertStepRun(
 }
 
 describe('reconcileInterruptedRuns', () => {
-  it('переводит прерванные шаги в aborted, итерацию и задачу в failed', () => {
+  it('переводит прерванные шаги в failed с feedback, итерацию и задачу в failed', () => {
     const db = createDb(':memory:');
     const issueId = insertIssue(db, 'running');
     const iterationId = insertIteration(db, issueId, 'running');
@@ -92,8 +92,20 @@ describe('reconcileInterruptedRuns', () => {
       .where(eq(stepRuns.iteration_id, iterationId))
       .all();
 
-    const aborted = runStatuses.filter((row) => row.status === 'aborted');
-    expect(aborted).toHaveLength(3);
+    const interrupted = runStatuses.filter(
+      (row) => row.feedback === 'interrupted by server restart',
+    );
+    expect(interrupted).toHaveLength(3);
+    expect(interrupted.every((row) => row.status === 'failed')).toBe(true);
+
+    // Завершённые шаги не трогаются: 'success' остаётся, пре-существующий
+    // 'failed' не получает feedback о рестарте.
+    const success = runStatuses.find((row) => row.status === 'success');
+    expect(success?.feedback).toBeNull();
+    const preexistingFailed = runStatuses.filter(
+      (row) => row.status === 'failed' && row.feedback === null,
+    );
+    expect(preexistingFailed).toHaveLength(1);
 
     const iteration = db
       .select()

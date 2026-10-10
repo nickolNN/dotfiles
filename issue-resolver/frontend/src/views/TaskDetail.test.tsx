@@ -154,7 +154,9 @@ describe('TaskDetail', () => {
     expect(String(url).endsWith('/iterations')).toBe(true);
     expect(JSON.parse(String(init.body)).context).toBe('new attempt');
 
-    expect(getMarkdownEditorValue('Контекст итерации')).toBe('');
+    await waitFor(() =>
+      expect(getMarkdownEditorValue('Контекст итерации')).toBe(''),
+    );
   });
 
   it('shows an error when the issue is not found', async () => {

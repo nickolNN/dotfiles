@@ -29,7 +29,11 @@ export function reconcileInterruptedRuns(db: Db): void {
 
   if (interrupted.length > 0) {
     db.update(stepRuns)
-      .set({ status: 'aborted', updated_at: now })
+      .set({
+        status: 'failed',
+        feedback: 'interrupted by server restart',
+        updated_at: now,
+      })
       .where(inArray(stepRuns.status, INTERRUPTED_STEP_STATUSES))
       .run();
   }
@@ -57,7 +61,7 @@ export function reconcileInterruptedRuns(db: Db): void {
 
   if (interrupted.length > 0 || runningIterations.length > 0) {
     console.error(
-      `[reconcile] interrupted by restart: ${interrupted.length} step_run(s) → aborted, ${runningIterations.length} iteration(s) → failed`,
+      `[reconcile] interrupted by restart: ${interrupted.length} step_run(s) → failed, ${runningIterations.length} iteration(s) → failed`,
     );
   }
 }
