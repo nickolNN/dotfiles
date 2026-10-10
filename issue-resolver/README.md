@@ -66,7 +66,11 @@ Backend по умолчанию поднимается с in-memory фейкам
 
 Иначе — пустой объект и безопасные Fake*-адаптеры `buildApp(db, deps)`. Имя
 общего named volume для памяти модели — `ISSUE_RESOLVER_MEMORY_VOLUME` (дефолт
-`agent-memory`). Данные лежат в SQLite (`backend/data/issue-resolver.db`, таблицы
+`agent-memory`). Таймаут одного pi-агента шага —
+`ISSUE_RESOLVER_RESOLVE_AGENT_TIMEOUT_MS` (мс, дефолт 30 мин; значения меньше
+60с поднимаются до 60с): прокидывается в `RpcPiRunner` (reject + SIGKILL) и
+дополнительно страхуется внешним таймером движка. Данные лежат в SQLite
+(`backend/data/issue-resolver.db`, таблицы
 создаются идемпотентно при старте).
 
 ## API
@@ -231,6 +235,12 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   `attempt + 1` и передаёт фидбек; максимум 3 попытки, дальше — итерация
   завершается `failed` с `needs_input`. Провал `refine`/`resolve`/`pr` завершает
   итерацию сразу.
+- **Терминальность сбоя агента**: reject/таймаут `pi.run` (spawn ENOENT,
+  timeout, child error, зависание) ловится движком вокруг single/room/stages
+  вызова шага: `step_run` → `failed`, `step_output` с отчётом
+  `{ status: 'fail', summary: '<step> agent failed/hung' }` и текстом ошибки в
+  `stderr`, итерация → `failed`. Шаг не остаётся в `running` навсегда. Успешный
+  `agent_settled`/abort при этом не путаются со сбоем (см. `resolve-not-aborted`).
 - **Преемственность итераций**: итерация `number > 1` получает в промпт каждого
   шага блок `Previous iteration outcome` — `status`+`summary` из `report`
   resolve-шага предыдущей итерации плюс документ результата из рабочей папки

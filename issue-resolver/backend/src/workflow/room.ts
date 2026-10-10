@@ -22,6 +22,7 @@ import {
   type RoomPromptInput,
   type WorkerSummary,
 } from './prompts';
+import { resolveAgentTimeoutMs, withAgentTimeout } from './timeout';
 
 /** Вход комнаты resolve: общий prompt-контекст + план и адрес контейнера. */
 export interface RoomResolveInput extends RoomPromptInput {
@@ -51,6 +52,12 @@ export interface RoomResolveOptions {
     total: number,
     agent: RoomAgentInfo,
   ) => void;
+  /**
+   * Таймаут одного pi-агента (мс). По умолчанию — env/30 мин (см.
+   * `resolveAgentTimeoutMs`). Явное значение используется как есть и служит
+   * override'ом для коротких прогонов/тестов.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -122,14 +129,19 @@ interface AgentRun {
   prompt: string;
 }
 
-/** Запускает pi-агента с прокидкой per-agent стрима/событий в общие колбэки. */
+/**
+ * Запускает pi-агента с прокидкой per-agent стрима/событий в общие колбэки.
+ * Если агент не завершился за `timeoutMs`, promise reject'ится (даже когда
+ * раннер игнорирует `options.timeoutMs`) — resolve-шаг не висит вечно.
+ */
 function runAgent(
   pi: PiRunner,
   input: RoomResolveInput,
   options: RoomResolveOptions,
   run: AgentRun,
 ): Promise<StepExecutionResult> {
-  return pi.run(input.containerName, run.prompt, {
+  const timeoutMs = options.timeoutMs ?? resolveAgentTimeoutMs();
+  const agentPromise = pi.run(input.containerName, run.prompt, {
     model: options.model,
     thinkingLevel: options.thinkingLevel,
     cwd: options.cwd,
@@ -138,10 +150,16 @@ function runAgent(
     issueId: options.issueId,
     registry: options.registry,
     agent: run.agent,
+    timeoutMs,
     onStdout: (chunk) => options.onStdout?.(chunk, run.agent),
     onStderr: (chunk) => options.onStderr?.(chunk, run.agent),
     onEvent: (event) => options.onEvent?.(event, run.agent),
   });
+  return withAgentTimeout(
+    agentPromise,
+    timeoutMs,
+    `resolve agent ${run.agent.id}`,
+  );
 }
 
 /** Дескриптор одного воркера: дескриптор агента, его id, подзадача и промпт. */

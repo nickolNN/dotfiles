@@ -765,11 +765,29 @@ const STATS_POLL_MS = 3000;
  * таймауту). Разбор отчёта (`.issue-step-result.json`) остаётся за
  * контроллером.
  */
+/**
+ * Точка инъекции CLI pi: продакшен зовёт `pi` (или `PI_BIN`), тесты — shim.
+ * Инъекция не меняет поведение по умолчанию (`piCommand` по умолчанию 'pi').
+ */
+export interface RpcPiRunnerConfig {
+  /** Исполняемый файл pi; по умолчанию env `PI_BIN`, иначе 'pi'. */
+  piCommand?: string;
+  /** Доп. аргументы перед `--mode rpc` (напр. путь к node-shim в тестах). */
+  piArgs?: string[];
+}
+
 export class RpcPiRunner implements PiRunner {
+  private readonly piCommand: string;
+  private readonly piArgs: string[];
+
   constructor(
     private readonly step: PipelineStep = 'resolve',
     private readonly transport: 'docker' | 'local' = 'docker',
-  ) {}
+    config: RpcPiRunnerConfig = {},
+  ) {
+    this.piCommand = config.piCommand ?? process.env.PI_BIN ?? 'pi';
+    this.piArgs = config.piArgs ?? [];
+  }
 
   run(
     containerName: string,
@@ -788,11 +806,15 @@ export class RpcPiRunner implements PiRunner {
       // до agent_settled.
       const child =
         this.transport === 'local'
-          ? spawn('pi', ['--mode', 'rpc', ...modelArgs, ...thinkingArgs], {
-              cwd: options.cwd,
-              stdio: ['pipe', 'pipe', 'pipe'],
-              ...(room ? { env: { ...process.env, PI_AGENT_ROOM: room } } : {}),
-            })
+          ? spawn(
+              this.piCommand,
+              [...this.piArgs, '--mode', 'rpc', ...modelArgs, ...thinkingArgs],
+              {
+                cwd: options.cwd,
+                stdio: ['pipe', 'pipe', 'pipe'],
+                ...(room ? { env: { ...process.env, PI_AGENT_ROOM: room } } : {}),
+              },
+            )
           : spawn(
               'docker',
               [
@@ -801,7 +823,8 @@ export class RpcPiRunner implements PiRunner {
                 ...(options.cwd ? ['-w', options.cwd] : []),
                 ...(room ? ['-e', `PI_AGENT_ROOM=${room}`] : []),
                 containerName,
-                'pi',
+                this.piCommand,
+                ...this.piArgs,
                 '--mode',
                 'rpc',
                 ...modelArgs,

@@ -40,6 +40,7 @@ import {
 } from '../workspace/paths';
 import { buildStepPrompt } from './prompts';
 import { runRoomResolve, runStagedResolve } from './room';
+import { resolveAgentTimeoutMs, withAgentTimeout } from './timeout';
 
 /** Канонический порядок исполнения шагов пайплайна. */
 const PIPELINE_STEP_ORDER: readonly PipelineStep[] = [
@@ -136,6 +137,11 @@ export interface RunIterationInput {
   previousOutcome?: string | null;
   /** Пути загруженных файлов (относительно корня рабочей папки задачи). */
   attachmentPaths?: string[];
+  /**
+   * Переопределение таймаута одного pi-агента (мс) для этого прогона.
+   * По умолчанию — env/30 мин; короткие значения используются в тестах.
+   */
+  agentTimeoutMs?: number;
 }
 
 export interface RunIterationResult {
@@ -274,6 +280,8 @@ export async function runIteration(
   // Заполняется только успешным refine-шагом; до него — null (single).
   let refinedPlan: string | null = null;
   let refinedExecution: ExecutionPlan | null = null;
+  // Общий таймаут одного pi-агента: override прогона или env-дефолт (30 мин).
+  const agentTimeoutMs = input.agentTimeoutMs ?? resolveAgentTimeoutMs();
 
   while (stepIndex < steps.length) {
     const step = steps[stepIndex];
@@ -315,6 +323,7 @@ export async function runIteration(
       iterationId: iteration.id,
       issueId: issue.id,
       registry: deps.control,
+      timeoutMs: agentTimeoutMs,
       onStdout: (chunk: string, agent?: RoomAgentInfo) =>
         deps.sse.publish(
           streamEvent(
@@ -364,34 +373,69 @@ export async function runIteration(
       );
 
     let result: StepExecutionResult;
-    if (topology === 'room') {
-      result = await runRoomResolve(
-        deps.pi,
-        {
-          containerName,
-          execution: refinedExecution as ExecutionPlan,
-          ...promptContext,
-          refinedPlan,
-        },
-        { ...runOptions, stepRunId: stepRun.id, onWorkerStart },
+    try {
+      if (topology === 'room') {
+        result = await runRoomResolve(
+          deps.pi,
+          {
+            containerName,
+            execution: refinedExecution as ExecutionPlan,
+            ...promptContext,
+            refinedPlan,
+          },
+          { ...runOptions, stepRunId: stepRun.id, onWorkerStart },
+        );
+      } else if (topology === 'stages') {
+        result = await runStagedResolve(
+          deps.pi,
+          {
+            containerName,
+            execution: refinedExecution as ExecutionPlan,
+            ...promptContext,
+            refinedPlan,
+          },
+          { ...runOptions, stepRunId: stepRun.id, onWorkerStart },
+        );
+      } else {
+        result = await withAgentTimeout(
+          deps.pi.run(
+            containerName,
+            buildStepPrompt({ step, ...promptContext, refinedPlan }),
+            { ...runOptions, stepRunId: stepRun.id },
+          ),
+          agentTimeoutMs,
+          `${step} agent`,
+        );
+      }
+    } catch (error) {
+      // Падение/зависание pi-агента (spawn ENOENT, timeout, child error,
+      // любой reject) обязано завершить шаг терминально, а не оставить
+      // step_run/итерацию в `running` навсегда. Причину не глотаем: пишем в
+      // stderr step_output и в console.error.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        `workflow: pi agent for step '${step}' failed or timed out`,
+        error,
       );
-    } else if (topology === 'stages') {
-      result = await runStagedResolve(
-        deps.pi,
-        {
-          containerName,
-          execution: refinedExecution as ExecutionPlan,
-          ...promptContext,
-          refinedPlan,
-        },
-        { ...runOptions, stepRunId: stepRun.id, onWorkerStart },
+      await deps.store.updateStepRun(stepRun.id, { status: 'failed' });
+      await deps.store.createStepOutput({
+        stepRunId: stepRun.id,
+        report: JSON.stringify({
+          status: 'fail',
+          summary:
+            step === 'resolve'
+              ? 'resolve agent failed/hung'
+              : `${step} agent failed/hung`,
+        }),
+        stdout: '',
+        stderr: message,
+        events: [],
+        stats: null,
+      });
+      deps.sse.publish(
+        stepStatusEvent(issue.id, iteration.id, stepRun.id, 'failed'),
       );
-    } else {
-      result = await deps.pi.run(
-        containerName,
-        buildStepPrompt({ step, ...promptContext, refinedPlan }),
-        { ...runOptions, stepRunId: stepRun.id },
-      );
+      return { iterationStatus: 'failed', needsInput: false };
     }
 
     // Отчёт шага — источник истины в рабочей папке задачи. В RPC-режиме
