@@ -265,7 +265,7 @@ docker run --rm -u root -v agent-rooms:/dest "${IMAGE}" \
 # `pi update --extensions` here: it was a full network npm install on every
 # launch. Skip the startup pi.dev version check too.
 echo "→ Launching pi agent in room «${ROOM}»..."
-exec docker exec -it -w /home/agent/workspace "${CONTAINER}" \
+exec docker exec -it -w /home/agent/workspace -e "PI_AGENT_ROOM=${ROOM}" "${CONTAINER}" \
   bash -c "
     mkdir -p ~/.pi/agent/rooms/${ROOM} && \
     if [ -f ~/.pi/agent/rooms/config.json ]; then \

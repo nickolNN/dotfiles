@@ -23,12 +23,12 @@ See the `Dockerfile` for the full list and the reasoning behind each layer.
 | ------ | ------- |
 | `build.sh` | build the image for the host arch (`--no-cache` supported) |
 | `attach.sh` | interactive shell — or any command — in the folder's container |
-| `spawn-pi-agent.sh` | launch the `pi` agent in a room named after the folder |
-| `container-name.sh` | per-directory container naming (never clobbers another folder) |
+| `spawn-pi-agent.sh` | `pi` in folder's room; `--room`/`PI_AGENT_ROOM` |
+| `container-name.sh` | per-directory container naming (per-folder isolation) |
 | `port-forward.sh` | ad-hoc host→container port forwarding (no restart) |
 | `stop-all.sh` | stop/remove every `dotfiles-agent` container (incl. forwards) |
 | `install-aliases.sh` | install `agent-*` zsh aliases (idempotent) |
-| `host-notify/install.sh` | install the macOS desktop-notification bridge (LaunchAgent) |
+| `host-notify/install.sh` | install macOS notification bridge (LaunchAgent) |
 | `docker-compose.yml` | declarative alternative to the shell scripts |
 
 ## Build prerequisites
@@ -52,9 +52,34 @@ Each script derives the container name from the folder path, so the same folder
 always maps to the same container, and different folders never share (or kill)
 one another's containers.
 
+`agent-spawn` names the agent's room after the folder too (basename of `$PWD`)
+— override with `--room NAME`. Rooms are selected through the `PI_AGENT_ROOM`
+env var; see [Agent rooms](#agent-rooms-per-task).
+
 `attach.sh` extras: `--build` (force rebuild), `--no-install` (skip the auto
 `bun install`/`npm install` when `package.json` is present), and `-- CMD` to run
 a specific command (`attach.sh -- pi` is equivalent to `spawn-pi-agent.sh`).
+
+## Agent rooms (per-task)
+
+Pi agents talk to each other through rooms kept in the shared `agent-rooms`
+Docker volume (`~/.pi/agent/rooms`), so every container sees the same rooms
+and history.
+
+- **`PI_AGENT_ROOM` override.** When set, the
+  `pi-agents-talk-to-each-other` extension auto-joins the agent to that room
+  and ignores the global `defaultRoom` in `~/.pi/agent/rooms/config.json`.
+  Unset/empty keeps the old behaviour (join the global `defaultRoom`).
+- **Launch scripts.** `spawn-pi-agent.sh` (`--room NAME`) and
+  `attach.sh -- pi` set `PI_AGENT_ROOM` to the folder basename, so an
+  interactive agent sits in a room named after the project.
+- **issue-resolver.** The backend starts each step's agents with
+  `PI_AGENT_ROOM=issue-<issue_id>`, giving every issue its own room of
+  worker agents.
+- **Rebuild required.** The override is a patch to the extension's
+  `index.ts` baked into the image by the `Dockerfile`; after changing that
+  patch, rebuild (`build.sh` / `agent-attach --build`) — a container
+  restart is not enough.
 
 ## Port forwarding
 
@@ -79,7 +104,8 @@ Rules:
   the container's live `docker inspect` mapping and recreates **only on
   mismatch**. Re-running with no `-p` leaves existing ports untouched, so a bare
   `agent-attach` never clobbers a container that already has ports.
-- recreation is cheap and safe: workspace + sessions + memory are volumes; skills are re-synced from the repo on every launch
+- recreation is cheap and safe: workspace + sessions + memory are volumes;
+  skills are re-synced from the repo on every launch
 
 ### 2. Ad-hoc forwards — `agent-fwd`
 

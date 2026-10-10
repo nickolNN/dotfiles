@@ -276,6 +276,16 @@ RUN for i in 1 2 3; do \
     done \
   && rm -rf /home/agent/.npm
 
+# ── Per-process room override (PI_AGENT_ROOM) ────────────────────
+# Honor PI_AGENT_ROOM so each task forces its own room (issue-resolver
+# sets issue-<id>) above the global defaultRoom. Fail loudly if upstream
+# reshapes the line this patch anchors to.
+RUN ROOM_EXT=/home/agent/.pi/agent/npm/node_modules/pi-agents-talk-to-each-other/extensions/agent-room/index.ts \
+  && grep -q 'const defaultRoom = readConfig().defaultRoom;' "$ROOM_EXT" \
+  && sed -i 's/const defaultRoom = readConfig().defaultRoom;/const defaultRoom = process.env.PI_AGENT_ROOM || readConfig().defaultRoom;/' "$ROOM_EXT" \
+  && grep -q "process.env.PI_AGENT_ROOM" "$ROOM_EXT" \
+  || { echo "ERROR: room extension anchor not found — PI_AGENT_ROOM patch failed"; exit 1; }
+
 # ── Remote skills: parallel git clone --depth 1 ─────────────────
 # (no skills CLI → no simple-git hangs). Format: repo:subpath.
 RUN git config --global protocol.version 2 \

@@ -73,6 +73,7 @@ FOLDER="$(realpath "${FOLDER:-$PWD}")"
 CMD=("${@:-bash}")
 # Per-directory container name — never steals/kills another folder's container.
 CONTAINER="$(bash "${SCRIPT_DIR}/container-name.sh" "${FOLDER}")"
+ROOM="$(basename "${FOLDER}")"
 
 # ── Port reconciliation (stateless — CLI is source of truth) ─────
 # `-p HOST:GUEST` (bare PORT ≡ PORT:PORT). When `-p` is passed, the
@@ -177,6 +178,7 @@ if [ "${NEED_CREATE}" = true ]; then
   # pre-creates both dirs so a fresh volume is seeded agent-owned.
   MOUNTS+=(-v "agent-sessions:/home/agent/.pi/agent/sessions")
   MOUNTS+=(-v "agent-memory:/home/agent/.pi/agent/memory")
+  MOUNTS+=(-v "agent-rooms:/home/agent/.pi/agent/rooms")
 
   NET_ARGS=()
   if [ "${NETWORK_HOST}" = true ]; then
@@ -254,4 +256,4 @@ fi
 
 # ── Attach ───────────────────────────────────────────────────────
 echo "→ Attaching to ${CONTAINER}..."
-exec docker exec -it -w /home/agent/workspace "${CONTAINER}" "${CMD[@]}"
+exec docker exec -it -w /home/agent/workspace -e "PI_AGENT_ROOM=${ROOM}" "${CONTAINER}" "${CMD[@]}"
