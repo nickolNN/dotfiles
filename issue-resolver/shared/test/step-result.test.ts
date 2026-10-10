@@ -43,6 +43,53 @@ describe('parseStepReport', () => {
     ]);
   });
 
+  it('keeps both real-world forms of findings and scenarios', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({
+        status: 'fail',
+        summary: 'mixed shapes',
+        findings: [
+          { severity: 'info', title: 'T', detail: 'D' },
+          { severity: 'low', description: 'X' },
+          { severity: 'minor', description: 'legacy' },
+        ],
+        scenarios: [
+          { name: 'S', expected: 'E', actual: 'A' },
+          { name: 'old', status: 'pass', details: 'fine' },
+        ],
+      }),
+    );
+
+    // (a) title/detail-форма без description сохранена.
+    expect(parsed?.findings?.[0]).toEqual({
+      severity: 'info',
+      title: 'T',
+      detail: 'D',
+    });
+    // (b) low + description сохранены.
+    expect(parsed?.findings?.[1]).toEqual({
+      severity: 'low',
+      description: 'X',
+    });
+    // (c) expected/actual-форма без status сохранена, status отсутствует.
+    expect(parsed?.scenarios?.[0]).toEqual({
+      name: 'S',
+      expected: 'E',
+      actual: 'A',
+    });
+    expect(parsed?.scenarios?.[0]).not.toHaveProperty('status');
+    // (d) старые формы finding/scenario не регрессируют.
+    expect(parsed?.findings?.[2]).toEqual({
+      severity: 'minor',
+      description: 'legacy',
+    });
+    expect(parsed?.scenarios?.[1]).toEqual({
+      name: 'old',
+      status: 'pass',
+      details: 'fine',
+    });
+  });
+
   it('keeps a valid execution plan', () => {
     const parsed = parseStepReport(
       JSON.stringify({

@@ -332,13 +332,25 @@ export interface ExecutionPlan {
 
 export interface StepReportScenario {
   name: string;
-  status: 'pass' | 'fail';
+  /** Старая форма: явный результат проверки. В форме expected/actual нет. */
+  status?: 'pass' | 'fail';
   details?: string;
+  /** Новая форма без status: что ожидалось и что получилось. */
+  expected?: string;
+  actual?: string;
 }
 
 export interface StepReportFinding {
-  severity: 'minor' | 'major' | 'critical';
-  description: string;
+  /**
+   * Известные уровни автокомплитятся, но реальные отчёты приносят и другие
+   * значения — произвольная строка допустима.
+   */
+  severity: 'info' | 'low' | 'minor' | 'major' | 'critical' | (string & {});
+  /** Старая форма. В форме title/detail отсутствует. */
+  description?: string;
+  /** Новая форма без description. */
+  title?: string;
+  detail?: string;
 }
 
 export interface StepReport {
