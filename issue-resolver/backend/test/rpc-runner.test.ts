@@ -293,6 +293,36 @@ describe('RpcPiRunner — статистика сессии', () => {
     });
     const result = await promise;
     expect(result.stats).toEqual(STATS);
+    // Ответ уходит тем же путём, что и `question`: live + в collected → персист.
+    expect(result.events).toContainEqual({
+      type: 'question_answered',
+      questionId: 'ui-1',
+      answer: 'да',
+    });
+  });
+
+  it('registry.respond confirm → question_answered «Да»', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+    const registry = new InMemoryStepSessionRegistry();
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', {
+      registry,
+      stepRunId: 'run-2',
+      iterationId: 'iter-2',
+    });
+
+    expect(registry.respond('run-2', { id: 'ui-2', confirmed: true })).toBe(
+      true,
+    );
+    settle(child);
+    const result = await promise;
+    expect(result.events).toContainEqual({
+      type: 'question_answered',
+      questionId: 'ui-2',
+      answer: 'Да',
+    });
   });
 
   it('abort зависшей сессии → SIGKILL, раннер резолвит aborted', async () => {

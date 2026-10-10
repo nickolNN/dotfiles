@@ -15,6 +15,7 @@ import {
   type StepReport,
 } from '@issue-resolver/shared';
 import type { PiRunOptions, PiRunner } from './runner';
+import type { UiResponsePayload } from './session-registry';
 
 /** Событие протокола pi RPC (поля, которые нам нужны для разбора). */
 interface RpcAssistantMessageEvent {
@@ -158,6 +159,17 @@ const compactionReason = (value: unknown): CompactionReason =>
     ? (value as CompactionReason)
     : 'manual';
 
+/**
+ * Текст ответа пользователя для события `question_answered`. select/input/
+ * editor шлют `value`; confirm — `confirmed` (Да/Нет), закрытие — `Отменено`.
+ */
+const questionAnswerText = (payload: UiResponsePayload): string => {
+  if (payload.value !== undefined) return payload.value;
+  if (payload.confirmed !== undefined) return payload.confirmed ? 'Да' : 'Нет';
+  if (payload.cancelled === true) return 'Отменено';
+  return '';
+};
+
 /** resultText из tool_execution_end: тексты content[] или structuredContent. */
 const toolResultText = (result: unknown): string => {
   if (result && typeof result === 'object') {
@@ -216,6 +228,16 @@ export class RpcSessionParser {
 
   events(): SessionEvent[] {
     return this.collected;
+  }
+
+  /**
+   * Фиксирует ответ пользователя на вопрос (`extension_ui_request` →
+   * `extension_ui_response`): тем же путём, что и событие `question`, —
+   * уходит живым подписчикам (`onEvent`) и попадает в `collected` →
+   * персистится в step_outputs.events.
+   */
+  recordQuestionAnswered(questionId: string, answer: string): void {
+    this.push({ type: 'question_answered', questionId, answer });
   }
 
   /** Последняя разобранная статистика сессии (`get_session_stats`) или null. */
@@ -840,8 +862,13 @@ export class RpcPiRunner implements PiRunner {
             // pi.run() зависнет навсегда.
             child.kill('SIGKILL');
           },
-          respond: (payload) =>
-            writeCommand({ type: 'extension_ui_response', ...payload }),
+          respond: (payload) => {
+            parser.recordQuestionAnswered(
+              payload.id,
+              questionAnswerText(payload),
+            );
+            return writeCommand({ type: 'extension_ui_response', ...payload });
+          },
           prompt: (message, mode) =>
             sendCommand({
               type: 'prompt',

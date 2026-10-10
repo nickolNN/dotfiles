@@ -184,6 +184,9 @@ export type SessionEvent =
   | { type: 'usage'; usage: SessionUsage; cost: SessionCost | null }
   | { type: 'stats'; stats: SessionStats }
   | ({ type: 'question' } & SessionQuestion)
+  // Ответ пользователя на интерактивный вопрос: `answer` — выбранная метка
+  // опции либо введённый текст (для confirm/cancel — «Да»/«Нет»/«Отменено»).
+  | { type: 'question_answered'; questionId: string; answer: string }
   | { type: 'tool_use'; toolCallId: string; toolName: string; args: unknown }
   | {
       type: 'tool_result';
