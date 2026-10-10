@@ -1177,6 +1177,11 @@ export default function TaskDetail({
                 {state.issue.jira_issue_url}
               </a>
             )}
+            <IssueFilesList
+              files={issueFiles.filter((file) => file.iteration_id === null)}
+              onDelete={handleDeleteFile}
+              deletingId={deletingFileId}
+            />
           </header>
 
           <div className="mb-8 grid gap-4 md:grid-cols-2">
@@ -1202,13 +1207,6 @@ export default function TaskDetail({
               </div>
             ))}
           </div>
-
-          <IssueFilesList
-            files={issueFiles}
-            iterations={state.iterations}
-            onDelete={handleDeleteFile}
-            deletingId={deletingFileId}
-          />
 
           {canStart && (
           <section className="mb-8">
@@ -1395,6 +1393,14 @@ export default function TaskDetail({
                         {iteration.context}
                       </p>
                     )}
+
+                    <IssueFilesList
+                      files={issueFiles.filter(
+                        (file) => file.iteration_id === iteration.id,
+                      )}
+                      onDelete={handleDeleteFile}
+                      deletingId={deletingFileId}
+                    />
 
                     {iteration.steps.length > 0 && (
                       <ul className="mt-2 flex flex-wrap gap-2">

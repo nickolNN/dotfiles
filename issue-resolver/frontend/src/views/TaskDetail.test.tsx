@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
@@ -992,11 +993,11 @@ describe('TaskDetail', () => {
     }
   });
 
-  it('показывает вложения задачи со ссылкой на скачивание', async () => {
+  it('файл итерации — инлайн в её карточке после контекста, общезадачный — в шапке', async () => {
     const issue = makeIssue();
     const iterations = [
       makeIteration({ number: 1 }),
-      makeIteration({ id: 'iter-2', number: 2 }),
+      makeIteration({ id: 'iter-2', number: 2, context: 'ctx 2' }),
     ];
     const files = [
       {
@@ -1031,18 +1032,29 @@ describe('TaskDetail', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<TaskDetail issueId="issue-1" />);
-    await screen.findByText('Итерация #1');
+    await screen.findByText('Итерация #2');
 
-    expect(await screen.findByTestId('issue-files')).toBeInTheDocument();
-    expect(screen.getAllByTestId('issue-file')).toHaveLength(2);
-    const downloads = screen.getAllByTestId('issue-file-download');
-    expect(downloads[0]).toHaveAttribute(
-      'href',
-      '/issue-resolver/api/v1/files/f1/content',
-    );
-    expect(screen.getByTestId('issue-file-iteration')).toHaveTextContent(
-      'Итерация #2',
-    );
+    // Отдельного блока «Файлы задачи» больше нет.
+    expect(screen.queryByTestId('issue-files')).toBeNull();
+
+    const iter2Card = screen
+      .getByText('Итерация #2')
+      .closest('li[role="button"]') as HTMLElement;
+    expect(iter2Card).not.toBeNull();
+    const ctx = within(iter2Card).getByText('ctx 2');
+    const inline = within(iter2Card).getByTestId('issue-files-inline');
+    // Файл идёт сразу после промпта итерации.
+    expect(
+      ctx.compareDocumentPosition(inline) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(iter2Card).getByText('log.txt')).toBeInTheDocument();
+    expect(within(iter2Card).queryByText('spec.md')).toBeNull();
+
+    // Общезадачный файл — в шапке, вне кликабельной карточки итерации.
+    const spec = screen.getByText('spec.md');
+    expect(spec.closest('li[role="button"]')).toBeNull();
+    expect(spec.closest('header')).not.toBeNull();
+    expect(screen.getByText('2.0 КБ')).toBeInTheDocument();
   });
 
   it('не рендерит блок файлов, когда вложений нет', async () => {
@@ -1066,6 +1078,8 @@ describe('TaskDetail', () => {
       ).toBe(true),
     );
     expect(screen.queryByTestId('issue-files')).toBeNull();
+    expect(screen.queryByTestId('issue-files-inline')).toBeNull();
+    expect(screen.queryByTestId('issue-file')).toBeNull();
   });
 
   it('удаляет вложение по ✕', async () => {
