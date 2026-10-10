@@ -30,4 +30,6 @@ pi/trust.json
 pi/*.sh
 pi/web-search-cache/
 dotfiles-agent/certs/
+node_modules/
+.vitest/
 
