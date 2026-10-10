@@ -4,6 +4,7 @@ import type { SessionEvent } from '../api/session-events';
 import { getRoomAgents } from '../api/client';
 import { subscribeToAgentEvents } from '../api/sse';
 import AutoScrollBox from './AutoScrollBox';
+import { formatTokens } from './SessionStatsBar';
 import SessionView from './SessionView';
 
 export interface RoomAgentTabsProps {
@@ -65,6 +66,58 @@ function tabLabel(agent: RoomAgent): string {
   return agent.label;
 }
 
+/** Живой тик раз в секунду, пока `active`; останавливается на false/unmount. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+/** Человекочитаемая длительность: `45с` / `3м 12с` / `1ч 4м`. */
+function formatDuration(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return '';
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) return `${totalSec}с`;
+  const minutes = Math.floor(totalSec / 60);
+  const seconds = totalSec % 60;
+  if (minutes < 60) return `${minutes}м ${seconds}с`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}ч ${minutes % 60}м`;
+}
+
+/** Компактная стоимость: `$0` / `$0.0123` / `$1.5`. */
+function formatCost(total: number): string {
+  if (!Number.isFinite(total) || total <= 0) return '$0';
+  return `$${total.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+}
+
+/** Старт агента в мс эпохи; null, если тайминга нет/битый ISO. */
+function startMillis(agent: RoomAgent): number | null {
+  if (!agent.startedAt) return null;
+  const parsed = Date.parse(agent.startedAt);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Длительность агента: у running — живой `now - start`, у терминального —
+ * зафиксированный на момент перехода конец (иначе `now`). null без старта.
+ */
+function agentDurationMs(
+  agent: RoomAgent,
+  now: number,
+  endedAt: Record<string, number>,
+): number | null {
+  const start = startMillis(agent);
+  if (start === null) return null;
+  const end = agent.status === 'running' ? now : (endedAt[agent.id] ?? now);
+  return Math.max(0, end - start);
+}
+
 /**
  * Выбирает агента по умолчанию: сохраняем прежний выбор, иначе — первый
  * ещё работающий, иначе — первый в стабильном порядке.
@@ -103,6 +156,9 @@ export default function RoomAgentTabs({
   const [liveByAgent, setLiveByAgent] = useState<
     Record<string, SessionEvent[]>
   >({});
+  // Конец работы терминального агента: фиксируем при первом наблюдении, чтобы
+  // elapsed на вкладке не «полз» после завершения (у бэкенда нет endedAt).
+  const [endedAt, setEndedAt] = useState<Record<string, number>>({});
   // Тик опроса статусов, пока есть работающий агент.
   const [pollTick, setPollTick] = useState(0);
   // Итерация, для которой уже загружен список: смена итерации — это сброс и
@@ -121,6 +177,7 @@ export default function RoomAgentTabs({
       // Новая итерация: прошлый выбор и live-буферы больше не актуальны.
       setSelectedId(null);
       setLiveByAgent({});
+      setEndedAt({});
       setAgentsState({ status: 'loading' });
     } else {
       // Фоновое обновление не должно мигать «Загрузка…» и терять вкладки.
@@ -135,6 +192,18 @@ export default function RoomAgentTabs({
         const sorted = sortAgents(Array.isArray(agents) ? agents : []);
         setAgentsState({ status: 'ready', agents: sorted });
         setSelectedId((current) => pickDefaultAgentId(sorted, current));
+        setEndedAt((current) => {
+          const stamp = Date.now();
+          const next = { ...current };
+          let changed = false;
+          for (const agent of sorted) {
+            if (agent.status !== 'running' && next[agent.id] === undefined) {
+              next[agent.id] = stamp;
+              changed = true;
+            }
+          }
+          return changed ? next : current;
+        });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -155,6 +224,9 @@ export default function RoomAgentTabs({
   const hasRunningAgent =
     agentsState.status === 'ready' &&
     agentsState.agents.some((agent) => agent.status === 'running');
+
+  // Один живой тик на компонент, пока работает хоть один агент комнаты.
+  const now = useNow(hasRunningAgent);
 
   useEffect(() => {
     if (!hasRunningAgent || statusPollMs <= 0) return;
@@ -200,6 +272,29 @@ export default function RoomAgentTabs({
     ];
   }, [eventsByAgent, liveByAgent, selected]);
 
+  // Итог по всему шагу: сумма токенов/cost всех агентов и wall-time от первого
+  // старта до `now` (тик живёт, пока работает хоть один агент, и замирает,
+  // когда все завершились).
+  const stepTotals = useMemo(() => {
+    let tokens = 0;
+    let cost = 0;
+    let firstStart = Number.POSITIVE_INFINITY;
+    for (const agent of agents) {
+      tokens += agent.stats?.tokens.total ?? 0;
+      cost += agent.stats?.cost ?? 0;
+      const start = startMillis(agent);
+      if (start !== null) firstStart = Math.min(firstStart, start);
+    }
+    const wallMs = Number.isFinite(firstStart)
+      ? Math.max(0, now - firstStart)
+      : null;
+    return { tokens, cost, wallMs };
+  }, [agents, now]);
+
+  const selectedDuration = selected
+    ? formatDuration(agentDurationMs(selected, now, endedAt))
+    : '';
+
   if (agentsState.status === 'loading') {
     return (
       <p
@@ -236,6 +331,16 @@ export default function RoomAgentTabs({
 
   return (
     <div data-testid="room-agents" className="mt-2">
+      <p
+        data-testid="room-step-summary"
+        className="mb-1 text-[10px] tracking-wider text-[#00FF41]/60"
+      >
+        Всего: {formatTokens(stepTotals.tokens)} токенов ·{' '}
+        {formatCost(stepTotals.cost)} ·{' '}
+        {stepTotals.wallMs === null
+          ? '—'
+          : formatDuration(stepTotals.wallMs)}
+      </p>
       <div
         role="tablist"
         aria-label="Агенты комнаты"
@@ -273,6 +378,15 @@ export default function RoomAgentTabs({
         })}
       </div>
 
+      {selectedDuration !== '' && (
+        <p
+          data-testid="room-agent-duration"
+          className="mt-1 text-[10px] tracking-wider text-[#00FF41]/60"
+        >
+          ⏱ {tabLabel(selected)} · {selectedDuration}
+        </p>
+      )}
+
       <div data-testid="room-agent-session" data-agent-id={selected.id}>
         <AutoScrollBox
           scrollKey={events.length}
@@ -280,9 +394,9 @@ export default function RoomAgentTabs({
         >
           <SessionView
             events={events}
-            stats={statsByAgent?.[selected.id] ?? null}
+            stats={selected.stats ?? statsByAgent?.[selected.id] ?? null}
             running={selected.status === 'running'}
-            showFooter={false}
+            showFooter
             emptyMessage={emptyMessage}
           />
         </AutoScrollBox>

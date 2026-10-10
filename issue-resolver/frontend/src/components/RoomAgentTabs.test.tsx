@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { RoomAgent } from '@issue-resolver/shared';
+import type { RoomAgent, SessionStats } from '@issue-resolver/shared';
 import type { SessionEvent } from '../api/session-events';
 import RoomAgentTabs from './RoomAgentTabs';
 
@@ -32,6 +32,21 @@ const COORDINATOR = makeAgent({
   status: 'running',
 });
 const AGENTS: RoomAgent[] = [WORKER_1, WORKER_2, COORDINATOR];
+
+/** Полный SessionStats с переопределяемыми полями (tokens/cost). */
+function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
+  return {
+    userMessages: 1,
+    assistantMessages: 1,
+    toolCalls: 2,
+    toolResults: 2,
+    totalMessages: 2,
+    tokens: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, total: 150 },
+    cost: 0.01,
+    contextUsage: null,
+    ...overrides,
+  };
+}
 
 function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response;
@@ -270,5 +285,66 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     ];
 
     await waitFor(() => expect(calls.agents).toBeGreaterThan(initial));
+  });
+
+  it('футер выбранного агента показывает его живые токены (showFooter)', async () => {
+    stubFetch([
+      makeAgent({
+        startedAt: new Date(Date.now() - 5000).toISOString(),
+        stats: makeStats({
+          tokens: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500 },
+          cost: 0.05,
+        }),
+      }),
+    ]);
+
+    render(<RoomAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('room-agents');
+
+    // Живой футер включён и берёт числа из stats выбранного агента.
+    expect(screen.getByTestId('session-stats')).toBeInTheDocument();
+    expect(screen.getByTestId('session-token-in')).toHaveTextContent('1k');
+    expect(screen.getByTestId('session-token-out')).toHaveTextContent('500');
+  });
+
+  it('итог room-step-summary суммирует токены и cost по всем агентам', async () => {
+    stubFetch([
+      makeAgent({
+        stats: makeStats({
+          tokens: { input: 1000, output: 0, cacheRead: 0, cacheWrite: 0, total: 1000 },
+          cost: 0.01,
+        }),
+      }),
+      makeAgent({
+        id: 'run-1/worker/1',
+        index: 2,
+        label: 'Воркер 2',
+        status: 'finished',
+        stats: makeStats({
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 2000 },
+          cost: 0.02,
+        }),
+      }),
+    ]);
+
+    render(<RoomAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('room-agents');
+
+    const summary = screen.getByTestId('room-step-summary');
+    expect(summary).toHaveTextContent('Всего: 3k токенов');
+    expect(summary).toHaveTextContent('$0.03');
+  });
+
+  it('null startedAt/stats не роняет компонент и даёт нулевой итог', async () => {
+    stubFetch([makeAgent()]); // startedAt: null, stats: null
+
+    render(<RoomAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('room-agents');
+
+    const summary = screen.getByTestId('room-step-summary');
+    expect(summary).toHaveTextContent('Всего: 0 токенов');
+    expect(summary).toHaveTextContent('$0');
+    // Без старта время агента не показываем.
+    expect(screen.queryByTestId('room-agent-duration')).toBeNull();
   });
 });
