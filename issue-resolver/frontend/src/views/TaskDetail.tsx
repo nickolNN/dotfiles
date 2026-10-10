@@ -29,6 +29,7 @@ import {
   getQuestionAnswers,
   getStepRuns,
   promptIteration,
+  repeatIteration,
   sendIterationCommand,
   sendIterationMessage,
   sendUiResponse,
@@ -361,6 +362,8 @@ export default function TaskDetail({
   const [messageError, setMessageError] = useState<string | null>(null);
   const [aborting, setAborting] = useState(false);
   const [abortError, setAbortError] = useState<string | null>(null);
+  const [repeatingId, setRepeatingId] = useState<string | null>(null);
+  const [repeatError, setRepeatError] = useState<string | null>(null);
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
     null,
   );
@@ -1042,6 +1045,31 @@ export default function TaskDetail({
     }
   }
 
+  async function handleRepeat(iteration: Iteration) {
+    if (!issueId) return;
+    setRepeatError(null);
+    setRepeatingId(iteration.id);
+
+    try {
+      const created = await repeatIteration(iteration.id);
+      const iterations = await getIterations(issueId);
+      setState((current) =>
+        current.status === 'ready'
+          ? {
+              ...current,
+              iterations: [...iterations].sort((a, b) => a.number - b.number),
+            }
+          : current,
+      );
+      setSelectedIterationId(created.id);
+      setRefreshTick((tick) => tick + 1);
+    } catch (error) {
+      setRepeatError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRepeatingId(null);
+    }
+  }
+
   async function handleQuestionResponse(
     question: QuestionEvent,
     payload: { value?: string; confirmed?: boolean; cancelled?: boolean },
@@ -1488,6 +1516,15 @@ export default function TaskDetail({
               запуска.
             </p>
 
+            {repeatError && (
+              <p
+                role="alert"
+                className="mb-3 text-xs font-medium text-[#FF0033]"
+              >
+                {repeatError}
+              </p>
+            )}
+
             {state.iterations.length === 0 ? (
               <div className="rounded-none border border-dashed border-[#008F11] p-6 text-center text-sm text-[#00FF41]/60">
                 Итераций пока нет.
@@ -1541,6 +1578,20 @@ export default function TaskDetail({
                           {aborting ? 'Прерываем…' : 'Прервать'}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        data-testid="repeat-iteration"
+                        disabled={repeatingId === iteration.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleRepeat(iteration);
+                        }}
+                        className="min-h-8 shrink-0 border border-[#008F11] bg-[#002B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50"
+                      >
+                        {repeatingId === iteration.id
+                          ? 'Повторяем…'
+                          : '↻ Повторить'}
+                      </button>
                     </div>
 
                     {iteration.status === 'running' && abortError && (

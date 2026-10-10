@@ -363,6 +363,20 @@ export async function createIteration(
   return (await response.json()) as Iteration;
 }
 
+export async function repeatIteration(
+  iterationId: string,
+): Promise<Iteration> {
+  const response = await fetch(`${API_BASE}/iterations/${iterationId}/repeat`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Iteration;
+}
+
 export async function deleteIssue(id: string): Promise<void> {
   const response = await fetch(`${API_BASE}/issues/${id}`, {
     method: 'DELETE',
