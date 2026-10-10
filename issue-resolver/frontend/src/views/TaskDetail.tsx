@@ -1311,20 +1311,31 @@ export default function TaskDetail({
                         key={step.value}
                         className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                       >
-                        <label className="flex items-center gap-2 text-sm text-[#00FF41]/80">
-                          <input
-                            type="checkbox"
-                            className="accent-[#00FF41]"
-                            checked={checked}
-                            disabled={isResolve || prBlocked}
-                            onChange={() => toggleStep(step.value)}
-                          />
-                          {isResolve
-                            ? 'Resolve (всегда)'
-                            : prBlocked
-                              ? `${step.label} (нужен репозиторий)`
-                              : step.label}
-                        </label>
+                        <div className="flex flex-col">
+                          <label className="flex items-center gap-2 text-sm text-[#00FF41]/80">
+                            <input
+                              type="checkbox"
+                              className="accent-[#00FF41]"
+                              checked={checked}
+                              disabled={isResolve || prBlocked}
+                              onChange={() => toggleStep(step.value)}
+                            />
+                            {isResolve
+                              ? 'Resolve (всегда)'
+                              : prBlocked
+                                ? `${step.label} (нужен репозиторий)`
+                                : step.label}
+                          </label>
+                          {step.value === 'refine' && (
+                            <span
+                              data-testid="refine-planner-hint"
+                              className="pl-6 text-xs text-[#00FF41]/60"
+                            >
+                              Планируем — решает, запускать ли resolve комнатой
+                              агентов; без Refine всегда ровно один агент.
+                            </span>
+                          )}
+                        </div>
                         {modelEnabled && (
                           <select
                             aria-label={`Модель для шага ${step.label}`}

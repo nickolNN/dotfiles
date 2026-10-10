@@ -236,6 +236,31 @@ describe('TaskDetail', () => {
     ).toBeInTheDocument();
   });
 
+  it('шаг Refine помечен как планирующий: подсказка про комнату агентов', async () => {
+    const issue = makeIssue();
+    const iteration = makeIteration({ status: 'completed' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/iterations')) {
+          return Promise.resolve(jsonResponse([iteration]));
+        }
+        return Promise.resolve(jsonResponse(issue));
+      }),
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByLabelText('Контекст итерации');
+
+    // Подсказка есть ровно у Refine (и только у него).
+    const hints = screen.getAllByTestId('refine-planner-hint');
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toHaveTextContent('Планируем');
+    expect(hints[0]).toHaveTextContent('комнатой агентов');
+    expect(hints[0]).toHaveTextContent('без Refine');
+  });
+
   it('тогл Reviewer убран; выбор шага Review шлёт is_review_need: true', async () => {
     const issue = makeIssue();
     let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
