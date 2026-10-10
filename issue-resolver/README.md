@@ -79,6 +79,8 @@ Backend по умолчанию поднимается с in-memory фейкам
 | `DELETE /files/:fileId` | — | `204`; удаляет строку и файл с диска (best-effort, guard от path traversal) / `404` |
 | `GET /files/:fileId/content` | — | `200` содержимое файла: `Content-Type: <mime_type>` (fallback `application/octet-stream`) + `Content-Disposition: attachment; filename="…"` (safe ASCII + `filename*=UTF-8''…`) / `404` (нет строки, файла или путь вне `attachments/`) |
 | `GET /iterations/:id/step-runs` | — | `StepRunWithLog[]` (порядок шагов конвейера, внутри шага `attempt` возр.; сырой лог шага) / `404` |
+| `GET /iterations/:id/agents` | — | `RoomAgent[]` (агенты комнаты resolve: воркеры по `index` 1..N + координатор последним; `id`, `role: 'worker' \| 'coordinator'`, `index`, `label`, `status`, `startedAt`, `stats`) / `404` |
+| `GET /iterations/:id/agents/stream?agentId=` | — | SSE: события сессии одного агента комнаты (`?agentId=<RoomAgent.id>`) / `400` (нет `agentId`) |
 | `GET /issues/:id/stream` | — | SSE: `data: <SSEEvent JSON>\n\n` |
 | `POST /iterations/:id/message` | `{ message }` | `{ ok: true }` (steer активного шага) / `409 { error: 'no active step session' }` / `400` |
 | `POST /iterations/:id/prompt` | `{ message, mode?: 'steer' \| 'followUp' }` | `PromptResult`: `{ ok, disposition: 'started' \| 'queued' \| 'handled', error? }` (`error` — при `ok:false`) / `400` / `409 { error: 'no active step session' }` |
@@ -180,6 +182,20 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   репозиториев + `context` итерации — задаёт уточняющие вопросы (вывод в живой
   лог), затем по ответам строит план. Текст Jira докачивается на прогоне через
   `jira.fetchIssue`; ошибка Jira деградирует до `null` и шаг не падает.
+- **Room-режим (параллельные агенты)**: `refine` — шаг планирования: его отчёт
+  может нести `execution` (`{ mode: 'single' | 'room', executors?,
+  decomposition? }`), но `room` валиден только при `executors >= 2`; иначе (нет
+  плана, битый или `single`) — всегда один агент. Топологию детерминированно
+  решает движок (`planExecutionMode` + `clampExecutors`, потолок
+  `DEFAULT_MAX_ROOM_EXECUTORS = 4`), а не сами агенты. В `room`-`resolve` N
+  воркеров параллельно решают подзадачи и пишут каждый свой
+  `.issue-worker-result-<i>.json`, затем координатор (lead, запускается
+  последним и держит финальный `pass`/`fail`) интегрирует их и пишет итоговый
+  `.issue-step-result.json`. У каждого агента свой `RoomAgent.id` (`<stepRunId>`
+  у координатора, `<stepRunId>/worker/<i>` у воркеров) и отдельный per-agent
+  SSE (`/agents/stream?agentId=`), а `RoomAgent` несёт `startedAt` (ISO) и
+  агрегированные `stats` (токены/cost/context из usage/stats-событий его
+  сессии).
 - **Цикл фидбека**: провал `review`/`test` откатывает конвейер на `resolve` с
   `attempt + 1` и передаёт фидбек; максимум 3 попытки, дальше — итерация
   завершается `failed` с `needs_input`. Провал `refine`/`resolve`/`pr` завершает
@@ -261,7 +277,14 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   (`parseStepReport(run.report)`, `data-testid="step-summary"`, summary обрезан
   `line-clamp-4`), а при отсутствии/битом отчёте (в т.ч. устаревшая строка
   `"null"`) — заглушку «Результат отсутствует.» (статус в блоке саммари —
-  `PASS`/`FAIL`/`BLOCKED` из отчёта, uppercase). Под карточкой шага
+  `PASS`/`FAIL`/`BLOCKED` из отчёта, uppercase). В `room`-режиме карточка
+  активного `resolve` вместо одной сессии показывает вкладки «Воркер 1..N /
+  Координатор (lead)» (`RoomAgentTabs`): у выбранного агента — живой
+  `SessionView` и его статистика (токены/cost/контекст + ⏱ длительность), а над
+  вкладками — итог по всему шагу (суммарные токены/cost и wall-time от первого
+  старта). Режим определяется по последнему `refine`-отчёту
+  (`parseStepReport(report).execution.mode === 'room'`), иначе — обычная
+  одиночная сессия. Под карточкой шага
   (`data-testid="step-run-log"`) — строка статистики: длительность (⏱; у
   активного шага тикает `now - created_at`), токены из `run.stats` в формате
   `<модель> · ^<input> · v<output> · кеш<cacheRead+cacheWrite> · N вызовов`
