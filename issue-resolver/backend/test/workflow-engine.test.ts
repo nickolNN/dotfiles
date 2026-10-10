@@ -836,7 +836,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
   });
 
   it('refine room(2) → 2 воркера + 1 координатор; отчёт = координатора', async () => {
-    const { deps, store, pi, sse } = makeDeps();
+    const { deps, store, pi, sse, control } = makeDeps();
     const events: SSEEvent[] = [];
     sse.subscribe('iter-1', (event) => events.push(event));
     pi.enqueue(
@@ -885,6 +885,50 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
       .map((event) => event.data);
     expect(systemData).toContain('worker 1/2: a');
     expect(systemData).toContain('worker 2/2: b');
+
+    // Реестр отдаёт агентов комнаты в порядке воркер1, воркер2, координатор.
+    expect(control.listAgents('iter-1')).toEqual([
+      {
+        id: `${resolveRunId}/worker/0`,
+        role: 'worker',
+        index: 1,
+        label: 'Воркер 1',
+        status: 'running',
+      },
+      {
+        id: `${resolveRunId}/worker/1`,
+        role: 'worker',
+        index: 2,
+        label: 'Воркер 2',
+        status: 'running',
+      },
+      {
+        id: resolveRunId,
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        status: 'running',
+      },
+    ]);
+
+    // Живые step_event агентов комнаты тегированы agentId (по 3 demo-события на
+    // агента), а payload несёт agentId рядом с stepRunId.
+    const tagged = events.filter(
+      (event) => event.type === 'step_event' && event.agentId !== undefined,
+    );
+    const perAgent = new Map<string, number>();
+    for (const event of tagged) {
+      perAgent.set(event.agentId ?? '', (perAgent.get(event.agentId ?? '') ?? 0) + 1);
+    }
+    expect(perAgent.get(`${resolveRunId}/worker/0`)).toBe(3);
+    expect(perAgent.get(`${resolveRunId}/worker/1`)).toBe(3);
+    expect(perAgent.get(resolveRunId)).toBe(3);
+    expect(
+      JSON.parse(tagged[0].data) as { agentId?: string },
+    ).toMatchObject({
+      stepRunId: resolveRunId,
+      agentId: `${resolveRunId}/worker/0`,
+    });
   });
 
   it('room + aborted воркер → координатор НЕ стартует, итерация cancelled', async () => {

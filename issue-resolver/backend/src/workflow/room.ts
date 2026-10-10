@@ -10,7 +10,7 @@ import {
   planRoomWorkItems,
 } from '@issue-resolver/shared';
 import type { PiRunner } from '../pi/runner';
-import type { StepSessionRegistry } from '../pi/session-registry';
+import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry';
 import {
   buildRoomCoordinatorPrompt,
   buildRoomWorkerPrompt,
@@ -34,12 +34,31 @@ export interface RoomResolveOptions {
   stepRunId: string;
   iterationId: string;
   registry?: StepSessionRegistry;
-  onStdout?: (chunk: string) => void;
-  onStderr?: (chunk: string) => void;
-  onEvent?: (event: SessionEvent) => void;
-  /** Хук логирования старта работника (индекс/подзадача). */
-  onWorkerStart?: (item: RoomWorkItem, total: number) => void;
+  onStdout?: (chunk: string, agent: RoomAgentInfo) => void;
+  onStderr?: (chunk: string, agent: RoomAgentInfo) => void;
+  onEvent?: (event: SessionEvent, agent: RoomAgentInfo) => void;
+  /** Хук логирования старта работника (индекс/подзадача/дескриптор агента). */
+  onWorkerStart?: (
+    item: RoomWorkItem,
+    total: number,
+    agent: RoomAgentInfo,
+  ) => void;
 }
+
+/** Дескриптор воркера: `index` в RoomAgent — 1-based, id — per-agent stepRunId. */
+const workerAgent = (baseStepRunId: string, index: number): RoomAgentInfo => ({
+  id: `${baseStepRunId}/worker/${index}`,
+  role: 'worker',
+  index: index + 1,
+  label: `Воркер ${index + 1}`,
+});
+
+const coordinatorAgent = (stepRunId: string): RoomAgentInfo => ({
+  id: stepRunId,
+  role: 'coordinator',
+  index: null,
+  label: 'Координатор',
+});
 
 /**
  * Прогон resolve в режиме комнаты: N работников параллельно решают свои
@@ -61,19 +80,22 @@ export async function runRoomResolve(
 
   const workers = await Promise.all(
     workItems.map((item) => {
-      options.onWorkerStart?.(item, count);
+      const stepRunId = `${options.stepRunId}/worker/${item.index}`;
+      const agent = workerAgent(options.stepRunId, item.index);
+      options.onWorkerStart?.(item, count, agent);
       return pi.run(
         input.containerName,
         buildRoomWorkerPrompt(input, item, count),
         {
           model: options.model,
           cwd: options.cwd,
-          stepRunId: `${options.stepRunId}/worker/${item.index}`,
+          stepRunId,
           iterationId: options.iterationId,
           registry: options.registry,
-          onStdout: options.onStdout,
-          onStderr: options.onStderr,
-          onEvent: options.onEvent,
+          agent,
+          onStdout: (chunk) => options.onStdout?.(chunk, agent),
+          onStderr: (chunk) => options.onStderr?.(chunk, agent),
+          onEvent: (event) => options.onEvent?.(event, agent),
         },
       );
     }),
@@ -110,9 +132,13 @@ export async function runRoomResolve(
       stepRunId: options.stepRunId,
       iterationId: options.iterationId,
       registry: options.registry,
-      onStdout: options.onStdout,
-      onStderr: options.onStderr,
-      onEvent: options.onEvent,
+      agent: coordinatorAgent(options.stepRunId),
+      onStdout: (chunk) =>
+        options.onStdout?.(chunk, coordinatorAgent(options.stepRunId)),
+      onStderr: (chunk) =>
+        options.onStderr?.(chunk, coordinatorAgent(options.stepRunId)),
+      onEvent: (event) =>
+        options.onEvent?.(event, coordinatorAgent(options.stepRunId)),
     },
   );
 }

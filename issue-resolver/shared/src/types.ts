@@ -333,6 +333,21 @@ export interface ExecutionPlan {
   rationale?: string;
 }
 
+/**
+ * Живой агент комнаты resolve: координатор (lead) и воркеры сосуществуют в
+ * одной итерации. `id` — стабильный адрес сессии агента (per-agent stepRunId):
+ * `<stepRunId>` у координатора, `<stepRunId>/worker/<i>` у воркера.
+ */
+export interface RoomAgent {
+  id: string;
+  role: 'worker' | 'coordinator';
+  /** 1..N в порядке декомпозиции; null у координатора. */
+  index: number | null;
+  /** Человекочитаемая подпись вкладки («Воркер 1», «Координатор»). */
+  label: string;
+  status: 'running' | 'finished' | 'aborted' | 'failed';
+}
+
 export interface StepReportScenario {
   name: string;
   /** Старая форма: явный результат проверки. В форме expected/actual нет. */
@@ -407,6 +422,8 @@ export interface SSEEvent {
   issueId: string;
   iterationId: string;
   stepRunId?: string;
+  /** Адрес агента комнаты (RoomAgent.id), если эмит принадлежит конкретному агенту. */
+  agentId?: string;
   stream?: 'stdout' | 'stderr' | 'rpc' | 'mr' | 'system';
   data: string;
   ts: string;

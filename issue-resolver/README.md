@@ -297,7 +297,10 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   (session + stdout/stderr/report) — в modal «Развернуть». Для задач с
   `desired_result` `md`/`html` в шапке — «Показать
   результат» (модалка: markdown через `AgentMarkdown` или `html` в iframe) и
-  «Скачать» (`/issues/:id/result/download`).
+  «Скачать» (`/issues/:id/result/download`). Обе кнопки активны только когда
+  `resolve`-шаг уже оставил непустой `.issue-step-result.json` (до этого —
+  `disabled`/`aria-disabled`, чтобы не бить в 404 «результат ещё не создан»);
+  отсутствие `desired_result`/`pr` скрывает их совсем.
 
 Статусы — из `shared`:
 

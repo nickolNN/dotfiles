@@ -2,6 +2,7 @@ import type {
   ControlResult,
   PromptMode,
   PromptResult,
+  RoomAgent,
 } from '@issue-resolver/shared';
 
 /**
@@ -27,15 +28,34 @@ export interface UiResponsePayload {
   cancelled?: boolean;
 }
 
+/** Терминальные/промежуточный статус агента комнаты. */
+export type RoomAgentStatus = RoomAgent['status'];
+
+/**
+ * Дескриптор агента комнаты при регистрации сессии. `id` — per-agent
+ * stepRunId (адрес сессии в реестре и в SSE `agentId`).
+ */
+export interface RoomAgentInfo {
+  id: string;
+  role: RoomAgent['role'];
+  index: number | null;
+  label: string;
+}
+
 export interface StepSessionRegistry {
-  /** Регистрирует control активной сессии шага. */
+  /** Регистрирует control активной сессии шага; `agent` — если это агент комнаты. */
   register(
     stepRunId: string,
     iterationId: string,
     control: StepSessionControl,
+    agent?: RoomAgentInfo,
   ): void;
-  /** Снимает регистрацию сессии (по завершении шага). */
-  unregister(stepRunId: string): void;
+  /**
+   * Снимает регистрацию сессии (по завершении шага). Для агента комнаты
+   * проставляет финальный `status` (по умолчанию 'finished') и оставляет его в
+   * списке `listAgents`, чтобы вкладка осталась доступной.
+   */
+  unregister(stepRunId: string, status?: RoomAgentStatus): void;
   /** Steer по stepRunId; true — сессия найдена и команда вызвана. */
   steer(stepRunId: string, text: string): boolean;
   /** Abort по stepRunId; true — сессия найдена и команда вызвана. */
@@ -79,12 +99,21 @@ export interface StepSessionRegistry {
     iterationId: string,
     command: Record<string, unknown>,
   ): Promise<ControlResult> | null;
+  /**
+   * Агенты комнаты итерации в порядке регистрации (Воркер 1..N, Координатор).
+   * Включает уже завершённых (со своим финальным статусом); не-комнатные
+   * сессии (single-режим) в список не попадают.
+   */
+  listAgents(iterationId: string): RoomAgent[];
 }
 
 interface SessionEntry {
   iterationId: string;
   control: StepSessionControl;
 }
+
+/** Потолок числа итераций с сохранёнными агентами (защита от утечки памяти). */
+const MAX_TRACKED_AGENT_ITERATIONS = 64;
 
 /**
  * In-memory реестр: прямой Map stepRunId → сессия и обратный
@@ -99,11 +128,13 @@ interface SessionEntry {
 export class InMemoryStepSessionRegistry implements StepSessionRegistry {
   private readonly byStepRun = new Map<string, SessionEntry>();
   private readonly activeByIteration = new Map<string, Set<string>>();
-
+  // Агенты комнаты переживают unregister (статус остаётся для вкладок).
+  private readonly agentsByIteration = new Map<string, Map<string, RoomAgent>>();
   register(
     stepRunId: string,
     iterationId: string,
     control: StepSessionControl,
+    agent?: RoomAgentInfo,
   ): void {
     this.byStepRun.set(stepRunId, { iterationId, control });
     // Добавляем в set итерации; порядок вставки = порядок регистрации.
@@ -113,17 +144,46 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
       this.activeByIteration.set(iterationId, sessions);
     }
     sessions.add(stepRunId);
+    if (agent) {
+      let agents = this.agentsByIteration.get(iterationId);
+      if (!agents) {
+        agents = new Map();
+        this.agentsByIteration.set(iterationId, agents);
+        // Завершённые агенты остаются в памяти бессрочно — ограничиваем
+        // число итераций FIFO-эвикцией (активные всегда в хвосте).
+        while (this.agentsByIteration.size > MAX_TRACKED_AGENT_ITERATIONS) {
+          const oldest = this.agentsByIteration.keys().next().value;
+          if (oldest === undefined) break;
+          this.agentsByIteration.delete(oldest);
+        }
+      }
+      agents.set(stepRunId, {
+        id: stepRunId,
+        role: agent.role,
+        index: agent.index,
+        label: agent.label,
+        status: 'running',
+      });
+    }
   }
 
-  unregister(stepRunId: string): void {
+  unregister(stepRunId: string, status: RoomAgentStatus = 'finished'): void {
     const entry = this.byStepRun.get(stepRunId);
     if (!entry) return;
     this.byStepRun.delete(stepRunId);
+    const agent = this.agentsByIteration.get(entry.iterationId)?.get(stepRunId);
+    if (agent) agent.status = status;
     const sessions = this.activeByIteration.get(entry.iterationId);
     if (!sessions) return;
     sessions.delete(stepRunId);
     // Пустой set — итерация без живых сессий. Не сносим чужие сессии.
     if (sessions.size === 0) this.activeByIteration.delete(entry.iterationId);
+  }
+
+  listAgents(iterationId: string): RoomAgent[] {
+    const agents = this.agentsByIteration.get(iterationId);
+    // Копии: вызывающий не должен мутировать внутреннее состояние реестра.
+    return agents ? [...agents.values()].map((agent) => ({ ...agent })) : [];
   }
 
   steer(stepRunId: string, text: string): boolean {

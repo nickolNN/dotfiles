@@ -26,7 +26,7 @@ import {
 import type { ContainerController } from '../docker/controller';
 import type { GitPrepareResult, GitService } from '../git/service';
 import type { PiRunner } from '../pi/runner';
-import type { StepSessionRegistry } from '../pi/session-registry';
+import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry';
 import { detectGitHost, type MrClient } from '../pr/mr';
 import type { SseHub } from '../sse/hub';
 import {
@@ -179,11 +179,13 @@ const streamEvent = (
   stepRunId: string,
   stream: NonNullable<SSEEvent['stream']>,
   data: string,
+  agentId?: string,
 ): SSEEvent => ({
   type: 'log',
   issueId,
   iterationId,
   stepRunId,
+  ...(agentId ? { agentId } : {}),
   stream,
   data,
   ts: nowIso(),
@@ -195,13 +197,17 @@ const stepEvent = (
   iterationId: string,
   stepRunId: string,
   event: SessionEvent,
+  agentId?: string,
 ): SSEEvent => ({
   type: 'step_event',
   issueId,
   iterationId,
   stepRunId,
+  ...(agentId ? { agentId } : {}),
   stream: 'system',
-  data: JSON.stringify({ stepRunId, event }),
+  data: JSON.stringify(
+    agentId ? { stepRunId, agentId, event } : { stepRunId, event },
+  ),
   ts: nowIso(),
 });
 
@@ -297,16 +303,32 @@ export async function runIteration(
       cwd: deps.local ? workspaceHostDir : workspaceContainerPath,
       iterationId: iteration.id,
       registry: deps.control,
-      onStdout: (chunk: string) =>
+      onStdout: (chunk: string, agent?: RoomAgentInfo) =>
         deps.sse.publish(
-          streamEvent(issue.id, iteration.id, stepRun.id, 'stdout', chunk),
+          streamEvent(
+            issue.id,
+            iteration.id,
+            stepRun.id,
+            'stdout',
+            chunk,
+            agent?.id,
+          ),
         ),
-      onStderr: (chunk: string) =>
+      onStderr: (chunk: string, agent?: RoomAgentInfo) =>
         deps.sse.publish(
-          streamEvent(issue.id, iteration.id, stepRun.id, 'stderr', chunk),
+          streamEvent(
+            issue.id,
+            iteration.id,
+            stepRun.id,
+            'stderr',
+            chunk,
+            agent?.id,
+          ),
         ),
-      onEvent: (event: SessionEvent) =>
-        deps.sse.publish(stepEvent(issue.id, iteration.id, stepRun.id, event)),
+      onEvent: (event: SessionEvent, agent?: RoomAgentInfo) =>
+        deps.sse.publish(
+          stepEvent(issue.id, iteration.id, stepRun.id, event, agent?.id),
+        ),
     };
 
     // Детерминированная развилка: комната — только если успешный refine явно
@@ -326,7 +348,7 @@ export async function runIteration(
           {
             ...runOptions,
             stepRunId: stepRun.id,
-            onWorkerStart: (item, total) =>
+            onWorkerStart: (item, total, agent) =>
               deps.sse.publish(
                 streamEvent(
                   issue.id,
@@ -334,6 +356,7 @@ export async function runIteration(
                   stepRun.id,
                   'system',
                   `worker ${item.index + 1}/${total}: ${item.task}`,
+                  agent.id,
                 ),
               ),
           },

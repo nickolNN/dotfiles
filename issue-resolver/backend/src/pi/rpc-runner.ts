@@ -15,7 +15,7 @@ import {
   type StepReport,
 } from '@issue-resolver/shared';
 import type { PiRunOptions, PiRunner } from './runner';
-import type { UiResponsePayload } from './session-registry';
+import type { RoomAgentStatus, UiResponsePayload } from './session-registry';
 
 /** Событие протокола pi RPC (поля, которые нам нужны для разбора). */
 interface RpcAssistantMessageEvent {
@@ -168,6 +168,12 @@ const questionAnswerText = (payload: UiResponsePayload): string => {
   if (payload.confirmed !== undefined) return payload.confirmed ? 'Да' : 'Нет';
   if (payload.cancelled === true) return 'Отменено';
   return '';
+};
+
+/** Финальный статус агента комнаты по результату прогона. */
+const agentStatusFor = (result: StepExecutionResult): RoomAgentStatus => {
+  if (result.aborted) return 'aborted';
+  return result.exitCode !== 0 ? 'failed' : 'finished';
 };
 
 /** resultText из tool_execution_end: тексты content[] или structuredContent. */
@@ -744,7 +750,7 @@ export class RpcPiRunner implements PiRunner {
       >();
       let requestSeq = 0;
 
-      const cleanup = () => {
+      const cleanup = (status: RoomAgentStatus = 'finished') => {
         if (timer) clearTimeout(timer);
         if (statsTimer) clearTimeout(statsTimer);
         if (statsPollTimer) clearInterval(statsPollTimer);
@@ -754,7 +760,7 @@ export class RpcPiRunner implements PiRunner {
           entry.resolve({ ok: false, error: 'session closed' });
         }
         pending.clear();
-        if (registry && stepRunId) registry.unregister(stepRunId);
+        if (registry && stepRunId) registry.unregister(stepRunId, status);
       };
 
       /** Финализация: не более одного resolve; мягко гасим сессию. */
@@ -767,7 +773,7 @@ export class RpcPiRunner implements PiRunner {
           stdout: parser.stdout(),
           events: parser.events(),
         };
-        cleanup();
+        cleanup(agentStatusFor(result));
         try {
           if (child.stdin?.writable) {
             child.stdin.write(`${JSON.stringify({ type: 'exit' })}\n`);
@@ -885,7 +891,7 @@ export class RpcPiRunner implements PiRunner {
               return { ok: result.ok, disposition: normalized };
             }),
           send: (command) => sendCommand(command),
-        });
+        }, options.agent);
       }
 
       // Пока сессия жива, периодически опрашиваем статистику: провайдер может
@@ -900,7 +906,7 @@ export class RpcPiRunner implements PiRunner {
         timer = setTimeout(() => {
           if (settled) return;
           settled = true;
-          cleanup();
+          cleanup('failed');
           child.kill('SIGKILL');
           reject(
             new Error(
@@ -971,7 +977,7 @@ export class RpcPiRunner implements PiRunner {
       child.on('error', (error) => {
         if (settled) return;
         settled = true;
-        cleanup();
+        cleanup('failed');
         reject(error);
       });
 

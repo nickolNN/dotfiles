@@ -198,6 +198,97 @@ describe('InMemoryStepSessionRegistry', () => {
     expect(spy.aborts).toHaveLength(1);
   });
 
+  it('listAgents: агенты комнаты в порядке регистрации, статус меняется при unregister', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base/worker/0', 'iter-1', spyControl().control, {
+      id: 'base/worker/0',
+      role: 'worker',
+      index: 1,
+      label: 'Воркер 1',
+    });
+    registry.register('base/worker/1', 'iter-1', spyControl().control, {
+      id: 'base/worker/1',
+      role: 'worker',
+      index: 2,
+      label: 'Воркер 2',
+    });
+    registry.register('base', 'iter-1', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    expect(registry.listAgents('iter-1')).toEqual([
+      {
+        id: 'base/worker/0',
+        role: 'worker',
+        index: 1,
+        label: 'Воркер 1',
+        status: 'running',
+      },
+      {
+        id: 'base/worker/1',
+        role: 'worker',
+        index: 2,
+        label: 'Воркер 2',
+        status: 'running',
+      },
+      {
+        id: 'base',
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        status: 'running',
+      },
+    ]);
+
+    registry.unregister('base/worker/0', 'failed');
+    // Вкладка завершённого агента остаётся, но живой сессии уже нет.
+    expect(registry.listAgents('iter-1')[0].status).toBe('failed');
+    expect(registry.steer('base/worker/0', 'x')).toBe(false);
+    expect(registry.listAgents('iter-1')).toHaveLength(3);
+    expect(registry.listAgents('iter-unknown')).toEqual([]);
+  });
+
+  it('listAgents: unregister без статуса → finished; single-сессия без agent не попадает', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('run-single', 'iter-2', spyControl().control);
+    registry.register('base', 'iter-2', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    registry.unregister('base');
+    expect(registry.listAgents('iter-2')).toEqual([
+      {
+        id: 'base',
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        status: 'finished',
+      },
+    ]);
+  });
+
+  it('listAgents: FIFO-эвикция при >64 итерациях с агентами', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    for (let i = 0; i < 65; i += 1) {
+      const iterationId = `iter-${i}`;
+      registry.register(`${iterationId}/worker/0`, iterationId, spyControl().control, {
+        id: `${iterationId}/worker/0`,
+        role: 'worker',
+        index: 1,
+        label: 'Воркер 1',
+      });
+    }
+
+    expect(registry.listAgents('iter-0')).toEqual([]);
+    expect(registry.listAgents('iter-64')).toHaveLength(1);
+  });
+
   it('promptByIteration/sendByIteration резолвят активную сессию; без → null', async () => {
     const registry = new InMemoryStepSessionRegistry();
     const spy = spyControl();

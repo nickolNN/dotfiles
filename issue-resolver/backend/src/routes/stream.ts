@@ -191,4 +191,49 @@ export async function streamRoutes(
     }
     return { ok: true };
   });
+
+  // Живые агенты комнаты resolve: роли/индексы/статусы для вкладок фронта.
+  app.get<{ Params: { id: string } }>(
+    `${MESSAGE_PATH}/:id/agents`,
+    async (request, reply) => {
+      const iteration = db
+        .select({ id: iterations.id })
+        .from(iterations)
+        .where(eq(iterations.id, request.params.id))
+        .get();
+      if (!iteration) {
+        return reply.status(404).send({ error: 'iteration not found' });
+      }
+      return control.listAgents(request.params.id);
+    },
+  );
+
+  // Поток событий ОДНОГО агента комнаты (`?agentId=<RoomAgent.id>`), чтобы
+  // открыть сессию воркера отдельно. Контроль (steer/abort) остаётся
+  // broadcast на всю комнату — здесь только чтение.
+  app.get<{
+    Params: { id: string };
+    Querystring: { agentId?: string };
+  }>(`${MESSAGE_PATH}/:id/agents/stream`, async (request, reply) => {
+    const agentId = request.query.agentId;
+    if (typeof agentId !== 'string' || agentId.trim().length === 0) {
+      return reply.status(400).send({ error: 'agentId is required' });
+    }
+
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    reply.raw.flushHeaders();
+    const unsubscribe = hub.subscribe(request.params.id, (event) => {
+      // agentId только у эмитов агентов комнаты; прочие — не наш поток.
+      if (event.agentId !== agentId) return;
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    });
+    request.raw.on('close', unsubscribe);
+    reply.hijack();
+    return reply;
+  });
 }
