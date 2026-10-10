@@ -1,0 +1,513 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  height: 100%;
+}
+
+/* Динамический вьюпорт: 100dvh отслеживает реально видимую высоту,
+   поэтому оболочка не перестраивается при сворачивании тулбара Safari. */
+#root {
+  height: 100vh;
+  height: 100dvh;
+}
+
+body {
+  margin: 0;
+  background-color: #0d0208;
+  color: #00ff41;
+  font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', 'Cascadia Mono',
+    Consolas, monospace;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(0, 255, 65, 0.04) 0px,
+    rgba(0, 255, 65, 0.04) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+.panel {
+  background-color: #003b00;
+  border: 1px solid #008f11;
+  border-radius: 0;
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.15);
+}
+
+.glow {
+  text-shadow: 0 0 6px rgba(0, 255, 65, 0.45);
+}
+
+/* Чат-рендер структурированных событий сессии агента (SessionView). */
+.session-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.session-msg--text {
+  min-width: 0;
+  border-left: 2px solid #008f11;
+  padding-left: 0.5rem;
+}
+
+.session-tool {
+  min-width: 0;
+  border: 1px solid #008f11;
+  background-color: rgba(0, 2, 0, 0.6);
+}
+
+.session-tool--error {
+  border-color: #ff0033;
+  background-color: rgba(42, 0, 8, 0.5);
+}
+
+.session-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  font: inherit;
+  font-size: 0.75rem;
+  color: #00ff41;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.session-tool-head:hover {
+  background-color: rgba(0, 143, 17, 0.15);
+}
+
+.session-tool--error .session-tool-head {
+  color: #ff0033;
+}
+
+.session-tool-caret {
+  color: rgba(0, 255, 65, 0.6);
+}
+
+.session-tool--error .session-tool-caret {
+  color: rgba(255, 0, 51, 0.7);
+}
+
+.session-tool-name {
+  font-weight: 600;
+}
+
+.session-tool-label {
+  color: rgba(0, 255, 65, 0.5);
+}
+
+.session-tool--error .session-tool-label {
+  color: rgba(255, 0, 51, 0.6);
+}
+
+.session-tool-duration {
+  margin-left: auto;
+  color: rgba(0, 255, 65, 0.5);
+  font-size: 0.6875rem;
+}
+
+.session-tool-error-badge {
+  border: 1px solid #ff0033;
+  padding: 0 0.25rem;
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #ff0033;
+}
+
+.session-tool--error .session-tool-duration {
+  color: rgba(255, 0, 51, 0.6);
+}
+
+.session-tool-body {
+  margin: 0;
+  padding: 0.5rem;
+  border-top: 1px solid rgba(0, 143, 17, 0.5);
+  background-color: #000200;
+  font-family: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: rgba(0, 255, 65, 0.85);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 20rem;
+  overflow: auto;
+}
+
+.session-tool--error .session-tool-body {
+  border-top-color: rgba(255, 0, 51, 0.5);
+  color: #ff9aa8;
+}
+
+/* Сворачиваемый блок размышления агента: приглушённый серо-зелёный курсив. */
+.session-thinking {
+  min-width: 0;
+  border-left: 2px solid #008f11;
+  background-color: rgba(0, 2, 0, 0.4);
+}
+
+.session-thinking .session-tool-head {
+  color: rgba(0, 255, 65, 0.5);
+  font-style: italic;
+}
+
+.session-thinking .session-tool-name {
+  font-weight: 400;
+}
+
+.session-thinking .session-tool-label {
+  color: rgba(0, 255, 65, 0.35);
+}
+
+/* Свёрнутый thinking-блок: разделитель между «thinking» и превью.
+   В остальных tool-блоках label идёт без разделителя. */
+.session-thinking .session-tool-label::before {
+  content: '·';
+  margin-right: 0.25rem;
+}
+
+.session-thinking-body {
+  margin: 0;
+  padding: 0.5rem;
+  font-family: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  font-style: italic;
+  color: rgba(0, 255, 65, 0.55);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  max-height: 20rem;
+  overflow: auto;
+}
+
+/* Интерактивный вопрос агента: акцентная рамка, чтобы выделяться среди инструментов. */
+.session-question {
+  min-width: 0;
+  border: 1px solid #00ff41;
+  border-left-width: 3px;
+  background-color: rgba(0, 59, 0, 0.35);
+  padding: 0.5rem;
+}
+
+.session-question-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(0, 255, 65, 0.6);
+}
+
+.session-question-icon {
+  font-weight: 700;
+  color: #00ff41;
+}
+
+.session-question-method {
+  margin-left: auto;
+  border: 1px solid #008f11;
+  padding: 0 0.25rem;
+  font-size: 0.625rem;
+  color: rgba(0, 255, 65, 0.5);
+}
+
+.session-question-title {
+  margin: 0.375rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: #00ff41;
+  overflow-wrap: break-word;
+}
+
+.session-question-message,
+.session-question-options {
+  margin: 0.25rem 0 0;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: rgba(0, 255, 65, 0.6);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.session-question-options {
+  color: rgba(0, 180, 255, 0.8);
+}
+
+/* Компактный футер статистики сессии. */
+.session-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding-top: 0.25rem;
+  font-size: 0.6875rem;
+  color: rgba(0, 255, 65, 0.5);
+}
+
+.session-stats-sep {
+  display: inline-block;
+  color: rgba(0, 143, 17, 0.8);
+}
+
+/* Markdown-рендер вывода агента в Matrix-теме. */
+.agent-markdown {
+  min-width: 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: rgba(0, 255, 65, 0.85);
+}
+
+.agent-markdown > :first-child {
+  margin-top: 0;
+}
+
+.agent-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-markdown h1,
+.agent-markdown h2,
+.agent-markdown h3,
+.agent-markdown h4,
+.agent-markdown h5,
+.agent-markdown h6 {
+  margin: 0.75rem 0 0.375rem;
+  color: #00ff41;
+  font-weight: 600;
+  text-shadow: 0 0 6px rgba(0, 255, 65, 0.45);
+}
+
+.agent-markdown h1 {
+  font-size: 1.25rem;
+}
+
+.agent-markdown h2 {
+  font-size: 1.1rem;
+}
+
+.agent-markdown h3 {
+  font-size: 1rem;
+}
+
+.agent-markdown h4,
+.agent-markdown h5,
+.agent-markdown h6 {
+  font-size: 0.875rem;
+}
+
+.agent-markdown p {
+  margin: 0.375rem 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.agent-markdown a {
+  color: #00b4ff;
+  text-decoration: underline;
+}
+
+.agent-markdown a:hover {
+  color: #00ff41;
+}
+
+.agent-markdown code {
+  font-family: inherit;
+  background-color: rgba(0, 143, 17, 0.2);
+  border: 1px solid rgba(0, 143, 17, 0.4);
+  padding: 0 0.25rem;
+}
+
+.agent-markdown pre {
+  margin: 0.5rem 0;
+  padding: 0.5rem;
+  background-color: #000200;
+  border: 1px solid #008f11;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.agent-markdown pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.agent-markdown ul,
+.agent-markdown ol {
+  margin: 0.375rem 0;
+  padding-left: 1.25rem;
+}
+
+.agent-markdown ul {
+  list-style: square;
+}
+
+.agent-markdown ol {
+  list-style: decimal;
+}
+
+.agent-markdown li {
+  margin: 0.125rem 0;
+}
+
+.agent-markdown blockquote {
+  margin: 0.5rem 0;
+  padding: 0.25rem 0 0.25rem 0.75rem;
+  border-left: 2px solid #008f11;
+  color: rgba(0, 255, 65, 0.65);
+}
+
+.agent-markdown hr {
+  margin: 0.75rem 0;
+  border: 0;
+  border-top: 1px solid #008f11;
+}
+
+.agent-markdown table {
+  margin: 0.5rem 0;
+  border-collapse: collapse;
+}
+
+.agent-markdown th,
+.agent-markdown td {
+  border: 1px solid #008f11;
+  padding: 0.125rem 0.5rem;
+}
+
+.agent-markdown th {
+  color: #00ff41;
+  background-color: rgba(0, 143, 17, 0.15);
+}
+/* ── Markdown editor (Tiptap) ─────────────────────────────────────────── */
+.markdown-editor:focus-within {
+  border-color: #00ff41;
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.35);
+}
+
+.markdown-editor-toolbar-button {
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.markdown-editor-toolbar-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.markdown-editor-content {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: #00ff41;
+  outline: none;
+  overflow-wrap: break-word;
+}
+
+.markdown-editor-content p {
+  margin: 0.375rem 0;
+}
+
+.markdown-editor-content h1,
+.markdown-editor-content h2,
+.markdown-editor-content h3 {
+  margin: 0.5rem 0 0.25rem;
+  font-weight: 600;
+  color: #00ff41;
+}
+
+.markdown-editor-content h1 {
+  font-size: 1.25rem;
+}
+
+.markdown-editor-content h2 {
+  font-size: 1.125rem;
+}
+
+.markdown-editor-content h3 {
+  font-size: 1rem;
+}
+
+.markdown-editor-content strong {
+  font-weight: 700;
+}
+
+.markdown-editor-content a {
+  color: #00b4ff;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.markdown-editor-content code {
+  padding: 0.05rem 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  color: #00ff9f;
+  background: rgba(0, 143, 17, 0.2);
+}
+
+.markdown-editor-content pre {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  background: #0d0208;
+  border: 1px solid #008f11;
+  overflow-x: auto;
+}
+
+.markdown-editor-content pre code {
+  padding: 0;
+  color: #00ff41;
+  background: transparent;
+}
+
+.markdown-editor-content blockquote {
+  margin: 0.5rem 0;
+  padding: 0.25rem 0 0.25rem 0.75rem;
+  border-left: 2px solid #008f11;
+  color: rgba(0, 255, 65, 0.65);
+}
+
+.markdown-editor-content ul,
+.markdown-editor-content ol {
+  margin: 0.375rem 0;
+  padding-left: 1.25rem;
+}
+
+.markdown-editor-content ul {
+  list-style: square;
+}
+
+.markdown-editor-content ol {
+  list-style: decimal;
+}
+
+.markdown-editor-content hr {
+  margin: 0.75rem 0;
+  border: 0;
+  border-top: 1px solid #008f11;
+}
+
+.markdown-editor-content p.is-editor-empty:first-child::before {
+  float: left;
+  height: 0;
+  color: #008f11;
+  pointer-events: none;
+  content: attr(data-placeholder);
+}
