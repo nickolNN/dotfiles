@@ -8,6 +8,7 @@ import type {
   ModelDescriptor,
   PromptMode,
   PromptResult,
+  RoomAgent,
   SessionCommand,
   SessionControlSnapshot,
 } from '@issue-resolver/shared';
@@ -91,6 +92,43 @@ export async function getStepRuns(
   }
 
   return (await response.json()) as StepRunWithEvents[];
+}
+
+/** Минимальная проверка формы `RoomAgent` (защита от мусора в ответе). */
+function isRoomAgent(value: unknown): value is RoomAgent {
+  if (!value || typeof value !== 'object') return false;
+  const agent = value as Partial<RoomAgent>;
+  return (
+    typeof agent.id === 'string' &&
+    (agent.role === 'worker' || agent.role === 'coordinator') &&
+    typeof agent.label === 'string' &&
+    (agent.status === 'running' ||
+      agent.status === 'finished' ||
+      agent.status === 'aborted' ||
+      agent.status === 'failed')
+  );
+}
+
+/**
+ * Живые агенты комнаты итерации (`GET /iterations/:id/agents`).
+ * Best-effort: пока бэкенд-роут ещё не дописан (или сеть/не-2xx/битый JSON)
+ * деградируем в `[]` — карточка resolve в room-режиме не должна падать,
+ * а `RoomAgentTabs` покажет пустое состояние.
+ */
+export async function getRoomAgents(
+  iterationId: string,
+): Promise<RoomAgent[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE}/iterations/${iterationId}/agents`,
+    );
+    if (!response.ok) return [];
+
+    const data: unknown = await response.json();
+    return Array.isArray(data) ? data.filter(isRoomAgent) : [];
+  } catch {
+    return [];
+  }
 }
 
 /**

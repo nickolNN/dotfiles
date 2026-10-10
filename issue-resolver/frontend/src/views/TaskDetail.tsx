@@ -42,6 +42,7 @@ import AutoScrollBox from '../components/AutoScrollBox';
 import FilePicker from '../components/FilePicker';
 import IssueFilesList from '../components/IssueFilesList';
 import MarkdownEditor from '../components/MarkdownEditor';
+import RoomAgentTabs from '../components/RoomAgentTabs';
 import SessionView from '../components/SessionView';
 import SessionStatsBar, {
   formatTokens,
@@ -77,6 +78,20 @@ const PIPELINE_ORDER: readonly PipelineStep[] = [
   'test',
   'pr',
 ];
+
+/**
+ * Room-режим итерации: ПОСЛЕДНИЙ refine-отчёт (по attempt) рекомендовал
+ * комнату. Это ровно то условие, по которому движок запускает `runRoomResolve`
+ * (`planExecutionMode(execution) === 'room'`); нет refine/execution → single.
+ */
+function isRoomIteration(runs: StepRunWithEvents[]): boolean {
+  const latestRefine = runs
+    .filter((run) => run.step === 'refine')
+    .sort((a, b) => b.attempt - a.attempt)[0];
+  return (
+    parseStepReport(latestRefine?.report ?? '')?.execution?.mode === 'room'
+  );
+}
 
 /** Интерактивный вопрос живой pi-сессии (`extension_ui_request`). */
 type QuestionEvent = Extract<SessionEvent, { type: 'question' }>;
@@ -768,6 +783,10 @@ export default function TaskDetail({
     stepRuns.stepRuns.some(
       (run) => run.step === 'resolve' && parseStepReport(run.report ?? '') !== null,
     );
+  // Room-режим итерации: последний refine рекомендовал комнату. Для активного
+  // resolve карточка шага показывает вкладки агентов вместо одной сессии.
+  const roomIteration =
+    stepRuns.status === 'ready' && isRoomIteration(stepRuns.stepRuns);
   const hint = !context.trim()
     ? 'Укажи контекст для новой итерации.'
     : selectedSteps.includes('review')
@@ -1595,20 +1614,28 @@ export default function TaskDetail({
                                               question={pendingQuestion}
                                             />
                                           )}
-                                        <AutoScrollBox
-                                          scrollKey={events.length}
-                                          className="mt-2 h-[300px] overflow-auto border border-[#008F11] bg-[#000200] p-2"
-                                        >
-                                          <div data-testid="step-session">
-                                            <SessionView
-                                              events={events}
-                                              stats={run.stats ?? null}
-                                              running={stepLive}
-                                              startedAt={run.created_at}
-                                              showFooter={false}
-                                            />
-                                          </div>
-                                        </AutoScrollBox>
+                                        {roomIteration &&
+                                        run.step === 'resolve' ? (
+                                          <RoomAgentTabs
+                                            iterationId={run.iteration_id}
+                                            refreshKey={refreshTick}
+                                          />
+                                        ) : (
+                                          <AutoScrollBox
+                                            scrollKey={events.length}
+                                            className="mt-2 h-[300px] overflow-auto border border-[#008F11] bg-[#000200] p-2"
+                                          >
+                                            <div data-testid="step-session">
+                                              <SessionView
+                                                events={events}
+                                                stats={run.stats ?? null}
+                                                running={stepLive}
+                                                startedAt={run.created_at}
+                                                showFooter={false}
+                                              />
+                                            </div>
+                                          </AutoScrollBox>
+                                        )}
                                       </>
                                     ) : aborted ? (
                                       <div
