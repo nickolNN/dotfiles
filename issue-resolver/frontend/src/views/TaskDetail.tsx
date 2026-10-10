@@ -1076,9 +1076,14 @@ export default function TaskDetail({
   return (
     <section
       ref={panelRef}
-      className="panel mx-auto max-w-3xl py-6 px-3 sm:px-4 md:px-6"
+      className="mx-auto max-w-3xl py-6 px-3 sm:px-4 md:px-6"
     >
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="space-y-4">
+      <div
+        data-testid="task-island"
+        className="rounded-none border border-[#008F11] p-4"
+      >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <button
           type="button"
           className="hidden min-h-12 text-sm font-medium text-[#008F11] hover:text-[#00FF41] sm:inline-flex"
@@ -1136,7 +1141,7 @@ export default function TaskDetail({
               Не удалось ответить на вопрос: {questionError}
             </p>
           )}
-          <header className="mb-6">
+          <header>
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="glow min-w-0 break-words text-xl font-semibold text-[#00FF41]">
                 {state.issue.title}
@@ -1185,7 +1190,7 @@ export default function TaskDetail({
             />
           </header>
 
-          <div className="mb-8 grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
             {state.issue.repositories.map((repository) => (
               <div
                 key={repository.id}
@@ -1208,9 +1213,15 @@ export default function TaskDetail({
               </div>
             ))}
           </div>
+        </>
+      )}
+      </div>
 
           {canStart && (
-          <section className="mb-8">
+          <section
+            data-testid="new-iteration-island"
+            className="rounded-none border border-[#008F11] p-4"
+          >
             <h3 className="glow mb-1 text-lg font-semibold text-[#00FF41]">
               Новая итерация
             </h3>
@@ -1316,7 +1327,12 @@ export default function TaskDetail({
           </section>
           )}
 
-          <section ref={iterationsRef} className="mb-8">
+          {state.status === 'ready' && (
+          <section
+            ref={iterationsRef}
+            data-testid="iterations-island"
+            className="rounded-none border border-[#008F11] p-4"
+          >
             <h3 className="glow mb-1 text-lg font-semibold text-[#00FF41]">
               Итерации
             </h3>
@@ -1703,9 +1719,8 @@ export default function TaskDetail({
               </ul>
             )}
           </section>
-
-        </>
-      )}
+          )}
+      </div>
 
       {resultOpen && state.status === 'ready' && resultAvailable && (
         <div

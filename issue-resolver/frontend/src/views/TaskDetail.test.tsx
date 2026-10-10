@@ -943,6 +943,61 @@ describe('TaskDetail', () => {
     ).toBeTruthy();
   });
 
+  it('три островка: задача → новая итерация → итерации, без внешней панели', async () => {
+    const issue = makeIssue();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/iterations')) {
+          return Promise.resolve(
+            jsonResponse([makeIteration({ status: 'completed' })]),
+          );
+        }
+        return Promise.resolve(jsonResponse(issue));
+      }),
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Итерация #1');
+
+    const task = screen.getByTestId('task-island');
+    const newIteration = screen.getByTestId('new-iteration-island');
+    const iterations = screen.getByTestId('iterations-island');
+
+    // Три прозрачные карточки в одном стиле, без чёрного фона внутри.
+    for (const island of [task, newIteration, iterations]) {
+      expect(island.className).toContain('rounded-none');
+      expect(island.className).toContain('border-[#008F11]');
+      expect(island.className).toContain('p-4');
+      expect(island.className).not.toContain('bg-[#000200]');
+    }
+
+    // Корневая секция — без `.panel` (внешняя зелёная обёртка убрана).
+    const root = task.closest('section') as HTMLElement;
+    expect(root.className).not.toContain('panel');
+
+    // Заголовок задачи и служебный ряд — внутри первого островка.
+    expect(
+      screen.getByText('Fix login bug').closest('[data-testid="task-island"]'),
+    ).not.toBeNull();
+    expect(
+      screen
+        .getByText('← Мои задачи')
+        .closest('[data-testid="task-island"]'),
+    ).not.toBeNull();
+
+    // Порядок: задача → новая итерация → итерации.
+    expect(
+      task.compareDocumentPosition(newIteration) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      newIteration.compareDocumentPosition(iterations) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('после создания итерации мягко подводит список (scrollIntoView smooth)', async () => {
     const scrollIntoView = vi.fn();
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
