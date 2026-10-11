@@ -56,13 +56,23 @@ Backend по умолчанию поднимается с in-memory фейкам
 - **Локальный режим (dev без docker) — `ISSUE_RESOLVER_LOCAL=1`**: pi
   запускается НАПРЯМУЮ на хосте (`RpcPiRunner('local')`), контейнер задачи —
   обычная host-папка (`LocalContainerController` — mkdir/rm), git — `GitCliService`,
-  workspace root по умолчанию `/home/agent/.issue-resolver/workspaces`
+  workspace root по умолчанию `/home/agent/workspace/.issue-resolver/workspaces`
   (переопределяется `ISSUE_RESOLVER_WORKSPACE_ROOT`).
 - **Прод docker-ветка — `ISSUE_RESOLVER_USE_REAL=1`**: изолированные
   контейнеры задач, боевые `DockerodeContainerController` (`DOCKER_SOCKET`,
   дефолт `/var/run/docker.sock`), `GitCliService`, `RpcPiRunner('docker')`,
   `HttpMrClient` (`MR_TOKEN`), `HttpJiraClient` (`JIRA_BASE_URL`,
   `JIRA_TOKEN`) и `InMemoryStepSessionRegistry` (steer/abort/respond живых шагов).
+
+**Общий каталог данных — `ISSUE_RESOLVER_DATA_DIR`.** Если он задан, БД лежит в
+`<DATA_DIR>/issue-resolver.db`, рабочие папки задач — в `<DATA_DIR>/workspaces`,
+git-кэш originals — в `<DATA_DIR>/originals`. Без него работают прежние
+дефолты: БД `backend/data/issue-resolver.db`, originals
+`/tmp/issue-resolver/originals`, а
+папки задач — `ISSUE_RESOLVER_WORKSPACE_ROOT` (local-дефолт
+`/home/agent/workspace/.issue-resolver/workspaces`, docker-дефолт `/workspaces`).
+`ISSUE_RESOLVER_WORKSPACE_ROOT` имеет приоритет над `DATA_DIR` для папок задач:
+он переопределяет `<DATA_DIR>/workspaces`.
 
 Иначе — пустой объект и безопасные Fake*-адаптеры `buildApp(db, deps)`. Имя
 общего named volume для памяти модели — `ISSUE_RESOLVER_MEMORY_VOLUME` (дефолт
@@ -153,15 +163,17 @@ Backend по умолчанию поднимается с in-memory фейкам
 эффективных шагов задачи/итерации убирается. Артефакт отдаётся роутами
 `/issues/:id/result` (inline-предпросмотр) и `/issues/:id/result/download`.
 
-Эффективный конвейер собирается из `pipeline_steps` (дефолт
-`['refine', 'resolve']`): `resolve` гарантированно присутствует; при
-`is_review_need` шаги `review`+`test` вставляются сразу после `resolve`; при
-`create_mr: true` хотя бы у одного репозитория в конец добавляется `pr`, но
-итоговое наличие `pr` определяется `desired_result` (см. выше).
-`is_review_need`/`review_context` хранятся на итерации, `Issue.description`
-хранит исходный `additional_context`. `is_review_need` управляет только
-составом конвейера (вставка `review`+`test`); `review_context` дополнительно
-попадает в промпт шага `review` (секция «Reviewer context»), когда не пуст.
+Эффективный конвейер берётся напрямую из `pipeline_steps` (при создании задачи)
+/ `steps` (при новой итерации); дефолт — `['refine', 'resolve']`. `resolve`
+гарантированно присутствует. Шаги `review` и `test` выбираются НЕЗАВИСИМО друг
+от друга (можно включить только `review`, только `test`, оба или ни одного) —
+они просто перечисляются в `pipeline_steps`/`steps`. Флаг `is_review_need`
+БОЛЬШЕ НЕ вставляет шаги: это только метаданные на итерации (при этом
+`review_context` всё так же попадает в промпт шага `review`, секция «Reviewer
+context», когда не пуст). Шаг `pr` добавляется в конец при `create_mr: true`
+хотя бы у одного репозитория, но итоговое наличие `pr` определяется
+`desired_result` (см. выше). `Issue.description` хранит исходный
+`additional_context`.
 
 `SSEEvent`: `{ type: 'log' | 'step_status' | 'step_event' | 'iteration_status',
 issueId, iterationId, stepRunId?, stream?, data, ts }`.
@@ -181,13 +193,28 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
 ## Функционал
 
 - **Конвейер** `refine → resolve → review → test → pr` (дефолт — `refine`,
-  `resolve`). Промпты шагов детерминированы (`workflow/prompts.ts`); каждый шаг
-  пишет в рабочую папку задачи `.issue-step-result.json` (`{ status:
+  `resolve`; `review` и `test` опциональны и независимы, см. следующий пункт).
+  Каждый шаг пишет в рабочую папку задачи `.issue-step-result.json` (`{ status:
   pass|fail|blocked, summary, scenarios, findings }`), а движок читает его
   после шага (`parseStepReport`) и мапит в статус: `pass → success`,
   `fail → failed`, `blocked → needs_input`. Если файла нет (или он битый/не
   читается), статус определяется по exit-коду: exit 0 → `success` (отчёт при
   этом хранится пустой строкой, не `"null"`), иначе `failed` — прогон не падает.
+- **Шаги `review` и `test`** (оба необязательны и независимы): `review` —
+  только код-ревью: проверяет исходный код против задачи и `review_context`,
+  без запуска приложения/тестов/браузера (быстрый). `test` — финальная
+  проверка: гоняет приложение в браузере (Playwright), фиксирует найденные
+  дефекты и НЕ чинит код; при падении конвейер возвращается к разработке
+  (`resolve`).
+- **Подготовка задачи (при запуске)**: clone репозиториев + разовый
+  детерминированный install зависимостей по манифесту (`package-lock.json` →
+  `npm ci`, `pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn install`,
+  `bun.lock`/`bun.lockb` → `bun install`, `package.json` → `npm install`,
+  `go.mod` → `go mod download`) выполняются ОДИН раз при инициализации задачи.
+  Повтор (папка уже склонирована) НЕ переклонирует и не переинсталлирует — все
+  итерации работают с одним кодом. Пока идёт подготовка, задача и итерация — в
+  статусе `preparing`; неудача clone/install переводит их терминально в
+  `failed`.
 - **Желаемый результат**: `desired_result` задачи (`'md'` дефолт / `'html'` /
   `'pr'`) попадает в промпт `resolve` и определяет итоговый артефакт —
   `report.md` (Markdown, plain, без HTML-обёртки) при `'md'`, self-contained
@@ -231,10 +258,10 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   `RoomAgent` несёт `stage`/`stageName` (staged-режим), `startedAt` (ISO) и
   агрегированные `stats` (токены/cost/context из usage/stats-событий его
   сессии).
-- **Цикл фидбека**: провал `review`/`test` откатывает конвейер на `resolve` с
-  `attempt + 1` и передаёт фидбек; максимум 3 попытки, дальше — итерация
-  завершается `failed` с `needs_input`. Провал `refine`/`resolve`/`pr` завершает
-  итерацию сразу.
+- **Цикл фидбека**: провал `review`/`test` откатывает конвейер на `resolve`
+  (разработку) с `attempt + 1` и передаёт фидбек; сам `test` код не чинит.
+  Максимум 3 попытки, дальше — итерация завершается `failed` с `needs_input`.
+  Провал `refine`/`resolve`/`pr` завершает итерацию сразу.
 - **Терминальность сбоя агента**: reject/таймаут `pi.run` (spawn ENOENT,
   timeout, child error, зависание) ловится движком вокруг single/room/stages
   вызова шага: `step_run` → `failed`, `step_output` с отчётом
@@ -371,12 +398,19 @@ output-строки: `stdout`/`stderr` (сырой вывод прогона; `'
   папке последней completed-итерации (`GET /issues/:id/result/files/content`,
   список — `GET /issues/:id/result/files`): каждый файл — своя ссылка
   `Скачать <имя>` с размером; служебные `.`-пути, `attachments/` и сам артефакт
-  результата исключены, пустой список ничего не рендерит.
+  результата исключены, пустой список ничего не рендерит. Если рабочая папка
+  задачи удалена, а issue в БД осталась (`Issue.workspace_missing === true`), в
+  шапке задачи показывается бейдж «Файлы задачи отсутствуют»; issue при этом
+  НЕ удаляется автоматически. В шапке формы и в чипах шагов лейблы шагов —
+  `Review` → «Код-ревью», `Test` → «Тест».
 
 Статусы — из `shared`:
 
-- `TaskStatus` (Issue и Iteration): `pending`, `running`, `completed`, `failed`, `cancelled`.
-- `StepRunStatus` (шаг): `pending`, `running`, `success`, `failed`, `needs_input`, `skipped`.
+- `TaskStatus` (Issue и Iteration): `pending`, `preparing`, `running`,
+  `completed`, `failed`, `cancelled`. `preparing` — идёт разовая подготовка
+  рабочей папки (clone/install).
+- `StepRunStatus` (шаг): `pending`, `running`, `success`, `failed`,
+  `needs_input`, `skipped`.
 - `StepReportStatus` (отчёт): `pass`, `fail`, `blocked`.
 
 ## Тесты
