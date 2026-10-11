@@ -21,8 +21,8 @@ import { thinkingLevelsFor } from '../constants/thinking-levels';
 
 /** Шаг пайплайна: одна строка = чекбокс шага + inline-селектор его модели. */
 const MODEL_STEPS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
-  { value: 'refine', label: 'Refine' },
-  { value: 'resolve', label: 'Resolve' },
+  { value: 'refine', label: 'Планирование' },
+  { value: 'resolve', label: 'Исполнение' },
   { value: 'review', label: 'Код-ревью' },
   { value: 'test', label: 'Тест' },
 ];
@@ -475,7 +475,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
                       disabled={isResolve}
                       onChange={() => toggleStep(step.value)}
                     />
-                    {isResolve ? 'Resolve (всегда)' : step.label}
+                    {isResolve ? 'Исполнение (всегда)' : step.label}
                   </label>
                   {modelEnabled && (
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">

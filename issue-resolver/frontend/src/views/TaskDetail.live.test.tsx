@@ -202,8 +202,8 @@ describe('TaskDetail — live SSE', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
     const steps = within(await screen.findByTestId('iteration-steps'));
-    expect(await steps.findByText('Refine')).toBeInTheDocument();
-    expect(steps.queryByText('Resolve')).toBeNull();
+    expect(await steps.findByText('Планирование')).toBeInTheDocument();
+    expect(steps.queryByText('Исполнение')).toBeNull();
 
     // Движок создал новый прогон resolve и опубликовал `running` (только
     // stepRunId, без step/attempt) — без перечитки списка его не отрисовать.
@@ -221,7 +221,7 @@ describe('TaskDetail — live SSE', () => {
 
     await waitFor(() => {
       expect(
-        within(screen.getByTestId('iteration-steps')).getByText('Resolve'),
+        within(screen.getByTestId('iteration-steps')).getByText('Исполнение'),
       ).toBeInTheDocument();
     });
     expect(stepRunCalls.count).toBeGreaterThanOrEqual(2);

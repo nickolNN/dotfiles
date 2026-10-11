@@ -591,7 +591,7 @@ describe('NewIssue', () => {
     fireEvent.change(screen.getByLabelText('Заголовок'), {
       target: { value: 'Fix login bug' },
     });
-    fireEvent.click(screen.getByLabelText('Refine'));
+    fireEvent.click(screen.getByLabelText('Планирование'));
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
 
     await waitFor(() => {
@@ -613,7 +613,7 @@ describe('NewIssue', () => {
     await screen.findAllByRole('option', { name: 'Model One' });
 
     const resolveLevel = screen.getByLabelText(
-      'Уровень размышления для шага Resolve',
+      'Уровень размышления для шага Исполнение',
     ) as HTMLSelectElement;
     expect(resolveLevel).toBeDisabled();
     expect(within(resolveLevel).getAllByRole('option')).toHaveLength(1);
@@ -621,7 +621,7 @@ describe('NewIssue', () => {
       within(resolveLevel).getByRole('option', { name: 'По умолчанию' }),
     ).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Модель для шага Resolve'), {
+    fireEvent.change(screen.getByLabelText('Модель для шага Исполнение'), {
       target: { value: 'm1' },
     });
 
@@ -642,11 +642,11 @@ describe('NewIssue', () => {
     fireEvent.change(screen.getByLabelText('Заголовок'), {
       target: { value: 'Fix login bug' },
     });
-    fireEvent.change(screen.getByLabelText('Модель для шага Resolve'), {
+    fireEvent.change(screen.getByLabelText('Модель для шага Исполнение'), {
       target: { value: 'm1' },
     });
     fireEvent.change(
-      screen.getByLabelText('Уровень размышления для шага Resolve'),
+      screen.getByLabelText('Уровень размышления для шага Исполнение'),
       { target: { value: 'high' } },
     );
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
@@ -668,9 +668,9 @@ describe('NewIssue', () => {
     fireEvent.change(screen.getByLabelText('Заголовок'), {
       target: { value: 'Fix login bug' },
     });
-    const modelSelect = screen.getByLabelText('Модель для шага Resolve');
+    const modelSelect = screen.getByLabelText('Модель для шага Исполнение');
     const levelSelect = screen.getByLabelText(
-      'Уровень размышления для шага Resolve',
+      'Уровень размышления для шага Исполнение',
     ) as HTMLSelectElement;
 
     fireEvent.change(modelSelect, { target: { value: 'm1' } });
@@ -720,16 +720,16 @@ describe('NewIssue', () => {
     });
 
     // Отмечаем refine, выбираем модель и уровень, затем снимаем шаг.
-    fireEvent.click(screen.getByLabelText('Refine'));
-    fireEvent.change(screen.getByLabelText('Модель для шага Refine'), {
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    fireEvent.change(screen.getByLabelText('Модель для шага Планирование'), {
       target: { value: 'm1' },
     });
     fireEvent.change(
-      screen.getByLabelText('Уровень размышления для шага Refine'),
+      screen.getByLabelText('Уровень размышления для шага Планирование'),
       { target: { value: 'high' } },
     );
-    fireEvent.click(screen.getByLabelText('Refine'));
-    expect(screen.queryByLabelText('Уровень размышления для шага Refine')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    expect(screen.queryByLabelText('Уровень размышления для шага Планирование')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
 

@@ -65,16 +65,16 @@ import { thinkingLevelsFor } from '../constants/thinking-levels';
 import { statusColor, stepStatusColor } from '../theme';
 
 const STEP_OPTIONS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
-  { value: 'refine', label: 'Refine' },
-  { value: 'resolve', label: 'Resolve' },
+  { value: 'refine', label: 'Планирование' },
+  { value: 'resolve', label: 'Исполнение' },
   { value: 'review', label: 'Код-ревью' },
   { value: 'test', label: 'Тест' },
   { value: 'pr', label: 'PR' },
 ];
 
 const STEP_LABELS: Record<PipelineStep, string> = {
-  refine: 'Refine',
-  resolve: 'Resolve',
+  refine: 'Планирование',
+  resolve: 'Исполнение',
   review: 'Код-ревью',
   test: 'Тест',
   pr: 'PR',
@@ -1507,7 +1507,7 @@ export default function TaskDetail({
                               onChange={() => toggleStep(step.value)}
                             />
                             {isResolve
-                              ? 'Resolve (всегда)'
+                              ? 'Исполнение (всегда)'
                               : prBlocked
                                 ? `${step.label} (нужен репозиторий)`
                                 : step.label}
@@ -1518,7 +1518,7 @@ export default function TaskDetail({
                               className="pl-6 text-xs text-[#00FF41]/60"
                             >
                               Планируем — решает, запускать ли resolve комнатой
-                              агентов; без Refine всегда ровно один агент.
+                              агентов; без Планирования всегда ровно один агент.
                             </span>
                           )}
                         </div>

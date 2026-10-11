@@ -90,13 +90,13 @@ describe('NewIssue — селектор модели (per-step)', () => {
     expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(1);
     expect(screen.getAllByRole('option', { name: 'm2' })).toHaveLength(1);
     expect(screen.getAllByRole('option', { name: 'По умолчанию' })).toHaveLength(2);
-    expect(screen.getByLabelText('Модель для шага Resolve')).toBeInTheDocument();
+    expect(screen.getByLabelText('Модель для шага Исполнение')).toBeInTheDocument();
     expect(
-      screen.getByLabelText('Уровень размышления для шага Resolve'),
+      screen.getByLabelText('Уровень размышления для шага Исполнение'),
     ).toBeInTheDocument();
 
     // Отмечаем ещё два шага — появляются их селекторы.
-    fireEvent.click(screen.getByLabelText('Refine'));
+    fireEvent.click(screen.getByLabelText('Планирование'));
     fireEvent.click(screen.getByLabelText('Код-ревью'));
     expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(3);
   });
@@ -107,7 +107,7 @@ describe('NewIssue — селектор модели (per-step)', () => {
     render(<NewIssue />);
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    fireEvent.change(screen.getByLabelText('Модель для шага Resolve'), {
+    fireEvent.change(screen.getByLabelText('Модель для шага Исполнение'), {
       target: { value: 'm1' },
     });
     fillRequired();
@@ -143,17 +143,17 @@ describe('NewIssue — селектор модели (per-step)', () => {
     await screen.findAllByRole('option', { name: 'Model One' });
 
     // resolve отмечен всегда → селектор виден; refine пока снят → селектора нет.
-    expect(screen.getByLabelText('Модель для шага Resolve')).toBeEnabled();
-    expect(screen.queryByLabelText('Модель для шага Refine')).toBeNull();
+    expect(screen.getByLabelText('Модель для шага Исполнение')).toBeEnabled();
+    expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
 
-    fireEvent.click(screen.getByLabelText('Refine'));
-    const refineModel = screen.getByLabelText('Модель для шага Refine');
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    const refineModel = screen.getByLabelText('Модель для шага Планирование');
     expect(refineModel).toBeEnabled();
     fireEvent.change(refineModel, { target: { value: 'm2' } });
 
     // Снимаем шаг — его модель отфильтровывается из payload, селектор скрыт.
-    fireEvent.click(screen.getByLabelText('Refine'));
-    expect(screen.queryByLabelText('Модель для шага Refine')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
 
     fillRequired();
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));

@@ -266,7 +266,7 @@ describe('TaskDetail', () => {
     expect(hints).toHaveLength(1);
     expect(hints[0]).toHaveTextContent('Планируем');
     expect(hints[0]).toHaveTextContent('комнатой агентов');
-    expect(hints[0]).toHaveTextContent('без Refine');
+    expect(hints[0]).toHaveTextContent('без Планирования');
   });
 
   it('тогл Reviewer убран; выбор шага Код-ревью шлёт is_review_need: true', async () => {
@@ -351,7 +351,7 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    fireEvent.click(screen.getByLabelText('Refine'));
+    fireEvent.click(screen.getByLabelText('Планирование'));
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -405,11 +405,11 @@ describe('TaskDetail', () => {
     await screen.findAllByRole('option', { name: 'Model One' });
 
     // Resolve отмечен всегда → селектор виден; снятый Refine → селектора нет.
-    expect(screen.getByLabelText('Модель для шага Resolve')).toBeEnabled();
-    expect(screen.queryByLabelText('Модель для шага Refine')).toBeNull();
+    expect(screen.getByLabelText('Модель для шага Исполнение')).toBeEnabled();
+    expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
 
-    fireEvent.click(screen.getByLabelText('Refine'));
-    fireEvent.change(screen.getByLabelText('Модель для шага Refine'), {
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    fireEvent.change(screen.getByLabelText('Модель для шага Планирование'), {
       target: { value: 'm1' },
     });
     setMarkdownEditorValue('Контекст итерации', 'ctx');
@@ -498,7 +498,7 @@ describe('TaskDetail', () => {
     await screen.findAllByRole('option', { name: 'Model One' });
 
     const levelSelect = screen.getByLabelText(
-      'Уровень размышления для шага Resolve',
+      'Уровень размышления для шага Исполнение',
     ) as HTMLSelectElement;
     expect(levelSelect).toBeDisabled();
     expect(within(levelSelect).getAllByRole('option')).toHaveLength(1);
@@ -506,7 +506,7 @@ describe('TaskDetail', () => {
       within(levelSelect).getByRole('option', { name: 'По умолчанию' }),
     ).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Модель для шага Resolve'), {
+    fireEvent.change(screen.getByLabelText('Модель для шага Исполнение'), {
       target: { value: 'm1' },
     });
     expect(levelSelect).toBeEnabled();
@@ -547,12 +547,12 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    fireEvent.click(screen.getByLabelText('Refine'));
-    fireEvent.change(screen.getByLabelText('Модель для шага Refine'), {
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    fireEvent.change(screen.getByLabelText('Модель для шага Планирование'), {
       target: { value: 'm1' },
     });
     fireEvent.change(
-      screen.getByLabelText('Уровень размышления для шага Refine'),
+      screen.getByLabelText('Уровень размышления для шага Планирование'),
       { target: { value: 'high' } },
     );
     setMarkdownEditorValue('Контекст итерации', 'ctx');
@@ -592,9 +592,9 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    const modelSelect = screen.getByLabelText('Модель для шага Resolve');
+    const modelSelect = screen.getByLabelText('Модель для шага Исполнение');
     const levelSelect = screen.getByLabelText(
-      'Уровень размышления для шага Resolve',
+      'Уровень размышления для шага Исполнение',
     ) as HTMLSelectElement;
     fireEvent.change(modelSelect, { target: { value: 'm1' } });
     fireEvent.change(levelSelect, { target: { value: 'high' } });
@@ -642,17 +642,17 @@ describe('TaskDetail', () => {
     await screen.findAllByRole('option', { name: 'Model One' });
 
     // Отмечаем Refine, выбираем модель и уровень, затем снимаем шаг.
-    fireEvent.click(screen.getByLabelText('Refine'));
-    fireEvent.change(screen.getByLabelText('Модель для шага Refine'), {
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    fireEvent.change(screen.getByLabelText('Модель для шага Планирование'), {
       target: { value: 'm1' },
     });
     fireEvent.change(
-      screen.getByLabelText('Уровень размышления для шага Refine'),
+      screen.getByLabelText('Уровень размышления для шага Планирование'),
       { target: { value: 'high' } },
     );
-    fireEvent.click(screen.getByLabelText('Refine'));
+    fireEvent.click(screen.getByLabelText('Планирование'));
     expect(
-      screen.queryByLabelText('Уровень размышления для шага Refine'),
+      screen.queryByLabelText('Уровень размышления для шага Планирование'),
     ).toBeNull();
 
     setMarkdownEditorValue('Контекст итерации', 'ctx');

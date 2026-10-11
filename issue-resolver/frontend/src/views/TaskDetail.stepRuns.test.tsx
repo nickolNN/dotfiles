@@ -128,7 +128,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
     render(<TaskDetail issueId="issue-1" />);
 
     const steps = within(await screen.findByTestId('iteration-steps'));
-    expect(await steps.findByText('Resolve')).toBeInTheDocument();
+    expect(await steps.findByText('Исполнение')).toBeInTheDocument();
     expect(steps.getByText('success')).toBeInTheDocument();
     expect(steps.getByText('Тест')).toBeInTheDocument();
     expect(steps.getByText('попытка 2')).toBeInTheDocument();
@@ -192,7 +192,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
 
     await waitFor(() => {
       const selectedSteps = within(screen.getByTestId('iteration-steps'));
-      expect(selectedSteps.getByText('Resolve')).toBeInTheDocument();
+      expect(selectedSteps.getByText('Исполнение')).toBeInTheDocument();
       expect(selectedSteps.queryByText('Тест')).toBeNull();
     });
   });
