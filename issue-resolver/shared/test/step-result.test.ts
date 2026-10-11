@@ -4,8 +4,81 @@ import {
   parseSessionStats,
   parseStepReport,
   stepRunStatusFromResult,
+  sumSessionStats,
 } from '../src/step-result';
-import type { StepReport } from '../src/types';
+import type { SessionStats, StepReport } from '../src/types';
+
+function stats(overrides: Partial<SessionStats> = {}): SessionStats {
+  return {
+    userMessages: 1,
+    assistantMessages: 1,
+    toolCalls: 1,
+    toolResults: 1,
+    totalMessages: 2,
+    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    cost: null,
+    contextUsage: null,
+    ...overrides,
+  };
+}
+
+describe('sumSessionStats', () => {
+  it('суммирует токены, cost, сообщения и вызовы', () => {
+    const total = sumSessionStats([
+      stats({
+        userMessages: 2,
+        assistantMessages: 3,
+        toolCalls: 5,
+        toolResults: 4,
+        totalMessages: 5,
+        tokens: { input: 100, output: 40, cacheRead: 10, cacheWrite: 5, total: 155 },
+        cost: 0.01,
+      }),
+      stats({
+        tokens: { input: 200, output: 60, cacheRead: 20, cacheWrite: 7, total: 287 },
+        cost: 0.02,
+      }),
+    ]);
+
+    expect(total).toMatchObject({
+      userMessages: 3,
+      assistantMessages: 4,
+      toolCalls: 6,
+      toolResults: 5,
+      totalMessages: 7,
+      tokens: {
+        input: 300,
+        output: 100,
+        cacheRead: 30,
+        cacheWrite: 12,
+        total: 442,
+      },
+      cost: 0.03,
+      contextUsage: null,
+    });
+    // Модель/сессия — свойства конкретного агента, у суммы их нет.
+    expect(total).not.toHaveProperty('model');
+    expect(total).not.toHaveProperty('sessionId');
+    expect(total).not.toHaveProperty('avgTokensPerSecond');
+  });
+
+  it('игнорирует null/undefined; cost null если нет ни одного значения', () => {
+    const total = sumSessionStats([
+      null,
+      undefined,
+      stats({ tokens: { input: 7, output: 3, cacheRead: 0, cacheWrite: 0, total: 10 } }),
+    ]);
+
+    expect(total).not.toBeNull();
+    expect(total?.cost).toBeNull();
+    expect(total?.tokens.input).toBe(7);
+  });
+
+  it('все элементы null/undefined → null', () => {
+    expect(sumSessionStats([])).toBeNull();
+    expect(sumSessionStats([null, undefined])).toBeNull();
+  });
+});
 
 describe('parseStepReport', () => {
   it('parses a minimal valid report', () => {

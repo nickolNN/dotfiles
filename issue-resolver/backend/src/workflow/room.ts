@@ -3,6 +3,7 @@ import type {
   NormalizedStage,
   RoomWorkItem,
   SessionEvent,
+  SessionStats,
   StepExecutionResult,
 } from '@issue-resolver/shared';
 import {
@@ -10,6 +11,7 @@ import {
   DEFAULT_MAX_ROOM_EXECUTORS,
   planExecutionStages,
   planRoomWorkItems,
+  sumSessionStats,
 } from '@issue-resolver/shared';
 import type { PiRunner } from '../pi/runner';
 import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry';
@@ -227,11 +229,18 @@ export async function runRoomResolve(
   }));
 
   const agent = coordinatorAgent(options.stepRunId);
-  return runAgent(pi, input, options, {
+  const result = await runAgent(pi, input, options, {
     stepRunId: agent.id,
     agent,
     prompt: buildRoomCoordinatorPrompt(input, summaries),
   });
+  // `run.stats` шага — тотал всех агентов (воркеры + координатор), а не
+  // телеметрия только последнего координатора.
+  const total = sumSessionStats([
+    ...workers.map((worker) => worker.stats),
+    result.stats,
+  ]);
+  return { ...result, stats: total };
 }
 
 /**
@@ -252,6 +261,9 @@ export async function runStagedResolve(
     input.maxExecutors ?? DEFAULT_MAX_ROOM_EXECUTORS,
   );
   const outcomes: { stage: NormalizedStage; outcome: string }[] = [];
+  // Копилка телеметрии всех агентов шага (воркеры + координаторы этапов) —
+  // в конце суммируется вместе с финальным координатором.
+  const allStats: SessionStats[] = [];
 
   for (const stage of stages) {
     if (stage.executors >= 2) {
@@ -275,6 +287,9 @@ export async function runStagedResolve(
         jobs,
         stage.executors,
       );
+      workers.forEach((worker) => {
+        if (worker.stats) allStats.push(worker.stats);
+      });
       if (workers.some((worker) => worker.aborted === true)) {
         return abortedResolveResult();
       }
@@ -292,6 +307,7 @@ export async function runStagedResolve(
         agent,
         prompt: buildStageCoordinatorPrompt(input, stage, summaries),
       });
+      if (result.stats) allStats.push(result.stats);
       if (result.aborted === true) return abortedResolveResult();
       outcomes.push({
         stage,
@@ -308,6 +324,7 @@ export async function runStagedResolve(
       agent,
       prompt: buildStageCoordinatorPrompt(input, stage, []),
     });
+    if (result.stats) allStats.push(result.stats);
     if (result.aborted === true) return abortedResolveResult();
     outcomes.push({
       stage,
@@ -317,9 +334,12 @@ export async function runStagedResolve(
   }
 
   const agent = coordinatorAgent(options.stepRunId);
-  return runAgent(pi, input, options, {
+  const result = await runAgent(pi, input, options, {
     stepRunId: agent.id,
     agent,
     prompt: buildStagedFinalCoordinatorPrompt(input, outcomes),
   });
+  // `run.stats` шага — тотал всех агентов этапов + финального координатора.
+  const total = sumSessionStats([...allStats, result.stats]);
+  return { ...result, stats: total };
 }

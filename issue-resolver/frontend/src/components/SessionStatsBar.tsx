@@ -230,6 +230,12 @@ function finiteOrNull(value: number | undefined | null): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+/** Компактная стоимость: `$0` / `$0.0123` / `$1.5`; null/NaN/<= 0 → `$0`. */
+export function formatCost(total: number): string {
+  if (!Number.isFinite(total) || total <= 0) return '$0';
+  return `$${total.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+}
+
 /** Компактный формат токенов: 950 → "950", 105000 → "105k", 1200000 → "1.2M". */
 export function formatTokens(total: number): string {
   if (!Number.isFinite(total) || total <= 0) return '0';

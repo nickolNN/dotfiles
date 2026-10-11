@@ -53,6 +53,7 @@ import RoomAgentTabs from '../components/RoomAgentTabs';
 import SessionView from '../components/SessionView';
 import SessionStatsBar, {
   formatAvgSpeed,
+  formatCost,
   formatInstantSpeed,
   formatTokens,
   resolveFooter,
@@ -1825,8 +1826,15 @@ export default function TaskDetail({
                                   stepDurationMs(run, stepLive, now),
                                 );
                                 const changedFiles = stepChangedFiles(events);
+                                // room/stages-resolve шлёт stats-события каждого
+                                // агента на общий шаг; футер должен показать
+                                // агрегат `run.stats` (тотал шага), а не stats
+                                // последнего координатора — пустые events
+                                // заставляют resolveFooter взять prop.
+                                const isRoomResolve =
+                                  roomIteration && run.step === 'resolve';
                                 const footer = resolveFooter(
-                                  events,
+                                  isRoomResolve ? [] : events,
                                   run.stats ?? null,
                                 );
                                 return (
@@ -1944,6 +1952,11 @@ export default function TaskDetail({
                                       {duration !== '' && (
                                         <span data-testid="step-duration">
                                           ⏱ {duration}
+                                        </span>
+                                      )}
+                                      {run.stats?.cost != null && (
+                                        <span data-testid="step-cost">
+                                          · {formatCost(run.stats.cost)}
                                         </span>
                                       )}
                                       {footer && (

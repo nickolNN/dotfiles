@@ -498,4 +498,55 @@ describe('TaskDetail — статистика карточки шага', () => 
     expect(formatAvgSpeed(42.4)).toBe('42');
     expect(formatAvgSpeed(42.6)).toBe('43');
   });
+
+  it('room-resolve: футер показывает агрегат run.stats и step-cost, не координаторские events', async () => {
+    const refine = makeStepRun({
+      id: 'run-refine',
+      step: 'refine',
+      status: 'success',
+      report: JSON.stringify({
+        status: 'pass',
+        summary: 'room',
+        execution: { mode: 'room', executors: 2 },
+      }),
+    });
+    const resolve = makeStepRun({
+      status: 'success',
+      stats: makeStats({
+        // Агрегат шага: воркеры + координатор.
+        toolCalls: 7,
+        tokens: { input: 2400, output: 500, cacheRead: 10, cacheWrite: 5, total: 2915 },
+        cost: 0.0123,
+      }),
+      events: [
+        {
+          type: 'stats',
+          // Stats-событие последнего координатора — НЕ должно попасть в футер.
+          stats: makeStats({
+            model: 'coordinator-model',
+            tokens: { input: 1200, output: 500, cacheRead: 0, cacheWrite: 0, total: 1700 },
+          }),
+        },
+      ],
+    });
+    stubFetch([refine, resolve]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    const tokens = await screen.findByTestId('step-tokens');
+    expect(within(tokens).getByTestId('session-token-in')).toHaveTextContent(
+      '2.4k',
+    );
+    expect(within(tokens).getByTestId('session-token-out')).toHaveTextContent(
+      '500',
+    );
+    expect(tokens).toHaveTextContent('7 вызовов');
+    // Координаторское stats-событие проигнорировано (иначе было бы 1.2k/model).
+    expect(tokens).not.toHaveTextContent('coordinator-model');
+    expect(within(tokens).getByTestId('session-token-in')).not.toHaveTextContent(
+      '1.2k',
+    );
+
+    const cost = await screen.findByTestId('step-cost');
+    expect(cost).toHaveTextContent('$0.0123');
+  });
 });
