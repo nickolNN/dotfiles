@@ -1,5 +1,5 @@
 import type { StepRunStatus } from '@issue-resolver/shared';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, inArray } from 'drizzle-orm';
 import type { Db } from './client';
 import { issues, iterations, stepRuns } from './schema';
 
@@ -41,20 +41,27 @@ export function reconcileInterruptedRuns(db: Db): void {
   const runningIterations = db
     .select({ id: iterations.id, issueId: iterations.issue_id })
     .from(iterations)
-    .where(eq(iterations.status, 'running'))
+    .where(inArray(iterations.status, ['running', 'preparing']))
     .all();
 
   if (runningIterations.length > 0) {
     db.update(iterations)
       .set({ status: 'failed', updated_at: now })
-      .where(eq(iterations.status, 'running'))
+      .where(inArray(iterations.status, ['running', 'preparing']))
       .run();
 
     const issueIds = [...new Set(runningIterations.map((row) => row.issueId))];
     if (issueIds.length > 0) {
       db.update(issues)
         .set({ status: 'failed', updated_at: now })
-        .where(and(inArray(issues.id, issueIds), eq(issues.status, 'running')))
+        .where(
+          and(
+            inArray(issues.id, issueIds),
+            // Задача могла застрять и в `running`, и в `preparing` (см.
+            // run-iteration.service): после рестарта обе доводим до failed.
+            inArray(issues.status, ['running', 'preparing']),
+          ),
+        )
         .run();
     }
   }

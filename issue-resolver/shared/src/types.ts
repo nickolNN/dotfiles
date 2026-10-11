@@ -3,6 +3,8 @@
 export type TaskStatus =
   | 'pending'
   | 'running'
+  /** Идёт разовая подготовка рабочей папки: clone репозиториев + install. */
+  | 'preparing'
   | 'completed'
   | 'failed'
   | 'cancelled';

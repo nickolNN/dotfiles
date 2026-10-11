@@ -6,8 +6,12 @@ import type {
   StepThinkingLevels,
   ThinkingLevel,
 } from '@issue-resolver/shared';
-import { extractIssueKeyFromUrl } from '@issue-resolver/shared';
+import {
+  extractIssueKeyFromUrl,
+  extractRepoNameFromUrl,
+} from '@issue-resolver/shared';
 import { and, eq } from 'drizzle-orm';
+import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Db } from '../db/client';
@@ -20,14 +24,14 @@ import {
   updateStepRun,
 } from '../db/step-runs.repo';
 import type { ContainerController } from '../docker/controller';
-import type { GitService } from '../git/service';
+import type { GitPrepareResult, GitService } from '../git/service';
 import type { JiraClient } from '../jira/client';
 import type { PiRunner } from '../pi/runner';
 import type { StepSessionRegistry } from '../pi/session-registry';
 import type { MrClient } from '../pr/mr';
 import type { SseHub } from '../sse/hub';
 import type { RunIterationResult, StepRunStore } from '../workflow/engine';
-import { runIteration } from '../workflow/engine';
+import { prepareWorkspace, runIteration } from '../workflow/engine';
 import {
   DEFAULT_WORKSPACE_ROOT,
   iterationResultDirFor,
@@ -300,6 +304,83 @@ export async function runIssueIteration(
     updated_at: now,
   };
 
+  // Разовая подготовка рабочей папки: clone + детерминированный install ОДИН
+  // раз при инициализации задачи. Повтор (workspace уже склонирован) не
+  // переклонирует и не переинсталлирует — все итерации работают с одним кодом.
+  const repos = input.repositories;
+  const workspaceDir = workspaceHostDirFor(
+    deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+    input.issue.id,
+  );
+  const clonesReady =
+    repos.length > 0 &&
+    repos.every((repo) =>
+      existsSync(
+        join(workspaceDir, extractRepoNameFromUrl(repo.repository_url), '.git'),
+      ),
+    );
+  const needPrepare = repos.length > 0 && !clonesReady;
+
+  let repoWorkspaces: GitPrepareResult['repoWorkspaces'];
+  if (needPrepare) {
+    // Пока идёт clone/install, задача и итерация — `preparing` (а не `running`).
+    db.update(iterations)
+      .set({ status: 'preparing', updated_at: now })
+      .where(eq(iterations.id, input.iteration.id))
+      .run();
+    db.update(issues)
+      .set({ status: 'preparing', updated_at: now })
+      .where(eq(issues.id, input.issue.id))
+      .run();
+    deps.sse.publish({
+      type: 'iteration_status',
+      issueId: input.issue.id,
+      iterationId: input.iteration.id,
+      data: JSON.stringify({
+        iterationId: input.iteration.id,
+        status: 'preparing',
+        needsInput: false,
+      }),
+      ts: now,
+    });
+
+    try {
+      repoWorkspaces = await prepareWorkspace(
+        deps,
+        { id: input.issue.id },
+        repos,
+      );
+    } catch (error) {
+      // Неудача подготовки (clone/install) — задача терминально `failed`.
+      console.error('workspace preparation failed', error);
+      const failedAt = new Date().toISOString();
+      db.update(iterations)
+        .set({ status: 'failed', updated_at: failedAt })
+        .where(eq(iterations.id, input.iteration.id))
+        .run();
+      db.update(issues)
+        .set({ status: 'failed', updated_at: failedAt })
+        .where(eq(issues.id, input.issue.id))
+        .run();
+      deps.sse.publish({
+        type: 'iteration_status',
+        issueId: input.issue.id,
+        iterationId: input.iteration.id,
+        data: JSON.stringify({
+          iterationId: input.iteration.id,
+          status: 'failed',
+          needsInput: false,
+        }),
+        ts: failedAt,
+      });
+      return { iterationStatus: 'failed', needsInput: false };
+    }
+  } else {
+    // Клоны уже на месте (или репозиториев нет): spawn(mkdir) + prepare(skip) +
+    // install(skip) идемпотентны.
+    repoWorkspaces = await prepareWorkspace(deps, { id: input.issue.id }, repos);
+  }
+
   // Итерация и задача переходят в running ещё до прогона конвейера.
   db.update(iterations)
     .set({ status: 'running', updated_at: now })
@@ -347,6 +428,7 @@ export async function runIssueIteration(
         issue: input.issue,
         iteration,
         repositories: input.repositories,
+        preparedRepoWorkspaces: repoWorkspaces,
         model: input.model,
         step_models: input.step_models,
         thinking_level: input.thinking_level,

@@ -5,6 +5,7 @@ import { MATRIX, statusColor, stepStatusColor } from './theme';
 const STATUSES: TaskStatus[] = [
   'pending',
   'running',
+  'preparing',
   'completed',
   'failed',
   'cancelled',
@@ -32,7 +33,7 @@ describe('theme tokens', () => {
     expect(MATRIX.green).toBe('#00FF41');
   });
 
-  it('maps exactly the five TaskStatus values to valid hex colors', () => {
+  it('maps exactly the six TaskStatus values to valid hex colors', () => {
     expect(Object.keys(statusColor).sort()).toEqual([...STATUSES].sort());
 
     for (const status of STATUSES) {
@@ -44,6 +45,7 @@ describe('theme tokens', () => {
     expect(statusColor.completed).toBe('#00FF41');
     expect(statusColor.failed).toBe('#FF0033');
     expect(statusColor.running).toBe('#00B4FF');
+    expect(statusColor.preparing).toBe('#FFB000');
     expect(statusColor.pending).toBe('#008F11');
     expect(statusColor.cancelled).toBe('#8A8A8A');
   });

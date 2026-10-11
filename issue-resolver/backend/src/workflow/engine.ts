@@ -129,6 +129,12 @@ export interface RunIterationInput {
   step_thinking_levels?: StepThinkingLevels;
   /** Токен для MR/PR (в проде — из secrets). */
   mrToken?: string;
+  /**
+   * Готовые рабочие копии репозиториев (clone + install уже выполнены
+   * `prepareWorkspace` один раз при инициализации задачи). Если не задано —
+   * движок считает, что репозиториев нет.
+   */
+  preparedRepoWorkspaces?: GitPrepareResult['repoWorkspaces'];
   /** Описание задачи для промпта. */
   description?: string;
   /** Текст задачи из Jira для промпта (или null). */
@@ -156,6 +162,54 @@ const MAX_ATTEMPTS = 3;
 const STEP_REPORT_FILE = '.issue-step-result.json';
 
 const nowIso = (): string => new Date().toISOString();
+
+/** Подмножество WorkflowDeps, нужное разовой подготовке рабочей папки. */
+export type PrepareWorkspaceDeps = Pick<
+  WorkflowDeps,
+  'container' | 'git' | 'workspaceRoot'
+>;
+
+/**
+ * Разовая подготовка рабочей папки задачи перед первой итерацией: создаёт/
+ * spawn-ит контейнер, идемпотентно клонирует репозитории и детерминированно
+ * ставит зависимости. Без репозиториев возвращает [] (контейнер и папка
+ * задачи всё равно создаются).
+ */
+export async function prepareWorkspace(
+  deps: PrepareWorkspaceDeps,
+  issue: { id: string },
+  repositories: RunIterationInput['repositories'],
+): Promise<GitPrepareResult['repoWorkspaces']> {
+  const workspaceRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
+  const workspaceHostDir = workspaceHostDirFor(workspaceRoot, issue.id);
+  const repoUrls = repositories.map((repo) => repo.repository_url);
+  const baseBranches = repositories.map((repo) => repo.base_branch);
+
+  const spec: ContainerSpec = {
+    issueId: issue.id,
+    containerName: containerNameFor(issue.id),
+    image: IMAGE,
+    workspaceHostPath: workspaceHostDir,
+    repoUrls,
+    // Общая на все контейнеры память модели — named volume.
+    memoryVolumeName: process.env.ISSUE_RESOLVER_MEMORY_VOLUME || 'agent-memory',
+  };
+  await deps.container.spawn(spec);
+
+  if (repositories.length === 0) {
+    return [];
+  }
+
+  const prepared = await deps.git.prepare({
+    repoUrls,
+    baseBranches,
+    workspacePath: workspaceHostDir,
+  });
+  await deps.git.installDependencies(
+    prepared.repoWorkspaces.map((workspace) => workspace.path),
+  );
+  return prepared.repoWorkspaces;
+}
 
 /**
  * Читает `.issue-step-result.json` из рабочей папки задачи. Отсутствие файла,
@@ -235,35 +289,16 @@ export async function runIteration(
   deps: WorkflowDeps,
   input: RunIterationInput,
 ): Promise<RunIterationResult> {
-  const { issue, iteration, repositories } = input;
-  const repoUrls = repositories.map((repo) => repo.repository_url);
-  const baseBranches = repositories.map((repo) => repo.base_branch);
+  const { issue, iteration } = input;
   const workspaceRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
   const containerName = containerNameFor(issue.id);
   const workspaceHostDir = workspaceHostDirFor(workspaceRoot, issue.id);
   const workspaceContainerPath = workspaceContainerDirFor(issue.id);
 
-  const spec: ContainerSpec = {
-    issueId: issue.id,
-    containerName,
-    image: IMAGE,
-    workspaceHostPath: workspaceHostDir,
-    repoUrls,
-    // Общая на все контейнеры память модели — named volume.
-    memoryVolumeName: process.env.ISSUE_RESOLVER_MEMORY_VOLUME || 'agent-memory',
-  };
-  await deps.container.spawn(spec);
-  // Без репозиториев git-подготовка не нужна: агент работает в пустой
-  // рабочей папке задачи (её создаёт контейнер/workspace как обычно).
-  let repoWorkspaces: GitPrepareResult['repoWorkspaces'] = [];
-  if (repositories.length > 0) {
-    const prepared = await deps.git.prepare({
-      repoUrls,
-      baseBranches,
-      workspacePath: workspaceHostDir,
-    });
-    repoWorkspaces = prepared.repoWorkspaces;
-  }
+  // Подготовка (spawn контейнера + clone + install) выполнена один раз до
+  // старта конвейера (см. `prepareWorkspace` / run-iteration.service) и
+  // передана сюда: движок лишь использует готовые рабочие копии.
+  const repoWorkspaces = input.preparedRepoWorkspaces ?? [];
   const repoPaths = repoWorkspaces.map((workspace) => workspace.path);
 
   const rawSteps =

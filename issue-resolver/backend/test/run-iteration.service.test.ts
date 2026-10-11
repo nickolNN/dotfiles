@@ -9,7 +9,7 @@ import type {
   StepExecutionResult,
 } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app';
 import type { Db } from '../src/db/client';
 import { createDb } from '../src/db/client';
@@ -19,7 +19,11 @@ import {
   createStepRun,
 } from '../src/db/step-runs.repo';
 import { FakeContainerController } from '../src/docker/controller';
-import { FakeGitService } from '../src/git/service';
+import {
+  FakeGitService,
+  type GitPrepareInput,
+  type GitPrepareResult,
+} from '../src/git/service';
 import { FakeJiraClient } from '../src/jira/client';
 import { FakePiRunner } from '../src/pi/runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
@@ -674,6 +678,199 @@ describe('runIssueIteration — снапшот результата итерац
       ).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/** FakeGitService с «воротами»: prepare висит до open() — для проверки preparing. */
+class GatedGitService extends FakeGitService {
+  private startResolve!: () => void;
+  private releaseGate!: () => void;
+  readonly started = new Promise<void>((resolve) => {
+    this.startResolve = resolve;
+  });
+  private readonly gate = new Promise<void>((resolve) => {
+    this.releaseGate = resolve;
+  });
+
+  async prepare(input: GitPrepareInput): Promise<GitPrepareResult> {
+    this.startResolve();
+    await this.gate;
+    return super.prepare(input);
+  }
+
+  open(): void {
+    this.releaseGate();
+  }
+}
+
+describe('runIssueIteration — разовая подготовка рабочей папки (фаза 2)', () => {
+  const roots: string[] = [];
+
+  const tempRoot = (): string => {
+    const root = mkdtempSync(join(tmpdir(), 'ir-prepare-'));
+    roots.push(root);
+    return root;
+  };
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('status preparing на время подготовки, prepare/install один раз, затем running', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['refine', 'resolve']);
+    const { deps, pi, sse } = makeDeps();
+    const gated = new GatedGitService();
+    deps.git = gated;
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('refine'));
+    pi.enqueue(pass('resolve'));
+
+    const events: SSEEvent[] = [];
+    sse.subscribe(iteration.id, (event) => events.push(event));
+
+    const run = runIssueIteration(db, deps, {
+      issue: {
+        id: issueId,
+        title: 'Подготовка',
+        pipelineSteps: ['refine', 'resolve'],
+      },
+      iteration: {
+        id: iteration.id,
+        issueId,
+        number: iteration.number,
+        context: iteration.context,
+        steps: ['refine', 'resolve'],
+      },
+      repositories,
+    });
+
+    await gated.started;
+
+    // Пока prepare висит — preparing зафиксирован в БД и SSE, pi не запущен.
+    expect(
+      db.select().from(iterations).where(eq(iterations.id, iteration.id)).get()
+        ?.status,
+    ).toBe('preparing');
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('preparing');
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'iteration_status' &&
+          event.data.includes('"status":"preparing"'),
+      ),
+    ).toBe(true);
+    expect(pi.calls).toHaveLength(0);
+
+    gated.open();
+    const result = await run;
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // Подготовка — ровно один раз на итерацию, а не на каждый шаг.
+    expect(gated.prepares).toHaveLength(1);
+    expect(gated.dependenciesInstalled).toEqual([
+      [join(deps.workspaceRoot as string, issueId, 'app')],
+    ]);
+    expect(pi.calls).toHaveLength(2);
+  });
+
+  it('workspace уже склонирован → preparing не публикуется, идемпотентный prepare позван', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse, git } = makeDeps();
+    const root = tempRoot();
+    deps.workspaceRoot = root;
+    mkdirSync(join(root, issueId, 'app', '.git'), { recursive: true });
+    pi.enqueue(pass('resolve'));
+
+    const events: SSEEvent[] = [];
+    sse.subscribe(iteration.id, (event) => events.push(event));
+
+    const result = await runIssueIteration(db, deps, {
+      issue: { id: issueId, title: 'Повтор', pipelineSteps: ['resolve'] },
+      iteration: {
+        id: iteration.id,
+        issueId,
+        number: iteration.number,
+        context: iteration.context,
+        steps: ['resolve'],
+      },
+      repositories,
+    });
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'iteration_status' &&
+          event.data.includes('"status":"preparing"'),
+      ),
+    ).toBe(false);
+    expect(git.prepares).toHaveLength(1);
+    expect(git.dependenciesInstalled).toEqual([
+      [join(root, issueId, 'app')],
+    ]);
+  });
+
+  it('init-fail подготовки → failed, не остаётся preparing/running, pi не вызван', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, git, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    git.failNextWith(new Error('npm install failed'));
+    const errorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const events: SSEEvent[] = [];
+    sse.subscribe(iteration.id, (event) => events.push(event));
+
+    try {
+      const result = await runIssueIteration(db, deps, {
+        issue: { id: issueId, title: 'Init-fail', pipelineSteps: ['resolve'] },
+        iteration: {
+          id: iteration.id,
+          issueId,
+          number: iteration.number,
+          context: iteration.context,
+          steps: ['resolve'],
+        },
+        repositories,
+      });
+
+      expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+      expect(
+        db
+          .select()
+          .from(iterations)
+          .where(eq(iterations.id, iteration.id))
+          .get()?.status,
+      ).toBe('failed');
+      expect(
+        db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+      ).toBe('failed');
+      expect(pi.calls).toHaveLength(0);
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'iteration_status' &&
+            event.data.includes('"status":"preparing"'),
+        ),
+      ).toBe(true);
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'iteration_status' &&
+            event.data.includes('"status":"failed"'),
+        ),
+      ).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
     }
   });
 });

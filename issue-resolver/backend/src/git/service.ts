@@ -84,12 +84,49 @@ export interface GitCommitResult {
   branchName: string;
 }
 
+/** Команда установки зависимостей: исполняемый файл и его аргументы. */
+export interface InstallCommand {
+  file: string;
+  args: string[];
+}
+
+/**
+ * Детерминированный манифест → команда установки зависимостей в `repoPath`.
+ * Приоритет: lock-файлы JS-менеджеров → `package.json` (npm) → `go.mod` →
+ * `null` (ставить нечего, отсутствие манифеста — не ошибка).
+ */
+export function detectInstallCommand(repoPath: string): InstallCommand | null {
+  if (existsSync(path.join(repoPath, 'package-lock.json'))) {
+    return { file: 'npm', args: ['ci'] };
+  }
+  if (existsSync(path.join(repoPath, 'pnpm-lock.yaml'))) {
+    return { file: 'pnpm', args: ['install'] };
+  }
+  if (existsSync(path.join(repoPath, 'yarn.lock'))) {
+    return { file: 'yarn', args: ['install'] };
+  }
+  if (
+    existsSync(path.join(repoPath, 'bun.lock')) ||
+    existsSync(path.join(repoPath, 'bun.lockb'))
+  ) {
+    return { file: 'bun', args: ['install'] };
+  }
+  if (existsSync(path.join(repoPath, 'package.json'))) {
+    return { file: 'npm', args: ['install'] };
+  }
+  if (existsSync(path.join(repoPath, 'go.mod'))) {
+    return { file: 'go', args: ['mod', 'download'] };
+  }
+  return null;
+}
+
 /**
  * Подготовка рабочих копий репозиториев и публикация результата.
  * Реализации: in-memory fake для юнит-тестов и CLI-обёртка над `git`.
  */
 export interface GitService {
   prepare(input: GitPrepareInput): Promise<GitPrepareResult>;
+  installDependencies(repoPaths: string[]): Promise<void>;
   commitAndPush(input: GitCommitInput): Promise<GitCommitResult>;
 }
 
@@ -123,6 +160,8 @@ const rmIndexLock = async (repoPath: string): Promise<void> => {
 export class FakeGitService implements GitService {
   readonly prepares: GitPrepareInput[] = [];
   readonly commits: GitCommitInput[] = [];
+  /** Аргументы каждого вызова installDependencies (копия массива путей). */
+  readonly dependenciesInstalled: string[][] = [];
   private pendingError: Error | null = null;
 
   /** Следующая операция (prepare/commitAndPush) отклонится этой ошибкой. */
@@ -140,6 +179,11 @@ export class FakeGitService implements GitService {
         branch: input.baseBranches[index] ?? 'main',
       })),
     };
+  }
+
+  async installDependencies(repoPaths: string[]): Promise<void> {
+    this.throwIfPending();
+    this.dependenciesInstalled.push([...repoPaths]);
   }
 
   async commitAndPush(input: GitCommitInput): Promise<GitCommitResult> {
@@ -197,6 +241,14 @@ export class GitCliService implements GitService {
 
       const name = repoName(repoUrl);
       const repoPath = path.join(input.workspacePath, name);
+
+      // Идемпотентность: уже склонированную рабочую копию не переклонируем —
+      // повтор итерации работает с тем же кодом, что и первая.
+      if (existsSync(path.join(repoPath, '.git'))) {
+        repoWorkspaces.push({ repoUrl, path: repoPath, branch: baseBranch });
+        continue;
+      }
+
       const cachePath = gitCachePath(this.originalsRoot, repoUrl);
 
       if (!existsSync(cachePath)) {
@@ -225,6 +277,41 @@ export class GitCliService implements GitService {
     }
 
     return { repoWorkspaces };
+  }
+
+  /**
+   * Разовая установка зависимостей в уже склонированных `repoPath`.
+   * Идемпотентно: если `node_modules` уже есть (кроме Go), репозиторий
+   * пропускается. Ненулевой exit команды установки — ошибка (init-fail).
+   */
+  async installDependencies(repoPaths: string[]): Promise<void> {
+    for (const repoPath of repoPaths) {
+      const command = detectInstallCommand(repoPath);
+      if (!command) {
+        continue;
+      }
+      // Go не создаёт node_modules: его модульный кэш общий, а повторный
+      // `go mod download` дёшев и не считается переустановкой.
+      if (
+        command.file !== 'go' &&
+        existsSync(path.join(repoPath, 'node_modules'))
+      ) {
+        continue;
+      }
+      try {
+        await this.exec(command.file, command.args, {
+          cwd: repoPath,
+          maxBuffer: 16 * 1024 * 1024,
+          windowsHide: true,
+          timeout: gitTimeoutMs(),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `dependency install failed (${command.file} ${command.args.join(' ')}) in ${repoPath}: ${message}`,
+        );
+      }
+    }
   }
 
   async commitAndPush(input: GitCommitInput): Promise<GitCommitResult> {

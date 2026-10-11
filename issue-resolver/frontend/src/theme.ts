@@ -12,6 +12,7 @@ export const MATRIX = {
 export const statusColor: Record<TaskStatus, string> = {
   pending: '#008F11',
   running: '#00B4FF',
+  preparing: '#FFB000',
   completed: '#00FF41',
   failed: '#FF0033',
   cancelled: '#8A8A8A',

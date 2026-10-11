@@ -135,7 +135,7 @@ const pass = () => ({ step: 'resolve' as const, exitCode: 0, report: { status: '
 const fail = () => ({ step: 'resolve' as const, exitCode: 1, report: { status: 'fail' as const, summary: 'no' }, stdout: '', stderr: '' });
 
 describe('runIssueIteration — статус running', () => {
-  it('success: iteration_status running до completed; итог completed в БД', async () => {
+  it('success: preparing → running → completed; итог completed в БД', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db);
     const { deps, pi, sse } = makeDeps();
@@ -161,7 +161,9 @@ describe('runIssueIteration — статус running', () => {
     const statuses = events
       .filter((event) => event.type === 'iteration_status')
       .map((event) => JSON.parse(event.data).status as string);
-    expect(statuses[0]).toBe('running');
+    // Первый вход без клонов: подготовка (clone/install) предшествует running.
+    expect(statuses[0]).toBe('preparing');
+    expect(statuses).toContain('running');
     expect(statuses.at(-1)).toBe('completed');
     expect(statuses.indexOf('running')).toBeLessThan(
       statuses.indexOf('completed'),

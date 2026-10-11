@@ -23,6 +23,7 @@ type LoadState =
 const STATUS_LABELS: Record<TaskStatus, string> = {
   pending: 'В очереди',
   running: 'В работе',
+  preparing: 'Подготовка',
   completed: 'Завершено',
   failed: 'Ошибка',
   cancelled: 'Отменено',

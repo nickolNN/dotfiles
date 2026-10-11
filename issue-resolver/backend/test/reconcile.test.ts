@@ -13,7 +13,10 @@ function newId(): string {
   return randomUUID();
 }
 
-function insertIssue(db: Db, status: 'running' | 'completed'): string {
+function insertIssue(
+  db: Db,
+  status: 'running' | 'preparing' | 'completed',
+): string {
   const id = newId();
   db.insert(issues)
     .values({
@@ -33,7 +36,7 @@ function insertIssue(db: Db, status: 'running' | 'completed'): string {
 function insertIteration(
   db: Db,
   issueId: string,
-  status: 'running' | 'completed',
+  status: 'running' | 'preparing' | 'completed',
 ): string {
   const id = newId();
   db.insert(iterations)
@@ -165,5 +168,21 @@ describe('reconcileInterruptedRuns', () => {
 
     const doneAfter = db.select().from(stepRuns).where(eq(stepRuns.id, doneStep)).get();
     expect(doneAfter?.status).toBe('success');
+  });
+
+  it('доводит preparing-итерацию и задачу до failed (прерванная подготовка)', () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db, 'preparing');
+    const iterationId = insertIteration(db, issueId, 'preparing');
+
+    reconcileInterruptedRuns(db);
+
+    expect(
+      db.select().from(iterations).where(eq(iterations.id, iterationId)).get()
+        ?.status,
+    ).toBe('failed');
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('failed');
   });
 });

@@ -132,6 +132,13 @@ const makeInput = (
   repositories: [
     { repository_url: 'https://example.com/a.git', base_branch: 'main' },
   ],
+  preparedRepoWorkspaces: [
+    {
+      repoUrl: 'https://example.com/a.git',
+      path: '/workspaces/issue-1/a',
+      branch: 'main',
+    },
+  ],
   model,
 });
 
@@ -201,13 +208,9 @@ describe('runIteration — один шаг', () => {
       events.some((event) => event.type === 'log' && event.stream === 'stdout'),
     ).toBe(true);
 
-    // git.prepare вызван на workspace итерации; контейнер — один на итерацию.
-    expect(git.prepares).toHaveLength(1);
-    expect(git.prepares[0]).toMatchObject({
-      repoUrls: ['https://example.com/a.git'],
-      baseBranches: ['main'],
-      workspacePath: '/workspaces/issue-1',
-    });
+    // Подготовка (clone/install) живёт вне движка: runIteration получает
+    // готовые repoWorkspaces и git.prepare сам не вызывает.
+    expect(git.prepares).toEqual([]);
     expect(pi.calls[0].containerName).toBe('issue-resolver-issue-1');
   });
 
@@ -683,9 +686,10 @@ describe('runIteration — без репозиториев', () => {
   const emptyReposInput = (steps: PipelineStep[]): RunIterationInput => ({
     ...makeInput(steps),
     repositories: [],
+    preparedRepoWorkspaces: [],
   });
 
-  it('prepare НЕ вызывается, контейнер спавнится, итерация завершается', async () => {
+  it('prepare НЕ вызывается, пайплайн исполняется в cwd задачи', async () => {
     const { deps, git, pi } = makeDeps();
     pi.enqueue(pass('resolve'));
 
@@ -744,6 +748,15 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       updated_at: NOW,
     } satisfies Iteration,
     repositories,
+    preparedRepoWorkspaces: repositories.map((repo) => ({
+      repoUrl: repo.repository_url,
+      path: `/workspaces/issue-1/${repo.repository_url
+        .replace(/\/+$/, '')
+        .replace(/\.git$/, '')
+        .split(/[\\/]/)
+        .pop()}`,
+      branch: repo.base_branch,
+    })),
     mrToken,
   });
 
@@ -808,7 +821,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     );
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    expect(git.prepares).toHaveLength(1);
+    expect(git.prepares).toEqual([]);
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
   });

@@ -78,11 +78,12 @@ export function statusOfIssue(iterations: Iteration[]): TaskStatus | null {
 }
 
 /**
- * Активная итерация: ещё выполняется (`running`) или запущена, но не
- * стартовала (`pending`). Повтор/начало новой по такой итерации запрещены.
+ * Активная итерация: ещё выполняется (`running`), запущена, но не стартовала
+ * (`pending`), или готовит рабочую папку (`preparing`). Повтор/начало новой по
+ * такой итерации запрещены.
  */
 export function isIterationActive(status: TaskStatus): boolean {
-  return status === 'running' || status === 'pending';
+  return status === 'running' || status === 'pending' || status === 'preparing';
 }
 
 /**
