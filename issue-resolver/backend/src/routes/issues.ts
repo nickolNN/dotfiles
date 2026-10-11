@@ -449,7 +449,10 @@ export async function issuesRoutes(
     },
   );
 
-  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+  app.get<{
+    Params: { id: string };
+    Querystring: { path?: string; inline?: string };
+  }>(
     `${ROUTE_PATH}/:id/result/files/content`,
     async (request, reply) => {
       const { id } = request.params;
@@ -482,9 +485,14 @@ export async function issuesRoutes(
       }
 
       const name = basename(path);
+      // `inline=1` — для предпросмотра (iframe/img); без него — скачивание.
+      const disposition =
+        request.query.inline === '1'
+          ? 'inline'
+          : attachmentDisposition(name);
       return reply
         .type(mimeForFilename(name) ?? 'application/octet-stream')
-        .header('Content-Disposition', attachmentDisposition(name))
+        .header('Content-Disposition', disposition)
         .send(body);
     },
   );

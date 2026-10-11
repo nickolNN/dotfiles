@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type {
   Issue,
   Iteration,
@@ -103,7 +110,7 @@ afterEach(() => {
 });
 
 describe('TaskDetail — порождённые файлы результата', () => {
-  it('готовый результат + список файлов → ссылки на скачивание', async () => {
+  it('готовый результат + файлы → кнопка «Артефакты (2)», клик открывает модалку со ссылками', async () => {
     const files: WorkspaceFile[] = [
       {
         name: 'index.html',
@@ -123,23 +130,30 @@ describe('TaskDetail — порождённые файлы результата'
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const list = await screen.findByTestId('result-files');
-    const links = within(list).getAllByTestId('result-file-download');
-    expect(links).toHaveLength(2);
-    expect(links[0]).toHaveAttribute(
+    // В шапке больше нет списка ссылок — вместо них кнопка-счётчик.
+    expect(screen.queryByTestId('result-files')).toBeNull();
+    expect(screen.queryByTestId('result-file-download')).toBeNull();
+    const open = await screen.findByTestId('open-artifacts');
+    await waitFor(() => expect(open).toBeEnabled());
+    expect(open).toHaveTextContent('Артефакты (2)');
+
+    fireEvent.click(open);
+    const modal = await screen.findByTestId('artifacts-modal');
+    const downloads = within(modal).getAllByTestId('artifact-download');
+    expect(downloads).toHaveLength(2);
+    expect(downloads[0]).toHaveAttribute(
       'href',
       '/issue-resolver/api/v1/issues/issue-1/result/files/content?path=index.html',
     );
-    expect(links[0]).toHaveAttribute('download', 'index.html');
-    expect(links[0]).toHaveTextContent('Скачать index.html');
-    expect(links[1]).toHaveAttribute('download', 'styles.css');
-    expect(links[1]).toHaveAttribute(
+    expect(downloads[0]).toHaveAttribute('download', 'index.html');
+    expect(downloads[1]).toHaveAttribute('download', 'styles.css');
+    expect(downloads[1]).toHaveAttribute(
       'href',
       '/issue-resolver/api/v1/issues/issue-1/result/files/content?path=styles.css',
     );
   });
 
-  it('rel_path с подпапкой кодируется в query', async () => {
+  it('rel_path с подпапкой кодируется в query ссылки скачивания', async () => {
     stubFetch(makeIssue({ desired_result: 'html' }), [
       {
         name: 'leaf.txt',
@@ -150,16 +164,17 @@ describe('TaskDetail — порождённые файлы результата'
     ]);
 
     render(<TaskDetail issueId="issue-1" />);
-    const list = await screen.findByTestId('result-files');
-    expect(
-      within(list).getByTestId('result-file-download'),
-    ).toHaveAttribute(
+    const open = await screen.findByTestId('open-artifacts');
+    await waitFor(() => expect(open).toBeEnabled());
+    fireEvent.click(open);
+
+    expect(await screen.findByTestId('artifact-download')).toHaveAttribute(
       'href',
       '/issue-resolver/api/v1/issues/issue-1/result/files/content?path=nested%2Fleaf.txt',
     );
   });
 
-  it('пустой список файлов → блок result-files отсутствует', async () => {
+  it('пустой список файлов → кнопка «Артефакты (0)» задизейблена, модалки нет', async () => {
     stubFetch(makeIssue({ desired_result: 'md' }), []);
 
     render(<TaskDetail issueId="issue-1" />);
@@ -168,8 +183,12 @@ describe('TaskDetail — порождённые файлы результата'
       expect(screen.getByTestId('open-result')).toBeEnabled(),
     );
 
+    const open = screen.getByTestId('open-artifacts');
+    expect(open).toBeDisabled();
+    expect(open).toHaveTextContent('Артефакты (0)');
     expect(screen.queryByTestId('result-files')).toBeNull();
     expect(screen.queryByTestId('result-file-download')).toBeNull();
+    expect(screen.queryByTestId('artifacts-modal')).toBeNull();
     // сама кнопка «Скачать» результата на месте
     expect(screen.getByTestId('download-result')).toBeInTheDocument();
   });

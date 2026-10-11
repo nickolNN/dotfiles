@@ -32,7 +32,6 @@ import {
   getStepRuns,
   promptIteration,
   repeatIteration,
-  resultFileContentUrl,
   resultFilesArchiveUrl,
   sendIterationCommand,
   sendIterationMessage,
@@ -45,8 +44,9 @@ import {
   type StepRunWithEvents,
 } from '../api/session-events';
 import AgentMarkdown from '../components/AgentMarkdown';
+import ArtifactsModal from '../components/ArtifactsModal';
 import AutoScrollBox from '../components/AutoScrollBox';
-import FilePicker, { formatFileSize } from '../components/FilePicker';
+import FilePicker from '../components/FilePicker';
 import IssueFilesList from '../components/IssueFilesList';
 import MarkdownEditor from '../components/MarkdownEditor';
 import RoomAgentTabs from '../components/RoomAgentTabs';
@@ -363,7 +363,9 @@ export default function TaskDetail({
   const [issueFiles, setIssueFiles] = useState<IssueFile[]>([]);
   // Файлы, порождённые агентом в рабочей папке последней completed-итерации
   // (кроме самого артефакта результата).
-  const [resultFiles, setResultFiles] = useState<WorkspaceFile[]>([]);  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
+  const [resultFiles, setResultFiles] = useState<WorkspaceFile[]>([]);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
   const [stepModels, setStepModels] = useState<StepModels>({});
   const [stepThinkingLevels, setStepThinkingLevels] =
@@ -1384,32 +1386,16 @@ export default function TaskDetail({
                   >
                     Скачать всё (.tar.gz)
                   </a>
-                </div>
-                {resultReady && resultFiles.length > 0 && (
-                  <ul
-                    data-testid="result-files"
-                    className="mt-2 flex flex-col items-start gap-1"
+                  <button
+                    type="button"
+                    data-testid="open-artifacts"
+                    onClick={() => setArtifactsOpen(true)}
+                    disabled={!resultReady || resultFiles.length === 0}
+                    className="min-h-9 rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#008F11] disabled:hover:text-[#00FF41]/80"
                   >
-                    {resultFiles.map((file) => (
-                      <li key={file.rel_path}>
-                        <a
-                          data-testid="result-file-download"
-                          href={resultFileContentUrl(
-                            state.issue.id,
-                            file.rel_path,
-                          )}
-                          download={file.name}
-                          className="min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]"
-                        >
-                          Скачать {file.name}
-                          <span className="ml-2 text-[#00FF41]/50">
-                            {formatFileSize(file.size)}
-                          </span>
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                    Артефакты ({resultFiles.length})
+                  </button>
+                </div>
               </div>
             )}
             {state.issue.jira_issue_url && (
@@ -2166,6 +2152,15 @@ export default function TaskDetail({
             </div>
           </div>
         </div>
+      )}
+
+      {state.status === 'ready' && (
+        <ArtifactsModal
+          issueId={state.issue.id}
+          files={resultFiles}
+          open={artifactsOpen}
+          onClose={() => setArtifactsOpen(false)}
+        />
       )}
 
       {expandedStepRun && (

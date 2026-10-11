@@ -408,6 +408,14 @@ export function resultFileContentUrl(
   return `${API_BASE}/issues/${issueId}/result/files/content?path=${encodeURIComponent(relPath)}`;
 }
 
+/** URL содержимого порождённого файла для предпросмотра (inline). */
+export function resultFilePreviewUrl(
+  issueId: string,
+  relPath: string,
+): string {
+  return `${resultFileContentUrl(issueId, relPath)}&inline=1`;
+}
+
 /** URL архива (tar.gz) со всеми порождёнными файлами и результатом. */
 export function resultFilesArchiveUrl(issueId: string): string {
   return `${API_BASE}/issues/${issueId}/result/files/archive`;
