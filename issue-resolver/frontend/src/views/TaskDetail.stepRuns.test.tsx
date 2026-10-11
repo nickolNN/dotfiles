@@ -130,7 +130,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
     const steps = within(await screen.findByTestId('iteration-steps'));
     expect(await steps.findByText('Resolve')).toBeInTheDocument();
     expect(steps.getByText('success')).toBeInTheDocument();
-    expect(steps.getByText('Test')).toBeInTheDocument();
+    expect(steps.getByText('Тест')).toBeInTheDocument();
     expect(steps.getByText('попытка 2')).toBeInTheDocument();
     expect(steps.getByText('failed')).toBeInTheDocument();
   });
@@ -186,14 +186,14 @@ describe('TaskDetail — шаги выбранной итерации', () => {
     render(<TaskDetail issueId="issue-1" />);
 
     const defaultSteps = within(await screen.findByTestId('iteration-steps'));
-    expect(await defaultSteps.findByText('Test')).toBeInTheDocument();
+    expect(await defaultSteps.findByText('Тест')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Итерация #1'));
 
     await waitFor(() => {
       const selectedSteps = within(screen.getByTestId('iteration-steps'));
       expect(selectedSteps.getByText('Resolve')).toBeInTheDocument();
-      expect(selectedSteps.queryByText('Test')).toBeNull();
+      expect(selectedSteps.queryByText('Тест')).toBeNull();
     });
   });
 

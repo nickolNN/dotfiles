@@ -53,29 +53,14 @@ const API_PATH = '/issue-resolver/api/v1';
 const ROUTE_PATH = `${API_PATH}/issues`;
 const DEFAULT_STEPS: readonly PipelineStep[] = ['refine', 'resolve'];
 
-/** Вставляет additions сразу после 'resolve' (или в начало, если resolve нет). */
-function insertAfterResolve(
-  steps: PipelineStep[],
-  additions: readonly PipelineStep[],
-): PipelineStep[] {
-  const missing = additions.filter((step) => !steps.includes(step));
-  if (missing.length === 0) {
-    return steps;
-  }
-  const resolveIndex = steps.indexOf('resolve');
-  const at = resolveIndex === -1 ? 0 : resolveIndex + 1;
-  return [...steps.slice(0, at), ...missing, ...steps.slice(at)];
-}
-
 /**
- * Эффективные шаги задачи: 'resolve' всегда присутствует; при isReviewNeed
- * 'review'+'test' вставляются сразу после 'resolve' (если отсутствуют); при
- * createMr — 'pr' в конец. Остальное — без дублей, в исходном порядке.
- * Пользовательские шаги при выключенных флагах не переписываются.
+ * Эффективные шаги задачи: 'resolve' всегда присутствует; при createMr —
+ * 'pr' в конец. Список шагов приходит из `pipeline_steps`/`steps` напрямую:
+ * review и test выбираются независимо пользователем, флагом не навязываются.
+ * Остальное — без дублей, в исходном порядке.
  */
 function resolvePipelineSteps(
   input: PipelineStep[] | undefined,
-  isReviewNeed: boolean,
   createMr: boolean,
 ): PipelineStep[] {
   const steps = input && input.length > 0 ? input : DEFAULT_STEPS;
@@ -83,31 +68,26 @@ function resolvePipelineSteps(
   const withResolve: PipelineStep[] = deduped.includes('resolve')
     ? deduped
     : ['resolve', ...deduped];
-  return combineSteps(withResolve, isReviewNeed, createMr);
+  return combineSteps(withResolve, createMr);
 }
 
 /**
- * Шаги итерации: без принудительного 'resolve' (сохраняем override), но те же
- * правила комбинирования review/test/pr.
+ * Шаги итерации: без принудительного 'resolve' (сохраняем override), но то же
+ * правило комбинирования pr.
  */
 function combineIterationSteps(
   input: PipelineStep[],
-  isReviewNeed: boolean,
   createMr: boolean,
 ): PipelineStep[] {
-  return combineSteps([...new Set(input)], isReviewNeed, createMr);
+  return combineSteps([...new Set(input)], createMr);
 }
 
-/** Общее правило: review+test после resolve при isReviewNeed, pr в конец при createMr. */
+/** Общее правило: pr в конец при createMr; набор шагов не переписывается. */
 function combineSteps(
   input: PipelineStep[],
-  isReviewNeed: boolean,
   createMr: boolean,
 ): PipelineStep[] {
   let steps = input;
-  if (isReviewNeed) {
-    steps = insertAfterResolve(steps, ['review', 'test']);
-  }
   if (createMr && !steps.includes('pr')) {
     steps = [...steps, 'pr'];
   }
@@ -690,7 +670,6 @@ export async function issuesRoutes(
         steps: applyDesiredResult(
           combineIterationSteps(
             body.steps ?? issue.pipeline_steps,
-            isReviewNeed,
             createMr,
           ),
           issue.desired_result ?? 'md',
@@ -798,7 +777,7 @@ export async function issuesRoutes(
       (repository) => repository.create_mr === true,
     );
     const pipelineSteps = applyDesiredResult(
-      resolvePipelineSteps(body.pipeline_steps, isReviewNeed, createMr),
+      resolvePipelineSteps(body.pipeline_steps, createMr),
       desiredResult,
     );
     const now = new Date().toISOString();

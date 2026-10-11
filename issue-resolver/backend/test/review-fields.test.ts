@@ -59,7 +59,7 @@ describe('review-поля итерации — spec-parity', () => {
     expect(list[0].context).toBe('важный контекст задачи');
   });
 
-  it('POST /issues с is_review_need:true → review_context сохранён и review в шагах', async () => {
+  it('POST /issues с is_review_need:true → review_context сохранён, review приходит из шагов', async () => {
     const app = makeApp();
 
     const created = await app.inject({
@@ -68,6 +68,7 @@ describe('review-поля итерации — spec-parity', () => {
       payload: {
         title: 'Review-задача',
         repositories: REPOSITORIES,
+        pipeline_steps: ['review'],
         is_review_need: true,
         review_context: 'ctx',
       },
@@ -115,7 +116,12 @@ describe('review-поля итерации — spec-parity', () => {
     const iteration = await app.inject({
       method: 'POST',
       url: `${ROUTE_PATH}/${issueId}/iterations`,
-      payload: { context: 'restart', is_review_need: true, review_context: 'rctx' },
+      payload: {
+        context: 'restart',
+        steps: ['review'],
+        is_review_need: true,
+        review_context: 'rctx',
+      },
     });
 
     expect(iteration.statusCode).toBe(201);

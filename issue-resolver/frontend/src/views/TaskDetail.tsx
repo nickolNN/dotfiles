@@ -66,16 +66,16 @@ import { statusColor, stepStatusColor } from '../theme';
 const STEP_OPTIONS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
   { value: 'refine', label: 'Refine' },
   { value: 'resolve', label: 'Resolve' },
-  { value: 'review', label: 'Review' },
-  { value: 'test', label: 'Test' },
+  { value: 'review', label: 'Код-ревью' },
+  { value: 'test', label: 'Тест' },
   { value: 'pr', label: 'PR' },
 ];
 
 const STEP_LABELS: Record<PipelineStep, string> = {
   refine: 'Refine',
   resolve: 'Resolve',
-  review: 'Review',
-  test: 'Test',
+  review: 'Код-ревью',
+  test: 'Тест',
   pr: 'PR',
 };
 
@@ -862,7 +862,7 @@ export default function TaskDetail({
   const hint = !context.trim()
     ? 'Укажи контекст для новой итерации.'
     : selectedSteps.includes('review')
-      ? 'После Resolver автоматически запустится Reviewer.'
+      ? 'После Resolver автоматически запустится Код-ревью.'
       : 'Итерация завершится сразу после работы Resolver.';
 
   // Один живой тик на все карточки шагов: активные показывают elapsed.

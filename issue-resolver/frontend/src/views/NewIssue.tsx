@@ -23,8 +23,8 @@ import { thinkingLevelsFor } from '../constants/thinking-levels';
 const MODEL_STEPS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
   { value: 'refine', label: 'Refine' },
   { value: 'resolve', label: 'Resolve' },
-  { value: 'review', label: 'Review' },
-  { value: 'test', label: 'Test' },
+  { value: 'review', label: 'Код-ревью' },
+  { value: 'test', label: 'Тест' },
 ];
 
 /** Желаемый результат задачи: артефакт (md/html) или PR. */

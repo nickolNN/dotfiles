@@ -97,7 +97,7 @@ describe('NewIssue — селектор модели (per-step)', () => {
 
     // Отмечаем ещё два шага — появляются их селекторы.
     fireEvent.click(screen.getByLabelText('Refine'));
-    fireEvent.click(screen.getByLabelText('Review'));
+    fireEvent.click(screen.getByLabelText('Код-ревью'));
     expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(3);
   });
 

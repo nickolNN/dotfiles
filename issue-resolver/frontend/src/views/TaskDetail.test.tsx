@@ -269,7 +269,7 @@ describe('TaskDetail', () => {
     expect(hints[0]).toHaveTextContent('без Refine');
   });
 
-  it('тогл Reviewer убран; выбор шага Review шлёт is_review_need: true', async () => {
+  it('тогл Reviewer убран; выбор шага Код-ревью шлёт is_review_need: true', async () => {
     const issue = makeIssue();
     let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
     const fetchMock = vi.fn(
@@ -302,7 +302,7 @@ describe('TaskDetail', () => {
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByLabelText('Контекст для Reviewer')).toBeNull();
 
-    fireEvent.click(screen.getByLabelText('Review'));
+    fireEvent.click(screen.getByLabelText('Код-ревью'));
 
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
@@ -460,8 +460,8 @@ describe('TaskDetail', () => {
     await screen.findByText('Итерация #1');
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    // Отмечаем Review, но модель оставляем «По умолчанию».
-    fireEvent.click(screen.getByLabelText('Review'));
+    // Отмечаем Код-ревью, но модель оставляем «По умолчанию».
+    fireEvent.click(screen.getByLabelText('Код-ревью'));
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),

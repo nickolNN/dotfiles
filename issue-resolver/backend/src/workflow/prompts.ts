@@ -148,7 +148,10 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
 
   review: (input) =>
     [
-      'Role: independent reviewer, do NOT continue the implementation.',
+      'Role: independent code reviewer — review the SOURCE CODE only.',
+      'Check correctness against the task description and review context.',
+      'Do NOT run the application, do NOT run tests/build/typecheck, do NOT use',
+      'the browser — this is a fast code-only review.',
       ...(input.reviewContext
         ? [
             'Reviewer context (focus points, regression risks, or acceptance',
@@ -156,18 +159,19 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
             input.reviewContext,
           ]
         : []),
-      'You are allowed to run build, tests, and the browser (Playwright / agent-browser).',
-      'Verify the real behavior of the application, not just reading code.',
       'Format the result in `.issue-step-result.json`:',
       '{ status: pass|fail|blocked, summary, scenarios[], findings[] }.',
     ].join('\n'),
 
   test: () =>
     [
-      'Role: tester.',
+      'Role: tester — final verification only.',
       'Run the target application in the browser (Playwright).',
-      'Record the verified scenarios and the defects found.',
-      'Format the result in `.issue-step-result.json`.',
+      'Verify the scenarios and record the defects found.',
+      'You do NOT fix code — if something is broken, record it in findings and',
+      'return status fail/blocked; the pipeline will re-run development.',
+      'Format the result in `.issue-step-result.json`:',
+      '{ status: pass|fail|blocked, summary, scenarios[], findings[] }.',
     ].join('\n'),
 
   pr: () =>

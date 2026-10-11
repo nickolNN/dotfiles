@@ -170,7 +170,7 @@ describe('NewIssue', () => {
     fireEvent.change(screen.getByLabelText('Адрес'), {
       target: { value: 'git@github.com:org/repo.git' },
     });
-    fireEvent.click(screen.getByLabelText('Review'));
+    fireEvent.click(screen.getByLabelText('Код-ревью'));
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
 
     await waitFor(() => {

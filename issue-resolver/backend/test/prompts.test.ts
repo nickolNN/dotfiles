@@ -120,12 +120,27 @@ describe('buildStepPrompt', () => {
     expect(text).not.toContain('Jira text');
   });
 
-  it('review: independent reviewer + output file', () => {
+  it('review: чистое код-ревью — source-only, без запуска tests/build/browser', () => {
     const text = prompt('review');
 
-    expect(text).toContain('independent reviewer');
+    expect(text).toContain('independent code reviewer');
+    expect(text).toContain('SOURCE CODE only');
     expect(text).toContain('.issue-step-result.json');
+    // Старое разрешение выполнять тесты/браузер убрано: ревью больше не тестирует.
+    expect(text).not.toContain('You are allowed to run');
+    expect(text).not.toContain('Playwright');
+    expect(text).not.toContain('Verify the real behavior');
+  });
+
+  it('test: финальная проверка, не чинит код, при падении перезапускается разработка', () => {
+    const text = prompt('test');
+
+    expect(text).toContain('final verification only');
     expect(text).toContain('Playwright');
+    expect(text.toLowerCase()).toContain('do not fix');
+    expect(text.toLowerCase()).toContain('re-run development');
+    expect(text).toContain('fail/blocked');
+    expect(text).toContain('.issue-step-result.json');
   });
 
   it('review: review_context renders the "Reviewer context" section; empty/other steps — no section', () => {
