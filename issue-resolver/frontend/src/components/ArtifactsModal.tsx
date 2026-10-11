@@ -6,6 +6,7 @@ import {
 } from '../api/client';
 import AgentMarkdown from './AgentMarkdown';
 import { formatFileSize } from './FilePicker';
+import { extToLanguage, highlightCode } from '../lib/highlight';
 
 interface ArtifactsModalProps {
   issueId: string;
@@ -187,6 +188,26 @@ function ArtifactPreview({
     } catch {
       body = state.text;
     }
+  }
+  // Подсветка синтаксиса; неизвестный язык → сырой <pre> с дефолтным цветом.
+  const lang =
+    kind === 'json'
+      ? 'json'
+      : extToLanguage(extensionOf(file.name) || extensionOf(file.rel_path));
+  const highlighted = highlightCode(body, lang);
+  if (highlighted !== null) {
+    return (
+      <pre
+        data-testid="artifact-preview"
+        className="whitespace-pre-wrap break-words text-xs"
+      >
+        <code
+          className="hljs"
+          // pi-lens-ignore: dangerously-set-inner-html -- highlight.js escapes the source (only <span class="hljs-*"> + text), no user HTML is injected
+          dangerouslySetInnerHTML={{ __html: highlighted }}
+        />
+      </pre>
+    );
   }
   return (
     <pre

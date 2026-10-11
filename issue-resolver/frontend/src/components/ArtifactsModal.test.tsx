@@ -38,6 +38,20 @@ const BIN_FILE: WorkspaceFile = {
   mime_type: 'application/octet-stream',
 };
 
+const JS_FILE: WorkspaceFile = {
+  name: 'app.js',
+  rel_path: 'src/app.js',
+  size: 18,
+  mime_type: 'application/javascript',
+};
+
+const TXT_FILE: WorkspaceFile = {
+  name: 'readme.txt',
+  rel_path: 'readme.txt',
+  size: 8,
+  mime_type: 'text/plain',
+};
+
 function textResponse(body: string): Response {
   return { ok: true, status: 200, text: async () => body } as Response;
 }
@@ -51,6 +65,9 @@ function stubFetch(overrides: (url: string) => Response | null = () => null) {
     if (url.includes('notes.md')) return Promise.resolve(textResponse('# Заголовок'));
     if (url.includes('data.json')) {
       return Promise.resolve(textResponse('{"b":2,"a":1}'));
+    }
+    if (url.includes('app.js')) {
+      return Promise.resolve(textResponse('const answer = 42;'));
     }
     if (url.includes('/result/files/content')) {
       return Promise.resolve(textResponse('raw body'));
@@ -130,11 +147,12 @@ describe('ArtifactsModal', () => {
     );
   });
 
-  it('json → pre с pretty-print', async () => {
+  it('json → pre с pretty-print и подсветкой', async () => {
     stubFetch();
     renderModal([JSON_FILE]);
 
     const pre = await screen.findByTestId('artifact-preview');
+    expect(pre.querySelector('code.hljs')).not.toBeNull();
     expect(pre.textContent).toContain('"b": 2');
     expect(pre.textContent).toContain('"a": 1');
   });
@@ -147,6 +165,26 @@ describe('ArtifactsModal', () => {
 
     const pre = await screen.findByTestId('artifact-preview');
     expect(pre).toHaveTextContent('{not json');
+  });
+
+  it('js → подсветка синтаксиса: code.hljs с токен-классами', async () => {
+    stubFetch();
+    renderModal([JS_FILE]);
+
+    const pre = await screen.findByTestId('artifact-preview');
+    const code = pre.querySelector('code.hljs');
+    expect(code).not.toBeNull();
+    expect(code?.querySelector('.hljs-keyword')).not.toBeNull();
+    expect(pre).toHaveTextContent('const answer = 42;');
+  });
+
+  it('txt без языка → без подсветки, сырой текст', async () => {
+    stubFetch();
+    renderModal([TXT_FILE]);
+
+    const pre = await screen.findByTestId('artifact-preview');
+    expect(pre.querySelector('code.hljs')).toBeNull();
+    expect(pre).toHaveTextContent('raw body');
   });
 
   it('неизвестный тип → заглушка «недоступен» + ссылка скачивания', () => {

@@ -527,3 +527,8 @@ body {
   pointer-events: none;
   content: attr(data-placeholder);
 }
+
+/* Фон темы highlight.js не нужен: модалка артефактов уже тёмная (#0d0208). */
+.hljs {
+  background: transparent;
+}
