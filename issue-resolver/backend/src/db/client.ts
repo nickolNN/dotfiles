@@ -2,13 +2,23 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import * as schema from './schema';
 
 export const DEFAULT_DB_PATH = resolve(
   import.meta.dirname,
   '../../data/issue-resolver.db',
 );
+
+/**
+ * Путь БД из env: при заданном `ISSUE_RESOLVER_DATA_DIR` — 
+ * `<DATA_DIR>/issue-resolver.db`, иначе DEFAULT_DB_PATH (текущее поведение).
+ * Общий DATA_DIR двигает БД, workspaces и originals-кэш вместе.
+ */
+export const dbPathFromEnv = (env: NodeJS.ProcessEnv): string => {
+  const dataDir = env.ISSUE_RESOLVER_DATA_DIR;
+  return dataDir ? join(dataDir, 'issue-resolver.db') : DEFAULT_DB_PATH;
+};
 
 /**
  * DDL совпадает с src/db/schema.ts. drizzle-kit-миграции в этом срезе нет,

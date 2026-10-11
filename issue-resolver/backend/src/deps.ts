@@ -1,8 +1,9 @@
+import { join } from 'node:path';
 import Dockerode from 'dockerode';
 import type { AppDeps } from './app';
 import { DockerodeContainerController } from './docker/controller';
 import { LocalContainerController } from './docker/local-controller';
-import { GitCliService } from './git/service';
+import { GitCliService, originalsRootFromEnv } from './git/service';
 import { HttpJiraClient } from './jira/client';
 import { RpcPiRunner } from './pi/rpc-runner';
 import { InMemoryStepSessionRegistry } from './pi/session-registry';
@@ -39,13 +40,16 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
   if (env.ISSUE_RESOLVER_LOCAL === '1') {
     return {
       container: new LocalContainerController(),
-      git: new GitCliService(),
+      git: new GitCliService(originalsRootFromEnv(env)),
       pi: new RpcPiRunner('resolve', 'local'),
       mr: new HttpMrClient(env.MR_TOKEN || ''),
       jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
       control: new InMemoryStepSessionRegistry(),
       workspaceRoot:
-        env.ISSUE_RESOLVER_WORKSPACE_ROOT || DEFAULT_LOCAL_WORKSPACE_ROOT,
+        env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
+        (env.ISSUE_RESOLVER_DATA_DIR
+          ? join(env.ISSUE_RESOLVER_DATA_DIR, 'workspaces')
+          : DEFAULT_LOCAL_WORKSPACE_ROOT),
       local: true,
     };
   }
@@ -58,12 +62,16 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
 
   return {
     container: new DockerodeContainerController(docker),
-    git: new GitCliService(),
+    git: new GitCliService(originalsRootFromEnv(env)),
     pi: new RpcPiRunner(),
     mr: new HttpMrClient(env.MR_TOKEN || ''),
     jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
     control: new InMemoryStepSessionRegistry(),
     local: false,
-    workspaceRoot: env.ISSUE_RESOLVER_WORKSPACE_ROOT || DEFAULT_WORKSPACE_ROOT,
+    workspaceRoot:
+      env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
+      (env.ISSUE_RESOLVER_DATA_DIR
+        ? join(env.ISSUE_RESOLVER_DATA_DIR, 'workspaces')
+        : DEFAULT_WORKSPACE_ROOT),
   };
 }

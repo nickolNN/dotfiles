@@ -100,6 +100,8 @@ export interface Issue {
   status: TaskStatus;
   created_at: string;
   updated_at: string;
+  /** true — issue есть в БД, но его workspace-папка удалена (осиротевшая задача). */
+  workspace_missing?: boolean;
 }
 
 export interface Iteration {

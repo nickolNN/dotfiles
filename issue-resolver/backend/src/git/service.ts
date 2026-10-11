@@ -35,6 +35,18 @@ const defaultGitExecFile: GitExecFile = async (file, args, options) => {
   return { stdout: String(stdout), stderr: String(stderr) };
 };
 
+/** Дефолтный корень originals-кэша: bare-клоны репозиториев. */
+export const DEFAULT_ORIGINALS_ROOT = '/tmp/issue-resolver/originals';
+
+/**
+ * Корень originals-кэша из env: при заданном `ISSUE_RESOLVER_DATA_DIR` — 
+ * `<DATA_DIR>/originals`, иначе DEFAULT_ORIGINALS_ROOT (текущее поведение).
+ */
+export const originalsRootFromEnv = (env: NodeJS.ProcessEnv): string => {
+  const dataDir = env.ISSUE_RESOLVER_DATA_DIR;
+  return dataDir ? path.join(dataDir, 'originals') : DEFAULT_ORIGINALS_ROOT;
+};
+
 /** Таймаут git (`killed`) → понятная ошибка; прочее отдаём как есть. */
 function describeGitError(
   error: unknown,
@@ -156,7 +168,7 @@ export class FakeGitService implements GitService {
  */
 export class GitCliService implements GitService {
   constructor(
-    private readonly originalsRoot = '/tmp/issue-resolver/originals',
+    private readonly originalsRoot = DEFAULT_ORIGINALS_ROOT,
     private readonly exec: GitExecFile = defaultGitExecFile,
     private readonly timeoutMs: number = gitTimeoutMs(),
   ) {}

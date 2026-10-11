@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type {
@@ -148,7 +149,11 @@ function toIteration(row: typeof iterations.$inferSelect): Iteration {
 }
 
 /** Сборка Issue из строк БД: repositories — из issue_repositories, status — из последней итерации. */
-function toIssue(db: Db, row: typeof issues.$inferSelect): Issue {
+function toIssue(
+  db: Db,
+  row: typeof issues.$inferSelect,
+  workspaceRoot: string,
+): Issue {
   const repositories = db
     .select()
     .from(issueRepositories)
@@ -184,6 +189,7 @@ function toIssue(db: Db, row: typeof issues.$inferSelect): Issue {
     status: statusOfIssue(iterationRows.map(toIteration)) ?? 'pending',
     created_at: row.created_at,
     updated_at: row.updated_at,
+    workspace_missing: !existsSync(workspaceHostDirFor(workspaceRoot, row.id)),
   };
 }
 
@@ -285,7 +291,9 @@ export async function issuesRoutes(
       .orderBy(desc(issues.created_at))
       .all();
 
-    return rows.map((row) => toIssue(db, row));
+    return rows.map((row) =>
+      toIssue(db, row, deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT),
+    );
   });
 
   app.get<{ Params: { id: string } }>(
@@ -295,7 +303,7 @@ export async function issuesRoutes(
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
-      return toIssue(db, issue);
+      return toIssue(db, issue, deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT);
     },
   );
 

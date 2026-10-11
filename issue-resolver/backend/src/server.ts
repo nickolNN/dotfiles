@@ -1,5 +1,5 @@
 import { buildApp } from './app';
-import { createDb } from './db/client';
+import { createDb, dbPathFromEnv } from './db/client';
 import { reconcileInterruptedRuns } from './db/reconcile';
 import { buildDepsFromEnv } from './deps';
 
@@ -8,7 +8,7 @@ const HOST = '0.0.0.0';
 
 const port = Number(process.env.PORT) || DEFAULT_PORT;
 
-const db = createDb();
+const db = createDb(dbPathFromEnv(process.env));
 reconcileInterruptedRuns(db);
 
 const app = buildApp(db, buildDepsFromEnv(process.env));

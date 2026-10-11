@@ -1327,6 +1327,15 @@ export default function TaskDetail({
               >
                 {state.issue.status}
               </span>
+              {state.issue.workspace_missing === true && (
+                <span
+                  data-testid="workspace-missing"
+                  title="Рабочая папка задачи была удалена"
+                  className="shrink-0 border border-[#FFB000] px-2 py-0.5 text-xs font-medium text-[#FFB000]"
+                >
+                  Файлы задачи отсутствуют
+                </span>
+              )}
             </div>
             {resultAvailable && (
               <div className="mt-3">
