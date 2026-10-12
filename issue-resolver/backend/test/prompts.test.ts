@@ -22,6 +22,7 @@ const base = {
   attachmentPaths: undefined as string[] | undefined,
   previousOutcome: null as string | null,
   reviewContext: null as string | null,
+  pipelineSteps: undefined as PipelineStep[] | undefined,
 };
 
 function prompt(
@@ -200,6 +201,35 @@ describe('buildStepPrompt', () => {
     expect(emptyOutcome).not.toContain('Previous iteration outcome');
   });
 
+  it('resolve: знает даунстрим-гейты и не дублирует их', () => {
+    const text = prompt('resolve', { pipelineSteps: ['refine','resolve','review','test','pr'] });
+    expect(text).toContain('Downstream verification steps run AFTER you');
+    expect(text).toContain('do NOT duplicate');
+    expect(text).toContain('Playwright');
+    expect(text).toContain('source code only');
+  });
+
+  it('resolve: без даунстрим review/test — примечания нет', () => {
+    const text = prompt('resolve', { pipelineSteps: ['refine','resolve'] });
+    expect(text).not.toContain('Downstream verification steps');
+    expect(text).not.toContain('do NOT duplicate');
+  });
+
+  it('refine: согласует план с даунстрим-гейтами', () => {
+    const text = prompt('refine', { pipelineSteps: ['refine','resolve','review','test','pr'] });
+    expect(text).toContain('Enabled pipeline for this run');
+    expect(text).toContain('Coordinate your plan with these steps');
+    expect(text).toContain('do NOT duplicate');
+    expect(text).toContain('Playwright');
+  });
+
+  it('refine: resolve — FINAL gate, когда review/test не включены', () => {
+    const text = prompt('refine', { pipelineSteps: ['refine','resolve'] });
+    expect(text).toContain('Enabled pipeline for this run');
+    expect(text).toContain('FINAL verification gate');
+    expect(text).toContain('full self-verification');
+  });
+
   it('determinism: same input → same string', () => {
     expect(prompt('review')).toBe(prompt('review'));
     expect(prompt('resolve', { feedback: 'x' })).toBe(
@@ -282,6 +312,15 @@ describe('refine execution & room prompts', () => {
     expect(text).toContain('frontend done');
     expect(text).toContain('backend done');
     expect(text).toContain('.issue-step-result.json');
+  });
+
+  it('coordinator: знает даунстрим-гейты, когда они включены', () => {
+    const text = buildRoomCoordinatorPrompt(
+      { ...roomInput, pipelineSteps: ['refine','resolve','review','test','pr'] },
+      [{ index: 0, summary: 'frontend done' }],
+    );
+
+    expect(text).toContain('Downstream verification steps run AFTER you');
   });
 });
 

@@ -32,6 +32,12 @@ export interface StepPromptInput {
    * отсутствует.
    */
   previousOutcome?: string | null;
+  /**
+   * Канонический список включённых шагов прогона (в порядке исполнения).
+   * Используется для координации с даунстрим-верификацией (review/test), а не
+   * для запретов: план не дублирует отдельные шаги верификации.
+   */
+  pipelineSteps?: PipelineStep[];
 }
 
 /** Общий контекст комнаты resolve (coordinator + workers). */
@@ -46,6 +52,12 @@ export interface RoomPromptInput {
   desiredResult?: DesiredResult;
   previousOutcome?: string | null;
   attachmentPaths?: string[];
+  /**
+   * Канонический список включённых шагов прогона (в порядке исполнения).
+   * Используется для координации с даунстрим-верификацией (review/test), а не
+   * для запретов: resolve не дублирует отдельные шаги верификации.
+   */
+  pipelineSteps?: PipelineStep[];
 }
 
 /** Сводка подзадачи работника для интеграции координатором. */
@@ -65,10 +77,61 @@ function outputContract(): string {
   ].join('\n');
 }
 
+const PIPELINE_ORDER: readonly PipelineStep[] = ['refine', 'resolve', 'review', 'test', 'pr'];
+
+const VERIFICATION_STEPS: ReadonlyArray<{ step: PipelineStep; label: string; description: string }> = [
+  { step: 'review', label: 'Review', description: 'independent code review (source code only).' },
+  { step: 'test', label: 'Test', description: 'runtime/browser verification (Playwright).' },
+];
+
+function downstreamVerification(pipelineSteps: PipelineStep[] | undefined, step: PipelineStep): { step: PipelineStep; label: string; description: string }[] {
+  if (!pipelineSteps || pipelineSteps.length === 0) return [];
+  const from = PIPELINE_ORDER.indexOf(step);
+  return VERIFICATION_STEPS.filter(
+    (gate) => PIPELINE_ORDER.indexOf(gate.step) > from && pipelineSteps.includes(gate.step),
+  );
+}
+
+function refinePipelineAwareness(pipelineSteps?: PipelineStep[]): string[] {
+  if (!pipelineSteps || pipelineSteps.length === 0) return [];
+  const gates = downstreamVerification(pipelineSteps, 'refine');
+  const lines: string[] = ['', `Enabled pipeline for this run: ${pipelineSteps.join(' → ')}.`];
+  if (gates.length > 0) {
+    lines.push(
+      'The following verification steps run AFTER the execution (resolve) step:',
+      ...gates.map((gate) => `  - ${gate.label}: ${gate.description}`),
+      'Coordinate your plan with these steps — do NOT duplicate their work.',
+      'Keep only lightweight developer self-checks in the plan (local build/',
+      'typecheck/unit smoke) so the hand-off to review/test is clean. Do NOT',
+      'bake a full verification/acceptance pass into the execution plan — that',
+      'belongs to the dedicated Review/Test steps. You MAY add intermediate',
+      'checkpoints if useful.',
+    );
+  } else {
+    lines.push(
+      'No separate Review/Test step follows the execution step — the resolve step',
+      'is the FINAL verification gate, so plan full self-verification there.',
+    );
+  }
+  return lines;
+}
+
+function resolveDownstreamAwareness(pipelineSteps?: PipelineStep[]): string[] {
+  const gates = downstreamVerification(pipelineSteps, 'resolve');
+  if (gates.length === 0) return [];
+  return [
+    '',
+    'Downstream verification steps run AFTER you — do NOT duplicate them:',
+    ...gates.map((gate) => `  - ${gate.label}: ${gate.description}`),
+    'Limit your own verification to local self-checks (build/tests/typecheck) to',
+    'hand over cleanly. Full verification is done by the dedicated steps.',
+  ];
+}
+
 type StepBodyBuilder = (input: StepPromptInput) => string;
 
 const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
-  refine: () =>
+  refine: (input) =>
     [
       'Role: refiner.',
       'You have the full context of the task (title, description, Jira text, repositories, iteration context).',
@@ -106,6 +169,7 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
       '  (indexes are 1..N in execution order; for executors > 1 provide one',
       '  decomposition entry per worker, otherwise a single agent runs the stage).',
       'Only the coordinator (lead) ever makes the final pass/fail decision for the step.',
+      ...refinePipelineAwareness(input.pipelineSteps),
     ].join('\n'),
 
   resolve: (input) => {
@@ -141,6 +205,7 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
             'Plain Markdown, no HTML wrapper. In addition to `.issue-step-result.json`.',
           ]
         : []),
+      ...resolveDownstreamAwareness(input.pipelineSteps),
       'HARD-RULES: you may run build/tests/typecheck to verify your own changes.',
       'Commit and push are forbidden — publishing is done by the pr step/backend.',
     ].join('\n');
@@ -348,6 +413,8 @@ export function buildRoomCoordinatorPrompt(
       'Markdown document. Plain Markdown, no HTML wrapper. In addition to `.issue-step-result.json`.',
     );
   }
+
+  lines.push(...resolveDownstreamAwareness(input.pipelineSteps));
 
   lines.push(
     '',
@@ -570,6 +637,8 @@ export function buildStagedFinalCoordinatorPrompt(
       'Markdown document. Plain Markdown, no HTML wrapper. In addition to `.issue-step-result.json`.',
     );
   }
+
+  lines.push(...resolveDownstreamAwareness(input.pipelineSteps));
 
   lines.push(
     '',

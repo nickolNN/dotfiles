@@ -347,6 +347,7 @@ export async function runIteration(
       desiredResult: issue.desiredResult,
       previousOutcome: input.previousOutcome,
       attachmentPaths: input.attachmentPaths ?? [],
+      pipelineSteps: steps,
     };
     const model = (input.step_models?.[step] ?? input.model) || undefined;
     const thinkingLevel =
