@@ -217,6 +217,36 @@ describe('GitHubResolver', () => {
 
     expect(info.writeAccess).toBe(false);
   });
+
+  it('GitHub Enterprise: ходит в <host>/api/v3, а не api.github.com', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          full_name: 'acme/app',
+          default_branch: 'main',
+          language: 'TypeScript',
+          description: 'demo',
+          stargazers_count: 42,
+          private: false,
+          clone_url: 'https://git.company.com/acme/app.git',
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse([{ name: 'main' }]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const info = await new GitHubResolver('secret', 'git.company.com').resolve(
+      'https://git.company.com/acme/app.git',
+    );
+
+    expect(info.platform).toBe('github');
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://git.company.com/api/v3/repos/acme/app',
+    );
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'https://git.company.com/api/v3/repos/acme/app/branches?per_page=100',
+    );
+  });
 });
 
 describe('GitLabResolver', () => {
@@ -794,6 +824,22 @@ describe('createRepoResolver', () => {
     expect(
       createRepoResolver('https://gitlab.com/a/b', { GITLAB_TOKEN: 't' }),
     ).toBeInstanceOf(GitLabResolver);
+  });
+
+  it('GitHub Enterprise: hostOf(url) прокидывается в GitHubResolver', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ full_name: 'a/b', default_branch: 'main' }))
+      .mockResolvedValueOnce(jsonResponse([{ name: 'main' }]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createRepoResolver('https://github.company.com/a/b', {}).resolve(
+      'https://github.company.com/a/b',
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://github.company.com/api/v3/repos/a/b',
+    );
   });
 
   it('нераспознанный URL → throw "Unsupported platform"', () => {

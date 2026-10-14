@@ -112,6 +112,13 @@ export class FakeMrClient implements MrClient {
         id,
       };
     }
+    if (input.source === 'github') {
+      const { owner, repo } = githubOwnerRepo(input.repositoryUrl);
+      return {
+        mrUrl: `https://${hostOf(input.repositoryUrl)}/${owner}/${repo}/pull/${id}`,
+        id,
+      };
+    }
     return { mrUrl: `${webBase}/-/merge_requests/${id}`, id };
   }
 }
@@ -192,8 +199,15 @@ export class HttpMrClient implements MrClient {
 
     if (input.source === 'github') {
       const { owner, repo } = githubOwnerRepo(input.repositoryUrl);
+      const host = hostOf(input.repositoryUrl);
+      // github.com живёт на api.github.com, GitHub Enterprise Server —
+      // на собственном хосте под /api/v3.
+      const apiBase =
+        host === 'github.com'
+          ? 'https://api.github.com'
+          : `https://${host}/api/v3`;
       const response = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/pulls`,
+        `${apiBase}/repos/${owner}/${repo}/pulls`,
         {
           method: 'POST',
           headers: {

@@ -235,4 +235,169 @@ describe('HttpMrClient', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('github: POST на api.github.com, заголовки и тело PR', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        number: 42,
+        html_url: 'https://github.com/acme/app/pull/42',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = new HttpMrClient();
+
+      const result = await client.createMr(
+        input({
+          repositoryUrl: 'https://github.com/acme/app.git',
+          source: 'github',
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://api.github.com/repos/acme/app/pulls');
+      expect(init.method).toBe('POST');
+      expect(init.headers).toMatchObject({
+        Authorization: 'Bearer secret-token',
+        Accept: 'application/vnd.github+json',
+      });
+      expect(JSON.parse(String(init.body))).toEqual({
+        head: 'issue-resolver/abc',
+        base: 'main',
+        title: 'Fix EXP-1',
+        body: 'Generated MR description',
+      });
+      expect(result).toEqual({
+        mrUrl: 'https://github.com/acme/app/pull/42',
+        id: '42',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('github enterprise: URL содержит /api/v3/ вместо api.github.com', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        number: 7,
+        html_url: 'https://git.company.com/acme/app/pull/7',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const client = new HttpMrClient();
+
+      await client.createMr(
+        input({
+          repositoryUrl: 'https://git.company.com/acme/app.git',
+          source: 'github',
+        }),
+      );
+
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://git.company.com/api/v3/repos/acme/app/pulls');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('github: приоритет input.token > tokens[source] > общий token', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        number: 1,
+        html_url: 'https://github.com/acme/app/pull/1',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const githubInput = input({
+        repositoryUrl: 'https://github.com/acme/app.git',
+        source: 'github',
+      });
+      const client = new HttpMrClient('default-token', {
+        github: 'github-token',
+      });
+
+      // per-call токен выигрывает у per-host и общего.
+      await client.createMr(githubInput);
+      expect(authHeaderOfFirstCall(fetchMock)).toBe('Bearer secret-token');
+
+      // пустой per-call → per-host токен (GITHUB_TOKEN).
+      fetchMock.mockClear();
+      await client.createMr({ ...githubInput, token: '' });
+      expect(authHeaderOfFirstCall(fetchMock)).toBe('Bearer github-token');
+
+      // нет per-host токена → общий token.
+      fetchMock.mockClear();
+      await new HttpMrClient('default-token').createMr({
+        ...githubInput,
+        token: '',
+      });
+      expect(authHeaderOfFirstCall(fetchMock)).toBe('Bearer default-token');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('github: не-ok ответ → throws с кодом', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        text: async () => 'Validation Failed',
+      }),
+    );
+    try {
+      const client = new HttpMrClient();
+
+      await expect(
+        client.createMr(
+          input({
+            repositoryUrl: 'https://github.com/acme/app.git',
+            source: 'github',
+          }),
+        ),
+      ).rejects.toThrow('github pr failed: 422');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('FakeMrClient GitHub URLs', () => {
+  it('github source → URL /pull/ формата', async () => {
+    const client = new FakeMrClient();
+
+    const result = await client.createMr(
+      input({
+        repositoryUrl: 'https://github.com/acme/app.git',
+        source: 'github',
+      }),
+    );
+
+    expect(result.mrUrl).toBe('https://github.com/acme/app/pull/mr-1');
+    expect(result.id).toBe('mr-1');
+  });
+
+  it('github enterprise → правильный хост в URL', async () => {
+    const client = new FakeMrClient();
+
+    const result = await client.createMr(
+      input({
+        repositoryUrl: 'https://git.company.com/acme/app.git',
+        source: 'github',
+      }),
+    );
+
+    expect(result.mrUrl).toBe('https://git.company.com/acme/app/pull/mr-1');
+    expect(result.id).toBe('mr-1');
+  });
 });

@@ -931,7 +931,10 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       .map((event) => event.data);
     expect(mrData).toHaveLength(2);
     for (const url of mrData) {
-      expect(url).toContain('merge_requests');
+      // GitHub → /pull/, GitLab → /-/merge_requests
+      expect(
+        url.includes('merge_requests') || url.includes('/pull/'),
+      ).toBe(true);
       expect(url.startsWith('mr:')).toBe(false);
     }
   });

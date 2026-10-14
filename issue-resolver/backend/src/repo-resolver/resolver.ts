@@ -19,6 +19,7 @@ export type RepoResolverFactory = (
   env: NodeJS.ProcessEnv,
 ) => RepoResolver;
 
+const DEFAULT_GITHUB_HOST = 'github.com';
 const DEFAULT_GITLAB_HOST = 'gitlab.com';
 const DEFAULT_BITBUCKET_HOST = 'bitbucket.org';
 
@@ -156,14 +157,29 @@ interface GitHubRepoResponse {
   permissions?: { push?: boolean };
 }
 
-/** GitHub: `GET https://api.github.com/repos/:owner/:repo`. */
+/**
+ * GitHub / GitHub Enterprise Server.
+ * - `github.com`: `GET https://api.github.com/repos/:owner/:repo`
+ * - GHES (self-hosted): `GET https://<host>/api/v3/repos/:owner/:repo`
+ */
 export class GitHubResolver implements RepoResolver {
-  constructor(private readonly token = '') {}
+  constructor(
+    private readonly token = '',
+    private readonly host = DEFAULT_GITHUB_HOST,
+  ) {}
+
+  /** Базовый URL REST API: cloud — `api.github.com`, GHES — `<host>/api/v3`. */
+  private apiBase(): string {
+    return this.host === DEFAULT_GITHUB_HOST
+      ? 'https://api.github.com'
+      : `https://${this.host}/api/v3`;
+  }
 
   async resolve(url: string): Promise<RepoInfo> {
     const { owner, repo } = githubOwnerRepo(url);
+    const repoUrl = `${this.apiBase()}/repos/${owner}/${repo}`;
     const response = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}`,
+      repoUrl,
       {
         headers: {
           Accept: 'application/vnd.github+json',
@@ -188,7 +204,7 @@ export class GitHubResolver implements RepoResolver {
     let branches: string[] = [data.default_branch];
     try {
       const branchesResp = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/branches?per_page=100`,
+        `${repoUrl}/branches?per_page=100`,
         {
           headers: {
             Accept: 'application/vnd.github+json',
@@ -556,7 +572,10 @@ export function createRepoResolver(
 ): RepoResolver {
   const platform = detectPlatform(url);
   if (platform === 'github') {
-    return new GitHubResolver(env.GITHUB_TOKEN ?? '');
+    return new GitHubResolver(
+      env.GITHUB_TOKEN ?? '',
+      hostOf(url) || DEFAULT_GITHUB_HOST,
+    );
   }
   if (platform === 'gitlab') {
     return new GitLabResolver(
