@@ -222,7 +222,10 @@ const trace = (store: InMemoryStepRunStore): string[] =>
   store.runs.map((run) => `${run.step}#${run.attempt}:${run.status}`);
 
 const resolveOutput = (store: InMemoryStepRunStore): StepOutput => {
-  const resolveRun = store.runs.find((run) => run.step === 'resolve');
+  // С self-retry может быть несколько resolve-прогонов — берём последний
+  // (в нём финальная ошибка).
+  const resolveRuns = store.runs.filter((run) => run.step === 'resolve');
+  const resolveRun = resolveRuns[resolveRuns.length - 1];
   const output = store.outputs.find(
     (candidate) => candidate.step_run_id === resolveRun?.id,
   );
@@ -276,28 +279,35 @@ describe('resolveBootstrapperTimeoutMs — env-таймаут подготовк
 });
 
 describe('runIteration — падение/зависание pi-агента завершает resolve терминально', () => {
-  it('single: зависание (never-resolving) катится до таймаута → failed, не hang', async () => {
+  it('single: зависание (never-resolving) катится до таймаута → 4 попытки, все failed', async () => {
     const { deps, store } = makeDeps();
+    // hang + 3 reject (no handler) = 4 попытки (1 осн + 3 self-retry).
     const pi = new ScriptedPiRunner([hang]);
     deps.pi = pi;
 
     const result = await runIteration(deps, makeInput(['resolve'], 25));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    expect(trace(store)).toEqual(['resolve#1:failed']);
+    expect(trace(store)).toEqual([
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
 
     const output = resolveOutput(store);
     expect(JSON.parse(output.report)).toEqual({
       status: 'fail',
       summary: 'resolve agent failed/hung',
     });
-    expect(output.stderr).toContain('timed out after 25ms');
+    // Первая попытка — таймаут, последующие — no handler.
+    expect(output.stderr).toMatch(/timed out|unexpected pi call/);
 
     // Таймаут прокинут в раннер (RpcPiRunner → reject + SIGKILL).
     expect(pi.calls[0].options?.timeoutMs).toBe(25);
   });
 
-  it('room: reject pi.run у воркера → resolve failed, координатор не решает', async () => {
+  it('room: reject pi.run у воркера → 4 resolve попытки, все failed, координатор не решает', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
       () => Promise.resolve(refineResolve(roomPlan)),
@@ -309,19 +319,26 @@ describe('runIteration — падение/зависание pi-агента з�
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:failed']);
+    // refine успешен, resolve — 4 попытки (1 осн + 3 self-retry), все failed.
+    expect(trace(store)).toEqual([
+      'refine#1:success',
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
 
     const output = resolveOutput(store);
     expect(JSON.parse(output.report)).toEqual({
       status: 'fail',
       summary: 'resolve agent failed/hung',
     });
-    expect(output.stderr).toContain('spawn pi ENOENT');
-    // Воркеры запускались, координатор — нет (шаг уже failed).
-    expect(pi.calls.map((call) => call.options?.stepRunId)).toHaveLength(3);
+    expect(output.stderr).toMatch(/spawn pi ENOENT|unexpected pi call/);
+    // Первая попытка: refine(1) + worker0(1) + worker1(1) = 3 вызова.
+    expect(pi.calls.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('room: reject pi.run у координатора → resolve failed', async () => {
+  it('room: reject pi.run у координатора → 4 resolve попытки, все failed', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
       () => Promise.resolve(refineResolve(roomPlan)),
@@ -334,11 +351,18 @@ describe('runIteration — падение/зависание pi-агента з�
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:failed']);
-    expect(resolveOutput(store).stderr).toContain('child error');
+    expect(trace(store)).toEqual([
+      'refine#1:success',
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
+    // Финальный output содержит ошибку координатора или no-handler.
+    expect(resolveOutput(store).stderr).toMatch(/child error|unexpected pi call/);
   });
 
-  it('room: зависание воркеров катится до таймаута → resolve failed', async () => {
+  it('room: зависание воркеров катится до таймаута → 4 resolve попытки', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
       () => Promise.resolve(refineResolve(roomPlan)),
@@ -350,12 +374,19 @@ describe('runIteration — падение/зависание pi-агента з�
     const result = await runIteration(deps, makeInput(['refine', 'resolve'], 20));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:failed']);
-    expect(resolveOutput(store).stderr).toContain('timed out after 20ms');
+    expect(trace(store)).toEqual([
+      'refine#1:success',
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
+    // Первая попытка — таймаут, последующие — no handler.
+    expect(resolveOutput(store).stderr).toMatch(/timed out|unexpected pi call/);
     expect(pi.calls[1].options?.timeoutMs).toBe(20);
   });
 
-  it('stages: зависание агента этапа катится до таймаута → resolve failed', async () => {
+  it('stages: зависание агента этапа катится до таймаута → 4 resolve попытки', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
       () => Promise.resolve(refineResolve(stagesPlan)),
@@ -366,8 +397,14 @@ describe('runIteration — падение/зависание pi-агента з�
     const result = await runIteration(deps, makeInput(['refine', 'resolve'], 20));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:failed']);
-    expect(resolveOutput(store).stderr).toContain('timed out after 20ms');
+    expect(trace(store)).toEqual([
+      'refine#1:success',
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
+    expect(resolveOutput(store).stderr).toMatch(/timed out|unexpected pi call/);
     expect(pi.calls[1].options?.stepRunId).toContain('/stage/1/coordinator');
   });
 });

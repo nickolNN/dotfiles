@@ -346,6 +346,9 @@ describe('runIssueIteration — прямой вызов', () => {
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi } = makeDeps();
     pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
 
     const result = await runIssueIteration(db, deps, {
       issue: { id: issueId, title: 'Wiring задача', pipelineSteps: ['resolve'] },
@@ -643,6 +646,9 @@ describe('runIssueIteration — снапшот результата итерац
       writeFileSync(join(root, issueId, 'report.md'), '# Итог', 'utf8');
       const { deps, pi } = makeDeps();
       deps.workspaceRoot = root;
+      pi.enqueue(fail('resolve'));
+      pi.enqueue(fail('resolve'));
+      pi.enqueue(fail('resolve'));
       pi.enqueue(fail('resolve'));
 
       const result = await runIssueIteration(db, deps, {
@@ -1257,6 +1263,9 @@ describe('runIssueIteration — прогресс подготовки, прич�
     const { deps, pi } = makeDeps();
     deps.workspaceRoot = root;
     pi.enqueue(pass('refine'));
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
     pi.enqueue(fail('resolve'));
 
     const result = await runIssueIteration(db, deps, {

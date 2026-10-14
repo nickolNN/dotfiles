@@ -24,9 +24,11 @@ import type {
 } from '@issue-resolver/shared';
 import {
   extractRepoNameFromUrl,
+  MAX_SELF_RETRIES,
   nextStepDecision,
   parseStepReport,
   planExecutionMode,
+  SELF_RETRY_STEPS,
   stepRunStatusFromResult,
 } from '@issue-resolver/shared';
 import type { ContainerController } from '../docker/controller';
@@ -660,6 +662,12 @@ export async function runIteration(
   // attempt общий для шагов одного прохода: resolve#2 → review#2 (см. UNIQUE
   // step_runs(iteration_id, step, attempt) и план §8 «откат с attempt+1»).
   let attempt = 1;
+  // pipelineAttempt — счётчик для nextStepDecision, НЕ растёт от self-retry.
+  // Self-retry бампает attempt (для уникальности step_runs), но не трогает
+  // pipeline-бюджет (MAX_ATTEMPTS=3 для откатов review/test → resolve).
+  let pipelineAttempt = 1;
+  // Счётчик самоперезапусков текущего шага, сбрасывается при смене шага.
+  let stepRetries = 0;
   // Фидбек прошлого упавшего шага (review/test) для следующего resolve.
   let feedback: string | null = null;
   // Рекомендация refine о топологии resolve: план (summary) и execution.
@@ -839,9 +847,8 @@ export async function runIteration(
       }
     } catch (error) {
       // Падение/зависание pi-агента (spawn ENOENT, timeout, child error,
-      // любой reject) обязано завершить шаг терминально, а не оставить
-      // step_run/итерацию в `running` навсегда. Причину не глотаем: пишем в
-      // stderr step_output и в console.error.
+      // любой reject). Причину не глотаем: пишем в stderr step_output и в
+      // console.error.
       const message = error instanceof Error ? error.message : String(error);
       console.error(
         `workflow: pi agent for step '${step}' failed or timed out`,
@@ -865,6 +872,21 @@ export async function runIteration(
       deps.sse.publish(
         stepStatusEvent(issue.id, iteration.id, stepRun.id, 'failed'),
       );
+
+      // Self-retry: refine и resolve самоперезапускаются при техническом сбое
+      // (агент краш, таймаут, inference error) с контекстом ошибки.
+      const maxSelf = MAX_SELF_RETRIES[step] ?? 0;
+      if (SELF_RETRY_STEPS.has(step) && stepRetries < maxSelf) {
+        stepRetries += 1;
+        attempt += 1;
+        feedback = [
+          `Previous ${step} attempt CRASHED: ${message}`,
+          `(self-retry ${stepRetries}/${maxSelf})`,
+          'Fix the crash and continue — do not redo work from scratch if partial results exist.',
+        ].join('\n');
+        continue;
+      }
+
       return { iterationStatus: 'failed', needsInput: false };
     }
 
@@ -930,11 +952,32 @@ export async function runIteration(
       return { iterationStatus: 'failed', needsInput: true };
     }
 
+    // Self-retry для refine/resolve при логическом падении (шаг завершился,
+    // но со статусом failed). Контекст: report + stderr предыдущей попытки.
+    if (status === 'failed' && SELF_RETRY_STEPS.has(step)) {
+      const maxSelf = MAX_SELF_RETRIES[step] ?? 0;
+      if (stepRetries < maxSelf) {
+        stepRetries += 1;
+        attempt += 1;
+        const parts = [`Previous ${step} attempt FAILED.`];
+        if (report?.summary) parts.push(`Report: ${report.summary}`);
+        if (result.stderr) {
+          parts.push(`Stderr (last 2000 chars): ${result.stderr.slice(-2000)}`);
+        }
+        parts.push(
+          `(self-retry ${stepRetries}/${maxSelf})`,
+          'Fix the issues and continue — use any partial results from the previous attempt.',
+        );
+        feedback = parts.join('\n');
+        continue;
+      }
+    }
+
     const decision = nextStepDecision({
       steps,
       currentStep: step,
       result: status === 'success' ? 'success' : 'failed',
-      attempt,
+      attempt: pipelineAttempt,
       maxAttempts: MAX_ATTEMPTS,
     });
 
@@ -944,11 +987,14 @@ export async function runIteration(
           return { iterationStatus: 'completed', needsInput: false };
         }
         stepIndex += 1;
+        stepRetries = 0;
         break;
       case 'retry_resolve':
         feedback = report?.summary ?? null;
         attempt = decision.attempt;
+        pipelineAttempt = decision.attempt;
         stepIndex = steps.indexOf('resolve');
+        stepRetries = 0;
         break;
       case 'needs_input':
         return { iterationStatus: 'failed', needsInput: true };

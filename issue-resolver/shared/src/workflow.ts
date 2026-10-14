@@ -23,6 +23,25 @@ export interface StepTransitionInput {
 const DEFAULT_MAX_ATTEMPTS = 3;
 
 /**
+ * Шаги, которые могут самоперезапускаться при падении (техническом или
+ * логическом). Каждый такой шаг получает до N попыток подряд, и на каждом
+ * перезапуске получает контекст предыдущей ошибки.
+ *
+ * Не зависит от pipeline-откатов review/test → resolve — это отдельный
+ * счётчик, который сбрасывается при смене шага.
+ */
+export const SELF_RETRY_STEPS: ReadonlySet<PipelineStep> = new Set([
+  'refine',
+  'resolve',
+]);
+
+/** Максимум самоперезапусков подряд для каждого шага. */
+export const MAX_SELF_RETRIES: Readonly<Record<string, number>> = {
+  refine: 3,
+  resolve: 3,
+};
+
+/**
  * Шаги, провал которых не перезапускает resolve, а сразу валит итерацию.
  * (refine, resolve и pr — по §8; review/test обрабатываются отдельно ниже.)
  */

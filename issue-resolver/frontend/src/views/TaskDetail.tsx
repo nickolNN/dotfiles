@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type {
   CreateIterationRequest,
   Issue,
@@ -505,6 +505,7 @@ export default function TaskDetail({
     null,
   );
   const modalScrollRef = useRef<HTMLDivElement | null>(null);
+  const modalPinnedRef = useRef(true);
   const [resultOpen, setResultOpen] = useState(false);
   const [resultText, setResultText] = useState<string | null>(null);
   const [resultError, setResultError] = useState<'missing' | 'error' | null>(
@@ -1052,10 +1053,19 @@ export default function TaskDetail({
       ]
     : [];
 
-  // Модалка вывода: как у pi — новые события прокручивают лог вниз.
+  // Модалка вывода: автоскролл вниз только пока пользователь прибит ко дну.
+  const handleModalScroll = useCallback(() => {
+    const el = modalScrollRef.current;
+    if (!el) return;
+    modalPinnedRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+  }, []);
+
   useEffect(() => {
     const el = modalScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && modalPinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [expandedEvents]);
 
   // Авто-скролл внутри карточки итерации к running-воркеру.
@@ -2850,6 +2860,7 @@ export default function TaskDetail({
 
             <div
               ref={modalScrollRef}
+              onScroll={handleModalScroll}
               data-testid="step-log-scroll"
               className="min-h-0 flex-1 space-y-4 overflow-auto py-4 px-2 sm:px-4"
             >

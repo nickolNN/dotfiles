@@ -250,15 +250,23 @@ describe('runIteration — один шаг', () => {
     const observed: StepRunStatus[] = [];
     deps.pi = {
       run: async () => {
-        observed.push(store.runs[0].status);
+        // Все self-retry получают fail — resolve падает 4 раза (1 осн + 3 ретрая).
+        observed.push(store.runs[store.runs.length - 1]?.status ?? 'pending');
         return fail('resolve');
       },
     };
 
     await runIteration(deps, makeInput(['resolve']));
 
-    expect(observed).toEqual(['running']);
-    expect(trace(store)).toEqual(['resolve#1:failed']);
+    // Первый вызов: видит running (статус установлен перед pi.run).
+    expect(observed[0]).toBe('running');
+    // 4 попытки: resolve#1 → failed, self-retry ×3 → все failed.
+    expect(trace(store)).toEqual([
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
   });
 
   it('prompt детерминирован: содержит шаг и контекст итерации', async () => {    const { deps, pi } = makeDeps();
@@ -359,26 +367,50 @@ describe('runIteration — один шаг', () => {
     expect(options?.registry).toBe(deps.control);
   });
 
-  it('resolve fail → iteration failed без needsInput', async () => {
+  it('resolve fail → после self-retry с defaultSuccess → completed', async () => {
     const { deps, store, pi } = makeDeps();
+    // Одна явная ошибка, затем self-retry получает defaultSuccess (pass).
+    pi.enqueue(fail('resolve'));
+
+    const result = await runIteration(deps, makeInput(['resolve']));
+
+    // resolve#1 упал, resolve#2 (self-retry) прошёл → completed.
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual(['resolve#1:failed', 'resolve#2:success']);
+    expect(pi.calls).toHaveLength(2);
+  });
+
+  it('resolve fail ×4 (исчерпаны self-retry) → iteration failed', async () => {
+    const { deps, store, pi } = makeDeps();
+    // 4 отказа подряд — self-retry исчерпаны (3), итерация падает.
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
     pi.enqueue(fail('resolve'));
 
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    expect(trace(store)).toEqual(['resolve#1:failed']);
-    expect(pi.calls).toHaveLength(1);
+    expect(trace(store)).toEqual([
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
+    expect(pi.calls).toHaveLength(4);
   });
 
-  it('stdout/stderr прокидываются в createStepOutput', async () => {
+  it('stdout/stderr прокидываются в createStepOutput (с self-retry)', async () => {
     const { deps, store, pi } = makeDeps();
+    // Первая попытка падает, self-retry с defaultSuccess проходит.
     pi.enqueue(fail('resolve'));
 
     await runIteration(deps, makeInput(['resolve']));
 
-    expect(store.outputs).toHaveLength(1);
-    expect(store.outputs[0].stdout).toBe('');
+    // Два output: провал + успешный self-retry.
+    expect(store.outputs).toHaveLength(2);
     expect(store.outputs[0].stderr).toBe('resolve err');
+    expect(store.outputs[1].stdout).toBe('');
   });
 
   it('events прокидываются в createStepOutput и живьём в step_event', async () => {
@@ -573,19 +605,26 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     expect(store.outputs[0].screenshots_dir).toBeNull();
   });
 
-  it('файл {status:fail,summary} перекрывает result.report → status failed + report-json', async () => {
+  it('файл {status:fail,summary} перекрывает result.report → 4 попытки fail, self-retry исчерпаны', async () => {
     const { deps, store, pi } = makeDeps();
     const { root } = await withWorkspace(
       JSON.stringify({ status: 'fail', summary: 'найдено 3 дефекта' }),
     );
     deps.workspaceRoot = root;
     // result.report — pass, но файл важнее (источник истины в RPC-режиме).
+    // Файл не исчезает → все 4 попытки читают его и получают failed.
     pi.enqueue(pass('resolve'));
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
+    // 4 попытки (1 + 3 self-retry) — все неудачные из-за файла.
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    expect(trace(store)).toEqual(['resolve#1:failed']);
+    expect(trace(store)).toEqual([
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
     expect(JSON.parse(store.outputs[0].report)).toEqual({
       status: 'fail',
       summary: 'найдено 3 дефекта',

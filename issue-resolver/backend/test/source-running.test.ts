@@ -184,6 +184,9 @@ describe('runIssueIteration — статус running', () => {
     const { issueId, iteration } = seedIteration(db);
     const { deps, pi } = makeDeps();
     pi.enqueue(fail());
+    pi.enqueue(fail());
+    pi.enqueue(fail());
+    pi.enqueue(fail());
 
     const result = await runIssueIteration(db, deps, {
       issue: { id: issueId, title: 'Running-задача', pipelineSteps: ['resolve'] },
