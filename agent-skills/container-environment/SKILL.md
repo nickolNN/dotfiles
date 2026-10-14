@@ -45,8 +45,9 @@ survive has to live in the workspace or the sessions/skills volumes.
   codebase-design, domain-modeling, glyph, handoff,
   improve-codebase-architecture, ponytail, retro, tdd, teach,
   to-questionnaire, wayfinder, web-design-guidelines, writing-for-agents
-- repo skills (5, re-synced every launch): container-environment,
-  coordinator, geo-bypass, handoff (overrides the cloned handoff), pr
+- repo skills (6, re-synced every launch): container-environment,
+  coordinator, geo-bypass, handoff (overrides the cloned handoff), pr,
+  refine
 
 See `dotfiles-agent/Dockerfile` for the authoritative list.
 

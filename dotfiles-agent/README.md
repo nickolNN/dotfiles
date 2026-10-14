@@ -247,6 +247,7 @@ the next launch with **no rebuild**. To also bake it into the image for fresh
 | `geo-bypass` | Geo-restricted / TLS-blocked network access recipes |
 | `handoff` | Pi-adapted handoff doc (overrides the cloned remote copy) |
 | `pr` | Generate an MR/PR description from a feature diff |
+| `refine` | Grilling-интервью + план для шага `refine` в issue-resolver (на него ссылается `issue-resolver/prompts/step-refine.md`) |
 
 ### Remote skills (cloned at build time)
 
