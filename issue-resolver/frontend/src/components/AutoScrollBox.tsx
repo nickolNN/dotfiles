@@ -28,7 +28,11 @@ export default function AutoScrollBox({
   }, [scrollKey ?? children]);
 
   return (
-    <div ref={ref} className={className}>
+    <div
+      ref={ref}
+      className={className}
+      style={{ scrollBehavior: scrollKey !== undefined ? 'smooth' : 'auto' }}
+    >
       {children}
     </div>
   );

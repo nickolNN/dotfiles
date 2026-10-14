@@ -1,5 +1,5 @@
 import type { StepRunStatus } from '@issue-resolver/shared';
-import { and, inArray } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import type { Db } from './client';
 import { issues, iterations, stepRuns } from './schema';
 
@@ -38,37 +38,54 @@ export function reconcileInterruptedRuns(db: Db): void {
       .run();
   }
 
-  const runningIterations = db
+  // Итерации, пережившие рестарт в нефинальном статусе: `running`/`preparing`
+  // (процесс мог умереть посреди конвейера) плюс `pending` у задачи в
+  // `preparing` — подготовка началась, но процесс умер до `runIssueIteration`.
+  // Без второго случая пара «задача preparing / итерация pending» висит вечно.
+  const interruptedIterations = db
     .select({ id: iterations.id, issueId: iterations.issue_id })
     .from(iterations)
-    .where(inArray(iterations.status, ['running', 'preparing']))
+    .innerJoin(issues, eq(issues.id, iterations.issue_id))
+    .where(
+      or(
+        inArray(iterations.status, ['running', 'preparing']),
+        and(eq(iterations.status, 'pending'), eq(issues.status, 'preparing')),
+      ),
+    )
     .all();
 
-  if (runningIterations.length > 0) {
+  if (interruptedIterations.length > 0) {
     db.update(iterations)
       .set({ status: 'failed', updated_at: now })
-      .where(inArray(iterations.status, ['running', 'preparing']))
+      .where(
+        inArray(
+          iterations.id,
+          interruptedIterations.map((row) => row.id),
+        ),
+      )
       .run();
 
-    const issueIds = [...new Set(runningIterations.map((row) => row.issueId))];
+    const issueIds = [
+      ...new Set(interruptedIterations.map((row) => row.issueId)),
+    ];
     if (issueIds.length > 0) {
       db.update(issues)
         .set({ status: 'failed', updated_at: now })
         .where(
           and(
             inArray(issues.id, issueIds),
-            // Задача могла застрять и в `running`, и в `preparing` (см.
-            // run-iteration.service): после рестарта обе доводим до failed.
-            inArray(issues.status, ['running', 'preparing']),
+            // Задача могла застрять и в `running`, и в `preparing`, и в
+            // `question` (агент ждал ответа): после рестарта все доводим до failed.
+            inArray(issues.status, ['running', 'preparing', 'question']),
           ),
         )
         .run();
     }
   }
 
-  if (interrupted.length > 0 || runningIterations.length > 0) {
+  if (interrupted.length > 0 || interruptedIterations.length > 0) {
     console.error(
-      `[reconcile] interrupted by restart: ${interrupted.length} step_run(s) → failed, ${runningIterations.length} iteration(s) → failed`,
+      `[reconcile] interrupted by restart: ${interrupted.length} step_run(s) → failed, ${interruptedIterations.length} iteration(s) → failed`,
     );
   }
 }

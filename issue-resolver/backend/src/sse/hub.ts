@@ -3,11 +3,16 @@ import type { SSEEvent } from '@issue-resolver/shared';
 /** Слушатель событий SSE по одной итерации. */
 export type SseListener = (event: SSEEvent) => void;
 
-/** Портовый интерфейс шины событий: publish/subscribe по iterationId и issueId. */
+/**
+ * Портовый интерфейс шины событий: publish/subscribe по iterationId и issueId,
+ * а также глобальная подписка на все события без фильтрации.
+ */
 export interface SseHub {
   publish(event: SSEEvent): void;
   subscribe(iterationId: string, listener: SseListener): () => void;
   subscribeByIssue(issueId: string, listener: SseListener): () => void;
+  /** Подписка на все события шины независимо от iterationId/issueId. */
+  subscribeGlobal(listener: SseListener): () => void;
 }
 
 /**
@@ -21,13 +26,19 @@ export interface SseHub {
 export class InMemorySseHub implements SseHub {
   private readonly listeners = new Map<string, Set<SseListener>>();
   private readonly issueListeners = new Map<string, Set<SseListener>>();
+  private readonly globalListeners = new Set<SseListener>();
 
   publish(event: SSEEvent): void {
     const targets = new Set<SseListener>();
-    for (const listener of this.listeners.get(event.iterationId) ?? []) {
-      targets.add(listener);
+    if (event.iterationId) {
+      for (const listener of this.listeners.get(event.iterationId) ?? []) {
+        targets.add(listener);
+      }
     }
     for (const listener of this.issueListeners.get(event.issueId) ?? []) {
+      targets.add(listener);
+    }
+    for (const listener of this.globalListeners) {
       targets.add(listener);
     }
     // Копия не нужна: Set уже отделяет доставку от мутаций реестра.
@@ -42,6 +53,13 @@ export class InMemorySseHub implements SseHub {
 
   subscribeByIssue(issueId: string, listener: SseListener): () => void {
     return this.addListener(this.issueListeners, issueId, listener);
+  }
+
+  subscribeGlobal(listener: SseListener): () => void {
+    this.globalListeners.add(listener);
+    return () => {
+      this.globalListeners.delete(listener);
+    };
   }
 
   private addListener(

@@ -42,6 +42,46 @@ describe('POST /issues — успешное создание', () => {
     expect(typeof body.created_at).toBe('string');
   });
 
+  it('bootstrap_enabled:false сохраняется per-repo, отсутствие → true', async () => {
+    const response = await post({
+      title: 'Без бутстрапа',
+      repositories: [
+        {
+          repository_url: 'https://github.com/acme/app.git',
+          base_branch: 'main',
+          bootstrap_enabled: false,
+        },
+        {
+          repository_url: 'https://github.com/acme/lib.git',
+          base_branch: 'main',
+        },
+      ],
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+
+    const responseByUrl = new Map<string, boolean>(
+      body.repositories.map((repo: { repository_url: string; bootstrap_enabled: boolean }) => [
+        repo.repository_url,
+        repo.bootstrap_enabled,
+      ]),
+    );
+    expect(responseByUrl.get('https://github.com/acme/app.git')).toBe(false);
+    expect(responseByUrl.get('https://github.com/acme/lib.git')).toBe(true);
+
+    const dbByUrl = new Map<string, boolean>(
+      db
+        .select()
+        .from(issueRepositories)
+        .where(eq(issueRepositories.issue_id, body.id))
+        .all()
+        .map((row) => [row.repository_url, row.bootstrap_enabled]),
+    );
+    expect(dbByUrl.get('https://github.com/acme/app.git')).toBe(false);
+    expect(dbByUrl.get('https://github.com/acme/lib.git')).toBe(true);
+  });
+
   it('title передан без jira → 201, jira_issue_url === null', async () => {
     const response = await post({
       title: 'Моя задача',
@@ -189,7 +229,6 @@ describe('POST /issues — успешное создание', () => {
   it('create_mr:true у репозитория → pr в конец', async () => {
     const response = await post({
       title: 'MR',
-      desired_result: 'pr',
       repositories: [
         {
           repository_url: 'https://github.com/acme/app.git',
@@ -207,7 +246,6 @@ describe('POST /issues — успешное создание', () => {
     const response = await post({
       title: 'Ревью + тест + MR',
       pipeline_steps: ['review', 'test'],
-      desired_result: 'pr',
       repositories: [
         {
           repository_url: 'https://github.com/acme/app.git',

@@ -4,9 +4,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   detectInstallCommand,
+  extractPort,
   GitCliService,
   gitCachePath,
   gitTimeoutMs,
+  parseRunCommand,
   type GitExecFile,
   type GitExecOptions,
 } from '../src/git/service';
@@ -167,6 +169,72 @@ describe('detectInstallCommand — детект манифестов', () => {
 
   it('нет манифеста → null (ставить нечего)', async () => {
     expect(detectInstallCommand(await repoWith([]))).toBeNull();
+  });
+});
+
+describe('parseRunCommand', () => {
+  it('достаёт команду из секции Run и выбрасывает cd/комментарии', () => {
+    const md = [
+      '# Setup',
+      '',
+      '## Install Dependencies',
+      '```bash',
+      'npm ci',
+      '```',
+      '',
+      '## Run',
+      '```bash',
+      'cd /workspaces/issue-1/app',
+      '# запуск',
+      'npm run dev',
+      '```',
+      '',
+      '## Notes',
+      'что-то',
+    ].join('\n');
+    expect(parseRunCommand(md)).toEqual({
+      file: 'sh',
+      args: ['-c', 'npm run dev'],
+    });
+  });
+
+  it('понимает секцию «Запуск» и однострочный cd && …', () => {
+    const md = '## Запуск\n```bash\ncd app && npx vite --port 5173\n```\n';
+    expect(parseRunCommand(md)).toEqual({
+      file: 'sh',
+      args: ['-c', 'npx vite --port 5173'],
+    });
+  });
+
+  it('нет секции Run / пустая / null → null', () => {
+    expect(parseRunCommand(null)).toBeNull();
+    expect(parseRunCommand('# Setup\nnpm ci')).toBeNull();
+    expect(parseRunCommand('## Run\n```bash\ncd x\n```')).toBeNull();
+  });
+});
+
+describe('extractPort', () => {
+  it('вытаскивает порт из Vite-подобного вывода и флага --port', () => {
+    expect(extractPort('  ➜  Local:   http://localhost:5173/')).toBe(5173);
+    expect(extractPort('ready on http://127.0.0.1:3000')).toBe(3000);
+    expect(extractPort('npx vite --port 4200')).toBe(4200);
+  });
+
+  it('нет порта → null, нечисловое/вне диапазона игнорируется', () => {
+    expect(extractPort('starting…')).toBeNull();
+    expect(extractPort('localhost:abc')).toBeNull();
+    expect(extractPort('localhost:99999')).toBeNull();
+  });
+});
+
+describe('GitCliService.startDevServer', () => {
+  it('нет команды запуска → { port: null, message } без spawn', async () => {
+    const service = new GitCliService('/tmp/originals', () => {
+      throw new Error('exec must not run');
+    });
+    const result = await service.startDevServer('/tmp/repo', null);
+    expect(result.port).toBeNull();
+    expect(result.message).toContain('RUN_INSTRUCTIONS');
   });
 });
 

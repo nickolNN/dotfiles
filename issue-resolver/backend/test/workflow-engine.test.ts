@@ -33,7 +33,14 @@ const NOW = '2026-01-01T00:00:00.000Z';
 class InMemoryStepRunStore implements StepRunStore {
   readonly runs: StepRun[] = [];
   readonly outputs: StepOutput[] = [];
+  readonly persistedEvents = new Map<string, SessionEvent[]>();
   private seq = 0;
+
+  async appendStepRunEvent(id: string, event: SessionEvent): Promise<void> {
+    const events = this.persistedEvents.get(id) ?? [];
+    events.push(event);
+    this.persistedEvents.set(id, events);
+  }
 
   async createStepRun(input: {
     iterationId: string;
@@ -109,7 +116,7 @@ const makeDeps = () => {
 const makeInput = (
   steps: PipelineStep[],
   model?: string,
-  desiredResult?: 'html' | 'pr',
+  desiredResult?: 'md' | 'html',
 ): RunIterationInput => ({
   issue: {
     id: 'issue-1',
@@ -202,7 +209,12 @@ describe('runIteration — один шаг', () => {
     const statuses = events
       .filter((event) => event.type === 'step_status')
       .map((event) => event.data);
-    expect(statuses).toContain('running');
+    // running несёт JSON `{ status, step, model }`; прочие статусы — строку.
+    const runningPayload = statuses
+      .filter((data) => data.startsWith('{'))
+      .map((data) => JSON.parse(data) as { status: string })
+      .find((payload) => payload.status === 'running');
+    expect(runningPayload).toBeDefined();
     expect(statuses).toContain('success');
     expect(
       events.some((event) => event.type === 'log' && event.stream === 'stdout'),
@@ -284,13 +296,54 @@ describe('runIteration — один шаг', () => {
     expect(pi.calls[0].prompt).toContain('report.html');
   });
 
-  it('desiredResult pr → resolve prompt без report.html', async () => {
+  it('desiredResult не задан → resolve prompt без report.html', async () => {
     const { deps, pi } = makeDeps();
     pi.enqueue(pass('resolve'));
 
-    await runIteration(deps, makeInput(['resolve'], undefined, 'pr'));
+    await runIteration(deps, makeInput(['resolve']));
 
     expect(pi.calls[0].prompt).not.toContain('report.html');
+  });
+
+  it('devServerPort → test-промпт несёт URL живого приложения', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('test'));
+
+    await runIteration(deps, { ...makeInput(['test']), devServerPort: 4321 });
+
+    expect(pi.calls[0].prompt).toContain('http://localhost:4321');
+  });
+
+  it('без devServerPort → test-промпт велит поднять приложение самому', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('test'));
+
+    await runIteration(deps, makeInput(['test']));
+
+    expect(pi.calls[0].prompt).toContain('No dev server is running');
+  });
+
+  it('pr-промпт несёт цели публикации: рабочая копия + base-ветка + create_mr', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('pr'));
+
+    await runIteration(deps, {
+      ...makeInput(['pr']),
+      repositories: [
+        {
+          repository_url: 'https://example.com/a.git',
+          base_branch: 'release-7',
+          create_mr: true,
+        },
+      ],
+    });
+
+    expect(pi.calls[0].prompt).toContain(
+      '/workspaces/issue-1/a — base `release-7`, create MR: yes',
+    );
+    // Коммит делает бэкенд ПОСЛЕ шага: агент смотрит рабочее дерево, а не HEAD.
+    expect(pi.calls[0].prompt).toContain('git status --porcelain');
+    expect(pi.calls[0].prompt).not.toContain('<base>...HEAD');
   });
 
   it('прокидывает registry/stepRunId/iterationId живого шага в pi.run', async () => {
@@ -367,6 +420,27 @@ describe('runIteration — один шаг', () => {
       type: 'thinking',
       thinking: 'размышляю над задачей',
     });
+  });
+
+  it('вопрос агента → question, ответ → running (хук статуса задачи)', async () => {
+    const { deps, pi } = makeDeps();
+    const statuses: Array<'question' | 'running'> = [];
+    deps.onQuestionStatus = (status) => statuses.push(status);
+    pi.enqueue({
+      step: 'resolve',
+      exitCode: 0,
+      report: { status: 'pass', summary: 'ok' },
+      stdout: '',
+      stderr: '',
+      events: [
+        { type: 'question', id: 'q1', method: 'select', title: 'Выбор?' },
+        { type: 'question_answered', questionId: 'q1', answer: 'A' },
+      ],
+    });
+
+    await runIteration(deps, makeInput(['resolve']));
+
+    expect(statuses).toEqual(['question', 'running']);
   });
 
   it('stats прокидываются в createStepOutput', async () => {
@@ -474,6 +548,29 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(trace(store)).toEqual(['resolve#1:success']);
     expect(store.outputs[0].report).toBe('');
+  });
+
+  it('каталог screenshots/ шага → screenshots_dir в output (строка UI «Скриншоты»)', async () => {
+    const { deps, store, pi } = makeDeps();
+    const { root, dir } = await withWorkspace();
+    await mkdir(join(dir, 'screenshots'), { recursive: true });
+    deps.workspaceRoot = root;
+    pi.enqueue(pass('test'));
+
+    await runIteration(deps, makeInput(['test']));
+
+    expect(store.outputs[0].screenshots_dir).toBe('screenshots');
+  });
+
+  it('нет каталога screenshots/ → screenshots_dir null', async () => {
+    const { deps, store, pi } = makeDeps();
+    const { root } = await withWorkspace();
+    deps.workspaceRoot = root;
+    pi.enqueue(pass('resolve'));
+
+    await runIteration(deps, makeInput(['resolve']));
+
+    expect(store.outputs[0].screenshots_dir).toBeNull();
   });
 
   it('файл {status:fail,summary} перекрывает result.report → status failed + report-json', async () => {
@@ -608,9 +705,11 @@ describe('runIteration — abort', () => {
 
 describe('runIteration — per-step модели', () => {
   it('step_models[step] переопределяет общий model только для своего шага', async () => {
-    const { deps, pi } = makeDeps();
+    const { deps, pi, sse } = makeDeps();
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('review'));
+    const events: SSEEvent[] = [];
+    sse.subscribe('iter-1', (event) => events.push(event));
 
     await runIteration(deps, {
       ...makeInput(['resolve', 'review'], 'fallback-model'),
@@ -620,6 +719,25 @@ describe('runIteration — per-step модели', () => {
     expect(pi.calls.map((call) => call.options?.model)).toEqual([
       'fallback-model',
       'review-model',
+    ]);
+
+    // running-событие каждого шага несёт сам шаг и его модель.
+    const runningPayloads = events
+      .filter((event) => event.type === 'step_status')
+      .map((event) => event.data)
+      .filter((data) => data.startsWith('{'))
+      .map(
+        (data) =>
+          JSON.parse(data) as {
+            status: string;
+            step: string;
+            model: string | null;
+          },
+      )
+      .filter((payload) => payload.status === 'running');
+    expect(runningPayloads).toEqual([
+      { status: 'running', step: 'resolve', model: 'fallback-model' },
+      { status: 'running', step: 'review', model: 'review-model' },
     ]);
   });
 
@@ -771,21 +889,28 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
 
-    // commit/push: по одному на репозиторий, с ветвями из prepare.
+    // commit/push: по одному на репозиторий, в уникальную feature-ветку.
+    // base (`main`/`develop`) защищена от прямого push — туда не пушим.
     expect(git.commits).toHaveLength(2);
-    expect(git.commits.map((commit) => commit.branchName)).toEqual([
-      'main',
-      'develop',
-    ]);
+    const featureBranches = git.commits.map((commit) => commit.branchName);
+    for (const branch of featureBranches) {
+      expect(branch).toMatch(/^feature\//);
+    }
+    expect(featureBranches).not.toContain('main');
+    expect(featureBranches).not.toContain('develop');
     for (const commit of git.commits) {
       expect(commit.commitMessage).toBe('feat: Fix bug');
     }
 
-    // MR: по одному на репозиторий, source выведен из URL.
+    // MR: по одному на репозиторий, source выведен из URL. head — feature-ветка,
+    // base — целевая ветка репозитория; head всегда отличён от base.
     expect(mr.calls).toHaveLength(2);
     expect(mr.calls.map((call) => call.source)).toEqual(['github', 'gitlab']);
     expect(mr.calls.map((call) => call.baseBranch)).toEqual(['main', 'develop']);
-    expect(mr.calls.map((call) => call.headBranch)).toEqual(['main', 'develop']);
+    expect(mr.calls.map((call) => call.headBranch)).toEqual(featureBranches);
+    for (const call of mr.calls) {
+      expect(call.headBranch).not.toBe(call.baseBranch);
+    }
     expect(mr.calls[0]).toMatchObject({
       repositoryUrl: 'https://github.com/acme/app.git',
       title: 'Fix bug',
@@ -797,7 +922,9 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     const systemData = events
       .filter((event) => event.type === 'log' && event.stream === 'system')
       .map((event) => event.data);
-    expect(systemData).toEqual(['committed main', 'committed develop']);
+    expect(systemData).toEqual(
+      featureBranches.map((branch) => `committed ${branch}`),
+    );
 
     const mrData = events
       .filter((event) => event.type === 'log' && event.stream === 'mr')
@@ -806,6 +933,30 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     for (const url of mrData) {
       expect(url).toContain('merge_requests');
       expect(url.startsWith('mr:')).toBe(false);
+    }
+  });
+
+  it('branch protection: push в feature-ветку, MR head≠base (base не пушится)', async () => {
+    const { deps, pi, git, mr } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('pr'));
+
+    const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // Регрессия: раньше push шёл в `workspace.branch` (= base), что Bitbucket
+    // отвергает на protected-ветке. Теперь push только в feature-ветку.
+    expect(git.commits).toHaveLength(2);
+    for (const commit of git.commits) {
+      expect(commit.branchName).toMatch(/^feature\//);
+      expect(commit.branchName).not.toMatch(/^(main|develop)$/);
+      // Сквош: soft-reset до origin/base-ветки (локальная могла сдвинуться)
+      expect(commit.squashBase).toMatch(/^origin\/(main|develop)$/);
+    }
+    for (const call of mr.calls) {
+      expect(call.headBranch).toMatch(/^feature\//);
+      expect(call.baseBranch).toMatch(/^(main|develop)$/);
+      expect(call.headBranch).not.toBe(call.baseBranch);
     }
   });
 
@@ -846,6 +997,35 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(mr.calls[0].repositoryUrl).toBe(
       'git@gitlab.example.com:team/lib.git',
     );
+  });
+
+  it('createMr падает → итерация completed, а не failed (publish не роняет прогон)', async () => {
+    const { deps, pi, git, mr } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('pr'));
+    mr.failNextWith(new Error('mr api 403'));
+
+    const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
+
+    // pr-шаг был успешен — падение публикации MR не должно его отменить.
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // commit/push первого репо успел пройти, MR не создан (ошибка на createMr).
+    expect(git.commits).toHaveLength(1);
+    expect(mr.calls).toEqual([]);
+  });
+
+  it('commitAndPush падает → итерация completed, а не failed (publish не роняет прогон)', async () => {
+    const { deps, pi, git, mr } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('pr'));
+    git.failNextWith(new Error('git push rejected'));
+
+    const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // commit/push упал до записи — ни коммитов, ни MR.
+    expect(git.commits).toEqual([]);
+    expect(mr.calls).toEqual([]);
   });
 
   it('pr fail → failed; commitAndPush и createMr НЕ вызывались', async () => {

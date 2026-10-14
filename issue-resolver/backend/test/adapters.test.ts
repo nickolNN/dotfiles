@@ -1,11 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import { PassThrough } from 'node:stream';
 import Dockerode from 'dockerode';
 import type { ContainerSpec } from '@issue-resolver/shared';
 import {
   DockerodeContainerController,
   FakeContainerController,
+  toContainerStatsPayload,
 } from '../src/docker/controller';
+import { LocalContainerController } from '../src/docker/local-controller';
 import { FakeGitService, GitCliService } from '../src/git/service';
+
+// fs мокается только точечно (existsSync/readFileSync); остальное — настоящее,
+// чтобы не ломать импортируемые dockerode/git-модули.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    existsSync: vi.fn(),
+    readFileSync: vi.fn(),
+  };
+});
 
 const spec = (name: string): ContainerSpec => ({
   issueId: 'issue-1',
@@ -42,6 +57,45 @@ describe('FakeContainerController', () => {
     controller.failNextWith(error);
 
     await expect(controller.spawn(spec('ir-issue-1'))).rejects.toThrow(
+      'docker unavailable',
+    );
+  });
+
+  it('stats → нули с тем же containerName (Docker не трогается)', async () => {
+    const controller = new FakeContainerController();
+
+    await expect(controller.stats('ir-issue-1')).resolves.toEqual({
+      containerName: 'ir-issue-1',
+      cpuPercent: 0,
+      memoryUsageBytes: 0,
+      memoryLimitBytes: 0,
+      pids: 0,
+    });
+  });
+
+  it('failNextWith → stats rejects', async () => {
+    const controller = new FakeContainerController();
+    controller.failNextWith(new Error('docker unavailable'));
+
+    await expect(controller.stats('ir-issue-1')).rejects.toThrow(
+      'docker unavailable',
+    );
+  });
+
+  it('statsStream → пустой Readable, Docker не трогается', async () => {
+    const controller = new FakeContainerController();
+
+    const stream = await controller.statsStream('ir-issue-1');
+
+    expect(typeof stream.on).toBe('function');
+    (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
+  });
+
+  it('failNextWith → statsStream rejects', async () => {
+    const controller = new FakeContainerController();
+    controller.failNextWith(new Error('docker unavailable'));
+
+    await expect(controller.statsStream('ir-issue-1')).rejects.toThrow(
       'docker unavailable',
     );
   });
@@ -152,6 +206,141 @@ describe('DockerodeContainerController — Binds (workspace + общая пам�
     });
 
     expect(bindsOf(configs[0])).toContain('shared-memory:/custom/memory');
+  });
+});
+
+describe('DockerodeContainerController.stats', () => {
+  /** docker-клиент, чей контейнер отдаёт заданный stats-JSON. */
+  function statsDocker(data: unknown): Dockerode {
+    return {
+      getContainer: () => ({ stats: async () => data }),
+    } as unknown as Dockerode;
+  }
+
+  const sample = {
+    cpu_stats: {
+      cpu_usage: { total_usage: 300 },
+      system_cpu_usage: 5000,
+      online_cpus: 2,
+    },
+    precpu_stats: {
+      cpu_usage: { total_usage: 100 },
+      system_cpu_usage: 1000,
+    },
+    memory_stats: { usage: 1024, limit: 2048 },
+    pids_stats: { current: 7 },
+  };
+
+  it('cpuPercent по дельтам (cpu/system/online_cpus), память и pids переносятся', async () => {
+    const controller = new DockerodeContainerController(statsDocker(sample));
+
+    await expect(controller.stats('ir-issue-1')).resolves.toEqual({
+      containerName: 'ir-issue-1',
+      cpuPercent: 10,
+      memoryUsageBytes: 1024,
+      memoryLimitBytes: 2048,
+      pids: 7,
+    });
+  });
+
+  it('systemDelta = 0 → cpuPercent null', async () => {
+    const controller = new DockerodeContainerController(
+      statsDocker({
+        ...sample,
+        precpu_stats: { ...sample.precpu_stats, system_cpu_usage: 5000 },
+      }),
+    );
+
+    const stats = await controller.stats('ir-issue-1');
+
+    expect(stats.cpuPercent).toBeNull();
+  });
+
+  it('пустой stats-JSON → 0/null без падения', async () => {
+    const controller = new DockerodeContainerController(statsDocker({}));
+
+    await expect(controller.stats('ir-issue-1')).resolves.toEqual({
+      containerName: 'ir-issue-1',
+      cpuPercent: null,
+      memoryUsageBytes: 0,
+      memoryLimitBytes: 0,
+      pids: 0,
+    });
+  });
+});
+
+describe('DockerodeContainerController.statsStream', () => {
+  it('открывает поток контейнера через stats({ stream: true })', async () => {
+    const stream = new PassThrough();
+    const calls: Array<{ name: string; options: unknown }> = [];
+    const docker = {
+      getContainer: (name: string) => ({
+        stats: async (options: unknown) => {
+          calls.push({ name, options });
+          return stream;
+        },
+      }),
+    } as unknown as Dockerode;
+    const controller = new DockerodeContainerController(docker);
+
+    await expect(controller.statsStream('ir-issue-1')).resolves.toBe(stream);
+    expect(calls).toEqual([{ name: 'ir-issue-1', options: { stream: true } }]);
+  });
+});
+
+describe('LocalContainerController.statsStream', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.resetAllMocks();
+  });
+
+  it('reads cgroup, шлёт NDJSON docker-stats и считает CPU по дельтам', async () => {
+    vi.useFakeTimers();
+
+    let cpuReads = 0;
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockImplementation(((path: unknown): string => {
+      const file = String(path);
+      if (file.endsWith('/cpu.stat')) {
+        cpuReads += 1;
+        const usage = cpuReads === 1 ? 1_000_000 : 1_500_000;
+        return `usage_usec ${usage}\nuser_usec 0\nsystem_usec 0\n`;
+      }
+      if (file.endsWith('/memory.current')) return '1048576\n';
+      if (file.endsWith('/memory.max')) return '2097152\n';
+      if (file.endsWith('/pids.current')) return '3\n';
+      if (file.endsWith('/cpuset.cpus.effective')) return '0-1\n';
+      throw new Error(`unexpected cgroup read: ${file}`);
+    }) as never);
+
+    const controller = new LocalContainerController();
+    const stream = await controller.statsStream('ir-issue-2');
+
+    const chunks: string[] = [];
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk.toString()));
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(chunks).toHaveLength(2);
+    // Первый кадр отдаётся сразу (память/pids), CPU без дельты — null.
+    const first = toContainerStatsPayload(JSON.parse(chunks[0]));
+    expect(first).toEqual({
+      cpuPercent: null,
+      memoryUsageBytes: 1048576,
+      memoryLimitBytes: 2097152,
+      pids: 3,
+    });
+    // 0.5 ядра за секунду (usage +0.5s) при 2 online_cpus → 50%.
+    const second = toContainerStatsPayload(JSON.parse(chunks[1]));
+    expect(second).toEqual({
+      cpuPercent: 50,
+      memoryUsageBytes: 1048576,
+      memoryLimitBytes: 2097152,
+      pids: 3,
+    });
+
+    expect(fs.existsSync).toHaveBeenCalledWith('/sys/fs/cgroup/cpu.stat');
+    (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.();
   });
 });
 

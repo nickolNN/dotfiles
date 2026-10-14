@@ -3,12 +3,15 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import type {
   ContainerSpec,
+  ContainerStats,
+  SSEEvent,
   SpawnContainerResult,
 } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app';
 import type { Db } from '../src/db/client';
 import { createDb } from '../src/db/client';
@@ -20,6 +23,7 @@ import {
   stepRuns,
 } from '../src/db/schema';
 import type { ContainerController } from '../src/docker/controller';
+import type { SseHub } from '../src/sse/hub';
 
 const ROUTE_PATH = '/issue-resolver/api/v1/issues';
 
@@ -27,8 +31,15 @@ const ROUTE_PATH = '/issue-resolver/api/v1/issues';
 class SpyContainerController implements ContainerController {
   readonly spawned: string[] = [];
   readonly removed: string[] = [];
+  private pendingError: Error | null = null;
+
+  /** Следующая операция (spawn/remove) отклонится этой ошибкой. */
+  failNextWith(error: Error): void {
+    this.pendingError = error;
+  }
 
   async spawn(spec: ContainerSpec): Promise<SpawnContainerResult> {
+    this.throwIfPending();
     this.spawned.push(spec.containerName);
     return {
       containerId: `cid-${spec.containerName}`,
@@ -38,7 +49,53 @@ class SpyContainerController implements ContainerController {
   }
 
   async remove(containerName: string): Promise<void> {
+    this.throwIfPending();
     this.removed.push(containerName);
+  }
+
+  async stats(containerName: string): Promise<ContainerStats> {
+    this.throwIfPending();
+    return {
+      containerName,
+      cpuPercent: 0,
+      memoryUsageBytes: 0,
+      memoryLimitBytes: 0,
+      pids: 0,
+    };
+  }
+
+  async statsStream(_containerName: string): Promise<NodeJS.ReadableStream> {
+    this.throwIfPending();
+    return new PassThrough();
+  }
+
+  private throwIfPending(): void {
+    if (this.pendingError) {
+      const error = this.pendingError;
+      this.pendingError = null;
+      throw error;
+    }
+  }
+}
+
+/** SseHub-шпион: копит опубликованные события, без живой доставки. */
+class RecordingSseHub implements SseHub {
+  readonly events: SSEEvent[] = [];
+
+  publish(event: SSEEvent): void {
+    this.events.push(event);
+  }
+
+  subscribe(): () => void {
+    return () => {};
+  }
+
+  subscribeByIssue(): () => void {
+    return () => {};
+  }
+
+  subscribeGlobal(): () => void {
+    return () => {};
   }
 }
 
@@ -64,8 +121,13 @@ function makeApp(
   db: Db,
   container: SpyContainerController,
   workspaceRoot: string,
+  sse?: SseHub,
 ): ReturnType<typeof buildApp> {
-  const app = buildApp(db, { container, workspaceRoot });
+  const app = buildApp(db, {
+    container,
+    workspaceRoot,
+    ...(sse ? { sse } : {}),
+  });
   openApps.push(app);
   return app;
 }
@@ -83,6 +145,51 @@ async function waitFor(
   throw new Error('waitFor: timeout');
 }
 
+/** Фазы SSE `issue_deleting` задачи — в порядке публикации. */
+function phasesOf(sse: RecordingSseHub, issueId: string): string[] {
+  return sse.events
+    .filter(
+      (event) => event.type === 'issue_deleting' && event.issueId === issueId,
+    )
+    .map((event) => (JSON.parse(event.data) as { phase: string }).phase);
+}
+
+/** Есть ли событие типа `type` по задаче. */
+function hasEvent(
+  sse: RecordingSseHub,
+  type: SSEEvent['type'],
+  issueId: string,
+): boolean {
+  return sse.events.some(
+    (event) => event.type === type && event.issueId === issueId,
+  );
+}
+
+/** Прямой insert задачи: без POST, который тянет тяжёлый фоновый прогон. */
+function seedIssue(db: Db): string {
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  db.insert(issues)
+    .values({
+      id,
+      title: 'Задача на удаление',
+      description: '',
+      desired_result: 'md',
+      pipeline_steps: [],
+      status: 'pending',
+      created_at: now,
+      updated_at: now,
+    })
+    .run();
+  return id;
+}
+
+/** better-sqlite3-клиент drizzle — для DDL-триггеров в тестах сбоя БД. */
+function sqliteOf(db: Db): { exec: (sql: string) => void } {
+  return (db as unknown as { $client: { exec: (sql: string) => void } })
+    .$client;
+}
+
 const REPOSITORIES = [
   { repository_url: 'https://github.com/acme/app.git', base_branch: 'main' },
 ];
@@ -91,8 +198,9 @@ describe('DELETE /issues/:id — полная зачистка', () => {
   it('удаление чистит БД-каскад + папку + контейнер', async () => {
     const db = createDb(':memory:');
     const container = new SpyContainerController();
+    const sse = new RecordingSseHub();
     const workspaceRoot = await makeRoot();
-    const app = makeApp(db, container, workspaceRoot);
+    const app = makeApp(db, container, workspaceRoot, sse);
 
     const created = await app.inject({
       method: 'POST',
@@ -153,7 +261,11 @@ describe('DELETE /issues/:id — полная зачистка', () => {
       method: 'DELETE',
       url: `${ROUTE_PATH}/${issueId}`,
     });
-    expect(response.statusCode).toBe(204);
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ ok: true });
+
+    // Удаление — фоновое: финал — SSE `issue_deleted` (после сноса папки).
+    await waitFor(() => hasEvent(sse, 'issue_deleted', issueId));
 
     const fetched = await app.inject({
       method: 'GET',
@@ -169,6 +281,15 @@ describe('DELETE /issues/:id — полная зачистка', () => {
 
     expect(container.removed).toContain(`issue-resolver-${issueId}`);
     expect(existsSync(issueDir)).toBe(false);
+
+    // Прогресс удаления уходит в SSE фазами, финал — issue_deleted.
+    expect(phasesOf(sse, issueId)).toEqual([
+      'stopping_processes',
+      'removing_db_record',
+      'removing_container',
+      'removing_workspace',
+    ]);
+    expect(hasEvent(sse, 'issue_deleted', issueId)).toBe(true);
   });
 
   it('DELETE неизвестного id → 404', async () => {
@@ -185,5 +306,214 @@ describe('DELETE /issues/:id — полная зачистка', () => {
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: 'issue not found' });
     expect(container.removed).toEqual([]);
+  });
+});
+
+describe('DELETE /issues/:id — corner cases', () => {
+  it('сбой db.delete → phase error, папка и контейнер НЕ тронуты', async () => {
+    const db = createDb(':memory:');
+    const container = new SpyContainerController();
+    const sse = new RecordingSseHub();
+    const workspaceRoot = await makeRoot();
+    const app = makeApp(db, container, workspaceRoot, sse);
+    const issueId = seedIssue(db);
+
+    const issueDir = join(workspaceRoot, issueId);
+    mkdirSync(issueDir, { recursive: true });
+    writeFileSync(join(issueDir, 'work.txt'), 'artifact');
+
+    // Сбой БД: DELETE по issues всегда падает через RAISE(ABORT).
+    sqliteOf(db).exec(
+      "CREATE TRIGGER fail_delete BEFORE DELETE ON issues BEGIN SELECT RAISE(ABORT, 'db delete failed'); END;",
+    );
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `${ROUTE_PATH}/${issueId}`,
+    });
+    expect(response.statusCode).toBe(202);
+
+    await waitFor(() => phasesOf(sse, issueId).includes('error'));
+
+    // Задача цела: запись в БД, папка и контейнер не тронуты.
+    const fetched = await app.inject({
+      method: 'GET',
+      url: `${ROUTE_PATH}/${issueId}`,
+    });
+    expect(fetched.statusCode).toBe(200);
+    expect(existsSync(issueDir)).toBe(true);
+    expect(container.removed).toEqual([]);
+    expect(hasEvent(sse, 'issue_deleted', issueId)).toBe(false);
+
+    // Фатальный сбой БД: дальше removing_container/workspace не идём.
+    expect(phasesOf(sse, issueId)).toEqual([
+      'stopping_processes',
+      'removing_db_record',
+      'error',
+    ]);
+    const errorEvent = sse.events.find(
+      (event) =>
+        event.type === 'issue_deleting' &&
+        event.issueId === issueId &&
+        (JSON.parse(event.data) as { phase: string }).phase === 'error',
+    );
+    expect(JSON.parse(errorEvent!.data)).toMatchObject({
+      phase: 'error',
+      message: expect.stringContaining('db delete failed'),
+    });
+  });
+
+  it('сбой container.remove → идём к папке, финал issue_deleted', async () => {
+    const db = createDb(':memory:');
+    const container = new SpyContainerController();
+    const sse = new RecordingSseHub();
+    const workspaceRoot = await makeRoot();
+    const app = makeApp(db, container, workspaceRoot, sse);
+    const issueId = seedIssue(db);
+
+    const issueDir = join(workspaceRoot, issueId);
+    mkdirSync(issueDir, { recursive: true });
+    writeFileSync(join(issueDir, 'work.txt'), 'artifact');
+
+    container.failNextWith(new Error('docker down'));
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `${ROUTE_PATH}/${issueId}`,
+    });
+    expect(response.statusCode).toBe(202);
+
+    await waitFor(() => hasEvent(sse, 'issue_deleted', issueId));
+
+    // Контейнер не удалился, но это не мешает: запись и папка снесены.
+    expect(container.removed).toEqual([]);
+    expect(db.select().from(issues).all()).toHaveLength(0);
+    expect(existsSync(issueDir)).toBe(false);
+    expect(phasesOf(sse, issueId)).toEqual([
+      'stopping_processes',
+      'removing_db_record',
+      'removing_container',
+      'removing_workspace',
+    ]);
+  });
+
+  it('сбой rm рабочей папки → запись уже удалена, финал issue_deleted', async () => {
+    const db = createDb(':memory:');
+    const container = new SpyContainerController();
+    const sse = new RecordingSseHub();
+    const root = await makeRoot();
+    // workspaceRoot — обычный файл: `rm(<root>/<id>)` упадёт с ENOTDIR.
+    const blocker = join(root, 'not-a-dir');
+    writeFileSync(blocker, 'x');
+    const app = makeApp(db, container, blocker, sse);
+    const issueId = seedIssue(db);
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `${ROUTE_PATH}/${issueId}`,
+    });
+    expect(response.statusCode).toBe(202);
+
+    await waitFor(() => hasEvent(sse, 'issue_deleted', issueId));
+
+    expect(db.select().from(issues).all()).toHaveLength(0);
+    expect(container.removed).toContain(`issue-resolver-${issueId}`);
+    expect(phasesOf(sse, issueId)).toEqual([
+      'stopping_processes',
+      'removing_db_record',
+      'removing_container',
+      'removing_workspace',
+    ]);
+  });
+
+  it('неожиданная ошибка (не-Error) → phase error с String(error)', async () => {
+    const db = createDb(':memory:');
+    const container = new SpyContainerController();
+    const sse = new RecordingSseHub();
+    const workspaceRoot = await makeRoot();
+    const app = makeApp(db, container, workspaceRoot, sse);
+    const issueId = seedIssue(db);
+
+    const issueDir = join(workspaceRoot, issueId);
+    mkdirSync(issueDir, { recursive: true });
+
+    // Не-Error throwable: проверяем ветку `String(error)` в catch.
+    const deleteSpy = vi.spyOn(db, 'delete').mockImplementation(() => {
+      throw 'boom';
+    });
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `${ROUTE_PATH}/${issueId}`,
+    });
+    expect(response.statusCode).toBe(202);
+
+    await waitFor(() => phasesOf(sse, issueId).includes('error'));
+
+    const errorEvent = sse.events.find(
+      (event) =>
+        event.type === 'issue_deleting' &&
+        event.issueId === issueId &&
+        (JSON.parse(event.data) as { phase: string }).phase === 'error',
+    );
+    expect(JSON.parse(errorEvent!.data)).toMatchObject({
+      phase: 'error',
+      message: 'boom',
+    });
+    expect(existsSync(issueDir)).toBe(true);
+    expect(container.removed).toEqual([]);
+
+    deleteSpy.mockRestore();
+  });
+
+  it('202 возвращается сразу, удаление идёт в фоне', async () => {
+    const db = createDb(':memory:');
+    const container = new SpyContainerController();
+    const sse = new RecordingSseHub();
+    const workspaceRoot = await makeRoot();
+    const app = makeApp(db, container, workspaceRoot, sse);
+    const issueId = seedIssue(db);
+
+    const issueDir = join(workspaceRoot, issueId);
+    mkdirSync(issueDir, { recursive: true });
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `${ROUTE_PATH}/${issueId}`,
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toEqual({ ok: true });
+
+    // Фоновый прогон спит 500 мс после SIGTERM — финала ещё быть не может.
+    expect(hasEvent(sse, 'issue_deleted', issueId)).toBe(false);
+
+    await waitFor(() => hasEvent(sse, 'issue_deleted', issueId));
+    expect(db.select().from(issues).all()).toHaveLength(0);
+  });
+
+  it('SSE-фазы идут в порядке db → container → workspace', async () => {
+    const db = createDb(':memory:');
+    const container = new SpyContainerController();
+    const sse = new RecordingSseHub();
+    const workspaceRoot = await makeRoot();
+    const app = makeApp(db, container, workspaceRoot, sse);
+    const issueId = seedIssue(db);
+
+    const issueDir = join(workspaceRoot, issueId);
+    mkdirSync(issueDir, { recursive: true });
+
+    await app.inject({
+      method: 'DELETE',
+      url: `${ROUTE_PATH}/${issueId}`,
+    });
+
+    await waitFor(() => hasEvent(sse, 'issue_deleted', issueId));
+
+    expect(phasesOf(sse, issueId)).toEqual([
+      'stopping_processes',
+      'removing_db_record',
+      'removing_container',
+      'removing_workspace',
+    ]);
   });
 });

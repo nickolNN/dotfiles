@@ -215,7 +215,6 @@ describe('TaskDetail — порождённые файлы результата'
   it.each([
     ['md', 'report.md'],
     ['html', 'report.html'],
-    ['pr', 'result.json'],
   ] as const)(
     'download-result для desired_result=%s получает имя %s',
     async (desired, filename) => {

@@ -1,6 +1,12 @@
 {
   "lastChangelogVersion": "1.0.3",
   "theme": "hackerman",
+"retry": {
+    "enabled": true,
+    "maxRetries": 4,
+    "baseDelayMs": 15000,
+    "maxAgentDelayMs": 60000
+  },
   "themes": [
     "themes"
   ],

@@ -1,10 +1,16 @@
 import { buildApp } from './app';
+import { loadConfig } from './config';
 import { createDb, dbPathFromEnv } from './db/client';
 import { reconcileInterruptedRuns } from './db/reconcile';
 import { buildDepsFromEnv } from './deps';
 
+const config = loadConfig();
+for (const [key, val] of Object.entries(config)) {
+  if (val && !process.env[key]) process.env[key] = val;
+}
+
 const DEFAULT_PORT = 8080;
-const HOST = '0.0.0.0';
+const HOST = '127.0.0.1';
 
 const port = Number(process.env.PORT) || DEFAULT_PORT;
 

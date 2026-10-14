@@ -1,4 +1,5 @@
 import type { NormalizedStage, PipelineStep } from '@issue-resolver/shared';
+import { DEFAULT_MAX_ROOM_EXECUTORS } from '@issue-resolver/shared';
 import { describe, expect, it } from 'vitest';
 import {
   buildRoomCoordinatorPrompt,
@@ -7,6 +8,7 @@ import {
   buildStageWorkerPrompt,
   buildStagedFinalCoordinatorPrompt,
   buildStepPrompt,
+  type PrTarget,
   type RoomPromptInput,
 } from '../src/workflow/prompts';
 
@@ -18,11 +20,13 @@ const base = {
   feedback: null as string | null,
   refinedPlan: null as string | null,
   repoPaths: ['/workspaces/issue-1/app', '/workspaces/issue-1/lib'],
-  desiredResult: undefined as 'md' | 'html' | 'pr' | undefined,
+  desiredResult: undefined as 'md' | 'html' | undefined,
   attachmentPaths: undefined as string[] | undefined,
   previousOutcome: null as string | null,
   reviewContext: null as string | null,
   pipelineSteps: undefined as PipelineStep[] | undefined,
+  devServerPort: null as number | null | undefined,
+  prTargets: undefined as PrTarget[] | undefined,
 };
 
 function prompt(
@@ -48,14 +52,14 @@ describe('buildStepPrompt', () => {
     );
   });
 
-  it('resolve: with repos — install dependencies; without repos — write files into the working folder', () => {
+  it('resolve: with repos — зависимости уже поставлены подготовкой; without repos — файлы в рабочую папку', () => {
     const withRepos = prompt('resolve');
-    expect(withRepos).toContain('install dependencies');
+    expect(withRepos).toContain('Dependencies are already installed');
 
     const withoutRepos = prompt('resolve', { repoPaths: [] });
     expect(withoutRepos).toContain('There are no repositories');
     expect(withoutRepos).toContain('task working folder');
-    expect(withoutRepos).not.toContain('install dependencies');
+    expect(withoutRepos).not.toContain('Dependencies are already installed');
   });
 
   it('resolve: desiredResult html → self-contained report.html instruction', () => {
@@ -77,11 +81,7 @@ describe('buildStepPrompt', () => {
     expect(text).toContain('.issue-step-result.json');
   });
 
-  it('resolve: desiredResult pr / undefined → no report.html/report.md instruction', () => {
-    const pr = prompt('resolve', { desiredResult: 'pr' });
-    expect(pr).not.toContain('report.html');
-    expect(pr).not.toContain('report.md');
-
+  it('resolve: desiredResult undefined → no report.html/report.md instruction', () => {
     const fallback = prompt('resolve');
     expect(fallback).not.toContain('report.html');
     expect(fallback).not.toContain('report.md');
@@ -125,9 +125,9 @@ describe('buildStepPrompt', () => {
     const text = prompt('review');
 
     expect(text).toContain('independent code reviewer');
-    expect(text).toContain('SOURCE CODE only');
+    expect(text).toContain('source code');
+    expect(text).toContain('READ-ONLY step');
     expect(text).toContain('.issue-step-result.json');
-    // Старое разрешение выполнять тесты/браузер убрано: ревью больше не тестирует.
     expect(text).not.toContain('You are allowed to run');
     expect(text).not.toContain('Playwright');
     expect(text).not.toContain('Verify the real behavior');
@@ -162,8 +162,7 @@ describe('buildStepPrompt', () => {
     const text = prompt('pr');
 
     expect(text).toContain('PR');
-    expect(text).toContain('Do NOT push');
-    expect(text).toContain('do NOT create an MR');
+    expect(text).toContain('READ-ONLY');
   });
 
   it.each(['refine', 'resolve', 'review', 'test', 'pr'] as PipelineStep[])(
@@ -284,7 +283,7 @@ describe('refine execution & room prompts', () => {
     expect(text).toContain('План из refine');
   });
 
-  it('worker prompt: peer, not the lead, writes .issue-worker-result-0.json', () => {
+  it('worker prompt: peer, not the lead, writes .issue-worker-result-1.json', () => {
     const text = buildRoomWorkerPrompt(
       roomInput,
       { index: 0, task: 'frontend part' },
@@ -292,13 +291,13 @@ describe('refine execution & room prompts', () => {
     );
 
     expect(text).toContain('NOT the lead');
-    expect(text).toContain('.issue-worker-result-0.json');
+    expect(text).toContain('.issue-worker-result-1.json');
+    expect(text).not.toContain('.issue-worker-result-0.json');
     expect(text).toContain('frontend part');
     expect(text).toContain('Sub-task 1 of 2');
     // Самопроверка разрешена, публикация — нет.
     expect(text).toContain('build/tests/typecheck');
-    expect(text).toContain('Commit/push are forbidden');
-    expect(text).not.toContain('Build/test/commit/push are FORBIDDEN');
+    expect(text).toContain('Commit/push are FORBIDDEN');
   });
 
   it('coordinator prompt: LEAD takes the FINAL decision + worker summaries', () => {
@@ -369,8 +368,7 @@ describe('staged prompts', () => {
     expect(text).not.toContain('.issue-step-result.json');
     // Самопроверка разрешена, публикация — нет.
     expect(text).toContain('build/tests/typecheck');
-    expect(text).toContain('Commit/push are forbidden');
-    expect(text).not.toContain('Build/test/commit/push are FORBIDDEN');
+    expect(text).toContain('Commit/push are FORBIDDEN');
   });
 
   it('stage coordinator: integrates workers, stage file, shared memory read/write', () => {
@@ -406,5 +404,148 @@ describe('staged prompts', () => {
     expect(text).toContain('.issue-step-result.json');
     expect(text).toContain('memory_write');
     expect(text).toContain('[[resolve]]');
+  });
+});
+
+describe('prompt hygiene — роль видит всё, что нужно именно ей', () => {
+  const steps: PipelineStep[] = ['refine', 'resolve', 'review', 'test', 'pr'];
+  const stage: NormalizedStage = {
+    index: 1,
+    name: 'Сбор контекста',
+    task: 'собрать контекст',
+    executors: 2,
+    decomposition: ['frontend', 'backend'],
+  };
+  const full: RoomPromptInput = {
+    issueTitle: 'Поправить вход',
+    description: 'Описание',
+    jiraText: 'Jira',
+    context: 'Контекст итерации',
+    feedback: 'верните кэш',
+    refinedPlan: 'План',
+    repoPaths: ['/workspaces/issue-1/app'],
+    desiredResult: 'md',
+    previousOutcome: 'Previous iteration #1 (status fail): кэш не сброшен.',
+    attachmentPaths: ['attachments/spec.pdf'],
+    pipelineSteps: steps,
+    devServerPort: 4321,
+  };
+  const roomTexts = (): string[] => [
+    buildRoomWorkerPrompt(full, { index: 0, task: 'frontend' }, 2),
+    buildRoomCoordinatorPrompt(full, [{ index: 1, summary: 'frontend done' }]),
+    buildStageWorkerPrompt(full, stage, { index: 0, task: 'frontend' }, 2),
+    buildStageCoordinatorPrompt(full, stage, [{ index: 1, summary: 'frontend done' }]),
+    buildStagedFinalCoordinatorPrompt(full, [{ stage, outcome: 'stage done' }]),
+  ];
+
+  it.each(steps)('%s: пути репозиториев и место в конвейере', (step) => {
+    const text = prompt(step, { pipelineSteps: steps });
+
+    expect(text).toContain(`Pipeline step: ${step}.`);
+    expect(text).toContain(
+      'Enabled pipeline for this run: refine → resolve → review → test → pr.',
+    );
+    expect(text).toContain('- /workspaces/issue-1/app');
+  });
+
+  it('ни один промпт не оставляет нерезолвленных плейсхолдеров', () => {
+    const texts = [
+      ...steps.map((step) =>
+        prompt(step, {
+          pipelineSteps: steps,
+          devServerPort: 4321,
+          desiredResult: 'md',
+          refinedPlan: 'План',
+          previousOutcome: 'итог',
+          attachmentPaths: ['attachments/spec.pdf'],
+          reviewContext: 'контекст ревьюера',
+          prTargets: [
+            { path: '/workspaces/issue-1/app', baseBranch: 'main', createMr: true },
+          ],
+        }),
+      ),
+      ...roomTexts(),
+    ];
+
+    for (const text of texts) {
+      expect(text).not.toContain('{{');
+    }
+  });
+
+  it('room/staged: задача, вложения и итог прошлой итерации доходят до каждой роли', () => {
+    for (const text of roomTexts()) {
+      expect(text).toContain('Task: Поправить вход');
+      expect(text).toContain('Uploaded files (already in the working folder):');
+      expect(text).toContain('- attachments/spec.pdf');
+      expect(text).toContain('Previous iteration outcome');
+      expect(text).toContain('кэш не сброшен');
+      expect(text).toContain('http://localhost:4321');
+    }
+  });
+
+  it('room/staged: воркеру и лиду видно, какие гейты идут после них', () => {
+    for (const text of roomTexts()) {
+      expect(text).toContain('Downstream verification steps run AFTER');
+      expect(text).toContain('Playwright');
+    }
+  });
+
+  it('lead комнаты: карта файлов воркеров + output contract', () => {
+    const text = buildRoomCoordinatorPrompt(full, [
+      { index: 1, summary: 'frontend done' },
+      { index: 2, summary: 'backend done' },
+    ]);
+
+    expect(text).toContain('`.issue-worker-result-1.json`: frontend done');
+    expect(text).toContain('`.issue-worker-result-2.json`: backend done');
+    expect(text).toContain('Output contract');
+  });
+
+  it('test: живой dev-сервер — URL; нет порта — поднять самому', () => {
+    expect(prompt('test', { devServerPort: 4321 })).toContain(
+      'http://localhost:4321',
+    );
+    expect(prompt('test')).toContain('No dev server is running');
+  });
+
+  it('pr: диф рабочего дерева (коммитит бэкенд после шага) + цели публикации', () => {
+    const text = prompt('pr', {
+      prTargets: [
+        { path: '/workspaces/issue-1/app', baseBranch: 'release-7', createMr: true },
+      ],
+    });
+
+    expect(text).toContain('git status --porcelain');
+    expect(text).toContain('nothing is committed yet');
+    expect(text).toContain('/workspaces/issue-1/app — base `release-7`, create MR: yes');
+    expect(text).not.toContain('<base>...HEAD');
+  });
+
+  it('pr: без репозиториев — публиковать нечего', () => {
+    expect(prompt('pr', { prTargets: [] })).toContain('nothing to publish');
+  });
+
+  it('output contract: форма scenarios/findings, без недосягаемых ссылок', () => {
+    const text = prompt('resolve');
+
+    expect(text).toContain('"expected"');
+    expect(text).toContain('"severity"');
+    expect(text).not.toContain('ISSUE_RESOLVER_PLAN');
+  });
+
+  it('refine: потолок исполнителей из shared, без противоречивых «prefer»', () => {
+    const text = prompt('refine');
+
+    expect(text).toContain(`2..${DEFAULT_MAX_ROOM_EXECUTORS}`);
+    expect(text).not.toContain('MAX 3 AGENTS PARALLEL');
+    expect(text).not.toContain('Prefer `single`');
+    expect(text).not.toContain('Prefer room or stages');
+  });
+
+  it('review: читает change set и отчёт предыдущего шага', () => {
+    const text = prompt('review');
+
+    expect(text).toContain('git status --porcelain');
+    expect(text).toContain('the execution step');
   });
 });

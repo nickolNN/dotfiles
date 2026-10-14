@@ -33,7 +33,6 @@ import { createDb } from '../src/db/client';
 import { issues, iterations, stepRuns } from '../src/db/schema';
 import { FakeContainerController } from '../src/docker/controller';
 import { FakeGitService } from '../src/git/service';
-import { FakeJiraClient } from '../src/jira/client';
 import { FakePiRunner } from '../src/pi/runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import { FakeMrClient } from '../src/pr/mr';
@@ -116,7 +115,6 @@ function makeDeps(workspaceRoot: string): {
     mr: new FakeMrClient(),
     pi,
     sse,
-    jira: new FakeJiraClient(),
     control: new InMemoryStepSessionRegistry(),
     workspaceRoot,
   };
@@ -192,6 +190,7 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
         steps: STEPS,
       },
       repositories: [],
+      repoWorkspaces: [],
     });
 
     return { db, pi, events, seeded, result };

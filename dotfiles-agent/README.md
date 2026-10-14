@@ -12,7 +12,11 @@ disposable and safe to recreate on the fly.
   `typescript-language-server`, `bash-language-server`, `gopls`,
   `golangci-lint`, `delve`, `lazygit`, …)
 - browser automation: playwright + puppeteer + system Chromium
+- `git-lfs`, for repositories that track large files
 - the `pi` coding agent + its packages + skills (remote + repo `agent-skills/`)
+- `tini` as PID 1 (`ENTRYPOINT ["/usr/bin/tini", "--"]`) so orphaned
+  MCP / chrome / esbuild children are reaped instead of accumulating as
+  zombie processes
 - uid/gid aligned to the host user (`AGENT_UID`/`AGENT_GID` build args)
 
 See the `Dockerfile` for the full list and the reasoning behind each layer.
@@ -222,10 +226,9 @@ Notes:
 ## Skills
 
 Skills reach the container from two sources, merged in
-`/home/agent/.agents/skills`:
+`/home/agent/.agents/skills`; the pi-lens package adds four more of its own.
 
-- **Remote skills** (agent-browser, caveman, glyph, ponytail, …) are
-  cloned into the image at build time and baked in.
+- **Remote skills** are cloned into the image at build time and baked in.
 - **Repo skills** in `agent-skills/` are also baked in by the Dockerfile, and —
   because the image is only rebuilt on demand — `agent-spawn` / `agent-attach`
   re-sync `agent-skills/` into the container on **every launch**.
@@ -234,6 +237,96 @@ So a new skill (a `SKILL.md` dropped under `agent-skills/<name>/`) shows up on
 the next launch with **no rebuild**. To also bake it into the image for fresh
 `docker run` / `docker compose` containers, run `build.sh` (or
 `agent-attach --build`).
+
+### Repo skills (`agent-skills/`)
+
+| Skill | Purpose |
+| ----- | ------- |
+| `container-environment` | What this container is; what to suggest about the runtime |
+| `coordinator` | Coordinator role in a hand-assembled room — dispatch, verify, integrate (не для шагов issue-resolver: там роль выдаёт движок) |
+| `geo-bypass` | Geo-restricted / TLS-blocked network access recipes |
+| `handoff` | Pi-adapted handoff doc (overrides the cloned remote copy) |
+| `pr` | Generate an MR/PR description from a feature diff |
+
+### Remote skills (cloned at build time)
+
+| Skill | Source | Purpose |
+| ----- | ------ | ------- |
+| `agent-browser` | vercel-labs/agent-browser | Browser automation CLI |
+| `caveman` | juliusbrussee/caveman | Terse caveman voice |
+| `clean-code` | sickn33/agentic-awesome-skills | Clean Code principles |
+| `code-review` | mattpocock/skills | Standards + spec review, in parallel |
+| `codebase-design` | mattpocock/skills | Deep-module design vocabulary |
+| `domain-modeling` | mattpocock/skills | GLOSSARY.md + ADR workflow |
+| `glyph` | yonatangross/orchestkit | ASCII-art answers |
+| `handoff` | mattpocock/skills | Compact a session into a handoff doc |
+| `improve-codebase-architecture` | mattpocock/skills | Scan for deepening opportunities |
+| `ponytail` | dietrichgebert/ponytail | Lazy-senior minimal-change mode |
+| `retro` | mattpocock/skills | Session retrospective |
+| `tdd` | mattpocock/skills | Test-driven development |
+| `teach` | mattpocock/skills | Teach a concept inside the workspace |
+| `to-questionnaire` | mattpocock/skills | Turn a decision into a questionnaire |
+| `wayfinder` | mattpocock/skills | Plan huge work as decision tickets |
+| `web-design-guidelines` | vercel-labs/agent-skills | Web Interface Guidelines review |
+| `writing-for-agents` | mattpocock/skills | Writing docs for agents (was `writing-great-skills`) |
+
+### pi-lens built-in skills
+
+Shipped inside the `pi-lens` npm package (not in `~/.agents/skills`):
+`pi-lens-ast-grep`, `pi-lens-lsp-navigation`,
+`pi-lens-write-ast-grep-rule`, `pi-lens-write-tree-sitter-rule`.
+
+The image bakes 21 unique skill directories into
+`/home/agent/.agents/skills` (17 remote + 5 repo, where the repo `handoff`
+overrides the cloned one of the same name) plus the 4 pi-lens built-ins.
+Remote skills whose source path vanished upstream (e.g. the
+`writing-great-skills` → `writing-for-agents` rename) now fail the build
+instead of being dropped silently.
+
+## Known issues & maintenance
+
+### Zombie processes
+
+The container accumulates `<defunct>` pid-table entries. Orphaned
+`chrome-devtools-mcp` trees (`npm exec` → `sh` → server), `esbuild` and
+`chrome-headless` children are not reaped by anything, so a long-lived
+container was observed with **1900+ zombies**. They hold no CPU/RAM, but they
+consume PID-table slots and clutter `ps`.
+
+The image ships **tini** as the entrypoint (`ENTRYPOINT ["/usr/bin/tini", "--"]`)
+so newly created containers reap orphans. The launch scripts override that
+entrypoint (`--entrypoint sleep`), so `spawn-pi-agent.sh` and `attach.sh`
+now pass **`--init`** as well, which gives the container the same docker-init
+(tini) reaper at PID 1; `docker-compose.yml` only overrides `command`, so it
+already gets the image entrypoint. An already-running container cannot
+be fixed in place: recreate it (`agent-stop`, then `agent-spawn`/`agent-attach`).
+
+### Duplicate MCP servers (per-agent spawn)
+
+Every `pi` agent spawns its own `chrome-devtools-mcp` / `web-search-mcp`
+process tree, so N agents means N copies of each — there is no sharing between
+agents. This is a Pi / MCP lifecycle limitation, not a container misconfig.
+
+### Cache cleanup
+
+Caches under `/home/agent/.cache` and `~/.npm` grow large; the Dockerfile now
+prunes them in the build layer. To reclaim space in a running container:
+
+```bash
+npm cache clean --force
+rm -rf ~/.cache/yarn/v6 ~/.cache/go-build/* ~/.cache/qmd/models/*
+```
+
+Notes:
+
+- Deleting the qmd GGUF models only affects **semantic/deep** memory search;
+  keyword (BM25) search keeps working because the image sets
+  `PI_MEMORY_QMD_UPDATE=off`. The model is re-downloaded on demand.
+- `~/.npm/_npx` is a separate npx execution cache (not touched by
+  `npm cache clean`). Leave it while `chrome-devtools-mcp` servers are
+  running; they resolve modules from it lazily.
+- `~/.pi/agent/sessions` is a **shared** volume (`agent-sessions`), so pruning
+  old sessions deletes history for every room/container using the volume.
 
 ## Long-term memory
 

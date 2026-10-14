@@ -9,10 +9,13 @@ import type {
 import {
   clampExecutors,
   DEFAULT_MAX_ROOM_EXECUTORS,
+  parseStepReport,
   planExecutionStages,
   planRoomWorkItems,
   sumSessionStats,
 } from '@issue-resolver/shared';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { PiRunner } from '../pi/runner';
 import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry';
 import {
@@ -36,6 +39,13 @@ export interface RoomResolveInput extends RoomPromptInput {
 
 /** Опции прогона комнаты: модель/cwd, адрес шага и живые колбэки. */
 export interface RoomResolveOptions {
+  /**
+   * Host-путь рабочей папки задачи. Отсюда движок дочитывает отчёты агентов
+   * (`.issue-worker-result-<n>.json`, `.issue-stage-<i>*.json`) в саммари для
+   * координатора: в docker-режиме `cwd` — путь внутри контейнера и бэкенду
+   * недоступен.
+   */
+  hostWorkspaceDir?: string;
   model?: string;
   /** Уровень размышления pi, общий для работников и координатора. */
   thinkingLevel?: string;
@@ -169,6 +179,31 @@ interface WorkerJob extends AgentRun {
   item: RoomWorkItem;
 }
 
+/**
+ * Саммари агента комнаты для промпта координатора: сначала in-memory отчёт
+ * раннера, затем файл отчёта в рабочей папке. В реальном прогоне раннер
+ * заполняет `report` только при abort, поэтому файл — основной источник;
+ * без него координатор получал список «(see …)» вместо содержимого.
+ */
+function agentSummary(
+  result: StepExecutionResult,
+  hostWorkspaceDir: string | undefined,
+  fileName: string,
+): string | null {
+  const inline = result.report?.summary?.trim();
+  if (inline) return inline;
+  if (!hostWorkspaceDir) return null;
+  try {
+    const report = parseStepReport(
+      readFileSync(join(hostWorkspaceDir, fileName), 'utf-8'),
+    );
+    const summary = report?.summary?.trim();
+    return summary ? summary : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Запускает N воркеров параллельно, переиспользуется комнатой и этапами. */
 async function runWorkersParallel(
   pi: PiRunner,
@@ -190,7 +225,7 @@ async function runWorkersParallel(
  * подзадачи, затем ОДИН координатор (старший) интегрирует их и принимает
  * финальное решение шага. Движок вызывает это только при детерминированном
  * planExecutionMode === 'room'; координатор пишет `.issue-step-result.json`,
- * а работники — `.issue-worker-result-<i>.json`.
+ * а работники — `.issue-worker-result-<n>.json` (n — 1-based номер подзадачи).
  */
 export async function runRoomResolve(
   pi: PiRunner,
@@ -222,11 +257,15 @@ export async function runRoomResolve(
     return abortedResolveResult();
   }
 
-  const summaries: WorkerSummary[] = workers.map((worker, index) => ({
-    index,
-    summary:
-      worker.report?.summary ?? `(see .issue-worker-result-${index}.json)`,
-  }));
+  const summaries: WorkerSummary[] = workers.map((worker, index) => {
+    const fileName = `.issue-worker-result-${index + 1}.json`;
+    return {
+      index: index + 1,
+      summary:
+        agentSummary(worker, options.hostWorkspaceDir, fileName) ??
+        `(see ${fileName})`,
+    };
+  });
 
   const agent = coordinatorAgent(options.stepRunId);
   const result = await runAgent(pi, input, options, {
@@ -294,12 +333,15 @@ export async function runStagedResolve(
         return abortedResolveResult();
       }
 
-      const summaries: WorkerSummary[] = workers.map((worker, index) => ({
-        index,
-        summary:
-          worker.report?.summary ??
-          `(see .issue-stage-${stage.index}-worker-${index + 1}.json)`,
-      }));
+      const summaries: WorkerSummary[] = workers.map((worker, index) => {
+        const fileName = `.issue-stage-${stage.index}-worker-${index + 1}.json`;
+        return {
+          index: index + 1,
+          summary:
+            agentSummary(worker, options.hostWorkspaceDir, fileName) ??
+            `(see ${fileName})`,
+        };
+      });
 
       const agent = coordinatorAgent(options.stepRunId, stage);
       const result = await runAgent(pi, input, options, {
@@ -312,7 +354,11 @@ export async function runStagedResolve(
       outcomes.push({
         stage,
         outcome:
-          result.report?.summary ?? `(see .issue-stage-${stage.index}.json)`,
+          agentSummary(
+            result,
+            options.hostWorkspaceDir,
+            `.issue-stage-${stage.index}.json`,
+          ) ?? `(see .issue-stage-${stage.index}.json)`,
       });
       continue;
     }
@@ -329,7 +375,11 @@ export async function runStagedResolve(
     outcomes.push({
       stage,
       outcome:
-        result.report?.summary ?? `(see .issue-stage-${stage.index}.json)`,
+        agentSummary(
+          result,
+          options.hostWorkspaceDir,
+          `.issue-stage-${stage.index}.json`,
+        ) ?? `(see .issue-stage-${stage.index}.json)`,
     });
   }
 

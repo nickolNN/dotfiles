@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
 import type { Db } from '../src/db/client';
@@ -217,6 +218,71 @@ describe('POST /iterations/:id/ui-response (персистентность)', ()
       payload: { id: 'q1' },
     });
     expect(noAnswer.statusCode).toBe(400);
+  });
+
+  it('ответ возвращает задачу из question в running', async () => {
+    const db = createDb(':memory:');
+    const iterationId = seedIteration(db);
+    const iteration = db
+      .select()
+      .from(iterations)
+      .where(eq(iterations.id, iterationId))
+      .get();
+    db.update(issues)
+      .set({ status: 'question' })
+      .where(eq(issues.id, iteration?.issue_id ?? ''))
+      .run();
+    const app = buildApp(db, { control: new InMemoryStepSessionRegistry() });
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `${ITERATIONS_PATH}/${iterationId}/ui-response`,
+      payload: { id: 'q1', value: 'да' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      db
+        .select()
+        .from(issues)
+        .where(eq(issues.id, iteration?.issue_id ?? ''))
+        .get()?.status,
+    ).toBe('running');
+  });
+
+  it('ответ на завершённую итерацию не воскрешает статус задачи', async () => {
+    const db = createDb(':memory:');
+    const iterationId = seedIteration(db);
+    const iteration = db
+      .select()
+      .from(iterations)
+      .where(eq(iterations.id, iterationId))
+      .get();
+    db.update(iterations)
+      .set({ status: 'completed' })
+      .where(eq(iterations.id, iterationId))
+      .run();
+    db.update(issues)
+      .set({ status: 'completed' })
+      .where(eq(issues.id, iteration?.issue_id ?? ''))
+      .run();
+    const app = buildApp(db, { control: new InMemoryStepSessionRegistry() });
+    openApps.push(app);
+
+    await app.inject({
+      method: 'POST',
+      url: `${ITERATIONS_PATH}/${iterationId}/ui-response`,
+      payload: { id: 'q1', value: 'да' },
+    });
+
+    expect(
+      db
+        .select()
+        .from(issues)
+        .where(eq(issues.id, iteration?.issue_id ?? ''))
+        .get()?.status,
+    ).toBe('completed');
   });
 });
 

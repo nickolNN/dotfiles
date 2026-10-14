@@ -5,17 +5,22 @@ import type {
   Issue,
   ModelDescriptor,
   PipelineStep,
-  RepositoryInput,
+  SavedRepo,
   StepModels,
   StepThinkingLevels,
+  Tag,
   ThinkingLevel,
 } from '@issue-resolver/shared';
 import {
   createIssue,
   createIssueWithFiles,
   getModels,
+  getRepositories,
+  getRepositoryBranches,
+  getTags,
 } from '../api/client';
 import FilePicker from '../components/FilePicker';
+import JiraIssueUrlInput from '../components/JiraIssueUrlInput';
 import MarkdownEditor from '../components/MarkdownEditor';
 import { thinkingLevelsFor } from '../constants/thinking-levels';
 
@@ -27,11 +32,10 @@ const MODEL_STEPS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
   { value: 'test', label: 'Тест' },
 ];
 
-/** Желаемый результат задачи: артефакт (md/html) или PR. */
+/** Желаемый результат задачи: формат артефакта (md/html). */
 const DESIRED_RESULTS: ReadonlyArray<{ value: DesiredResult; label: string }> = [
   { value: 'md', label: 'Markdown (.md)' },
   { value: 'html', label: 'HTML (.html)' },
-  { value: 'pr', label: 'PR (merge request)' },
 ];
 
 const inputClass =
@@ -53,12 +57,28 @@ interface NewIssueProps {
   onBack?: () => void;
 }
 
+/** Строка формы репозитория: выбранный сохранённый репозиторий + его ветки. */
+interface RepoRow {
+  repo_id: string;
+  base_branch: string;
+  create_mr: boolean;
+  /** Ставить ли зависимости (bootstrapper) в этом репозитории. */
+  bootstrap_enabled: boolean;
+  branches: string[];
+  branchesLoading: boolean;
+}
+
 export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   const [title, setTitle] = useState('');
   const [jiraIssueUrl, setJiraIssueUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [repositories, setRepositories] = useState<RepositoryInput[]>([]);
+  const [repositories, setRepositories] = useState<RepoRow[]>([]);
+  const [savedRepos, setSavedRepos] = useState<SavedRepo[]>([]);
+  const [savedReposLoading, setSavedReposLoading] = useState(true);
+  const [savedReposError, setSavedReposError] = useState<string | null>(null);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [selectedTagId, setSelectedTagId] = useState('');
   const [additionalContext, setAdditionalContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [showJira, setShowJira] = useState(false);
@@ -66,6 +86,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   const [stepModels, setStepModels] = useState<StepModels>({});
   const [stepThinkingLevels, setStepThinkingLevels] =
     useState<StepThinkingLevels>({});
+  const [bootstrapperModel, setBootstrapperModel] = useState('');
   const [desiredResult, setDesiredResult] = useState<DesiredResult>('md');
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -94,22 +115,171 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
     };
   }, []);
 
-  function updateRepository(
-    index: number,
-    field: keyof RepositoryInput,
-    value: string,
-  ) {
+  // Сохранённые репозитории для селектора: грузим один раз при монтировании.
+  useEffect(() => {
+    let cancelled = false;
+    setSavedReposLoading(true);
+
+    getRepositories()
+      .then((list) => {
+        if (cancelled) return;
+        setSavedRepos(Array.isArray(list) ? list : []);
+        setSavedReposError(null);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setSavedRepos([]);
+        setSavedReposError(
+          err instanceof Error ? err.message : 'Не удалось загрузить репозитории',
+        );
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setSavedReposLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Теги для быстрого добавления их репозиториев: грузим один раз.
+  useEffect(() => {
+    let cancelled = false;
+    getTags()
+      .then((list) => {
+        if (cancelled) return;
+        setTags(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTags([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function updateBaseBranch(index: number, value: string) {
     setRepositories((current) =>
       current.map((repository, i) =>
-        i === index ? { ...repository, [field]: value } : repository,
+        i === index ? { ...repository, base_branch: value } : repository,
       ),
     );
+  }
+
+  /** Выбор сохранённого репозитория: defaultBranch + live-загрузка веток. */
+  function selectRepository(index: number, repoId: string) {
+    const saved = savedRepos.find((repo) => repo.id === repoId);
+    setRepositories((current) =>
+      current.map((repository, i) =>
+        i === index
+          ? {
+              ...repository,
+              repo_id: repoId,
+              base_branch: saved?.defaultBranch ?? '',
+              branches: [],
+              branchesLoading: Boolean(repoId),
+            }
+          : repository,
+      ),
+    );
+
+    if (!repoId) return;
+    void getRepositoryBranches(repoId)
+      .then((branches) => {
+        setRepositories((current) =>
+          current.map((repository, i) => {
+            if (i !== index || repository.repo_id !== repoId) return repository;
+            const options =
+              repository.base_branch &&
+              !branches.includes(repository.base_branch)
+                ? [repository.base_branch, ...branches]
+                : branches;
+            return { ...repository, branches: options, branchesLoading: false };
+          }),
+        );
+      })
+      .catch(() => {
+        setRepositories((current) =>
+          current.map((repository, i) =>
+            i === index && repository.repo_id === repoId
+              ? { ...repository, branchesLoading: false }
+              : repository,
+          ),
+        );
+      });
+  }
+
+  /**
+   * Применяет тег: добавляет все его репозитории строками формы, пропуская
+   * уже выбранные, и подгружает ветки для новых строк. Сброс селекта — чтобы
+   * можно было применить тот же тег ещё раз.
+   */
+  function selectTag(tagId: string) {
+    setSelectedTagId('');
+    const tag = tags.find((item) => item.id === tagId);
+    if (!tag) return;
+
+    const existing = new Set(
+      repositories.map((repository) => repository.repo_id),
+    );
+    const additions: RepoRow[] = [];
+    for (const tr of tag.repositories) {
+      const repoId = tr.repository.id;
+      if (!repoId || existing.has(repoId)) continue;
+      existing.add(repoId);
+      additions.push({
+        repo_id: repoId,
+        base_branch: tr.repository.defaultBranch ?? '',
+        create_mr: false,
+        bootstrap_enabled: tr.bootstrap_enabled,
+        branches: [],
+        branchesLoading: true,
+      });
+    }
+    if (additions.length === 0) return;
+
+    setRepositories((current) => [...current, ...additions]);
+
+    for (const row of additions) {
+      void getRepositoryBranches(row.repo_id)
+        .then((branches) => {
+          setRepositories((current) =>
+            current.map((repository) => {
+              if (repository.repo_id !== row.repo_id) return repository;
+              const options =
+                repository.base_branch &&
+                !branches.includes(repository.base_branch)
+                  ? [repository.base_branch, ...branches]
+                  : branches;
+              return { ...repository, branches: options, branchesLoading: false };
+            }),
+          );
+        })
+        .catch(() => {
+          setRepositories((current) =>
+            current.map((repository) =>
+              repository.repo_id === row.repo_id
+                ? { ...repository, branchesLoading: false }
+                : repository,
+            ),
+          );
+        });
+    }
   }
 
   function addRepository() {
     setRepositories((current) => [
       ...current,
-      { repository_url: '', base_branch: 'dev', create_mr: false },
+      {
+        repo_id: '',
+        base_branch: '',
+        create_mr: false,
+        bootstrap_enabled: true,
+        branches: [],
+        branchesLoading: false,
+      },
     ]);
   }
 
@@ -123,12 +293,22 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
     );
   }
 
+  function toggleRepositoryBootstrap(index: number) {
+    setRepositories((current) =>
+      current.map((repository, i) =>
+        i === index
+          ? {
+              ...repository,
+              bootstrap_enabled: !repository.bootstrap_enabled,
+            }
+          : repository,
+      ),
+    );
+  }
+
   function removeRepository(index: number) {
     setRepositories((current) => current.filter((_, i) => i !== index));
   }
-
-  // PR доступен только при наличии хотя бы одного репозитория.
-  const prAvailable = repositories.length > 0;
 
   function toggleStep(step: PipelineStep) {
     setSelectedSteps((current) =>
@@ -177,11 +357,6 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   // Модель шага доступна только когда шаг отмечен (resolve отмечен всегда).
   const chosenSteps = new Set<PipelineStep>(['resolve', ...selectedSteps]);
 
-  // Удалили последний репозиторий — PR-результат больше недоступен, откат на md.
-  useEffect(() => {
-    if (!prAvailable && desiredResult === 'pr') setDesiredResult('md');
-  }, [prAvailable, desiredResult]);
-
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -201,10 +376,24 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       ),
     ) as StepThinkingLevels;
 
+    // В тело идут только строки с выбранным репозиторием — новый формат:
+    // `repo_id` + `base_branch` + `create_mr` (URL подставляет бэкенд).
+    // `bootstrap_enabled` пока не описан в shared-типах (его добавляет
+    // бэкенд-агент), но уходит в тело всегда: по умолчанию — true.
+    const activeRepositories = repositories
+      .filter((repository) => repository.repo_id)
+      .map((repository) => ({
+        repo_id: repository.repo_id,
+        base_branch: repository.base_branch,
+        create_mr: repository.create_mr,
+        bootstrap_enabled: repository.bootstrap_enabled,
+      }));
+
     const payload: CreateIssueRequest = {
       title,
       jira_issue_url: jiraIssueUrl.trim() || undefined,
-      repositories,
+      repositories:
+        activeRepositories.length > 0 ? activeRepositories : undefined,
       desired_result: desiredResult,
       additional_context: additionalContext.trim() || undefined,
       is_review_need: chosenSteps.has('review'),
@@ -212,6 +401,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       pipeline_steps: PIPELINE_ORDER.filter((step) => chosenSteps.has(step)),
       step_models:
         Object.keys(activeStepModels).length > 0 ? activeStepModels : undefined,
+      bootstrapper_model: bootstrapperModel || undefined,
       step_thinking_levels:
         Object.keys(activeStepThinkingLevels).length > 0
           ? activeStepThinkingLevels
@@ -233,7 +423,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   }
 
   return (
-    <section className="panel mx-auto max-w-3xl py-6 px-3 sm:px-4 md:px-6">
+    <div className="mx-auto max-w-4xl py-6 px-3 sm:px-4 md:px-6">
       <header className="mb-6">
         <button
           type="button"
@@ -280,6 +470,29 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
         </div>
 
         <fieldset>
+          <legend className="mb-2 text-sm font-medium text-[#00FF41]/80">
+            Теги
+          </legend>
+          <select
+            id="issue-tag"
+            data-testid="issue-tag-select"
+            aria-label="Тег"
+            className={inputClass}
+            value={selectedTagId}
+            onChange={(event) => selectTag(event.target.value)}
+          >
+            <option value="">
+              Выберите тег (добавит все его репозитории)
+            </option>
+            {tags.map((tag) => (
+              <option key={tag.id} value={tag.id}>
+                {tag.name}
+              </option>
+            ))}
+          </select>
+        </fieldset>
+
+        <fieldset>
           <div className="mb-2 flex items-center justify-between">
             <legend className="text-sm font-medium text-[#00FF41]/80">
               Репозитории
@@ -293,87 +506,168 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
             </button>
           </div>
           <div className="space-y-3">
-            {repositories.map((repository, index) => (
-              <div
-                key={index}
-                className="space-y-2 border border-[#008F11]/40 p-3"
-              >
-                <div className="flex flex-col gap-3 md:flex-row md:items-end">
-                <div className="min-w-0 flex-1">
-                  <label
-                    className={labelClass}
-                    htmlFor={`repository-url-${index}`}
-                  >
-                    Адрес
-                  </label>
-                  <input
-                    id={`repository-url-${index}`}
-                    className={inputClass}
-                    type="text"
-                    value={repository.repository_url}
-                    onChange={(event) =>
-                      updateRepository(index, 'repository_url', event.target.value)
-                    }
-                    placeholder="git@github.com:org/repo.git"
-                  />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <label
-                    className={labelClass}
-                    htmlFor={`repository-branch-${index}`}
-                  >
-                    Базовая ветка
-                  </label>
-                  <input
-                    id={`repository-branch-${index}`}
-                    className={inputClass}
-                    type="text"
-                    value={repository.base_branch}
-                    onChange={(event) =>
-                      updateRepository(index, 'base_branch', event.target.value)
-                    }
-                    placeholder="dev"
-                  />
-                </div>
-                <button
-                  type="button"
-                  className="min-h-12 w-full rounded-none border border-[#008F11] px-3 py-2 text-sm text-[#008F11] hover:bg-[#008F11]/20 hover:text-[#00FF41] disabled:opacity-40 md:w-auto"
-                  onClick={() => removeRepository(index)}
+            {savedReposError && (
+              <p role="alert" className="text-xs font-medium text-[#FF0033]">
+                {savedReposError}
+              </p>
+            )}
+            {repositories.map((repository, index) => {
+              const selectedRepo = savedRepos.find(
+                (repo) => repo.id === repository.repo_id,
+              );
+              // Опции веток: данные API, плюс текущее значение, если его нет.
+              const branchOptions =
+                repository.base_branch.length === 0
+                  ? []
+                  : repository.branches.includes(repository.base_branch)
+                    ? repository.branches
+                    : [repository.base_branch, ...repository.branches];
+              return (
+                <div
+                  key={index}
+                  data-testid="repo-row"
+                  className="space-y-2 border border-[#008F11]/40 p-3"
                 >
-                  Удалить
-                </button>
+                  <div className="flex flex-col gap-3 md:flex-row md:items-end">
+                    <div className="min-w-0 flex-1">
+                      <label
+                        className={labelClass}
+                        htmlFor={`repository-select-${index}`}
+                      >
+                        Репозиторий
+                      </label>
+                      <select
+                        id={`repository-select-${index}`}
+                        data-testid={`repository-select-${index}`}
+                        className={inputClass}
+                        value={repository.repo_id}
+                        disabled={savedReposLoading}
+                        onChange={(event) =>
+                          selectRepository(index, event.target.value)
+                        }
+                      >
+                        <option value="">
+                          {savedReposLoading
+                            ? 'Загружаем…'
+                            : 'Выберите репозиторий'}
+                        </option>
+                        {savedRepos.map((repo) => (
+                          <option key={repo.id} value={repo.id}>
+                            {repo.fullName ?? repo.url}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <label
+                        className={labelClass}
+                        htmlFor={`repository-branch-${index}`}
+                      >
+                        Базовая ветка
+                      </label>
+                      <select
+                        id={`repository-branch-${index}`}
+                        data-testid={`repository-branch-${index}`}
+                        className={inputClass}
+                        value={repository.base_branch}
+                        disabled={
+                          !repository.repo_id || repository.branchesLoading
+                        }
+                        onChange={(event) =>
+                          updateBaseBranch(index, event.target.value)
+                        }
+                      >
+                        {branchOptions.length === 0 && (
+                          <option value="">
+                            {repository.repo_id ? 'Загружаем…' : '—'}
+                          </option>
+                        )}
+                        {branchOptions.map((branch) => (
+                          <option key={branch} value={branch}>
+                            {branch}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      className="min-h-12 w-full rounded-none border border-[#008F11] px-3 py-2 text-sm text-[#008F11] hover:bg-[#008F11]/20 hover:text-[#00FF41] disabled:opacity-40 md:w-auto"
+                      onClick={() => removeRepository(index)}
+                    >
+                      Удалить
+                    </button>
+                  </div>
+                  {selectedRepo && (
+                    <p className="text-xs text-[#00FF41]/50">
+                      {selectedRepo.url}
+                      {selectedRepo.defaultBranch
+                        ? ` · ветка по умолчанию: ${selectedRepo.defaultBranch}`
+                        : ''}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
+                    {selectedRepo?.writeAccess === true && (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={repository.create_mr === true}
+                        onClick={() => toggleRepositoryMr(index)}
+                        className="flex min-h-12 items-center gap-3 text-sm font-medium text-[#00FF41]/80"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`relative inline-flex h-6 w-11 shrink-0 items-center border transition-colors ${
+                            repository.create_mr
+                              ? 'border-[#00FF41] bg-[#003B00]'
+                              : 'border-[#008F11] bg-[#0D0208]'
+                          }`}
+                        >
+                          <span
+                            className={`absolute h-4 w-4 transition-transform ${
+                              repository.create_mr
+                                ? 'translate-x-6 bg-[#00FF41]'
+                                : 'translate-x-1 bg-[#008F11]'
+                            }`}
+                          />
+                        </span>
+                        Создать merge request
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={repository.bootstrap_enabled === true}
+                      onClick={() => toggleRepositoryBootstrap(index)}
+                      className="flex min-h-12 items-center gap-3 text-sm font-medium text-[#00FF41]/80"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`relative inline-flex h-6 w-11 shrink-0 items-center border transition-colors ${
+                          repository.bootstrap_enabled
+                            ? 'border-[#00FF41] bg-[#003B00]'
+                            : 'border-[#008F11] bg-[#0D0208]'
+                        }`}
+                      >
+                        <span
+                          className={`absolute h-4 w-4 transition-transform ${
+                            repository.bootstrap_enabled
+                              ? 'translate-x-6 bg-[#00FF41]'
+                              : 'translate-x-1 bg-[#008F11]'
+                          }`}
+                        />
+                      </span>
+                      Dev сервер
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={repository.create_mr === true}
-                  onClick={() => toggleRepositoryMr(index)}
-                  className="flex min-h-12 items-center gap-3 text-sm font-medium text-[#00FF41]/80"
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`relative inline-flex h-6 w-11 shrink-0 items-center border transition-colors ${
-                      repository.create_mr
-                        ? 'border-[#00FF41] bg-[#003B00]'
-                        : 'border-[#008F11] bg-[#0D0208]'
-                    }`}
-                  >
-                    <span
-                      className={`absolute h-4 w-4 transition-transform ${
-                        repository.create_mr
-                          ? 'translate-x-6 bg-[#00FF41]'
-                          : 'translate-x-1 bg-[#008F11]'
-                      }`}
-                    />
-                  </span>
-                  Создать merge request
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
           {repositories.length === 0 && (
             <p className="mt-2 text-xs text-[#00FF41]/50">
-              Можно без репозиториев — агент запишет результаты в папку задачи
+              {!savedReposLoading && savedRepos.length === 0
+                ? 'Нет сохранённых репозиториев — добавьте их на странице «Репозитории»'
+                : 'Можно без репозиториев — агент запишет результаты в папку задачи'}
             </p>
           )}
         </fieldset>
@@ -383,23 +677,20 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
         {showJira ? (
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <label className={`${labelClass} mb-0`} htmlFor="jira_issue_url">
-                Ссылка на Jira
-              </label>
               <button
                 type="button"
                 className="text-sm font-medium text-[#008F11] underline hover:text-[#00FF41]"
-                onClick={() => setShowJira(false)}
+                onClick={() => {
+                  setJiraIssueUrl('');
+                  setShowJira(false);
+                }}
               >
                 Убрать
               </button>
             </div>
-            <input
-              id="jira_issue_url"
-              className={inputClass}
-              type="url"
+            <JiraIssueUrlInput
               value={jiraIssueUrl}
-              onChange={(event) => setJiraIssueUrl(event.target.value)}
+              onChange={(url) => setJiraIssueUrl(url)}
               placeholder="https://jira.example.com/browse/PROJ-123"
             />
           </div>
@@ -413,38 +704,59 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
           </button>
         )}
 
+        {repositories.length > 0 && (
+          <fieldset data-testid="bootstrapper-section">
+            <legend className="mb-2 text-sm font-medium text-[#00FF41]/80">
+              Bootstrapper проектов
+            </legend>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <label
+                className="text-sm text-[#00FF41]/80"
+                htmlFor="bootstrapper-model"
+              >
+                Модель анализатора
+              </label>
+              <select
+                id="bootstrapper-model"
+                aria-label="Модель анализатора для bootstrapper'а проектов"
+                className={`${inputClass} sm:w-64`}
+                value={bootstrapperModel}
+                onChange={(event) => setBootstrapperModel(event.target.value)}
+                disabled={modelsLoading}
+              >
+                <option value="">По умолчанию</option>
+                {models.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.name ?? model.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </fieldset>
+        )}
+
         <fieldset data-testid="desired-result">
           <legend className="mb-2 text-sm font-medium text-[#00FF41]/80">
             Желаемый результат
           </legend>
           <div className="space-y-2">
-            {DESIRED_RESULTS.map((option) => {
-              const disabled = option.value === 'pr' && !prAvailable;
-              return (
-                <label
-                  key={option.value}
-                  className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80"
-                >
-                  <input
-                    type="radio"
-                    name="desired_result"
-                    className="accent-[#00FF41]"
-                    data-testid={`desired-result-${option.value}`}
-                    value={option.value}
-                    checked={desiredResult === option.value}
-                    disabled={disabled}
-                    onChange={() => setDesiredResult(option.value)}
-                  />
-                  {option.label}
-                  {disabled && (
-                    <span className="text-xs text-[#00FF41]/40">
-                      {' '}
-                      (нужен репозиторий)
-                    </span>
-                  )}
-                </label>
-              );
-            })}
+            {DESIRED_RESULTS.map((option) => (
+              <label
+                key={option.value}
+                className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80"
+              >
+                <input
+                  type="radio"
+                  name="desired_result"
+                  className="accent-[#00FF41]"
+                  data-testid={`desired-result-${option.value}`}
+                  value={option.value}
+                  checked={desiredResult === option.value}
+                  onChange={() => setDesiredResult(option.value)}
+                />
+                {option.label}
+              </label>
+            ))}
           </div>
         </fieldset>
 
@@ -534,6 +846,6 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
           {submitting ? 'Запускаем…' : 'Запустить'}
         </button>
       </form>
-    </section>
+    </div>
   );
 }

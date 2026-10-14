@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
@@ -13,6 +13,14 @@ const DEFAULT_GIT_TIMEOUT_MS = 60_000;
 export const gitTimeoutMs = (): number => {
   const raw = Number(process.env.GIT_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_GIT_TIMEOUT_MS;
+};
+
+const DEFAULT_DEV_SERVER_TIMEOUT_MS = 30_000;
+
+/** Ожидание порта dev-сервера: env `DEV_SERVER_PORT_TIMEOUT_MS` (default 30000). */
+export const devServerTimeoutMs = (): number => {
+  const raw = Number(process.env.DEV_SERVER_PORT_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_DEV_SERVER_TIMEOUT_MS;
 };
 
 /** Опции запуска git-команды, которые значимы сервису (и инъекции в тестах). */
@@ -67,6 +75,12 @@ export interface GitPrepareInput {
   repoUrls: string[];
   baseBranches: string[];
   workspacePath: string;
+  /**
+   * Прогресс по каждому репозиторию: `running` перед клонированием,
+   * `done` — после. Позволяет вызывающему слою публиковать
+   * `workspace_progress` без знания внутреннего порядка git-операций.
+   */
+  onRepoProgress?: (repoUrl: string, status: 'running' | 'done') => void;
 }
 
 export interface GitPrepareResult {
@@ -77,11 +91,25 @@ export interface GitCommitInput {
   repoPath: string;
   branchName: string;
   commitMessage: string;
+  /**
+   * Если задан — мягкий reset (--soft) до этого ref перед коммитом.
+   * Все коммиты на ветке сквошатся в один. Ref должен существовать
+   * локально (обычно base-ветка: `master`, `main`).
+   */
+  squashBase?: string;
 }
 
 export interface GitCommitResult {
   pushed: boolean;
   branchName: string;
+}
+
+/** Итог запуска dev-сервера: найденный порт либо причина, почему его нет. */
+export interface DevServerStartResult {
+  /** Порт сервера или null, если команда не найдена/сервер не поднялся. */
+  port: number | null;
+  /** Причина, когда `port === null` (для прогресса со статусом `warning`). */
+  message?: string;
 }
 
 /** Команда установки зависимостей: исполняемый файл и его аргументы. */
@@ -121,6 +149,60 @@ export function detectInstallCommand(repoPath: string): InstallCommand | null {
 }
 
 /**
+ * Команда запуска dev-сервера из Markdown-инструкции (`RUN_INSTRUCTIONS.md`).
+ *
+ * Берём секцию `## Run`/`## Запуск`, из неё — fenced bash-блок (или весь текст
+ * секции), выбрасываем комментарии и строки `cd …` (рабочий cwd задаётся
+ * вызывающим кодом), остальные строки соединяем через `&&`. Нет секции или
+ * команд → null.
+ */
+export function parseRunCommand(
+  instructions: string | null,
+): InstallCommand | null {
+  if (!instructions) return null;
+  const heading = /^##[ \t]*(?:run|запуск)(?=[\s:(]|$)/im.exec(instructions);
+  if (!heading) return null;
+
+  const rest = instructions.slice(heading.index + heading[0].length);
+  const nextHeading = /^##\s/m.exec(rest);
+  const section = nextHeading ? rest.slice(0, nextHeading.index) : rest;
+
+  const fences = [...section.matchAll(/```[^\n]*\n([\s\S]*?)```/g)];
+  const raw =
+    fences.length > 0
+      ? fences.map((match) => match[1]).join('\n')
+      : section;
+
+  const command = raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !line.startsWith('#'))
+    // cwd задаёт вызывающий код: снимаем `cd <dir> && …`, чисто `cd` отсеем ниже.
+    .map((line) => line.replace(/^cd\s+[^&]*&&\s*/, '').trim())
+    .filter((line) => line.length > 0 && !/^cd(\s|$)/.test(line))
+    .join(' && ');
+
+  return command.length > 0 ? { file: 'sh', args: ['-c', command] } : null;
+}
+
+/** Первый порт из вывода dev-сервера (`localhost:5173`, `--port 3000` и т.п.). */
+export function extractPort(text: string): number | null {
+  const patterns = [
+    /(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{2,5})/i,
+    /--port[=\s]+(\d{2,5})/i,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match) {
+      const port = Number(match[1]);
+      if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+    }
+  }
+  return null;
+}
+
+/**
  * Подготовка рабочих копий репозиториев и публикация результата.
  * Реализации: in-memory fake для юнит-тестов и CLI-обёртка над `git`.
  */
@@ -128,6 +210,14 @@ export interface GitService {
   prepare(input: GitPrepareInput): Promise<GitPrepareResult>;
   installDependencies(repoPaths: string[]): Promise<void>;
   commitAndPush(input: GitCommitInput): Promise<GitCommitResult>;
+  /**
+   * Поднимает dev-сервер репозитория в фоне и по выводу пытается определить
+   * его порт. Сбой — не ошибка подготовки: возвращает `{ port: null, message }`.
+   */
+  startDevServer(
+    repoPath: string,
+    instructions: string | null,
+  ): Promise<DevServerStartResult>;
 }
 
 const repoName = (repoUrl: string): string => {
@@ -162,6 +252,11 @@ export class FakeGitService implements GitService {
   readonly commits: GitCommitInput[] = [];
   /** Аргументы каждого вызова installDependencies (копия массива путей). */
   readonly dependenciesInstalled: string[][] = [];
+  /** Аргументы каждого вызова startDevServer (путь + инструкции). */
+  readonly devServersStarted: { repoPath: string; instructions: string | null }[] =
+    [];
+  /** Результат `startDevServer` по умолчанию; тесты могут переопределить. */
+  devServerResult: DevServerStartResult = { port: 5173 };
   private pendingError: Error | null = null;
 
   /** Следующая операция (prepare/commitAndPush) отклонится этой ошибкой. */
@@ -173,17 +268,30 @@ export class FakeGitService implements GitService {
     this.throwIfPending();
     this.prepares.push(input);
     return {
-      repoWorkspaces: input.repoUrls.map((repoUrl, index) => ({
-        repoUrl,
-        path: `${input.workspacePath}/${repoName(repoUrl)}`,
-        branch: input.baseBranches[index] ?? 'main',
-      })),
+      repoWorkspaces: input.repoUrls.map((repoUrl, index) => {
+        input.onRepoProgress?.(repoUrl, 'running');
+        input.onRepoProgress?.(repoUrl, 'done');
+        return {
+          repoUrl,
+          path: `${input.workspacePath}/${repoName(repoUrl)}`,
+          branch: input.baseBranches[index] ?? 'main',
+        };
+      }),
     };
   }
 
   async installDependencies(repoPaths: string[]): Promise<void> {
     this.throwIfPending();
     this.dependenciesInstalled.push([...repoPaths]);
+  }
+
+  async startDevServer(
+    repoPath: string,
+    instructions: string | null,
+  ): Promise<DevServerStartResult> {
+    this.throwIfPending();
+    this.devServersStarted.push({ repoPath, instructions });
+    return this.devServerResult;
   }
 
   async commitAndPush(input: GitCommitInput): Promise<GitCommitResult> {
@@ -215,6 +323,7 @@ export class GitCliService implements GitService {
     private readonly originalsRoot = DEFAULT_ORIGINALS_ROOT,
     private readonly exec: GitExecFile = defaultGitExecFile,
     private readonly timeoutMs: number = gitTimeoutMs(),
+    private readonly devServerTimeout: number = devServerTimeoutMs(),
   ) {}
 
   private async git(args: string[], cwd?: string): Promise<string> {
@@ -238,6 +347,7 @@ export class GitCliService implements GitService {
     for (let i = 0; i < input.repoUrls.length; i += 1) {
       const repoUrl = input.repoUrls[i];
       const baseBranch = input.baseBranches[i] ?? 'main';
+      input.onRepoProgress?.(repoUrl, 'running');
 
       const name = repoName(repoUrl);
       const repoPath = path.join(input.workspacePath, name);
@@ -246,6 +356,7 @@ export class GitCliService implements GitService {
       // повтор итерации работает с тем же кодом, что и первая.
       if (existsSync(path.join(repoPath, '.git'))) {
         repoWorkspaces.push({ repoUrl, path: repoPath, branch: baseBranch });
+        input.onRepoProgress?.(repoUrl, 'done');
         continue;
       }
 
@@ -274,6 +385,7 @@ export class GitCliService implements GitService {
       await this.git(['-C', repoPath, 'pull', '--ff-only', 'origin', baseBranch]);
 
       repoWorkspaces.push({ repoUrl, path: repoPath, branch: baseBranch });
+      input.onRepoProgress?.(repoUrl, 'done');
     }
 
     return { repoWorkspaces };
@@ -314,9 +426,93 @@ export class GitCliService implements GitService {
     }
   }
 
+  /**
+   * Фоновый запуск dev-сервера. Команда берётся из `RUN_INSTRUCTIONS.md`
+   * (`parseRunCommand`), порт ищется в stdout/stderr (`extractPort`). Процесс
+   * остаётся жить после ответа; ошибки не пробрасываются — только `message`.
+   */
+  async startDevServer(
+    repoPath: string,
+    instructions: string | null,
+  ): Promise<DevServerStartResult> {
+    const command = parseRunCommand(instructions);
+    if (!command) {
+      return {
+        port: null,
+        message: 'команда запуска не найдена в RUN_INSTRUCTIONS.md',
+      };
+    }
+
+    return new Promise<DevServerStartResult>((resolve) => {
+      let settled = false;
+      let output = '';
+      const finish = (result: DevServerStartResult): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = setTimeout(
+        () =>
+          finish({
+            port: null,
+            message: 'таймаут ожидания порта dev-сервера',
+          }),
+        this.devServerTimeout,
+      );
+      timer.unref?.();
+
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(command.file, command.args, {
+          cwd: repoPath,
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (error) {
+        finish({
+          port: null,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+
+      // Порт может быть уже задан флагом (`--port 5173`) — не ждём вывода.
+      const preset = extractPort([command.file, ...command.args].join(' '));
+      if (preset !== null) {
+        child.unref();
+        finish({ port: preset });
+        return;
+      }
+
+      const onData = (chunk: Buffer | string): void => {
+        output = `${output}${String(chunk)}`.slice(-4096);
+        const port = extractPort(output);
+        if (port !== null) {
+          child.unref();
+          finish({ port });
+        }
+      };
+      child.stdout?.on('data', onData);
+      child.stderr?.on('data', onData);
+      child.on('error', (error) =>
+        finish({ port: null, message: error.message }),
+      );
+      child.on('exit', (code) =>
+        finish({
+          port: null,
+          message: `dev-сервер завершился с кодом ${code}`,
+        }),
+      );
+    });
+  }
+
   async commitAndPush(input: GitCommitInput): Promise<GitCommitResult> {
     await rmIndexLock(input.repoPath);
     await this.git(['-C', input.repoPath, 'checkout', '-B', input.branchName]);
+    if (input.squashBase) {
+      await this.git(['-C', input.repoPath, 'reset', '--soft', input.squashBase]);
+    }
     await this.git(['-C', input.repoPath, 'add', '-A']);
     // «nothing to commit» — не ошибка: пуш нужен даже без изменений.
     await this.git([

@@ -11,6 +11,7 @@ import { listAnsweredQuestionIds } from '../db/question-answers.repo';
 import { issueRepositories, issues, iterations } from '../db/schema';
 import { listStepRunsWithLog } from '../db/step-runs.repo';
 import {
+  prepareIssueWorkspace,
   runIssueIteration,
   type IterationRunDeps,
 } from '../workflow/run-iteration.service';
@@ -172,7 +173,7 @@ export async function iterationsRoutes(
 
   // Повторить итерацию: новая итерация с теми же параметрами/запросом/
   // вложениями, что у исходной. Шаги и модели копируются КАК ЕСТЬ (уже
-  // разрешённые на момент создания) — без applyDesiredResult/combine.
+  // разрешённые на момент создания) — без пересборки шагов.
   app.post<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/repeat`,
     async (request, reply) => {
@@ -213,6 +214,7 @@ export async function iterationsRoutes(
           repository_url: repository.repository_url,
           base_branch: repository.branch_name,
           create_mr: !!repository.create_mr,
+          bootstrap_enabled: repository.bootstrap_enabled ?? true,
         }));
 
       const lastNumber =
@@ -258,31 +260,55 @@ export async function iterationsRoutes(
         })),
       );
 
-      // Фоновый прогон: HTTP-ответ не ждёт конвейера (как в create).
-      void runIssueIteration(db, deps, {
-        issue: {
-          id: issue.id,
-          title: issue.title,
-          pipelineSteps: issue.pipeline_steps,
-          description: issue.description ?? '',
-          desiredResult: issue.desired_result ?? 'md',
-          jiraIssueUrl: issue.jira_issue_url,
-        },
-        iteration: {
-          id: iterationId,
-          issueId: issue.id,
-          number: iteration.number,
-          context: iteration.context,
-          steps: iteration.steps,
-          reviewContext: iteration.review_context,
-          isReviewNeed: iteration.is_review_need,
-        },
-        repositories,
-        model: iteration.model ?? undefined,
-        step_models: iteration.step_models,
-        thinking_level: iteration.thinking_level ?? undefined,
-        step_thinking_levels: iteration.step_thinking_levels,
-      }).catch((error) => console.error('run failed', error));
+      const prepareDeps = {
+        container: deps.container,
+        git: deps.git,
+        sse: deps.sse,
+        local: deps.local,
+        ...(deps.bootstrapperFactory
+          ? { bootstrapperFactory: deps.bootstrapperFactory }
+          : {}),
+        bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+        workspaceRoot: deps.workspaceRoot,
+      };
+      // Подготовка + конвейер — фоновый прогон. HTTP-ответ возвращается
+      // немедленно; прогресс и статус идут через SSE.
+      void (async () => {
+        try {
+          const ws = await prepareIssueWorkspace(db, prepareDeps, {
+            issueId: issue.id,
+            iterationId,
+            repositories,
+          });
+          void runIssueIteration(db, deps, {
+            issue: {
+              id: issue.id,
+              title: issue.title,
+              pipelineSteps: issue.pipeline_steps,
+              description: issue.description ?? '',
+              desiredResult: issue.desired_result ?? 'md',
+              jiraIssueUrl: issue.jira_issue_url,
+            },
+            iteration: {
+              id: iterationId,
+              issueId: issue.id,
+              number: iteration.number,
+              context: iteration.context,
+              steps: iteration.steps,
+              reviewContext: iteration.review_context,
+              isReviewNeed: iteration.is_review_need,
+            },
+            repositories,
+            repoWorkspaces: ws,
+            model: iteration.model ?? undefined,
+            step_models: iteration.step_models,
+            thinking_level: iteration.thinking_level ?? undefined,
+            step_thinking_levels: iteration.step_thinking_levels,
+          }).catch((error) => console.error('run failed', error));
+        } catch (error) {
+          console.error('preparation failed, issue set to failed', error);
+        }
+      })();
 
       return reply.status(201).send(iteration);
     },

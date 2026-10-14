@@ -36,9 +36,11 @@ import type {
 } from '../src/workflow/engine';
 import { runIteration } from '../src/workflow/engine';
 import {
+  DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
   DEFAULT_RESOLVE_AGENT_TIMEOUT_MS,
   MIN_RESOLVE_AGENT_TIMEOUT_MS,
   resolveAgentTimeoutMs,
+  resolveBootstrapperTimeoutMs,
 } from '../src/workflow/timeout';
 
 const NOW = '2026-01-01T00:00:00.000Z';
@@ -47,7 +49,14 @@ const NOW = '2026-01-01T00:00:00.000Z';
 class InMemoryStepRunStore implements StepRunStore {
   readonly runs: StepRun[] = [];
   readonly outputs: StepOutput[] = [];
+  readonly persistedEvents = new Map<string, SessionEvent[]>();
   private seq = 0;
+
+  async appendStepRunEvent(id: string, event: SessionEvent): Promise<void> {
+    const events = this.persistedEvents.get(id) ?? [];
+    events.push(event);
+    this.persistedEvents.set(id, events);
+  }
 
   async createStepRun(input: {
     iterationId: string;
@@ -239,6 +248,30 @@ describe('resolveAgentTimeoutMs — env-таймаут', () => {
 
   it('env больше минимума используется как есть', () => {
     expect(resolveAgentTimeoutMs('120000')).toBe(120_000);
+  });
+});
+
+describe('resolveBootstrapperTimeoutMs — env-таймаут подготовки', () => {
+  it('пустой/битый env → дефолт 30 минут', () => {
+    expect(resolveBootstrapperTimeoutMs(undefined)).toBe(
+      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    );
+    expect(resolveBootstrapperTimeoutMs('')).toBe(
+      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    );
+    expect(resolveBootstrapperTimeoutMs('abc')).toBe(
+      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    );
+    expect(resolveBootstrapperTimeoutMs('-5')).toBe(
+      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    );
+  });
+
+  it('env меньше 60с поднимается до минимума, больше — как есть', () => {
+    expect(resolveBootstrapperTimeoutMs('5000')).toBe(
+      MIN_RESOLVE_AGENT_TIMEOUT_MS,
+    );
+    expect(resolveBootstrapperTimeoutMs('120000')).toBe(120_000);
   });
 });
 

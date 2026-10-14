@@ -68,7 +68,15 @@ export function formatDateTime(iso: string): string {
 }
 
 /** Статус итерации с максимальным номером; null для пустого списка. */
-export function statusOfIssue(iterations: Iteration[]): TaskStatus | null {
+export function statusOfIssue(
+  iterations: Iteration[],
+  /** Прямой статус задачи (поле `issues.status`). Приоритетнее статуса итераций. */
+  issueStatus?: TaskStatus,
+): TaskStatus | null {
+  // Статус «вопрос» живёт на задаче, а не на итерации — итерация остаётся
+  // `running`, пока агент ждёт ответа. Без этого перезагрузка страницы теряет
+  // статус `question`.
+  if (issueStatus === 'question') return 'question';
   if (iterations.length === 0) return null;
 
   const latest = iterations.reduce((max, current) =>

@@ -40,8 +40,6 @@ export function resultArtifactFor(
       return { filename: 'report.md', contentType: 'text/markdown' };
     case 'html':
       return { filename: 'report.html', contentType: 'text/html' };
-    case 'pr':
-      return { filename: 'result.json', contentType: 'application/json' };
     default:
       return null;
   }

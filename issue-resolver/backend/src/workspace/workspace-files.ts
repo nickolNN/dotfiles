@@ -73,7 +73,7 @@ export async function listWorkspaceFiles(
         continue;
       }
       if (entry.isDirectory()) {
-        if (name === ATTACHMENTS_DIR) {
+        if (name === ATTACHMENTS_DIR || name === 'node_modules') {
           continue;
         }
         await walk(join(absDir, name), posix.join(relDir, name));

@@ -1,46 +1,75 @@
-import type {
-  DesiredResult,
-  NormalizedStage,
-  PipelineStep,
-  RoomWorkItem,
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import {
+  DEFAULT_MAX_ROOM_EXECUTORS,
+  type DesiredResult,
+  type NormalizedStage,
+  type PipelineStep,
+  type RoomWorkItem,
 } from '@issue-resolver/shared';
+
+// ── Prompt file loader ──────────────────────────────────────────────
+
+const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'prompts');
+
+/**
+ * Reads a prompt `.md` file, strips the frontmatter `# Prompt: ...` header
+ * line, and returns the body text. Cache is per-process lifetime (prompts
+ * don't change at runtime).
+ */
+const _cache = new Map<string, string>();
+function readPrompt(filename: string): string {
+  const cached = _cache.get(filename);
+  if (cached !== undefined) return cached;
+  const raw = readFileSync(join(PROMPTS_DIR, filename), 'utf-8');
+  // Strip the metadata header line (`# Prompt: ...`) and leading blank.
+  const body = raw.replace(/^#\s+Prompt:.*\n\n?/, '');
+  _cache.set(filename, body);
+  return body;
+}
+
+/** Подставляет плейсхолдеры `{{NAME}}` (глобально) и чистит пустые строки. */
+function render(template: string, values: Record<string, string>): string {
+  let body = template;
+  for (const [name, value] of Object.entries(values)) {
+    body = body.replace(new RegExp(`\\{\\{${name}\\}\\}`, 'g'), value);
+  }
+  return body
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// ── Types ───────────────────────────────────────────────────────────
+
+/** Репозиторий глазами шага `pr`: путь рабочей копии, base-ветка, нужен ли MR. */
+export interface PrTarget {
+  path: string;
+  baseBranch: string;
+  createMr: boolean;
+}
 
 export interface StepPromptInput {
   step: PipelineStep;
   issueTitle: string;
-  /** Issue description (additional_context). */
   description: string;
-  /** Jira issue text (or null if absent/unavailable). */
   jiraText: string | null;
-  /** Контекст для шага review (review_context итерации; пусто/undefined — секция не выводится). */
   reviewContext?: string | null;
   context: string;
   feedback: string | null;
   repoPaths: string[];
-  /** План из refine-шага (summary отчёта); передаётся в resolve. */
   refinedPlan?: string | null;
-  /** Желаемый результат задачи: 'md' (report.md), 'html' (report.html) или 'pr'. */
   desiredResult?: DesiredResult;
-  /**
-   * Пути загруженных файлов (относительно корня рабочей папки = cwd агента),
-   * уже лежащих в рабочей папке. Пусто/undefined — секция не выводится.
-   */
   attachmentPaths?: string[];
-  /**
-   * Итог предыдущей итерации (отчёт resolve + документ результата): агент
-   * должен продолжать с него, а не решать задачу заново. Для итерации №1
-   * отсутствует.
-   */
   previousOutcome?: string | null;
-  /**
-   * Канонический список включённых шагов прогона (в порядке исполнения).
-   * Используется для координации с даунстрим-верификацией (review/test), а не
-   * для запретов: план не дублирует отдельные шаги верификации.
-   */
   pipelineSteps?: PipelineStep[];
+  /** Порт уже поднятого системой dev-сервера (null — сервер не поднимали). */
+  devServerPort?: number | null;
+  /** Цели публикации для шага `pr` (путь + base-ветка + create_mr). */
+  prTargets?: PrTarget[];
 }
 
-/** Общий контекст комнаты resolve (coordinator + workers). */
 export interface RoomPromptInput {
   issueTitle: string;
   description: string;
@@ -52,30 +81,154 @@ export interface RoomPromptInput {
   desiredResult?: DesiredResult;
   previousOutcome?: string | null;
   attachmentPaths?: string[];
-  /**
-   * Канонический список включённых шагов прогона (в порядке исполнения).
-   * Используется для координации с даунстрим-верификацией (review/test), а не
-   * для запретов: resolve не дублирует отдельные шаги верификации.
-   */
   pipelineSteps?: PipelineStep[];
+  /** Порт уже поднятого системой dev-сервера (null — сервер не поднимали). */
+  devServerPort?: number | null;
 }
 
-/** Сводка подзадачи работника для интеграции координатором. */
 export interface WorkerSummary {
+  /** 1-based номер воркера, как он подписан в его отчёте. */
   index: number;
   summary: string;
 }
 
-/** Required step output contract (ISSUE_RESOLVER_PLAN.md §13.6). */
+// ── Shared blocks (single source of truth for every prompt) ─────────
+
 function outputContract(): string {
+  return readPrompt('output-contract.md');
+}
+
+/** Вход задачи: один блок для всех step- и room-промптов. */
+function taskContext(input: {
+  issueTitle: string;
+  description: string;
+  jiraText: string | null;
+  context: string;
+  feedback: string | null;
+}): string {
+  const lines = [
+    `Task: ${input.issueTitle}`,
+    `Issue description: ${input.description}`,
+  ];
+  if (input.jiraText) {
+    lines.push(`Jira text: ${input.jiraText}`);
+  }
+  lines.push('Iteration context:', input.context);
+  if (input.feedback !== null) {
+    lines.push('', `Previous step feedback (fix exactly this): ${input.feedback}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Зависимости уже поставлены разовой подготовкой задачи — говорим это
+ * исполнителям явно, иначе каждый агент заново гоняет `npm ci`.
+ */
+const DEPENDENCIES_PREPARED =
+  'Dependencies are already installed by the task preparation — run an install\nonly if you changed a manifest.';
+
+/** Рабочие копии репозиториев + живой dev-сервер (общий блок контекста). */
+function reposBlock(
+  repoPaths: string[],
+  devServerPort?: number | null,
+  options: { preparedNote?: boolean } = {},
+): string {
+  const lines: string[] = [];
+  if (repoPaths.length === 0) {
+    lines.push(
+      'There are no repositories — write the results of your work as files',
+      'directly into the task working folder.',
+    );
+  } else {
+    lines.push(
+      'Repositories (working paths):',
+      ...repoPaths.map((path) => `- ${path}`),
+    );
+    if (options.preparedNote) {
+      lines.push('', DEPENDENCIES_PREPARED);
+    }
+  }
+  if (devServerPort !== undefined && devServerPort !== null) {
+    lines.push(
+      '',
+      `Dev server: the app is already running at http://localhost:${devServerPort}`,
+      '(started by the system; `<repo>/DEV_SERVER.sh` restarts it if it died).',
+    );
+  }
+  return lines.join('\n');
+}
+
+/** Куда смотреть шагу `test`, когда система dev-сервер не поднимала. */
+function devServerBlock(devServerPort?: number | null): string {
+  if (devServerPort === undefined || devServerPort === null) {
+    return [
+      'No dev server is running for this task. Start the app yourself from the',
+      'repository working path above (`DEV_SERVER.sh`, or the `## Run` command in',
+      '`RUN_INSTRUCTIONS.md`), and stop it when the verification is done.',
+    ].join('\n');
+  }
   return [
-    'Output contract:',
-    'When the step is complete, you must write the file `.issue-step-result.json` to the root of the working copy.',
-    'Format (ISSUE_RESOLVER_PLAN.md §13.6):',
-    '{ "status": "pass|fail|blocked", "summary": "...", "scenarios": [ ... ], "findings": [ ... ] }',
-    'Without this file the step is considered incomplete.',
+    `The app is already running at http://localhost:${devServerPort} — the system`,
+    'started it from the repository `DEV_SERVER.sh`. Verify against this URL;',
+    'restart the script only if the server is dead.',
   ].join('\n');
 }
+
+/** Цели публикации шага `pr`: что коммитит бэкенд и в какую ветку. */
+function prTargetsBlock(targets?: PrTarget[]): string {
+  if (!targets || targets.length === 0) {
+    return 'No repositories in this task — there is nothing to publish.';
+  }
+  return [
+    ...targets.map(
+      (target) =>
+        `- ${target.path} — base \`${target.baseBranch}\`, create MR: ${target.createMr ? 'yes' : 'no (the result stays as files in the working folder)'}`,
+    ),
+  ].join('\n');
+}
+
+function attachmentsBlock(paths?: string[]): string {
+  const attachments = paths ?? [];
+  if (attachments.length === 0) return '';
+  return [
+    'Uploaded files (already in the working folder):',
+    ...attachments.map((path) => `- ${path}`),
+    'Read them before solving.',
+  ].join('\n');
+}
+
+function refinedPlanBlock(plan?: string | null): string {
+  return plan
+    ? `Refined plan (from the refine step — follow it, do not re-plan from scratch):\n${plan}`
+    : '';
+}
+
+function previousOutcomeBlock(outcome?: string | null): string {
+  return outcome
+    ? `Previous iteration outcome (build on it, do not redo from scratch):\n${outcome}`
+    : '';
+}
+
+/** Артефакт задачи по `desired_result` (один текст на все промпты). */
+function desiredResultBlock(desiredResult?: DesiredResult): string {
+  if (desiredResult === 'html') {
+    return [
+      'Deliverable: a single self-contained `report.html` at the working-folder',
+      'root (inline CSS/JS/images via data URIs) — a styled standalone page to',
+      'share. In addition to `.issue-step-result.json`.',
+    ].join('\n');
+  }
+  if (desiredResult === 'md') {
+    return [
+      'Deliverable: `report.md` at the working-folder root — a Markdown document:',
+      'analysis/conclusions, or a reusable skill definition. Plain Markdown, no HTML wrapper.',
+      'In addition to `.issue-step-result.json`.',
+    ].join('\n');
+  }
+  return '';
+}
+
+// ── Pipeline awareness ──────────────────────────────────────────────
 
 const PIPELINE_ORDER: readonly PipelineStep[] = ['refine', 'resolve', 'review', 'test', 'pr'];
 
@@ -92,10 +245,16 @@ function downstreamVerification(pipelineSteps: PipelineStep[] | undefined, step:
   );
 }
 
+/** Общая строка «где я в конвейере» — первая строка любого step-промпта. */
+function pipelineLine(pipelineSteps: PipelineStep[] | undefined): string[] {
+  if (!pipelineSteps || pipelineSteps.length === 0) return [];
+  return [`Enabled pipeline for this run: ${pipelineSteps.join(' → ')}.`];
+}
+
 function refinePipelineAwareness(pipelineSteps?: PipelineStep[]): string[] {
   if (!pipelineSteps || pipelineSteps.length === 0) return [];
   const gates = downstreamVerification(pipelineSteps, 'refine');
-  const lines: string[] = ['', `Enabled pipeline for this run: ${pipelineSteps.join(' → ')}.`];
+  const lines: string[] = [''];
   if (gates.length > 0) {
     lines.push(
       'The following verification steps run AFTER the execution (resolve) step:',
@@ -118,7 +277,13 @@ function refinePipelineAwareness(pipelineSteps?: PipelineStep[]): string[] {
 
 function resolveDownstreamAwareness(pipelineSteps?: PipelineStep[]): string[] {
   const gates = downstreamVerification(pipelineSteps, 'resolve');
-  if (gates.length === 0) return [];
+  if (gates.length === 0) {
+    return [
+      '',
+      'This run has no separate Review/Test step after you — your own verification',
+      'is the FINAL gate, so check the change end to end before reporting pass.',
+    ];
+  }
   return [
     '',
     'Downstream verification steps run AFTER you — do NOT duplicate them:',
@@ -128,317 +293,153 @@ function resolveDownstreamAwareness(pipelineSteps?: PipelineStep[]): string[] {
   ];
 }
 
+/** То же, что и для resolve, но в границах одной подзадачи воркера. */
+function workerDownstreamAwareness(pipelineSteps?: PipelineStep[]): string[] {
+  const gates = downstreamVerification(pipelineSteps, 'resolve');
+  if (gates.length === 0) {
+    return [
+      '',
+      'This run has no separate Review/Test step after the resolve step — your own',
+      'check of your sub-task is part of the FINAL gate, so make it thorough.',
+    ];
+  }
+  return [
+    '',
+    'Downstream verification steps run AFTER the resolve step — do NOT duplicate them:',
+    ...gates.map((gate) => `  - ${gate.label}: ${gate.description}`),
+    'Keep to local self-checks of your own sub-task; the dedicated steps verify',
+    'the integrated result.',
+  ];
+}
+
+// ── Step bodies (loaded from prompts/*.md) ──────────────────────────
+
 type StepBodyBuilder = (input: StepPromptInput) => string;
 
 const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
   refine: (input) =>
-    [
-      'Role: refiner.',
-      'You have the full context of the task (title, description, Jira text, repositories, iteration context).',
-      'If anything about the task is ambiguous or under-specified, ask the user via the `question` TOOL',
-      '(call the tool `question` with args `{ question, options: [ {label, description?}, ... ] }`).',
-      'One call per question; each call BLOCKS until the user answers — it forwards the question to the',
-      'user and returns the answer to you.',
-      'Give 2-5 concrete `options` per question so the user answers fast. If the task is already fully',
-      'clear, SKIP questions and go straight to the plan.',
-      'Order: (questions → answers) → plan. Then, based on the answers received, build an implementation plan.',
-      'Step outcome: refined context and a plan for the following steps.',
-      'Also write the implementation plan as human-readable Markdown to `plan.md` at the',
-      'root of the working folder (in addition to `.issue-step-result.json`).',
-      'Execution topology: recommend how the resolve step should execute by adding an',
-      '"execution" object to .issue-step-result.json:',
-      '{ "mode": "single" | "room" | "stages", "executors": <N>, "decomposition": ["sub-task", ...], "stages": [ ... ], "rationale": "..." }.',
-      'Actively decompose the task into parallel and/or sequential work — do NOT',
-      'lazily default to "single":',
-      '  * INDEPENDENT parts -> run them in PARALLEL ("room", or a stage with',
-      '    `executors` > 1).',
-      '  * ORDERED / DEPENDENT parts -> split them into ordered "stages" steps.',
-      '  * Mixing parallel workers inside a stage with sequential stage-to-stage',
-      '    order ("stages") is allowed and encouraged for larger tasks.',
-      'Choose "single" (ONE agent, no decomposition) only when the task is truly',
-      'trivial or has no sensible decomposition.',
-      '- "single": the implementation is simple enough for ONE agent to do alone.',
-      '- "room": needs a coordinator (lead) plus N worker agents (2 <= N <= 4). Provide',
-      '  a decomposition with exactly one sub-task per worker.',
-      '- "stages": a sequential plan of 2+ ordered stages executed one after another',
-      '  (prefer it for larger tasks or work that mixes parallel and sequential parts).',
-      '  Each stage runs either a single agent or 1..4 parallel workers, and after all',
-      '  stages a final coordinator integrates every stage outcome:',
-      '  { "mode": "stages", "stages": [ { "index": 1, "name": "...", "task": "...",',
-      '    "executors": N, "decomposition": ["...", ...] }, ... ], "rationale": "..." }',
-      '  (indexes are 1..N in execution order; for executors > 1 provide one',
-      '  decomposition entry per worker, otherwise a single agent runs the stage).',
-      'Only the coordinator (lead) ever makes the final pass/fail decision for the step.',
-      ...refinePipelineAwareness(input.pipelineSteps),
-    ].join('\n'),
+    render(readPrompt('step-refine.md'), {
+      MAX_EXECUTORS: String(DEFAULT_MAX_ROOM_EXECUTORS),
+      DOWNSTREAM_AWARENESS: refinePipelineAwareness(input.pipelineSteps).join('\n'),
+    }),
 
-  resolve: (input) => {
-    const repoGuidance =
-      input.repoPaths.length > 0
-        ? [
-            'Study the contents of the repositories and install dependencies',
-            '(npm/pnpm/yarn/bun — based on the manifest found) before solving.',
-          ]
-        : [
-            'There are no repositories — write the results of your research/analysis',
-            'as files directly into the task working folder.',
-          ];
-    return [
-      'Role: implementer.',
-      `Task: ${input.issueTitle}`,
-      `Issue description: ${input.description}`,
-      ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
-      'Repositories (working paths):',
-      ...input.repoPaths.map((path) => `- ${path}`),
-      ...repoGuidance,
-      ...(input.desiredResult === 'html'
-        ? [
-            'Write the deliverable as a single self-contained `report.html` at the',
-            'working-folder root (inline CSS/JS/images via data URIs) — a styled',
-            'standalone page to share. In addition to `.issue-step-result.json`.',
-          ]
-        : []),
-      ...(input.desiredResult === 'md'
-        ? [
-            'Write the deliverable as `report.md` at the working-folder root — a',
-            'Markdown document: analysis/conclusions, or a reusable skill definition.',
-            'Plain Markdown, no HTML wrapper. In addition to `.issue-step-result.json`.',
-          ]
-        : []),
-      ...resolveDownstreamAwareness(input.pipelineSteps),
-      'HARD-RULES: you may run build/tests/typecheck to verify your own changes.',
-      'Commit and push are forbidden — publishing is done by the pr step/backend.',
-    ].join('\n');
-  },
+  resolve: (input) =>
+    render(readPrompt('step-resolve-single.md'), {
+      REPO_GUIDANCE:
+        input.repoPaths.length > 0
+          ? `Work in the repository working paths above.\n${DEPENDENCIES_PREPARED}`
+          : '',
+      DESIRED_RESULT: desiredResultBlock(input.desiredResult),
+      DOWNSTREAM_AWARENESS: resolveDownstreamAwareness(input.pipelineSteps).join('\n'),
+    }),
 
   review: (input) =>
-    [
-      'Role: independent code reviewer — review the SOURCE CODE only.',
-      'Check correctness against the task description and review context.',
-      'Do NOT run the application, do NOT run tests/build/typecheck, do NOT use',
-      'the browser — this is a fast code-only review.',
-      ...(input.reviewContext
-        ? [
-            'Reviewer context (focus points, regression risks, or acceptance',
-            'criteria from the task owner):',
-            input.reviewContext,
-          ]
-        : []),
-      'Format the result in `.issue-step-result.json`:',
-      '{ status: pass|fail|blocked, summary, scenarios[], findings[] }.',
-    ].join('\n'),
+    render(readPrompt('step-review.md'), {
+      REVIEW_CONTEXT: input.reviewContext
+        ? `Reviewer context (focus points, regression risks, or acceptance\ncriteria from the task owner) — check each of them explicitly:\n${input.reviewContext}`
+        : '',
+    }),
 
-  test: () =>
-    [
-      'Role: tester — final verification only.',
-      'Run the target application in the browser (Playwright).',
-      'Verify the scenarios and record the defects found.',
-      'You do NOT fix code — if something is broken, record it in findings and',
-      'return status fail/blocked; the pipeline will re-run development.',
-      'Format the result in `.issue-step-result.json`:',
-      '{ status: pass|fail|blocked, summary, scenarios[], findings[] }.',
-    ].join('\n'),
+  test: (input) =>
+    render(readPrompt('step-test.md'), {
+      DEV_SERVER: devServerBlock(input.devServerPort),
+    }),
 
-  pr: () =>
-    [
-      'Role: PR.',
-      'Use the pr skill to assemble the changes into a meaningful PR.',
-      'Return { title, description, summary }.',
-      'Do NOT push and do NOT create an MR — the backend does that.',
-    ].join('\n'),
+  pr: (input) =>
+    render(readPrompt('step-pr.md'), {
+      PR_TARGETS: prTargetsBlock(input.prTargets),
+    }),
 };
 
-/**
- * Pure deterministic step prompt builder: the same input always yields
- * the same string (no timestamps/random).
- */
+// ── buildStepPrompt ─────────────────────────────────────────────────
+
 export function buildStepPrompt(input: StepPromptInput): string {
   const lines: string[] = [
     `Pipeline step: ${input.step}.`,
-    `Task: ${input.issueTitle}`,
-    `Issue description: ${input.description}`,
-    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
-    'Iteration context:',
-    input.context,
+    ...pipelineLine(input.pipelineSteps),
+    '',
+    taskContext(input),
+    '',
+    reposBlock(input.repoPaths, input.devServerPort),
   ];
 
-  const attachments = input.attachmentPaths ?? [];
-  if (attachments.length > 0) {
-    lines.push(
-      '',
-      'Uploaded files (already in the working folder):',
-      ...attachments.map((path) => `- ${path}`),
-      'Read them before solving.',
-    );
-  }
+  const attachments = attachmentsBlock(input.attachmentPaths);
+  if (attachments) lines.push('', attachments);
 
-  if (input.refinedPlan) {
-    lines.push(
-      '',
-      'Refined plan (from the refine step — follow it, do not re-plan from scratch):',
-      input.refinedPlan,
-    );
-  }
+  // План refine — вход для следующих шагов; самому refine он не нужен.
+  const plan = input.step === 'refine' ? '' : refinedPlanBlock(input.refinedPlan);
+  if (plan) lines.push('', plan);
 
   lines.push('', STEP_BODIES[input.step](input));
 
-  if (input.previousOutcome) {
-    lines.push(
-      '',
-      'Previous iteration outcome (build on it, do not redo from scratch):',
-      input.previousOutcome,
-    );
-  }
-
-  if (input.feedback !== null) {
-    lines.push('', `Previous step feedback: ${input.feedback}`);
-  }
+  const previousOutcome = previousOutcomeBlock(input.previousOutcome);
+  if (previousOutcome) lines.push('', previousOutcome);
 
   lines.push('', outputContract());
   return lines.join('\n');
 }
 
-/** Промпт работника комнаты resolve: решает только свою подзадачу, не финальное решение. */
+// ── Room / staged resolve prompts (loaded from prompts/*.md) ────────
+
+/** Общий набор блоков для всех room/staged-промптов (у них нет preamble). */
+function roomValues(
+  input: RoomPromptInput,
+  extra: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    TASK_CONTEXT: taskContext(input),
+    REPOS: reposBlock(input.repoPaths, input.devServerPort, { preparedNote: true }),
+    REFINED_PLAN: refinedPlanBlock(input.refinedPlan),
+    ATTACHMENTS: attachmentsBlock(input.attachmentPaths),
+    PREVIOUS_OUTCOME: previousOutcomeBlock(input.previousOutcome),
+    DESIRED_RESULT: desiredResultBlock(input.desiredResult),
+    DOWNSTREAM_AWARENESS: resolveDownstreamAwareness(input.pipelineSteps).join('\n'),
+    ...extra,
+  };
+}
+
+/** Список итогов воркеров: номер, файл отчёта и саммари (карта для лида). */
+function workerSummariesBlock(files: (index: number) => string, workers: WorkerSummary[]): string {
+  if (workers.length === 0) return '';
+  return workers
+    .map((worker) => `- worker ${worker.index} → \`${files(worker.index)}\`: ${worker.summary}`)
+    .join('\n');
+}
+
 export function buildRoomWorkerPrompt(
   input: RoomPromptInput,
   item: RoomWorkItem,
   total: number,
 ): string {
-  const lines: string[] = [
-    'Role: worker agent (executor) in a coordinated agent room. You are a peer, NOT the lead.',
-    'The coordinator (lead) alone makes the final pass/fail decision for this step — never you.',
-    `Sub-task ${item.index + 1} of ${total}: ${item.task}`,
-    `Task: ${input.issueTitle}`,
-    `Issue description: ${input.description}`,
-    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
-    'Iteration context:',
-    input.context,
-  ];
-
-  if (input.refinedPlan) {
-    lines.push('', 'Refined plan (follow it):', input.refinedPlan);
-  }
-
-  const attachments = input.attachmentPaths ?? [];
-  if (attachments.length > 0) {
-    lines.push(
-      '',
-      'Uploaded files (already in the working folder):',
-      ...attachments.map((path) => `- ${path}`),
-    );
-  }
-
-  if (input.repoPaths.length > 0) {
-    lines.push(
-      '',
-      'Repositories (working paths):',
-      ...input.repoPaths.map((path) => `- ${path}`),
-    );
-  } else {
-    lines.push(
-      '',
-      'There are no repositories — write your work files into the task working folder.',
-    );
-  }
-
-  if (input.feedback !== null) {
-    lines.push('', `Previous step feedback: ${input.feedback}`);
-  }
-
-  lines.push(
-    '',
-    'Instructions:',
-    '- Solve ONLY your sub-task above. Do not touch files outside its scope.',
-    '- You are allowed to edit code, write files, and run build/tests/typecheck to verify your own work. Commit/push are forbidden (publishing is done by the backend).',
-    '- Report your OWN sub-task outcome (not the whole step) by writing the file',
-    `  .issue-worker-result-${item.index}.json at the working-folder root:`,
-    '  { "status": "pass|fail|blocked", "summary": "..." }.',
-    '- The coordinator will integrate all sub-tasks and make the final decision.',
-    'Output contract:',
-    `.issue-worker-result-${item.index}.json is required; without it your sub-task is incomplete.`,
+  const worker = item.index + 1;
+  return render(
+    readPrompt('resolve-room-worker.md'),
+    roomValues(input, {
+      WORKER_NUMBER: String(worker),
+      TOTAL_WORKERS: String(total),
+      WORKER_TASK: item.task,
+      DOWNSTREAM_AWARENESS: workerDownstreamAwareness(input.pipelineSteps).join('\n'),
+    }),
   );
-  return lines.join('\n');
 }
 
-/**
- * Промпт координатора (старшего) комнаты resolve: интегрирует подзадачи и
- * ОДИН принимает финальное решение pass/fail/blocked шага.
- */
 export function buildRoomCoordinatorPrompt(
   input: RoomPromptInput,
   workers: WorkerSummary[],
 ): string {
-  const lines: string[] = [
-    'Role: coordinator (LEAD) of this agent room. You are the senior who takes the FINAL',
-    'decision whether the resolve step passed. You integrate the workers below.',
-    `Task: ${input.issueTitle}`,
-    `Issue description: ${input.description}`,
-    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
-    'Iteration context:',
-    input.context,
-  ];
-
-  if (input.refinedPlan) {
-    lines.push('', 'Refined plan (follow it):', input.refinedPlan);
-  }
-
-  if (input.repoPaths.length > 0) {
-    lines.push(
-      '',
-      'Repositories (working paths):',
-      ...input.repoPaths.map((path) => `- ${path}`),
-    );
-  } else {
-    lines.push(
-      '',
-      'There are no repositories — the deliverables are files in the task working folder.',
-    );
-  }
-
-  if (input.feedback !== null) {
-    lines.push('', `Previous step feedback: ${input.feedback}`);
-  }
-
-  if (input.desiredResult === 'html') {
-    lines.push(
-      '',
-      'Write the deliverable as a single self-contained `report.html` at the',
-      'working-folder root (inline CSS/JS/images via data URIs) — a styled',
-      'standalone page to share. In addition to `.issue-step-result.json`.',
-    );
-  } else if (input.desiredResult === 'md') {
-    lines.push(
-      '',
-      'Write the deliverable as `report.md` at the working-folder root — a',
-      'Markdown document. Plain Markdown, no HTML wrapper. In addition to `.issue-step-result.json`.',
-    );
-  }
-
-  lines.push(...resolveDownstreamAwareness(input.pipelineSteps));
-
-  lines.push(
-    '',
-    'Worker sub-task reports (read the full files .issue-worker-result-<index>.json in the working folder):',
-    ...workers.map((worker) => `  worker ${worker.index}: ${worker.summary}`),
-    '',
-    'Instructions:',
-    "- Integrate the workers' changes, resolve conflicts between them, and finish the implementation.",
-    '- You are the ONLY one allowed to conclude the step. Workers do not decide pass/fail.',
-    '- Decide pass/fail/blocked based on the integrated result, and write the FINAL',
-    '  .issue-step-result.json at the working-folder root:',
-    '  { "status": "pass|fail|blocked", "summary": "...", "scenarios": [ ... ], "findings": [ ... ] }.',
-    '- Do NOT push and do NOT create an MR — the backend publishes.',
-    'Output contract:',
-    '`.issue-step-result.json` is the single source of truth for this step result.',
+  const summaries = workerSummariesBlock(
+    (index) => `.issue-worker-result-${index}.json`,
+    workers,
   );
-  return lines.join('\n');
+  return `${render(
+    readPrompt('resolve-room-lead.md'),
+    roomValues(input, {
+      WORKER_SUMMARIES:
+        summaries || 'No worker reports: perform the resolve task YOURSELF and produce the step result directly.',
+    }),
+  )}\n\n${outputContract()}`;
 }
 
-/**
- * Промпт воркера этапа staged-режима: решает свою подзадачу этапа параллельно
- * другим воркерам; пишет `.issue-stage-<index>-worker-<w>.json`, но НЕ финальное
- * решение (ни этапа, ни шага).
- */
 export function buildStageWorkerPrompt(
   input: RoomPromptInput,
   stage: NormalizedStage,
@@ -446,224 +447,53 @@ export function buildStageWorkerPrompt(
   total: number,
 ): string {
   const worker = item.index + 1;
-  const lines: string[] = [
-    `Role: worker agent (executor) of stage ${stage.index} ("${stage.name}") in a staged agent room. You are a peer, NOT the lead.`,
-    'The stage coordinator and the final lead alone make pass/fail decisions — never you.',
-    `Stage ${stage.index} task: ${stage.task}`,
-    `Sub-task ${worker} of ${total}: ${item.task}`,
-    `Task: ${input.issueTitle}`,
-    `Issue description: ${input.description}`,
-    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
-    'Iteration context:',
-    input.context,
-  ];
-
-  if (input.refinedPlan) {
-    lines.push('', 'Refined plan (follow it):', input.refinedPlan);
-  }
-
-  const attachments = input.attachmentPaths ?? [];
-  if (attachments.length > 0) {
-    lines.push(
-      '',
-      'Uploaded files (already in the working folder):',
-      ...attachments.map((path) => `- ${path}`),
-    );
-  }
-
-  if (input.repoPaths.length > 0) {
-    lines.push(
-      '',
-      'Repositories (working paths):',
-      ...input.repoPaths.map((path) => `- ${path}`),
-    );
-  } else {
-    lines.push(
-      '',
-      'There are no repositories — write your work files into the task working folder.',
-    );
-  }
-
-  if (input.feedback !== null) {
-    lines.push('', `Previous step feedback: ${input.feedback}`);
-  }
-
-  lines.push(
-    '',
-    'Instructions:',
-    `- Solve ONLY sub-task ${worker} of stage ${stage.index}. Do not touch files outside its scope.`,
-    '- You are allowed to edit code, write files, and run build/tests/typecheck to verify your own work. Commit/push are forbidden (publishing is done by the backend).',
-    '- Report your OWN sub-task outcome (not the stage, not the step) by writing the file',
-    `  .issue-stage-${stage.index}-worker-${worker}.json at the working-folder root:`,
-    '  { "status": "pass|fail|blocked", "summary": "..." }.',
-    '- The stage coordinator integrates the workers; the final lead decides the step.',
-    'Output contract:',
-    `.issue-stage-${stage.index}-worker-${worker}.json is required; without it your sub-task is incomplete.`,
-  );
-  return lines.join('\n');
+  return render(readPrompt('resolve-stages-worker.md'), {
+    ...roomValues(input),
+    STAGE_INDEX: String(stage.index),
+    STAGE_NAME: stage.name,
+    STAGE_TASK: stage.task,
+    WORKER_INDEX: String(worker),
+    TOTAL_WORKERS: String(total),
+    WORKER_TASK: item.task,
+    DOWNSTREAM_AWARENESS: workerDownstreamAwareness(input.pipelineSteps).join('\n'),
+  });
 }
 
-/**
- * Промпт координатора этапа staged-режима: интегрирует воркеров СВОЕГО этапа и
- * пишет `.issue-stage-<index>.json`; финальное решение шага принимает отдельный
- * финальный lead. Итоги предыдущих этапов читаются из общей памяти комнаты.
- */
 export function buildStageCoordinatorPrompt(
   input: RoomPromptInput,
   stage: NormalizedStage,
   workers: WorkerSummary[],
 ): string {
-  const lines: string[] = [
-    `Role: coordinator (integrator) of stage ${stage.index} ("${stage.name}") in a staged agent room.`,
-    `You integrate the workers of stage ${stage.index} ONLY; the FINAL pass/fail decision for the step belongs to the final lead.`,
-    `Stage ${stage.index} task: ${stage.task}`,
-    `Task: ${input.issueTitle}`,
-    `Issue description: ${input.description}`,
-    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
-    'Iteration context:',
-    input.context,
-  ];
-
-  if (input.refinedPlan) {
-    lines.push('', 'Refined plan (follow it):', input.refinedPlan);
-  }
-
-  if (input.repoPaths.length > 0) {
-    lines.push(
-      '',
-      'Repositories (working paths):',
-      ...input.repoPaths.map((path) => `- ${path}`),
-    );
-  } else {
-    lines.push(
-      '',
-      'There are no repositories — the stage deliverables are files in the task working folder.',
-    );
-  }
-
-  if (input.feedback !== null) {
-    lines.push('', `Previous step feedback: ${input.feedback}`);
-  }
-
-  if (workers.length > 0) {
-    lines.push(
-      '',
-      `Worker sub-task reports of stage ${stage.index} (read the full files .issue-stage-${stage.index}-worker-<w>.json in the working folder):`,
-      ...workers.map(
-        (worker) => `  worker ${worker.index + 1}: ${worker.summary}`,
-      ),
-    );
-  } else {
-    lines.push(
-      '',
-      'There are no worker agents for this stage: perform the stage task YOURSELF',
-      'and produce the stage result directly.',
-    );
-  }
-
-  lines.push(
-    '',
-    'Shared room memory:',
-    '- Previous stages publish their outcomes to the shared room memory. Read them',
-    '  BEFORE integrating by using the `memory_read` tool and the `memory_search` tool',
-    '  (tags `#issue-resolver`, `[[stage-N]]`), in addition to the working-folder files.',
-    '- When your stage is done, write a short stage outcome to the shared memory with',
-    `  the \`memory_write\` tool: tags \`#issue-resolver\` and \`[[stage-${stage.index}]]\`.`,
-    '',
-    'Instructions:',
-    "- Integrate the workers' changes for YOUR stage, resolve conflicts between them, and finish the stage implementation.",
-    `- Write the stage outcome to .issue-stage-${stage.index}.json at the working-folder root:`,
-    '  { "status": "pass|fail|blocked", "summary": "..." }.',
-    '- This is NOT the final step result: do NOT write .issue-step-result.json.',
-    '- Do NOT push and do NOT create an MR — the backend publishes.',
-    'Output contract:',
-    `.issue-stage-${stage.index}.json is required; without it the stage is incomplete.`,
+  const summaries = workerSummariesBlock(
+    (index) => `.issue-stage-${stage.index}-worker-${index}.json`,
+    workers,
   );
-  return lines.join('\n');
+  return render(readPrompt('resolve-stages-lead.md'), {
+    ...roomValues(input),
+    STAGE_INDEX: String(stage.index),
+    STAGE_NAME: stage.name,
+    STAGE_TASK: stage.task,
+    WORKER_SUMMARIES:
+      summaries ||
+      'There are no worker agents for this stage: perform the stage task YOURSELF\nand produce the stage result directly.',
+  });
 }
 
-/**
- * Промпт финального lead staged-режима: интегрирует исходы ВСЕХ этапов и ОДИН
- * пишет deliverable (`report.html`/`report.md` по desiredResult) и финальный
- * `.issue-step-result.json`.
- */
 export function buildStagedFinalCoordinatorPrompt(
   input: RoomPromptInput,
   stages: { stage: NormalizedStage; outcome: string }[],
 ): string {
-  const lines: string[] = [
-    'Role: final coordinator (LEAD) of this staged agent room. You integrate the',
-    'outcomes of ALL stages below and take the FINAL decision whether the resolve',
-    'step passed.',
-    `Task: ${input.issueTitle}`,
-    `Issue description: ${input.description}`,
-    ...(input.jiraText ? [`Jira text: ${input.jiraText}`] : []),
-    'Iteration context:',
-    input.context,
-  ];
-
-  if (input.refinedPlan) {
-    lines.push('', 'Refined plan (follow it):', input.refinedPlan);
-  }
-
-  if (input.repoPaths.length > 0) {
-    lines.push(
-      '',
-      'Repositories (working paths):',
-      ...input.repoPaths.map((path) => `- ${path}`),
-    );
-  } else {
-    lines.push(
-      '',
-      'There are no repositories — the deliverables are files in the task working folder.',
-    );
-  }
-
-  if (input.feedback !== null) {
-    lines.push('', `Previous step feedback: ${input.feedback}`);
-  }
-
-  if (input.desiredResult === 'html') {
-    lines.push(
-      '',
-      'Write the deliverable as a single self-contained `report.html` at the',
-      'working-folder root (inline CSS/JS/images via data URIs) — a styled',
-      'standalone page to share. In addition to `.issue-step-result.json`.',
-    );
-  } else if (input.desiredResult === 'md') {
-    lines.push(
-      '',
-      'Write the deliverable as `report.md` at the working-folder root — a',
-      'Markdown document. Plain Markdown, no HTML wrapper. In addition to `.issue-step-result.json`.',
-    );
-  }
-
-  lines.push(...resolveDownstreamAwareness(input.pipelineSteps));
-
-  lines.push(
-    '',
-    'Stage outcomes (read the full files .issue-stage-<index>.json in the working folder):',
-    ...stages.map(
+  const outcomes = stages
+    .map(
       ({ stage, outcome }) =>
-        `  stage ${stage.index} (${stage.name}): ${outcome}`,
-    ),
-    '',
-    'Shared room memory:',
-    '- Each stage published a short outcome to the shared room memory. Read them with',
-    '  the `memory_read` / `memory_search` tools (tags `#issue-resolver`, `[[stage-N]]`),',
-    '  in addition to the working-folder files.',
-    '- When the resolve step is finished, write the overall resolve outcome to the',
-    '  shared memory with the `memory_write` tool: tags `#issue-resolver` and `[[resolve]]`.',
-    '',
-    'Instructions:',
-    '- Integrate the stage outcomes, resolve conflicts between stages, and finalize the implementation.',
-    '- You are the ONLY one allowed to conclude the step.',
-    '- Decide pass/fail/blocked based on the integrated result, and write the FINAL',
-    '  .issue-step-result.json at the working-folder root:',
-    '  { "status": "pass|fail|blocked", "summary": "...", "scenarios": [ ... ], "findings": [ ... ] }.',
-    '- Do NOT push and do NOT create an MR — the backend publishes.',
-    'Output contract:',
-    '`.issue-step-result.json` is the single source of truth for this step result.',
-  );
-  return lines.join('\n');
+        `- stage ${stage.index} (${stage.name}) → \`.issue-stage-${stage.index}.json\`: ${outcome}`,
+    )
+    .join('\n');
+  return `${render(
+    readPrompt('resolve-stages-final.md'),
+    roomValues(input, {
+      STAGE_OUTCOMES:
+        outcomes || 'No stage reports: perform the resolve task YOURSELF and produce the step result directly.',
+    }),
+  )}\n\n${outputContract()}`;
 }

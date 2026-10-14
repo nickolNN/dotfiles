@@ -154,6 +154,7 @@ describe('runIssueIteration — статус running', () => {
         steps: ['resolve'],
       },
       repositories: REPOSITORIES,
+      repoWorkspaces: [],
     });
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
@@ -161,8 +162,8 @@ describe('runIssueIteration — статус running', () => {
     const statuses = events
       .filter((event) => event.type === 'iteration_status')
       .map((event) => JSON.parse(event.data).status as string);
-    // Первый вход без клонов: подготовка (clone/install) предшествует running.
-    expect(statuses[0]).toBe('preparing');
+    // Подготовка вынесена в prepareIssueWorkspace: итерация стартует сразу running.
+    expect(statuses[0]).toBe('running');
     expect(statuses).toContain('running');
     expect(statuses.at(-1)).toBe('completed');
     expect(statuses.indexOf('running')).toBeLessThan(
@@ -194,6 +195,7 @@ describe('runIssueIteration — статус running', () => {
         steps: ['resolve'],
       },
       repositories: REPOSITORIES,
+      repoWorkspaces: [],
     });
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });

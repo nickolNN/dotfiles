@@ -9,6 +9,7 @@ const STATUSES: TaskStatus[] = [
   'completed',
   'failed',
   'cancelled',
+  'question',
 ];
 
 const STEP_STATUSES: StepRunStatus[] = [
@@ -33,7 +34,7 @@ describe('theme tokens', () => {
     expect(MATRIX.green).toBe('#00FF41');
   });
 
-  it('maps exactly the six TaskStatus values to valid hex colors', () => {
+  it('maps exactly the seven TaskStatus values to valid hex colors', () => {
     expect(Object.keys(statusColor).sort()).toEqual([...STATUSES].sort());
 
     for (const status of STATUSES) {
@@ -48,6 +49,7 @@ describe('theme tokens', () => {
     expect(statusColor.preparing).toBe('#FFB000');
     expect(statusColor.pending).toBe('#008F11');
     expect(statusColor.cancelled).toBe('#8A8A8A');
+    expect(statusColor.question).toBe('#FFB000');
   });
 
   it('maps every StepRunStatus (plus aborted) to a valid hex color', () => {

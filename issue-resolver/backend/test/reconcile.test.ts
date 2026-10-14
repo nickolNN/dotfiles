@@ -15,7 +15,7 @@ function newId(): string {
 
 function insertIssue(
   db: Db,
-  status: 'running' | 'preparing' | 'completed',
+  status: 'running' | 'preparing' | 'completed' | 'question',
 ): string {
   const id = newId();
   db.insert(issues)
@@ -36,7 +36,7 @@ function insertIssue(
 function insertIteration(
   db: Db,
   issueId: string,
-  status: 'running' | 'preparing' | 'completed',
+  status: 'running' | 'preparing' | 'pending' | 'completed',
 ): string {
   const id = newId();
   db.insert(iterations)
@@ -174,6 +174,54 @@ describe('reconcileInterruptedRuns', () => {
     const db = createDb(':memory:');
     const issueId = insertIssue(db, 'preparing');
     const iterationId = insertIteration(db, issueId, 'preparing');
+
+    reconcileInterruptedRuns(db);
+
+    expect(
+      db.select().from(iterations).where(eq(iterations.id, iterationId)).get()
+        ?.status,
+    ).toBe('failed');
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('failed');
+  });
+
+  it('доводит pending-итерацию задачи в preparing до failed (смерть до runIssueIteration)', () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db, 'preparing');
+    const iterationId = insertIteration(db, issueId, 'pending');
+
+    reconcileInterruptedRuns(db);
+
+    expect(
+      db.select().from(iterations).where(eq(iterations.id, iterationId)).get()
+        ?.status,
+    ).toBe('failed');
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('failed');
+  });
+
+  it('не трогает pending-итерацию без preparing-задачи', () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db, 'running');
+    const iterationId = insertIteration(db, issueId, 'pending');
+
+    reconcileInterruptedRuns(db);
+
+    expect(
+      db.select().from(iterations).where(eq(iterations.id, iterationId)).get()
+        ?.status,
+    ).toBe('pending');
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('running');
+  });
+
+  it('задача в question после рестарта доводится до failed (вопрос без живой сессии)', () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db, 'question');
+    const iterationId = insertIteration(db, issueId, 'running');
 
     reconcileInterruptedRuns(db);
 

@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app';
 import type { Db } from '../src/db/client';
 import { createDb } from '../src/db/client';
-import { issues, iterations, stepOutputs, stepRuns } from '../src/db/schema';
+import { issues, iterations, repositories as repositoriesTable, stepOutputs, stepRuns } from '../src/db/schema';
 import {
   createStepOutput,
   createStepRun,
@@ -24,15 +24,16 @@ import {
   type GitPrepareInput,
   type GitPrepareResult,
 } from '../src/git/service';
-import { FakeJiraClient } from '../src/jira/client';
 import { FakePiRunner } from '../src/pi/runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import { FakeMrClient } from '../src/pr/mr';
 import { InMemorySseHub } from '../src/sse/hub';
 import {
+  prepareIssueWorkspace,
   runIssueIteration,
   type IterationRunDeps,
 } from '../src/workflow/run-iteration.service';
+import { FakeBootstrapperAgent } from './fixtures/fake-bootstrapper';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 
@@ -138,12 +139,10 @@ function makeDeps(): {
   deps: IterationRunDeps;
   pi: FakePiRunner;
   sse: InMemorySseHub;
-  jira: FakeJiraClient;
   git: FakeGitService;
 } {
   const pi = new FakePiRunner();
   const sse = new InMemorySseHub();
-  const jira = new FakeJiraClient();
   const git = new FakeGitService();
   const deps: IterationRunDeps = {
     container: new FakeContainerController(),
@@ -151,10 +150,9 @@ function makeDeps(): {
     mr: new FakeMrClient(),
     pi,
     sse,
-    jira,
     control: new InMemoryStepSessionRegistry(),
   };
-  return { deps, pi, sse, jira, git };
+  return { deps, pi, sse, git };
 }
 
 const repositories = [
@@ -181,6 +179,7 @@ describe('runIssueIteration — прямой вызов', () => {
         steps: iteration.steps,
       },
       repositories,
+      repoWorkspaces: [],
       model: undefined,
     });
 
@@ -212,7 +211,12 @@ describe('runIssueIteration — прямой вызов', () => {
     const stepStatuses = events
       .filter((event) => event.type === 'step_status')
       .map((event) => event.data);
-    expect(stepStatuses).toContain('running');
+    // running несёт JSON `{ status, step, model }`; прочие статусы — строку.
+    const runningPayload = stepStatuses
+      .filter((data) => data.startsWith('{'))
+      .map((data) => JSON.parse(data) as { status: string })
+      .find((payload) => payload.status === 'running');
+    expect(runningPayload).toBeDefined();
     expect(stepStatuses).toContain('success');
 
     const iterationEvent = events
@@ -226,16 +230,89 @@ describe('runIssueIteration — прямой вызов', () => {
     });
   });
 
-  it('refine: description и jiraText из FakeJiraClient попадают в промпт', async () => {
+  it('вопрос агента: задача question в БД + SSE, ответ — обратно running', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse } = makeDeps();
+
+    // Наблюдаем состояние БД в момент каждой публикации статуса вопроса.
+    const observed: Array<{ status: string; dbStatus: string | undefined }> = [];
+    sse.subscribe(iteration.id, (event) => {
+      if (event.type !== 'iteration_status') return;
+      const parsed = JSON.parse(event.data) as { status?: string };
+      if (parsed.status !== 'question' && parsed.status !== 'running') return;
+      observed.push({
+        status: parsed.status,
+        dbStatus: db
+          .select()
+          .from(issues)
+          .where(eq(issues.id, issueId))
+          .get()?.status,
+      });
+    });
+
+    pi.enqueue({
+      step: 'resolve',
+      exitCode: 0,
+      report: { status: 'pass', summary: 'ok' },
+      stdout: '',
+      stderr: '',
+      events: [
+        { type: 'question', id: 'q1', method: 'select', title: 'Выбор?' },
+        { type: 'question_answered', questionId: 'q1', answer: 'A' },
+      ],
+    });
+
+    await runIssueIteration(db, deps, {
+      issue: { id: issueId, title: 'Wiring задача', pipelineSteps: ['resolve'] },
+      iteration: {
+        id: iteration.id,
+        issueId,
+        number: iteration.number,
+        context: iteration.context,
+        steps: iteration.steps,
+      },
+      repositories,
+      repoWorkspaces: [],
+      model: undefined,
+    });
+
+    // running старта → question (+БД question) → running (+БД running).
+    expect(observed).toEqual([
+      { status: 'running', dbStatus: 'running' },
+      { status: 'question', dbStatus: 'question' },
+      { status: 'running', dbStatus: 'running' },
+    ]);
+
+    // Вопрос и ответ дозалиты в step_runs.events (движок → appendStepRunEvent):
+    // после перезагрузки вопрос восстанавливается без SSE-реплея.
+    const run = db
+      .select()
+      .from(stepRuns)
+      .where(eq(stepRuns.iteration_id, iteration.id))
+      .get();
+    expect(run?.events).toEqual([
+      { type: 'question', id: 'q1', method: 'select', title: 'Выбор?' },
+      { type: 'question_answered', questionId: 'q1', answer: 'A' },
+    ]);
+  });
+
+  it('refine: description и jiraText из workspace-файла попадают в промпт', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['refine']);
-    const { deps, pi, jira } = makeDeps();
-    jira.setIssue('KLA-1', {
-      key: 'KLA-1',
-      title: 'Jira Title',
-      summary: 'Jira Summary',
-    });
+    const { deps, pi } = makeDeps();
     pi.enqueue(pass('refine'));
+
+    // Создаём workspace-файл Jira (имитируем запись при создании задачи).
+    const wsRoot = mkdtempSync(join(tmpdir(), 'jira-test-'));
+    const wsDir = join(wsRoot, issueId);
+    mkdirSync(join(wsDir, 'jira'), { recursive: true });
+    writeFileSync(
+      join(wsDir, 'jira', 'KLA-1.md'),
+      '# Jira Title\n\n**Ключ:** KLA-1\n\nJira Summary',
+      'utf8',
+    );
+    deps.workspaceRoot = wsRoot;
 
     await runIssueIteration(db, deps, {
       issue: {
@@ -253,12 +330,15 @@ describe('runIssueIteration — прямой вызов', () => {
         steps: ['refine'],
       },
       repositories,
+      repoWorkspaces: [],
+      model: undefined,
     });
 
-    expect(jira.calls).toContain('KLA-1');
     expect(pi.calls).toHaveLength(1);
     expect(pi.calls[0].prompt).toContain('Описание из тела');
     expect(pi.calls[0].prompt).toContain('Jira Summary');
+
+    rmSync(wsRoot, { recursive: true, force: true });
   });
 
   it('провал resolve → failed и статусы в БД failed', async () => {
@@ -277,6 +357,7 @@ describe('runIssueIteration — прямой вызов', () => {
         steps: iteration.steps,
       },
       repositories,
+      repoWorkspaces: [],
     });
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
@@ -290,7 +371,7 @@ describe('runIssueIteration — прямой вызов', () => {
     ).toBe('failed');
   });
 
-  it('git.prepare падает (clone timeout) → итерация failed, не остаётся running', async () => {
+  it('prepareIssueWorkspace: git.prepare падает (clone timeout) → итерация failed, не остаётся running', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi, git } = makeDeps();
@@ -300,23 +381,14 @@ describe('runIssueIteration — прямой вызов', () => {
       .mockImplementation(() => undefined);
 
     try {
-      const result = await runIssueIteration(db, deps, {
-        issue: {
-          id: issueId,
-          title: 'Wiring задача',
-          pipelineSteps: ['resolve'],
-        },
-        iteration: {
-          id: iteration.id,
+      await expect(
+        prepareIssueWorkspace(db, deps, {
           issueId,
-          number: iteration.number,
-          context: iteration.context,
-          steps: iteration.steps,
-        },
-        repositories,
-      });
+          iterationId: iteration.id,
+          repositories,
+        }),
+      ).rejects.toThrow('git clone timed out after 5ms');
 
-      expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
       expect(
         db
           .select()
@@ -373,6 +445,7 @@ describe('runIssueIteration — преемственность итераций'
           steps: ['resolve'],
         },
         repositories,
+      repoWorkspaces: [],
       });
 
       const prompt = pi.calls[0].prompt;
@@ -417,6 +490,7 @@ describe('runIssueIteration — преемственность итераций'
           steps: ['resolve'],
         },
         repositories,
+      repoWorkspaces: [],
       });
 
       expect(result).toEqual({
@@ -451,6 +525,7 @@ describe('runIssueIteration — преемственность итераций'
         steps: ['resolve'],
       },
       repositories,
+      repoWorkspaces: [],
     });
 
     expect(pi.calls[0].prompt).not.toContain('Previous iteration outcome');
@@ -538,6 +613,7 @@ describe('runIssueIteration — снапшот результата итерац
           steps: iteration.steps,
         },
         repositories,
+      repoWorkspaces: [],
       });
 
       expect(result).toEqual({
@@ -584,6 +660,7 @@ describe('runIssueIteration — снапшот результата итерац
           steps: iteration.steps,
         },
         repositories,
+      repoWorkspaces: [],
       });
 
       expect(result).toEqual({
@@ -600,7 +677,7 @@ describe('runIssueIteration — снапшот результата итерац
     }
   });
 
-  it("pr без create_mr: result.json не создаётся (guard)", async () => {
+  it("без pr-шага: result.json не создаётся (guard)", async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const root = mkdtempSync(join(tmpdir(), 'issue-resolver-'));
@@ -614,7 +691,6 @@ describe('runIssueIteration — снапшот результата итерац
           id: issueId,
           title: 'Wiring задача',
           pipelineSteps: ['resolve'],
-          desiredResult: 'pr',
         },
         iteration: {
           id: iteration.id,
@@ -624,6 +700,7 @@ describe('runIssueIteration — снапшот результата итерац
           steps: iteration.steps,
         },
         repositories: [],
+        repoWorkspaces: [],
       });
 
       expect(result).toEqual({
@@ -635,6 +712,61 @@ describe('runIssueIteration — снапшот результата итерац
           join(root, issueId, '.iteration-results', iteration.id, 'result.json'),
         ),
       ).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('pr с bitbucket-репо: detectGitHost не падает, итерация completed', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve', 'pr']);
+    const root = mkdtempSync(join(tmpdir(), 'issue-resolver-'));
+    try {
+      const { deps, pi, git } = makeDeps();
+      deps.workspaceRoot = root;
+      pi.enqueue(pass('resolve'));
+      pi.enqueue(pass('pr'));
+      const mr = deps.mr as FakeMrClient;
+
+      const bitbucketRepos = [
+        {
+          repository_url: 'https://b.yadro.com/scm/kos/some-repo.git',
+          base_branch: 'main',
+          create_mr: true,
+        },
+      ];
+      const repoWorkspaces = [
+        {
+          repoUrl: 'https://b.yadro.com/scm/kos/some-repo.git',
+          path: join(root, issueId, 'some-repo'),
+          branch: 'issue-resolver/abc',
+        },
+      ];
+
+      const result = await runIssueIteration(db, deps, {
+        issue: {
+          id: issueId,
+          title: 'Bitbucket задача',
+          pipelineSteps: ['resolve', 'pr'],
+        },
+        iteration: {
+          id: iteration.id,
+          issueId,
+          number: iteration.number,
+          context: iteration.context,
+          steps: iteration.steps,
+        },
+        repositories: bitbucketRepos,
+        repoWorkspaces,
+      });
+
+      expect(result).toEqual({
+        iterationStatus: 'completed',
+        needsInput: false,
+      });
+      expect(git.commits).toHaveLength(1);
+      expect(mr.calls).toHaveLength(1);
+      expect(mr.calls[0].source).toBe('bitbucket');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -665,6 +797,7 @@ describe('runIssueIteration — снапшот результата итерац
           steps: iteration.steps,
         },
         repositories,
+      repoWorkspaces: [],
       });
 
       expect(result).toEqual({
@@ -719,7 +852,7 @@ describe('runIssueIteration — разовая подготовка рабоче
     }
   });
 
-  it('status preparing на время подготовки, prepare/install один раз, затем running', async () => {
+  it('prepareIssueWorkspace: preparing на время подготовки, prepare/install один раз, затем running', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['refine', 'resolve']);
     const { deps, pi, sse } = makeDeps();
@@ -730,9 +863,33 @@ describe('runIssueIteration — разовая подготовка рабоче
     pi.enqueue(pass('resolve'));
 
     const events: SSEEvent[] = [];
-    sse.subscribe(iteration.id, (event) => events.push(event));
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
 
-    const run = runIssueIteration(db, deps, {
+    const preparing = prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+
+    await gated.started;
+
+    // Пока prepare висит — задача `preparing`, итерация ещё `pending`, pi не запущен.
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('preparing');
+    expect(
+      db.select().from(iterations).where(eq(iterations.id, iteration.id)).get()
+        ?.status,
+    ).toBe('pending');
+    expect(pi.calls).toHaveLength(0);
+    const progress = events
+      .filter((event) => event.type === 'workspace_progress')
+      .map((event) => JSON.parse(event.data) as { step: string; status: string });
+    expect(progress).toContainEqual({ step: 'creating_dirs', status: 'done' });
+
+    gated.open();
+    const repoWorkspaces = await preparing;
+    const result = await runIssueIteration(db, deps, {
       issue: {
         id: issueId,
         title: 'Подготовка',
@@ -746,29 +903,8 @@ describe('runIssueIteration — разовая подготовка рабоче
         steps: ['refine', 'resolve'],
       },
       repositories,
+      repoWorkspaces,
     });
-
-    await gated.started;
-
-    // Пока prepare висит — preparing зафиксирован в БД и SSE, pi не запущен.
-    expect(
-      db.select().from(iterations).where(eq(iterations.id, iteration.id)).get()
-        ?.status,
-    ).toBe('preparing');
-    expect(
-      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
-    ).toBe('preparing');
-    expect(
-      events.some(
-        (event) =>
-          event.type === 'iteration_status' &&
-          event.data.includes('"status":"preparing"'),
-      ),
-    ).toBe(true);
-    expect(pi.calls).toHaveLength(0);
-
-    gated.open();
-    const result = await run;
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     // Подготовка — ровно один раз на итерацию, а не на каждый шаг.
@@ -779,7 +915,7 @@ describe('runIssueIteration — разовая подготовка рабоче
     expect(pi.calls).toHaveLength(2);
   });
 
-  it('workspace уже склонирован → preparing не публикуется, идемпотентный prepare позван', async () => {
+  it('workspace уже склонирован → подготовка пропускается, preparing не публикуется', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi, sse, git } = makeDeps();
@@ -801,6 +937,7 @@ describe('runIssueIteration — разовая подготовка рабоче
         steps: ['resolve'],
       },
       repositories,
+      repoWorkspaces: [],
     });
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
@@ -811,13 +948,83 @@ describe('runIssueIteration — разовая подготовка рабоче
           event.data.includes('"status":"preparing"'),
       ),
     ).toBe(false);
-    expect(git.prepares).toHaveLength(1);
-    expect(git.dependenciesInstalled).toEqual([
-      [join(root, issueId, 'app')],
+    // Подготовка не вызывается повторно: клоны уже на месте, install уже сделан.
+    expect(git.prepares).toHaveLength(0);
+    expect(git.dependenciesInstalled).toHaveLength(0);
+  });
+
+  it('local-режим: уже склонированный репо → workspace.path использует host-путь, не /workspaces/', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps } = makeDeps();
+    const root = tempRoot();
+    deps.workspaceRoot = root;
+    deps.local = true;
+    mkdirSync(join(root, issueId, 'app', '.git'), { recursive: true });
+
+    const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+
+    expect(repoWorkspaces).toEqual([
+      {
+        repoUrl: repositories[0].repository_url,
+        path: join(root, issueId, 'app'),
+        branch: repositories[0].base_branch,
+      },
+    ]);
+    expect(repoWorkspaces[0].path.startsWith('/workspaces/')).toBe(false);
+  });
+
+  it('docker-режим: уже склонированный репо → workspace.path остаётся container-путём', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps } = makeDeps();
+    const root = tempRoot();
+    deps.workspaceRoot = root;
+    mkdirSync(join(root, issueId, 'app', '.git'), { recursive: true });
+
+    const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+
+    expect(repoWorkspaces).toEqual([
+      {
+        repoUrl: repositories[0].repository_url,
+        path: `/workspaces/${issueId}/app`,
+        branch: repositories[0].base_branch,
+      },
     ]);
   });
 
-  it('init-fail подготовки → failed, не остаётся preparing/running, pi не вызван', async () => {
+  it('инфраструктурные файлы скрыты от git (.git/info/exclude) и не дублируются', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps } = makeDeps();
+    const root = tempRoot();
+    deps.workspaceRoot = root;
+    mkdirSync(join(root, issueId, 'app', '.git'), { recursive: true });
+
+    const input = { issueId, iterationId: iteration.id, repositories };
+    await prepareIssueWorkspace(db, deps, input);
+    await prepareIssueWorkspace(db, deps, input);
+
+    // Публикация (`pr`) делает `git add -A`, поэтому RUN_INSTRUCTIONS.md и
+    // DEV_SERVER.sh должны быть в локальном exclude — иначе они уедут в MR.
+    const lines = readFileSync(
+      join(root, issueId, 'app', '.git', 'info', 'exclude'),
+      'utf8',
+    )
+      .split('\n')
+      .filter((line) => line.startsWith('/'));
+    expect(lines).toEqual(['/RUN_INSTRUCTIONS.md', '/DEV_SERVER.sh']);
+  });
+
+  it('prepareIssueWorkspace init-fail → задача и итерация failed, pi не вызван', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi, git, sse } = makeDeps();
@@ -831,19 +1038,14 @@ describe('runIssueIteration — разовая подготовка рабоче
     sse.subscribe(iteration.id, (event) => events.push(event));
 
     try {
-      const result = await runIssueIteration(db, deps, {
-        issue: { id: issueId, title: 'Init-fail', pipelineSteps: ['resolve'] },
-        iteration: {
-          id: iteration.id,
+      await expect(
+        prepareIssueWorkspace(db, deps, {
           issueId,
-          number: iteration.number,
-          context: iteration.context,
-          steps: ['resolve'],
-        },
-        repositories,
-      });
+          iterationId: iteration.id,
+          repositories,
+        }),
+      ).rejects.toThrow('npm install failed');
 
-      expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
       expect(
         db
           .select()
@@ -859,18 +1061,525 @@ describe('runIssueIteration — разовая подготовка рабоче
         events.some(
           (event) =>
             event.type === 'iteration_status' &&
-            event.data.includes('"status":"preparing"'),
-        ),
-      ).toBe(true);
-      expect(
-        events.some(
-          (event) =>
-            event.type === 'iteration_status' &&
             event.data.includes('"status":"failed"'),
         ),
       ).toBe(true);
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+/** Hub, падающий на `step_status`: проверяет catch после runIteration. */
+class ThrowingStepStatusHub extends InMemorySseHub {
+  publish(event: SSEEvent): void {
+    if (event.type === 'step_status') {
+      throw new Error('boom from sse');
+    }
+    super.publish(event);
+  }
+}
+
+describe('runIssueIteration — прогресс подготовки, причина фейла и отчёт', () => {
+  const roots: string[] = [];
+
+  const tempRoot = (): string => {
+    const root = mkdtempSync(join(tmpdir(), 'ir-report-'));
+    roots.push(root);
+    return root;
+  };
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  const progressOf = (events: SSEEvent[]): unknown[] =>
+    events
+      .filter((event) => event.type === 'workspace_progress')
+      .map((event) => JSON.parse(event.data) as unknown);
+
+  it('prepareIssueWorkspace шлёт workspace_progress по шагам (clone/install/…)', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('resolve'));
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+    const result = await runIssueIteration(db, deps, {
+      issue: { id: issueId, title: 'Прогресс', pipelineSteps: ['resolve'] },
+      iteration: {
+        id: iteration.id,
+        issueId,
+        number: iteration.number,
+        context: iteration.context,
+        steps: iteration.steps,
+      },
+      repositories,
+      repoWorkspaces,
+    });
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(progressOf(events)).toEqual([
+      { step: 'creating_dirs', status: 'running' },
+      { step: 'creating_dirs', status: 'done' },
+      { step: 'cloning', repo: 'app', status: 'running' },
+      { step: 'cloning', repo: 'app', status: 'done' },
+      { step: 'checking_instructions', status: 'running' },
+      { step: 'checking_instructions', status: 'done' },
+      { step: 'installing', repo: 'app', status: 'running' },
+      { step: 'installing', repo: 'app', status: 'done' },
+      { step: 'dev_server', repo: 'app', status: 'running' },
+      {
+        step: 'dev_server',
+        repo: 'app',
+        status: 'done',
+        message: 'localhost:5173',
+        devPort: 5173,
+      },
+      { step: 'ready', status: 'done' },
+    ]);
+    // Каждое событие адресовано задаче и итерации.
+    const envelope = events.find((event) => event.type === 'workspace_progress');
+    expect(envelope?.issueId).toBe(issueId);
+    expect(envelope?.iterationId).toBeUndefined();
+  });
+
+  it('фейл подготовки: iteration_status failed несёт error и progress error', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, git, sse } = makeDeps();
+    const root = tempRoot();
+    deps.workspaceRoot = root;
+    git.failNextWith(new Error('git clone timed out after 5ms'));
+    const errorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    try {
+      await expect(
+        prepareIssueWorkspace(db, deps, {
+          issueId,
+          iterationId: iteration.id,
+          repositories,
+        }),
+      ).rejects.toThrow('git clone timed out after 5ms');
+
+      const failed = events
+        .filter((event) => event.type === 'iteration_status')
+        .map((event) => JSON.parse(event.data) as Record<string, unknown>)
+        .find((data) => data.status === 'failed');
+      expect(failed).toMatchObject({
+        status: 'failed',
+        error: 'git clone timed out after 5ms',
+      });
+
+      const errored = (progressOf(events) as Record<string, unknown>[]).find(
+        (data) => data.status === 'error',
+      );
+      expect(errored).toMatchObject({
+        step: 'cloning',
+        status: 'error',
+        message: 'git clone timed out after 5ms',
+      });
+
+      // Итерация и задача терминально failed после провала подготовки.
+      expect(
+        db
+          .select()
+          .from(iterations)
+          .where(eq(iterations.id, iteration.id))
+          .get()?.status,
+      ).toBe('failed');
+      expect(
+        db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+      ).toBe('failed');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('catch после runIteration: iteration_status failed несёт error', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    const hub = new ThrowingStepStatusHub();
+    deps.sse = hub;
+    pi.enqueue(pass('resolve'));
+    const errorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const events: SSEEvent[] = [];
+    hub.subscribe(iteration.id, (event) => events.push(event));
+
+    try {
+      const result = await runIssueIteration(db, deps, {
+        issue: { id: issueId, title: 'Сбой', pipelineSteps: ['resolve'] },
+        iteration: {
+          id: iteration.id,
+          issueId,
+          number: iteration.number,
+          context: iteration.context,
+          steps: iteration.steps,
+        },
+        repositories,
+      repoWorkspaces: [],
+      });
+
+      expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+      const failed = events
+        .filter((event) => event.type === 'iteration_status')
+        .map((event) => JSON.parse(event.data) as Record<string, unknown>)
+        .find((data) => data.status === 'failed');
+      expect(failed).toMatchObject({ status: 'failed', error: 'boom from sse' });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('отчёт итерации пишется в report-<n>.md с шагами и статусами', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['refine', 'resolve']);
+    const root = tempRoot();
+    const { deps, pi } = makeDeps();
+    deps.workspaceRoot = root;
+    pi.enqueue(pass('refine'));
+    pi.enqueue(fail('resolve'));
+
+    const result = await runIssueIteration(db, deps, {
+      issue: { id: issueId, title: 'Отчётная задача', pipelineSteps: ['refine', 'resolve'] },
+      iteration: {
+        id: iteration.id,
+        issueId,
+        number: iteration.number,
+        context: iteration.context,
+        steps: ['refine', 'resolve'],
+      },
+      repositories,
+      repoWorkspaces: [],
+    });
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+
+    const reportPath = join(root, issueId, 'report-1.md');
+    expect(existsSync(reportPath)).toBe(true);
+    const content = readFileSync(reportPath, 'utf8');
+    expect(content).toContain('# Задача: Отчётная задача');
+    expect(content).toContain('# Итерация #1');
+    expect(content).toContain('**Статус:** failed');
+    expect(content).toContain('### refine (попытка 1)');
+    expect(content).toContain('**Статус:** ok');
+    expect(content).toContain('### resolve (попытка 1)');
+    expect(content).toContain('**Статус:** fail');
+    expect(content).toContain('refine ok');
+    expect(content).toContain('resolve no');
+  });
+});
+
+describe('runIssueIteration — run_instructions через анализатор', () => {
+  const roots: string[] = [];
+
+  const tempRoot = (): string => {
+    const root = mkdtempSync(join(tmpdir(), 'ir-run-instr-'));
+    roots.push(root);
+    return root;
+  };
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  const seedRepository = (
+    db: Db,
+    url: string,
+    status: 'unknown' | 'generated' | 'failed',
+  ): void => {
+    db.insert(repositoriesTable)
+      .values({
+        id: randomUUID(),
+        url,
+        connection_status: 'ok',
+        run_instructions: null,
+        run_instructions_status: status,
+        created_at: NOW,
+        updated_at: NOW,
+      })
+      .run();
+  };
+
+  const repoRow = (db: Db, url: string) =>
+    db
+      .select()
+      .from(repositoriesTable)
+      .where(eq(repositoriesTable.url, url))
+      .get();
+
+  const progressOf = (events: SSEEvent[]): unknown[] =>
+    events
+      .filter((event) => event.type === 'workspace_progress')
+      .map((event) => JSON.parse(event.data) as unknown);
+
+  const runInput = (
+    issueId: string,
+    iteration: Iteration,
+    repoWorkspaces: GitPrepareResult['repoWorkspaces'],
+  ) => ({
+    issue: { id: issueId, title: 'Анализ', pipelineSteps: ['resolve'] as PipelineStep[] },
+    iteration: {
+      id: iteration.id,
+      issueId,
+      number: iteration.number,
+      context: iteration.context,
+      steps: iteration.steps,
+    },
+    repositories,
+    repoWorkspaces,
+  });
+
+  it('status unknown: bootstrapper сохраняет generated и шлёт analyzing', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    seedRepository(db, repositories[0].repository_url, 'unknown');
+    const agent = new FakeBootstrapperAgent({
+      success: true,
+      instructions: '# Run\nnpm ci',
+    });
+    deps.bootstrapperFactory = () => agent;
+    pi.enqueue(pass('resolve'));
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+    const result = await runIssueIteration(
+      db,
+      deps,
+      runInput(issueId, iteration, repoWorkspaces),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(agent.calls).toHaveLength(1);
+    expect(agent.calls[0]).toMatchObject({
+      repoUrl: repositories[0].repository_url,
+      repoName: 'app',
+    });
+    const row = repoRow(db, repositories[0].repository_url);
+    expect(row?.run_instructions_status).toBe('generated');
+    expect(row?.run_instructions).toBe('# Run\nnpm ci');
+    expect(progressOf(events)).toContainEqual({
+      step: 'bootstrapping',
+      repo: 'app',
+      status: 'done',
+      message: 'Инструкции сохранены',
+    });
+  });
+
+  it('status generated: bootstrapper не вызывается, инструкции не трогаются', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    seedRepository(db, repositories[0].repository_url, 'generated');
+    const agent = new FakeBootstrapperAgent({ success: true, instructions: 'new' });
+    deps.bootstrapperFactory = () => agent;
+    pi.enqueue(pass('resolve'));
+
+    const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+    const result = await runIssueIteration(
+      db,
+      deps,
+      runInput(issueId, iteration, repoWorkspaces),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(agent.calls).toHaveLength(0);
+    const row = repoRow(db, repositories[0].repository_url);
+    expect(row?.run_instructions_status).toBe('generated');
+    expect(row?.run_instructions).toBeNull();
+  });
+
+  it('фейл анализа: статус failed, инструкция очищена', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    seedRepository(db, repositories[0].repository_url, 'unknown');
+    const agent = new FakeBootstrapperAgent({
+      success: false,
+      instructions: null,
+      error: 'no lockfile',
+    });
+    deps.bootstrapperFactory = () => agent;
+    pi.enqueue(pass('resolve'));
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+    const result = await runIssueIteration(
+      db,
+      deps,
+      runInput(issueId, iteration, repoWorkspaces),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    const row = repoRow(db, repositories[0].repository_url);
+    expect(row?.run_instructions_status).toBe('failed');
+    expect(row?.run_instructions).toBeNull();
+    expect(progressOf(events)).toContainEqual({
+      step: 'bootstrapping',
+      repo: 'app',
+      status: 'error',
+      message: 'no lockfile',
+    });
+  });
+
+  it('bootstrap_enabled:false → clone есть, анализ и install пропущены', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse, git } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    seedRepository(db, repositories[0].repository_url, 'unknown');
+    const agent = new FakeBootstrapperAgent({
+      success: true,
+      instructions: '# Run\nnpm ci',
+    });
+    deps.bootstrapperFactory = () => agent;
+    pi.enqueue(pass('resolve'));
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    const disabledRepositories = [
+      { ...repositories[0], bootstrap_enabled: false },
+    ];
+    const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories: disabledRepositories,
+    });
+    const result = await runIssueIteration(db, deps, {
+      ...runInput(issueId, iteration, repoWorkspaces),
+      repositories: disabledRepositories,
+    });
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // Клонирование выполнено, но анализатор не вызван и install не запускался.
+    expect(git.prepares).toHaveLength(1);
+    expect(agent.calls).toHaveLength(0);
+    expect(git.dependenciesInstalled).toHaveLength(0);
+    // Инструкции не трогаются — репозиторий даже не анализировался.
+    expect(repoRow(db, repositories[0].repository_url)?.run_instructions_status).toBe(
+      'unknown',
+    );
+    expect(progressOf(events)).toContainEqual({
+      step: 'bootstrapping',
+      repo: 'app',
+      status: 'done',
+      message: 'пропущен',
+    });
+    expect(progressOf(events)).toContainEqual({
+      step: 'installing',
+      repo: 'app',
+      status: 'done',
+      message: 'пропущен',
+    });
+  });
+
+  it('вывод анализатора публикуется как bootstrap_log с именем репозитория', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    seedRepository(db, repositories[0].repository_url, 'unknown');
+    const agent = new FakeBootstrapperAgent({
+      success: true,
+      instructions: '# Run',
+    });
+    deps.bootstrapperFactory = (params) => {
+      params.onStdout?.('installing deps\n');
+      params.onStderr?.('warning\n');
+      return agent;
+    };
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+
+    const logs = events.filter((event) => event.type === 'bootstrap_log');
+    expect(logs).toHaveLength(2);
+    expect(logs.map((event) => JSON.parse(event.data))).toEqual([
+      { repo: 'app', text: 'installing deps\n', kind: 'stdout' },
+      { repo: 'app', text: 'warning\n', kind: 'stderr' },
+    ]);
+    expect(logs[0].iterationId).toBe(iteration.id);
+    // Логи бутстрапера не маскируются под шаговые `log`-события.
+    expect(events.some((event) => event.type === 'log')).toBe(false);
+  });
+
+  it('пробрасывает bootstrapperTimeoutMs в фабрику анализатора', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    seedRepository(db, repositories[0].repository_url, 'unknown');
+    const seen: Array<number | undefined> = [];
+    deps.bootstrapperTimeoutMs = 123_456;
+    deps.bootstrapperFactory = (params) => {
+      seen.push(params.timeoutMs);
+      return new FakeBootstrapperAgent({
+        success: true,
+        instructions: '# Run\nnpm ci',
+      });
+    };
+    pi.enqueue(pass('resolve'));
+
+    const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+    await runIssueIteration(
+      db,
+      deps,
+      runInput(issueId, iteration, repoWorkspaces),
+    );
+
+    // Таймаут доехал до фабрики: без него зависший pi держал бы prepare вечно.
+    expect(seen).toEqual([123_456]);
   });
 });

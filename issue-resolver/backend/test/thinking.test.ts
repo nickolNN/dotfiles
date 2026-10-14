@@ -249,6 +249,7 @@ describe('thinking_level — runIssueIteration → pi.run', () => {
           steps,
         },
         repositories: REPOSITORIES,
+        repoWorkspaces: [],
         thinking_level: 'medium',
         step_thinking_levels: { review: 'high' },
       },
@@ -313,6 +314,7 @@ describe('thinking_level — runIssueIteration → pi.run', () => {
           steps,
         },
         repositories: REPOSITORIES,
+        repoWorkspaces: [],
       },
     );
 

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -84,6 +85,7 @@ function jsonResponse(
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -875,6 +877,7 @@ describe('TaskDetail', () => {
           repository_url: 'git@github.com:org/repo.git',
           branch_name: 'dev',
           create_mr: true,
+          bootstrap_enabled: false,
           created_at: '2026-10-09T00:00:00.000Z',
           updated_at: '2026-10-09T00:00:00.000Z',
         },
@@ -883,6 +886,7 @@ describe('TaskDetail', () => {
           repository_url: 'git@github.com:org/other.git',
           branch_name: 'main',
           create_mr: false,
+          bootstrap_enabled: false,
           created_at: '2026-10-09T00:00:00.000Z',
           updated_at: '2026-10-09T00:00:00.000Z',
         },
@@ -900,7 +904,7 @@ describe('TaskDetail', () => {
     );
 
     render(<TaskDetail issueId="issue-1" />);
-    await screen.findByText('git@github.com:org/repo.git');
+    await screen.findByText('org/repo');
 
     expect(screen.getAllByTestId('repo-mr-badge')).toHaveLength(1);
     expect(screen.getByText('MR')).toBeInTheDocument();
@@ -915,6 +919,7 @@ describe('TaskDetail', () => {
           repository_url: 'git@github.com:org/repo.git',
           branch_name: 'dev',
           create_mr: true,
+          bootstrap_enabled: false,
           created_at: '2026-10-09T00:00:00.000Z',
           updated_at: '2026-10-09T00:00:00.000Z',
         },
@@ -1023,6 +1028,7 @@ describe('TaskDetail', () => {
           repository_url: 'git@github.com:org/repo.git',
           branch_name: 'dev',
           create_mr: true,
+          bootstrap_enabled: false,
           created_at: '2026-10-09T00:00:00.000Z',
           updated_at: '2026-10-09T00:00:00.000Z',
         },
@@ -1075,7 +1081,7 @@ describe('TaskDetail', () => {
     });
   });
 
-  it('хедер: «Создана»/«Обновлена» с иконками справа от кнопки назад', async () => {
+  it('хедер: «Создана»/«Обновлена» с иконками', async () => {
     const issue = makeIssue({
       created_at: '2026-01-02T03:04:05.000Z',
       updated_at: '2026-02-03T04:05:06.000Z',
@@ -1091,7 +1097,7 @@ describe('TaskDetail', () => {
       }),
     );
 
-    render(<TaskDetail issueId="issue-1" onBack={() => {}} />);
+    render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
     const created = screen.getByTestId('issue-created-at');
@@ -1107,10 +1113,6 @@ describe('TaskDetail', () => {
     expect(updated.querySelector('time')?.getAttribute('datetime')).toBe(
       issue.updated_at,
     );
-
-    // Оба пункта — в одной строке с кнопкой назад.
-    const back = screen.getByRole('button', { name: '← Мои задачи' });
-    expect(back.parentElement).toBe(created.parentElement?.parentElement);
 
     // Даты больше не дублируются отдельной карточкой с текстом.
     expect(screen.queryByText(/Создана:/)).toBeNull();
@@ -1163,7 +1165,9 @@ describe('TaskDetail', () => {
     await screen.findByText('Итерация #1');
 
     const form = screen.getByRole('heading', { name: 'Новая итерация' });
-    const list = screen.getByRole('heading', { name: 'Итерации' });
+    // Секция итераций больше не обёрнута в отдельный остров с заголовком
+    // «Итерации»; список — это <ul>, карточки — <li role="button">.
+    const list = screen.getByText('Итерация #1');
     expect(
       form.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -1189,7 +1193,10 @@ describe('TaskDetail', () => {
 
     const task = screen.getByTestId('task-island');
     const newIteration = screen.getByTestId('new-iteration-island');
-    const iterations = screen.getByTestId('iterations-island');
+    // Островок итераций — теперь сама карточка-<li> (у списка нет своей рамки).
+    const iterations = screen
+      .getByText('Итерация #1')
+      .closest('li') as HTMLElement;
 
     // Три прозрачные карточки в одном стиле, без чёрного фона внутри.
     for (const island of [task, newIteration, iterations]) {
@@ -1199,18 +1206,14 @@ describe('TaskDetail', () => {
       expect(island.className).not.toContain('bg-[#000200]');
     }
 
-    // Корневая секция — без `.panel` (внешняя зелёная обёртка убрана).
-    const root = task.closest('section') as HTMLElement;
+    // Корневая обёртка — без `.panel` (внешняя зелёная обёртка убрана).
+    const root = task.closest('div.mx-auto') as HTMLElement;
+    expect(root).not.toBeNull();
     expect(root.className).not.toContain('panel');
 
     // Заголовок задачи и служебный ряд — внутри первого островка.
     expect(
       screen.getByText('Fix login bug').closest('[data-testid="task-island"]'),
-    ).not.toBeNull();
-    expect(
-      screen
-        .getByText('← Мои задачи')
-        .closest('[data-testid="task-island"]'),
     ).not.toBeNull();
 
     // Порядок: задача → новая итерация → итерации.
@@ -1445,5 +1448,117 @@ describe('TaskDetail', () => {
       expect(form.getAll('files')).toHaveLength(1);
       expect(JSON.parse(String(form.get('payload'))).context).toBe('ctx');
     });
+  });
+});
+
+describe('TaskDetail — фоновое удаление', () => {
+  /** Фейк EventSource: запоминает URL/закрытие и отдаёт onmessage вручную. */
+  class FakeEventSource {
+    static instances: FakeEventSource[] = [];
+
+    onmessage: ((event: MessageEvent) => void) | null = null;
+    onerror: ((event: unknown) => void) | null = null;
+    close = vi.fn();
+
+    constructor(readonly url: string) {
+      FakeEventSource.instances.push(this);
+    }
+
+    emit(event: unknown): void {
+      this.onmessage?.({ data: JSON.stringify(event) } as MessageEvent);
+    }
+  }
+
+  it('issue_deleting → заглушка «Задача удаляется...», issue_deleted → уход на список', async () => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/iterations')) {
+          return Promise.resolve(jsonResponse([makeIteration()]));
+        }
+        return Promise.resolve(jsonResponse(makeIssue()));
+      }),
+    );
+
+    window.location.hash = '';
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const stream = FakeEventSource.instances.find((source) =>
+      source.url.endsWith('/issues/issue-1/stream'),
+    );
+    expect(stream).toBeDefined();
+
+    stream?.emit({
+      type: 'issue_deleting',
+      issueId: 'issue-1',
+      data: JSON.stringify({ phase: 'stopping_processes' }),
+      ts: '2026-10-13T00:00:00.000Z',
+    });
+
+    expect(await screen.findByTestId('task-deleting')).toHaveTextContent(
+      'Задача удаляется...',
+    );
+    expect(screen.queryByText('Fix login bug')).not.toBeInTheDocument();
+
+    stream?.emit({
+      type: 'issue_deleted',
+      issueId: 'issue-1',
+      data: JSON.stringify({ issueId: 'issue-1' }),
+      ts: '2026-10-13T00:00:01.000Z',
+    });
+
+    await waitFor(() => expect(window.location.hash).toBe('#/'));
+  });
+
+  it('shows timeout error if issue_deleted never arrives', async () => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/iterations')) {
+          return Promise.resolve(jsonResponse([makeIteration()]));
+        }
+        return Promise.resolve(jsonResponse(makeIssue()));
+      }),
+    );
+
+    window.location.hash = '';
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    vi.useFakeTimers();
+    const stream = FakeEventSource.instances.find((source) =>
+      source.url.endsWith('/issues/issue-1/stream'),
+    );
+    expect(stream).toBeDefined();
+
+    act(() => {
+      stream?.emit({
+        type: 'issue_deleting',
+        issueId: 'issue-1',
+        data: JSON.stringify({ phase: 'stopping_processes' }),
+        ts: '2026-10-13T00:00:00.000Z',
+      });
+    });
+    expect(screen.getByTestId('task-deleting')).toHaveTextContent(
+      'Задача удаляется...',
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+
+    expect(screen.getByTestId('delete-timeout')).toHaveTextContent(
+      'Таймаут удаления. Задача может быть удалена частично. Обновите страницу.',
+    );
+    expect(screen.queryByTestId('task-deleting')).not.toBeInTheDocument();
+    expect(screen.getByText('Fix login bug')).toBeInTheDocument();
+    expect(window.location.hash).not.toBe('#/');
   });
 });

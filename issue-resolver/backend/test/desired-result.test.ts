@@ -128,7 +128,7 @@ async function writeSnapshot(
 }
 
 describe('POST /issues — desired_result', () => {
-  it('не указан → сохраняется как md, pr из шагов убирается', async () => {
+  it('не указан → сохраняется как md, pr остаётся если create_mr:true', async () => {
     const app = makeApp();
 
     const created = await post(app, {
@@ -139,7 +139,8 @@ describe('POST /issues — desired_result', () => {
     expect(created.statusCode).toBe(201);
     const body = created.json();
     expect(body.desired_result).toBe('md');
-    expect(body.pipeline_steps).not.toContain('pr');
+    // create_mr:true → pr в шагах (desired_result на pr не влияет)
+    expect(body.pipeline_steps).toContain('pr');
 
     const fetched = await app.inject({
       method: 'GET',
@@ -169,29 +170,20 @@ describe('POST /issues — desired_result', () => {
     expect(fetched.json().desired_result).toBe('md');
   });
 
-  it("desired_result:'pr' с репозиторием → pr гарантирован и сохранён", async () => {
+  it("desired_result:'pr' больше не в enum → 400", async () => {
     const app = makeApp();
 
-    const created = await post(app, {
-      title: 'Нужен PR',
+    const response = await post(app, {
+      title: 'Устаревший PR',
       desired_result: 'pr',
       repositories: [REPOSITORY],
     });
 
-    expect(created.statusCode).toBe(201);
-    const body = created.json();
-    expect(body.desired_result).toBe('pr');
-    expect(body.pipeline_steps).toContain('pr');
-
-    const fetched = await app.inject({
-      method: 'GET',
-      url: `${ROUTE_PATH}/${body.id}`,
-    });
-    expect(fetched.json().desired_result).toBe('pr');
-    expect(fetched.json().pipeline_steps).toContain('pr');
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain('desired_result');
   });
 
-  it("desired_result:'html' + create_mr:true → pr из шагов убран", async () => {
+  it("desired_result:'html' + create_mr:true → pr добавляется по create_mr", async () => {
     const app = makeApp();
 
     const created = await post(app, {
@@ -201,21 +193,7 @@ describe('POST /issues — desired_result', () => {
     });
 
     expect(created.statusCode).toBe(201);
-    expect(created.json().pipeline_steps).not.toContain('pr');
-  });
-
-  it("desired_result:'pr' без репозиториев → 400 «PR требует хотя бы один репозиторий»", async () => {
-    const app = makeApp();
-
-    const response = await post(app, {
-      title: 'PR без репо',
-      desired_result: 'pr',
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain(
-      'PR требует хотя бы один репозиторий',
-    );
+    expect(created.json().pipeline_steps).toContain('pr');
   });
 
   it('невалидное значение enum → 400', async () => {
@@ -277,36 +255,6 @@ describe('GET /issues/:id/result', () => {
     expect(response.headers['content-type']).toContain('text/markdown');
     expect(response.headers['content-disposition']).toBe('inline');
     expect(response.body).toBe('# Отчёт');
-  });
-
-  it('200: pr-снапшот → result.json как application/json, inline', async () => {
-    const root = await makeTempDir();
-    const db = createDb(':memory:');
-    const app = buildApp(db, { workspaceRoot: root });
-    openApps.push(app);
-    seedIssue(db, 'issue-pr', 'pr');
-    const iterationId = seedCompletedIteration(db, 'issue-pr', 1);
-    const payload = JSON.stringify({
-      merge_requests: [
-        {
-          repository_url: 'https://github.com/acme/app.git',
-          url: 'https://github.com/acme/app/pull/7',
-          title: 'feat: результат',
-          message: 'готово',
-        },
-      ],
-    });
-    await writeSnapshot(root, 'issue-pr', iterationId, 'result.json', payload);
-
-    const response = await app.inject({
-      method: 'GET',
-      url: `${ROUTE_PATH}/issue-pr/result`,
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.headers['content-type']).toContain('application/json');
-    expect(response.headers['content-disposition']).toBe('inline');
-    expect(response.json()).toEqual(JSON.parse(payload));
   });
 
   it('download: attachment; filename="report.md" из снапшота', async () => {

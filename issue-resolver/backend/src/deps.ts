@@ -8,9 +8,44 @@ import { HttpJiraClient } from './jira/client';
 import { RpcPiRunner } from './pi/rpc-runner';
 import { InMemoryStepSessionRegistry } from './pi/session-registry';
 import { HttpMrClient } from './pr/mr';
+import { PiBootstrapperAgent } from './workflow/bootstrapper';
+import type { BootstrapperFactory } from './workflow/engine';
+import {
+  BOOTSTRAPPER_TIMEOUT_ENV,
+  resolveBootstrapperTimeoutMs,
+} from './workflow/timeout';
 import { DEFAULT_WORKSPACE_ROOT } from './workspace/paths';
 
 const DEFAULT_DOCKER_SOCKET = '/var/run/docker.sock';
+
+/**
+ * Продуктовая фабрика агента-анализатора: переиспользует тот же экземпляр
+ * `PiRunner`, что и шаги конвейера, и пишет `run_instructions` через порт БД
+ * (создаётся в `runIssueIteration`). Без неё анализ не запускается (фейковый
+ * дефолт/тесты).
+ */
+function bootstrapperFactoryFor(
+  pi: RpcPiRunner,
+  defaultTimeoutMs: number,
+): BootstrapperFactory {
+  return ({
+    containerName,
+    hostWorkspaceDir,
+    model,
+    timeoutMs,
+    onStdout,
+    onStderr,
+  }) =>
+    new PiBootstrapperAgent({
+      pi,
+      containerName,
+      hostWorkspaceDir,
+      model,
+      timeoutMs: timeoutMs ?? defaultTimeoutMs,
+      onStdout,
+      onStderr,
+    });
+}
 
 /**
  * Дефолтный корень workspace-папок в локальном режиме (без Docker).
@@ -38,13 +73,23 @@ const DEFAULT_LOCAL_WORKSPACE_ROOT =
  */
 export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
   if (env.ISSUE_RESOLVER_LOCAL === '1') {
+    const pi = new RpcPiRunner('resolve', 'local');
+    const bootstrapperTimeoutMs = resolveBootstrapperTimeoutMs(
+      env[BOOTSTRAPPER_TIMEOUT_ENV],
+    );
     return {
       container: new LocalContainerController(),
       git: new GitCliService(originalsRootFromEnv(env)),
-      pi: new RpcPiRunner('resolve', 'local'),
-      mr: new HttpMrClient(env.MR_TOKEN || ''),
+      pi,
+      mr: new HttpMrClient(env.MR_TOKEN || '', {
+        bitbucket: env.BITBUCKET_TOKEN || '',
+        github: env.GITHUB_TOKEN || '',
+        gitlab: env.GITLAB_TOKEN || '',
+      }),
       jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
       control: new InMemoryStepSessionRegistry(),
+      bootstrapperFactory: bootstrapperFactoryFor(pi, bootstrapperTimeoutMs),
+      bootstrapperTimeoutMs,
       workspaceRoot:
         env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
         (env.ISSUE_RESOLVER_DATA_DIR
@@ -59,14 +104,24 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
   const docker = new Dockerode({
     socketPath: env.DOCKER_SOCKET || DEFAULT_DOCKER_SOCKET,
   });
+  const pi = new RpcPiRunner();
+  const bootstrapperTimeoutMs = resolveBootstrapperTimeoutMs(
+    env[BOOTSTRAPPER_TIMEOUT_ENV],
+  );
 
   return {
     container: new DockerodeContainerController(docker),
     git: new GitCliService(originalsRootFromEnv(env)),
-    pi: new RpcPiRunner(),
-    mr: new HttpMrClient(env.MR_TOKEN || ''),
+    pi,
+    mr: new HttpMrClient(env.MR_TOKEN || '', {
+      bitbucket: env.BITBUCKET_TOKEN || '',
+      github: env.GITHUB_TOKEN || '',
+      gitlab: env.GITLAB_TOKEN || '',
+    }),
     jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
     control: new InMemoryStepSessionRegistry(),
+    bootstrapperFactory: bootstrapperFactoryFor(pi, bootstrapperTimeoutMs),
+    bootstrapperTimeoutMs,
     local: false,
     workspaceRoot:
       env.ISSUE_RESOLVER_WORKSPACE_ROOT ||

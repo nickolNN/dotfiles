@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import App from './App';
 
 const issue = {
@@ -29,6 +23,9 @@ function stubFetch(issues = [issue]) {
     if (url.endsWith('/iterations')) {
       return Promise.resolve({ ok: true, json: async () => [] });
     }
+    if (url.endsWith('/repositories')) {
+      return Promise.resolve({ ok: true, json: async () => [] });
+    }
     if (url.endsWith('/issues')) {
       return Promise.resolve({ ok: true, json: async () => issues });
     }
@@ -36,10 +33,6 @@ function stubFetch(issues = [issue]) {
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
-}
-
-function mobileNav() {
-  return screen.getByRole('navigation', { name: 'Мобильная навигация' });
 }
 
 afterEach(() => {
@@ -55,9 +48,7 @@ describe('App routing', () => {
     setHash('#/tasks');
     render(<App />);
 
-    expect(
-      await screen.findByText('История запусков Issue Resolver'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
     expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument();
   });
 
@@ -66,7 +57,7 @@ describe('App routing', () => {
     setHash('#/tasks/abc');
     render(<App />);
 
-    expect(await screen.findByText('Итерации')).toBeInTheDocument();
+    expect(await screen.findByText('Итераций пока нет.')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/issues/abc'),
     );
@@ -77,7 +68,7 @@ describe('App routing', () => {
     setHash('#/tasks/abc/result');
     render(<App />);
 
-    expect(await screen.findByText('Итерации')).toBeInTheDocument();
+    expect(await screen.findByText('Итераций пока нет.')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/issues/abc'),
     );
@@ -88,9 +79,7 @@ describe('App routing', () => {
     setHash('');
     render(<App />);
 
-    expect(
-      await screen.findByRole('heading', { name: 'Мои задачи' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
     expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument();
   });
 
@@ -99,25 +88,23 @@ describe('App routing', () => {
     setHash('#/nope');
     render(<App />);
 
-    expect(
-      await screen.findByRole('heading', { name: 'Мои задачи' }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
     expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument();
   });
 
-  it('navigates to #/tasks from the nav item', async () => {
+  it('navigates to #/tasks from the top nav item', async () => {
     stubFetch();
-    setHash('');
+    setHash('#/repositories');
     render(<App />);
 
     fireEvent.click(
-      within(mobileNav()).getByRole('button', { name: 'Мои задачи' }),
+      within(screen.getByTestId('desktop-nav')).getByRole('button', {
+        name: 'Задачи',
+      }),
     );
 
     expect(window.location.hash).toBe('#/tasks');
-    expect(
-      await screen.findByText('История запусков Issue Resolver'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
   });
 
   it('pushes #/tasks/:issueId when a task is opened', async () => {
@@ -128,7 +115,7 @@ describe('App routing', () => {
     fireEvent.click(await screen.findByText('Fix login bug'));
 
     expect(window.location.hash).toBe('#/tasks/issue-1');
-    expect(await screen.findByText('Итерации')).toBeInTheDocument();
+    expect(await screen.findByText('Итераций пока нет.')).toBeInTheDocument();
   });
 
   it('updates the view when the hash changes', async () => {
@@ -141,22 +128,8 @@ describe('App routing', () => {
     window.history.replaceState(null, '', '#/tasks');
     window.dispatchEvent(new Event('hashchange'));
 
-    expect(
-      await screen.findByText('История запусков Issue Resolver'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
     expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument();
   });
 
-  it('returns to #/tasks from TaskDetail back button', async () => {
-    stubFetch();
-    setHash('#/tasks/issue-1');
-    render(<App />);
-
-    fireEvent.click(await screen.findByText('← Мои задачи'));
-
-    expect(window.location.hash).toBe('#/tasks');
-    expect(
-      await screen.findByText('История запусков Issue Resolver'),
-    ).toBeInTheDocument();
-  });
 });

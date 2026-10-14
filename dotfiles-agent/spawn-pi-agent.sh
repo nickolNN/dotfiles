@@ -157,6 +157,7 @@ create_container() {
   fi
 
   docker run -d --name "${CONTAINER}" \
+    --init \
     ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
     ${NET_ARGS[@]+"${NET_ARGS[@]}"} \
     "${MOUNTS[@]}" \

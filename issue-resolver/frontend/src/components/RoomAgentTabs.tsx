@@ -6,6 +6,7 @@ import { subscribeToAgentEvents } from '../api/sse';
 import AutoScrollBox from './AutoScrollBox';
 import { formatTokens } from './SessionStatsBar';
 import SessionView from './SessionView';
+import { formatDuration, useNow } from '../lib/time';
 
 export interface RoomAgentTabsProps {
   /** Итерация, чьих агентов комнаты показываем. */
@@ -84,30 +85,6 @@ function tabLabel(agent: RoomAgent): string {
   return agent.label;
 }
 
-/** Живой тик раз в секунду, пока `active`; останавливается на false/unmount. */
-function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [active]);
-  return now;
-}
-
-/** Человекочитаемая длительность: `45с` / `3м 12с` / `1ч 4м`. */
-function formatDuration(ms: number | null): string {
-  if (ms === null || !Number.isFinite(ms) || ms < 0) return '';
-  const totalSec = Math.floor(ms / 1000);
-  if (totalSec < 60) return `${totalSec}с`;
-  const minutes = Math.floor(totalSec / 60);
-  const seconds = totalSec % 60;
-  if (minutes < 60) return `${minutes}м ${seconds}с`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}ч ${minutes % 60}м`;
-}
-
 /** Компактная стоимость: `$0` / `$0.0123` / `$1.5`. */
 function formatCost(total: number): string {
   if (!Number.isFinite(total) || total <= 0) return '$0';
@@ -137,14 +114,17 @@ function agentDurationMs(
 }
 
 /**
- * Выбирает агента по умолчанию: сохраняем прежний выбор, иначе — первый
- * ещё работающий, иначе — первый в стабильном порядке.
+ * Выбирает агента по умолчанию: сохраняем прежний выбор, если он ещё
+ * работает; иначе — первый ещё работающий; иначе — первый в порядке.
  */
 function pickDefaultAgentId(
   agents: RoomAgent[],
   current: string | null,
 ): string | null {
-  if (current && agents.some((agent) => agent.id === current)) return current;
+  if (current) {
+    const currentAgent = agents.find((agent) => agent.id === current);
+    if (currentAgent && currentAgent.status === 'running') return current;
+  }
   return (
     agents.find((agent) => agent.status === 'running')?.id ?? agents[0]?.id ?? null
   );
@@ -270,6 +250,12 @@ export default function RoomAgentTabs({
           ...current,
           [key]: [...(current[key] ?? []), payload.event].slice(-500),
         }));
+      },
+      onStepStatus: () => {
+        if (disposed) return;
+        // Агент изменил статус (завершился/упал) — немедленно перечитываем
+        // список, без ожидания полла. pickDefaultAgentId переключит вкладку.
+        setPollTick((tick) => tick + 1);
       },
     });
 

@@ -186,6 +186,7 @@ if [ "${NEED_CREATE}" = true ]; then
   fi
 
   docker run -d --name "${CONTAINER}" \
+    --init \
     ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
     ${NET_ARGS[@]+"${NET_ARGS[@]}"} \
     "${MOUNTS[@]}" \

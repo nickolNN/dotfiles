@@ -152,8 +152,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('TaskDetail — интерактивная модалка вопроса', () => {
-  it('pending select-вопрос: модалка с radio по options', async () => {
+describe('TaskDetail — интерактивный вопрос (inline)', () => {
+  it('pending select-вопрос: inline с radio по options', async () => {
     stubFetch(undefined, [
       makeStepRun({
         events: [{ type: 'question', ...question() }],
@@ -163,17 +163,17 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const modal = await screen.findByTestId('question-modal');
+    const inline = await screen.findByTestId('inline-question');
+    expect(inline).toHaveTextContent('Какой подход выбрать?');
     expect(
-      within(modal).getByTestId('question-prompt'),
-    ).toHaveTextContent('Какой подход выбрать?');
-    expect(within(modal).getByRole('radio', { name: 'вариант-a' })).toBeChecked();
+      within(inline).getByRole('radio', { name: 'вариант-a' }),
+    ).toBeChecked();
     expect(
-      within(modal).getByRole('radio', { name: 'вариант-b' }),
+      within(inline).getByRole('radio', { name: 'вариант-b' }),
     ).not.toBeChecked();
   });
 
-  it('pending input-вопрос: модалка с текстовым полем', async () => {
+  it('pending input-вопрос: inline с текстовым полем', async () => {
     stubFetch(undefined, [
       makeStepRun({
         events: [
@@ -194,17 +194,21 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const modal = await screen.findByTestId('question-modal');
-    const field = within(modal).getByLabelText('Ответ');
+    const inline = await screen.findByTestId('inline-question');
+    const field = within(inline).getByLabelText('Ответ');
     expect(field).toHaveAttribute('placeholder', 'feature/...');
     // Пустое значение — «Ответить» заблокировано.
-    expect(within(modal).getByRole('button', { name: 'Ответить' })).toBeDisabled();
+    expect(
+      within(inline).getByRole('button', { name: 'Ответить' }),
+    ).toBeDisabled();
 
     fireEvent.change(field, { target: { value: 'feature/login' } });
-    expect(within(modal).getByRole('button', { name: 'Ответить' })).toBeEnabled();
+    expect(
+      within(inline).getByRole('button', { name: 'Ответить' }),
+    ).toBeEnabled();
   });
 
-  it('live-вопрос приходит по SSE и открывает модалку', async () => {
+  it('live-вопрос приходит по SSE и появляется inline', async () => {
     stubFetch(undefined, [makeStepRun({ events: [] })]);
 
     render(<TaskDetail issueId="issue-1" />);
@@ -224,7 +228,7 @@ describe('TaskDetail — интерактивная модалка вопрос�
       });
     });
 
-    expect(await screen.findByTestId('question-modal')).toBeInTheDocument();
+    expect(await screen.findByTestId('inline-question')).toBeInTheDocument();
   });
 
   it('submit: POST /iterations/iter-1/ui-response с выбранным value', async () => {
@@ -235,9 +239,9 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const modal = await screen.findByTestId('question-modal');
-    fireEvent.click(within(modal).getByRole('radio', { name: 'вариант-b' }));
-    fireEvent.click(within(modal).getByRole('button', { name: 'Ответить' }));
+    const inline = await screen.findByTestId('inline-question');
+    fireEvent.click(within(inline).getByRole('radio', { name: 'вариант-b' }));
+    fireEvent.click(within(inline).getByRole('button', { name: 'Ответить' }));
 
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -274,9 +278,11 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const modal = await screen.findByTestId('question-modal');
-    expect(within(modal).getByRole('button', { name: 'Да' })).toBeInTheDocument();
-    fireEvent.click(within(modal).getByRole('button', { name: 'Да' }));
+    const inline = await screen.findByTestId('inline-question');
+    expect(
+      within(inline).getByRole('button', { name: 'Да' }),
+    ).toBeInTheDocument();
+    fireEvent.click(within(inline).getByRole('button', { name: 'Да' }));
 
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -298,8 +304,8 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const modal = await screen.findByTestId('question-modal');
-    fireEvent.click(within(modal).getByTestId('question-cancel'));
+    const inline = await screen.findByTestId('inline-question');
+    fireEvent.click(within(inline).getByTestId('question-cancel'));
 
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(
@@ -313,7 +319,7 @@ describe('TaskDetail — интерактивная модалка вопрос�
     });
   });
 
-  it('отвеченный id не показывается снова — открывается следующий вопрос', async () => {
+  it('все неотвеченные вопросы видны одновременно стеком', async () => {
     stubFetch(undefined, [
       makeStepRun({
         events: [
@@ -326,31 +332,44 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    expect(
-      within(await screen.findByTestId('question-modal')).getByTestId(
-        'question-prompt',
-      ),
-    ).toHaveTextContent('Первый?');
+    const inline = await screen.findAllByTestId('inline-question');
+    expect(inline).toHaveLength(2);
+    expect(inline[0]).toHaveTextContent('Первый?');
+    expect(inline[1]).toHaveTextContent('Второй?');
+    // Отдельных баннеров по шагам больше нет.
+    expect(screen.queryByTestId('step-pending-question')).toBeNull();
+  });
 
-    fireEvent.click(
-      within(screen.getByTestId('question-modal')).getByRole('button', {
-        name: 'Ответить',
+  it('отвеченный вопрос исчезает — остаётся следующий', async () => {
+    stubFetch(undefined, [
+      makeStepRun({
+        events: [
+          { type: 'question', ...question({ id: 'q-1', title: 'Первый?' }) },
+          { type: 'question', ...question({ id: 'q-2', title: 'Второй?' }) },
+        ],
       }),
+    ]);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const inline = await screen.findAllByTestId('inline-question');
+    expect(inline).toHaveLength(2);
+
+    // Гасим первый — второй вопрос остаётся видимым.
+    fireEvent.click(
+      within(inline[0]).getByRole('button', { name: 'Ответить' }),
     );
 
-    // Первый гасится, но на очереди второй — модалка не исчезает, а меняет вопрос.
     await waitFor(() => {
-      const modal = screen.getByTestId('question-modal');
-      expect(within(modal).getByTestId('question-prompt')).toHaveTextContent(
-        'Второй?',
-      );
-      expect(within(modal).getByTestId('question-prompt')).not.toHaveTextContent(
-        'Первый?',
-      );
+      const remaining = screen.getAllByTestId('inline-question');
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]).toHaveTextContent('Второй?');
+      expect(remaining[0]).not.toHaveTextContent('Первый?');
     });
   });
 
-  it('шаг pending, итерация running: модалка открыта и radio кликабелен', async () => {
+  it('шаг pending, итерация running: inline-вопрос и radio кликабелен', async () => {
     stubFetch(
       undefined,
       [
@@ -365,14 +384,14 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const modal = await screen.findByTestId('question-modal');
-    const optionB = within(modal).getByRole('radio', { name: 'вариант-b' });
+    const inline = await screen.findByTestId('inline-question');
+    const optionB = within(inline).getByRole('radio', { name: 'вариант-b' });
     expect(optionB).not.toBeChecked();
 
     fireEvent.click(optionB);
     expect(optionB).toBeChecked();
     expect(
-      within(modal).getByRole('radio', { name: 'вариант-a' }),
+      within(inline).getByRole('radio', { name: 'вариант-a' }),
     ).not.toBeChecked();
   });
 
@@ -393,10 +412,10 @@ describe('TaskDetail — интерактивная модалка вопрос�
     // Завершённый шаг показывает саммари/заглушку, а не живой вывод.
     await screen.findByText('Результат отсутствует.');
 
-    expect(screen.queryByTestId('question-modal')).toBeNull();
+    expect(screen.queryByTestId('inline-question')).toBeNull();
   });
 
-  it('серверный ответ гасит модалку после перезагрузки (итерация running)', async () => {
+  it('серверный ответ гасит вопрос после перезагрузки (итерация running)', async () => {
     const fetchMock = stubFetch(
       undefined,
       [
@@ -421,10 +440,10 @@ describe('TaskDetail — интерактивная модалка вопрос�
     });
     await screen.findAllByTestId('step-run-log');
 
-    expect(screen.queryByTestId('question-modal')).toBeNull();
+    expect(screen.queryByTestId('inline-question')).toBeNull();
   });
 
-  it('неотвеченный вопрос завершённого шага не открывает модалку (итерация running)', async () => {
+  it('неотвеченный вопрос завершённого шага не всплывает (итерация running)', async () => {
     stubFetch(
       undefined,
       [
@@ -440,10 +459,10 @@ describe('TaskDetail — интерактивная модалка вопрос�
     await screen.findByText('Fix login bug');
     await screen.findAllByTestId('step-run-log');
 
-    expect(screen.queryByTestId('question-modal')).toBeNull();
+    expect(screen.queryByTestId('inline-question')).toBeNull();
   });
 
-  it('неотвеченный вопрос активного шага открывает модалку (итерация running)', async () => {
+  it('неотвеченный вопрос активного шага появляется inline (итерация running)', async () => {
     stubFetch(
       undefined,
       [
@@ -458,7 +477,60 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    expect(await screen.findByTestId('question-modal')).toBeInTheDocument();
+    expect(await screen.findByTestId('inline-question')).toBeInTheDocument();
+  });
+
+  it('неотвеченный вопрос шага needs_input появляется inline при открытии задачи', async () => {
+    // `needs_input` = exit 0 + blocked-отчёт: шаг остановился и ждёт ответа.
+    // Вопрос должен всплывать так же, как у running-шага.
+    stubFetch(
+      undefined,
+      [
+        makeStepRun({
+          status: 'needs_input',
+          events: [{ type: 'question', ...question({ id: 'q-blocked' }) }],
+        }),
+      ],
+      { status: 'running' },
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const inline = await screen.findByTestId('inline-question');
+    expect(inline).toHaveTextContent('Какой подход выбрать?');
+  });
+
+  it('SSE iteration_status:question перечитывает step runs', async () => {
+    const fetchMock = stubFetch(undefined, [
+      makeStepRun({ status: 'running', events: [] }),
+    ]);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    const stepRunsCalls = () =>
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).endsWith('/step-runs'),
+      ).length;
+    const before = stepRunsCalls();
+
+    act(() => {
+      FakeEventSource.instances[0].emit({
+        type: 'iteration_status',
+        issueId: 'issue-1',
+        iterationId: 'iter-1',
+        data: JSON.stringify({
+          iterationId: 'iter-1',
+          status: 'question',
+          needsInput: true,
+        }),
+        ts: '2026-10-09T00:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => expect(stepRunsCalls()).toBeGreaterThan(before));
   });
 
   it('ошибка отправки: показывает text-[#FF0033] баннер', async () => {
@@ -477,7 +549,7 @@ describe('TaskDetail — интерактивная модалка вопрос�
     await screen.findByText('Fix login bug');
 
     fireEvent.click(
-      within(await screen.findByTestId('question-modal')).getByRole('button', {
+      within(await screen.findByTestId('inline-question')).getByRole('button', {
         name: 'Ответить',
       }),
     );
@@ -619,8 +691,8 @@ describe('TaskDetail — интерактивная модалка вопрос�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const modal = await screen.findByTestId('question-modal');
-    const first = within(modal).getByRole('radio', { name: 'вариант-a' });
+    const inline = await screen.findByTestId('inline-question');
+    const first = within(inline).getByRole('radio', { name: 'вариант-a' });
     await waitFor(() => expect(document.activeElement).toBe(first));
 
     fireEvent.keyDown(first, { key: 'Enter' });
@@ -633,31 +705,6 @@ describe('TaskDetail — интерактивная модалка вопрос�
       expect(JSON.parse(String(call?.[1]?.body))).toEqual({
         id: 'q-select-enter',
         value: 'вариант-a',
-      });
-    });
-  });
-
-  it('Escape отменяет модалку (cancelled:true)', async () => {
-    const fetchMock = stubFetch(undefined, [
-      makeStepRun({
-        events: [{ type: 'question', ...question({ id: 'q-escape' }) }],
-      }),
-    ]);
-
-    render(<TaskDetail issueId="issue-1" />);
-    await screen.findByText('Fix login bug');
-
-    const modal = await screen.findByTestId('question-modal');
-    fireEvent.keyDown(modal, { key: 'Escape' });
-
-    await waitFor(() => {
-      const call = fetchMock.mock.calls.find(
-        ([url, init]) =>
-          init?.method === 'POST' && String(url).endsWith('/ui-response'),
-      );
-      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
-        id: 'q-escape',
-        cancelled: true,
       });
     });
   });

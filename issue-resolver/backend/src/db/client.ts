@@ -37,10 +37,52 @@ CREATE TABLE IF NOT EXISTS issues (
   step_thinking_levels TEXT,
   container_name TEXT,
   source TEXT,
+  dev_server_port INTEGER,
+  dev_server_pid INTEGER,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS repositories (
+  id TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  platform TEXT,
+  full_name TEXT,
+  default_branch TEXT,
+  clone_url TEXT,
+  language TEXT,
+  description TEXT,
+  is_private INTEGER,
+  connection_status TEXT NOT NULL DEFAULT 'unknown',
+  last_validated_at TEXT,
+  write_access INTEGER NOT NULL DEFAULT 0,
+  run_instructions TEXT,
+  run_instructions_status TEXT NOT NULL DEFAULT 'unknown',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  run_instructions TEXT,
+  run_instructions_status TEXT NOT NULL DEFAULT 'unknown',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tag_repositories (
+  id TEXT PRIMARY KEY,
+  tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+  bootstrap_enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS tag_repositories_tag_id_repository_id_unique
+  ON tag_repositories(tag_id, repository_id);
 
 CREATE TABLE IF NOT EXISTS issue_repositories (
   id TEXT PRIMARY KEY,
@@ -48,6 +90,7 @@ CREATE TABLE IF NOT EXISTS issue_repositories (
   repository_url TEXT NOT NULL,
   branch_name TEXT NOT NULL,
   create_mr INTEGER NOT NULL DEFAULT 0,
+  bootstrap_enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -83,6 +126,7 @@ CREATE TABLE IF NOT EXISTS step_runs (
   status TEXT NOT NULL,
   context TEXT NOT NULL,
   feedback TEXT,
+  events TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -181,6 +225,11 @@ function ensureIssueRepositoryColumns(sqlite: Database.Database): void {
       'ALTER TABLE issue_repositories ADD COLUMN create_mr INTEGER NOT NULL DEFAULT 0',
     );
   }
+  if (!columns.has('bootstrap_enabled')) {
+    sqlite.exec(
+      'ALTER TABLE issue_repositories ADD COLUMN bootstrap_enabled INTEGER NOT NULL DEFAULT 1',
+    );
+  }
 }
 
 function ensureIssueColumns(sqlite: Database.Database): void {
@@ -209,6 +258,84 @@ function ensureIssueColumns(sqlite: Database.Database): void {
   if (!columns.has('desired_result')) {
     sqlite.exec(
       "ALTER TABLE issues ADD COLUMN desired_result TEXT NOT NULL DEFAULT 'md'",
+    );
+  }
+  if (!columns.has('dev_server_port')) {
+    sqlite.exec('ALTER TABLE issues ADD COLUMN dev_server_port INTEGER');
+  }
+  if (!columns.has('dev_server_pid')) {
+    sqlite.exec('ALTER TABLE issues ADD COLUMN dev_server_pid INTEGER');
+  }
+}
+
+function ensureRepositoriesColumns(sqlite: Database.Database): void {
+  const columns = new Set(
+    (sqlite.pragma('table_info(repositories)') as { name: string }[]).map(
+      (column) => column.name,
+    ),
+  );
+  if (!columns.has('url')) {
+    sqlite.exec("ALTER TABLE repositories ADD COLUMN url TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.has('platform')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN platform TEXT');
+  }
+  if (!columns.has('full_name')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN full_name TEXT');
+  }
+  if (!columns.has('default_branch')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN default_branch TEXT');
+  }
+  if (!columns.has('clone_url')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN clone_url TEXT');
+  }
+  if (!columns.has('language')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN language TEXT');
+  }
+  if (!columns.has('description')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN description TEXT');
+  }
+  if (!columns.has('is_private')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN is_private INTEGER');
+  }
+  if (!columns.has('connection_status')) {
+    sqlite.exec(
+      "ALTER TABLE repositories ADD COLUMN connection_status TEXT NOT NULL DEFAULT 'unknown'",
+    );
+  }
+  if (!columns.has('last_validated_at')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN last_validated_at TEXT');
+  }
+  if (!columns.has('write_access')) {
+    sqlite.exec(
+      'ALTER TABLE repositories ADD COLUMN write_access INTEGER NOT NULL DEFAULT 0',
+    );
+  }
+  if (!columns.has('run_instructions')) {
+    sqlite.exec('ALTER TABLE repositories ADD COLUMN run_instructions TEXT');
+  }
+  if (!columns.has('run_instructions_status')) {
+    sqlite.exec(
+      "ALTER TABLE repositories ADD COLUMN run_instructions_status TEXT NOT NULL DEFAULT 'unknown'",
+    );
+  }
+  if (!columns.has('created_at')) {
+    sqlite.exec("ALTER TABLE repositories ADD COLUMN created_at TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.has('updated_at')) {
+    sqlite.exec("ALTER TABLE repositories ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''");
+  }
+}
+
+function ensureStepRunColumns(sqlite: Database.Database): void {
+  const columns = new Set(
+    (sqlite.pragma('table_info(step_runs)') as { name: string }[]).map(
+      (column) => column.name,
+    ),
+  );
+  if (!columns.has('events')) {
+    sqlite.exec(
+      "ALTER TABLE step_runs ADD COLUMN events TEXT NOT NULL DEFAULT '[]'",
     );
   }
 }
@@ -250,7 +377,9 @@ export function createDb(file: string = DEFAULT_DB_PATH): Db {
   ensureIterationColumns(sqlite);
   ensureIssueColumns(sqlite);
   ensureIssueRepositoryColumns(sqlite);
+  ensureStepRunColumns(sqlite);
   ensureStepOutputColumns(sqlite);
+  ensureRepositoriesColumns(sqlite);
 
   return drizzle(sqlite, { schema });
 }

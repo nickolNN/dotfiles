@@ -1,6 +1,10 @@
 import type {
   DesiredResult,
   PipelineStep,
+  RepoConnectionStatus,
+  RepoPlatform,
+  RunInstructionsStatus,
+  SessionEvent,
   StepModels,
   StepRunStatus,
   StepThinkingLevels,
@@ -28,6 +32,10 @@ export const issues = sqliteTable('issues', {
   >(),
   container_name: text('container_name'),
   source: text('source'),
+  /** Порт запущенного dev-сервера задачи (null — не запущен). */
+  dev_server_port: integer('dev_server_port'),
+  /** PID процесса dev-сервера задачи (null — не запущен). */
+  dev_server_pid: integer('dev_server_pid'),
   status: text('status').$type<TaskStatus>().notNull(),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
@@ -41,6 +49,10 @@ export const issueRepositories = sqliteTable(
     repository_url: text('repository_url').notNull(),
     branch_name: text('branch_name').notNull(),
     create_mr: integer('create_mr', { mode: 'boolean' }).notNull().default(false),
+    /** false — репозиторий клонируется, но install/анализ запуска пропускаются. */
+    bootstrap_enabled: integer('bootstrap_enabled', { mode: 'boolean' })
+      .notNull()
+      .default(true),
     created_at: text('created_at').notNull(),
     updated_at: text('updated_at').notNull(),
   },
@@ -81,6 +93,77 @@ export const iterations = sqliteTable(
   }),
 );
 
+/**
+ * Сохранённые репозитории (отдельная сущность с CRUD). `connection_status` —
+ * итог последней валидации; метаданные обнуляются при ошибке. Ветки не
+ * хранятся (запрашиваются live).
+ */
+export const repositories = sqliteTable('repositories', {
+  id: text('id').primaryKey(),
+  url: text('url').notNull(),
+  platform: text('platform').$type<RepoPlatform>(),
+  full_name: text('full_name'),
+  default_branch: text('default_branch'),
+  clone_url: text('clone_url'),
+  language: text('language'),
+  description: text('description'),
+  is_private: integer('is_private', { mode: 'boolean' }),
+  connection_status: text('connection_status')
+    .$type<RepoConnectionStatus>()
+    .notNull()
+    .default('unknown'),
+  last_validated_at: text('last_validated_at'),
+  /** Право токена на запись (последняя успешная валидация). */
+  write_access: integer('write_access', { mode: 'boolean' })
+    .notNull()
+    .default(false),
+  run_instructions: text('run_instructions'),
+  run_instructions_status: text('run_instructions_status')
+    .$type<RunInstructionsStatus>()
+    .notNull()
+    .default('unknown'),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});
+
+/** Теги: именованные наборы сохранённых репозиториев. */
+export const tags = sqliteTable('tags', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description'),
+  run_instructions: text('run_instructions'),
+  run_instructions_status: text('run_instructions_status')
+    .$type<RunInstructionsStatus>()
+    .notNull()
+    .default('unknown'),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});
+
+/** Связь тега с сохранённым репозиторием (many-to-many). */
+export const tagRepositories = sqliteTable(
+  'tag_repositories',
+  {
+    id: text('id').primaryKey(),
+    tag_id: text('tag_id')
+      .notNull()
+      .references(() => tags.id, { onDelete: 'cascade' }),
+    repository_id: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    bootstrap_enabled: integer('bootstrap_enabled', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    created_at: text('created_at').notNull(),
+  },
+  (table) => ({
+    uniqueTagRepo: uniqueIndex('tag_repositories_tag_id_repository_id_unique').on(
+      table.tag_id,
+      table.repository_id,
+    ),
+  }),
+);
+
 /** Загруженные файлы задачи/итерации; rel_path — от корня рабочей папки. */
 export const issueFiles = sqliteTable('issue_files', {
   id: text('id').primaryKey(),
@@ -109,6 +192,16 @@ export const stepRuns = sqliteTable(
     status: text('status').$type<StepRunStatus>().notNull(),
     context: text('context').notNull(),
     feedback: text('feedback'),
+    /**
+     * Инкрементально дозалитые события сессии, пока шаг в работе и строки
+     * `step_outputs` ещё нет (в первую очередь вопросы агента). На финише шага
+     * полный набор событий уходит в `step_outputs.events` — это источник истины,
+     * а здесь остаётся копия «живых» событий, переживающая перезагрузку страницы.
+     */
+    events: text('events', { mode: 'json' })
+      .$type<SessionEvent[]>()
+      .notNull()
+      .default([]),
     created_at: text('created_at').notNull(),
     updated_at: text('updated_at').notNull(),
   },

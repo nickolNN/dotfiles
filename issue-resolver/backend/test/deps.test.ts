@@ -7,6 +7,10 @@ import { HttpJiraClient } from '../src/jira/client';
 import { RpcPiRunner } from '../src/pi/rpc-runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import { HttpMrClient } from '../src/pr/mr';
+import {
+  BOOTSTRAPPER_TIMEOUT_ENV,
+  DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+} from '../src/workflow/timeout';
 
 describe('buildDepsFromEnv', () => {
   it('без ISSUE_RESOLVER_USE_REAL → {} (fakes остаются по умолчанию)', () => {
@@ -19,6 +23,9 @@ describe('buildDepsFromEnv', () => {
       ISSUE_RESOLVER_USE_REAL: '1',
       DOCKER_SOCKET: '/tmp/docker.sock',
       MR_TOKEN: 'mr-token',
+      BITBUCKET_TOKEN: 'bitbucket-token',
+      GITHUB_TOKEN: 'github-token',
+      GITLAB_TOKEN: 'gitlab-token',
       JIRA_BASE_URL: 'https://jira.example.com',
       JIRA_TOKEN: 'jira-token',
     });
@@ -36,14 +43,24 @@ describe('buildDepsFromEnv', () => {
     expect(jira.baseUrl).toBe('https://jira.example.com');
     expect(jira.token).toBe('jira-token');
 
-    const mr = deps.mr as unknown as { token: string };
+    const mr = deps.mr as unknown as {
+      token: string;
+      tokens: Record<string, string | undefined>;
+    };
     expect(mr.token).toBe('mr-token');
+    // Per-host токены проброшены из env (Bitbucket-репо ходят со своим).
+    expect(mr.tokens).toEqual({
+      bitbucket: 'bitbucket-token',
+      github: 'github-token',
+      gitlab: 'gitlab-token',
+    });
   });
 
   it('ISSUE_RESOLVER_LOCAL=1 → локальный режим без Docker', () => {
     const deps = buildDepsFromEnv({
       ISSUE_RESOLVER_LOCAL: '1',
       ISSUE_RESOLVER_WORKSPACE_ROOT: '/tmp/issue-workspaces',
+      BITBUCKET_TOKEN: 'bitbucket-token',
     });
 
     expect(deps.container).toBeInstanceOf(LocalContainerController);
@@ -52,5 +69,24 @@ describe('buildDepsFromEnv', () => {
     expect(deps.control).toBeInstanceOf(InMemoryStepSessionRegistry);
     expect(deps.local).toBe(true);
     expect(deps.workspaceRoot).toBe('/tmp/issue-workspaces');
+    // Локальный режим тоже прокидывает per-host MR-токены.
+    expect(
+      (deps.mr as unknown as { tokens: { bitbucket?: string } }).tokens
+        .bitbucket,
+    ).toBe('bitbucket-token');
+  });
+
+  it('bootstrapperTimeoutMs: дефолт 30 мин, env-override и фабрика', () => {
+    const defaults = buildDepsFromEnv({ ISSUE_RESOLVER_LOCAL: '1' });
+    expect(defaults.bootstrapperTimeoutMs).toBe(
+      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    );
+    expect(typeof defaults.bootstrapperFactory).toBe('function');
+
+    const overridden = buildDepsFromEnv({
+      ISSUE_RESOLVER_LOCAL: '1',
+      [BOOTSTRAPPER_TIMEOUT_ENV]: '120000',
+    });
+    expect(overridden.bootstrapperTimeoutMs).toBe(120_000);
   });
 });

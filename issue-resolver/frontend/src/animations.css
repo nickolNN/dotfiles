@@ -1,0 +1,146 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Animation keyframes — только transform + opacity (GPU-композит)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Плавное появление снизу — для нового контента (шаги, события, элементы списка) */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Исчезновение вверх — замена существующему workspace-progress-fade */
+@keyframes fade-out-up {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-8px); }
+}
+
+/* Появление из прозрачности — для overlay/модалок */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Появление с масштабом — для модалок, диалогов */
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Плавная пульсация на GPU — замена janky-версии Tailwind animate-pulse.
+   Медленная (2.5s), мягкая (40% минимум), чтобы не раздражать на высоком Hz. */
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
+/* Пульсация для статус-индикаторов (running), чуть заметнее */
+@keyframes pulse-active {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.65; transform: scale(1.02); }
+}
+
+/* Аккуратное раскрытие сверху — для раскрывающихся секций */
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Utility classes
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.3s ease-out both;
+}
+
+.animate-fade-out-up {
+  animation: fade-out-up 0.35s ease-in forwards;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.25s ease-out both;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.25s ease-out both;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2.5s ease-in-out infinite;
+  will-change: opacity;
+}
+
+.animate-pulse-active {
+  animation: pulse-active 2s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+.animate-slide-down {
+  animation: slide-down 0.25s ease-out both;
+}
+
+/* Задержки для staggered-анимации в списках */
+.animate-fade-in-up-d1 { animation: fade-in-up 0.3s 0.05s ease-out both; }
+.animate-fade-in-up-d2 { animation: fade-in-up 0.3s 0.10s ease-out both; }
+.animate-fade-in-up-d3 { animation: fade-in-up 0.3s 0.15s ease-out both; }
+.animate-fade-in-up-d4 { animation: fade-in-up 0.3s 0.20s ease-out both; }
+.animate-fade-in-up-d5 { animation: fade-in-up 0.3s 0.25s ease-out both; }
+.animate-fade-in-up-d6 { animation: fade-in-up 0.3s 0.30s ease-out both; }
+.animate-fade-in-up-d7 { animation: fade-in-up 0.3s 0.35s ease-out both; }
+.animate-fade-in-up-d8 { animation: fade-in-up 0.3s 0.40s ease-out both; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Transition utilities — для интерактивных элементов (hover/active/state change)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Быстрый переход для цвета/фона/границы/opacity/transform — кнопки, ссылки, чипы */
+.transition-base {
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+/* Чуть медленнее — для раскрывающихся панелей, карточек */
+.transition-smooth {
+  transition:
+    color 0.25s ease,
+    background-color 0.25s ease,
+    border-color 0.25s ease,
+    opacity 0.25s ease,
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+/* Только opacity + transform — для элементов, которые двигаются/исчезают */
+.transition-gpu {
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Reduced motion
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Кнопка «+» в хедере ── */
+@keyframes spin-fast {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(0, 255, 65, 0.15); }
+  50%      { box-shadow: 0 0 16px rgba(0, 255, 65, 0.45); }
+}

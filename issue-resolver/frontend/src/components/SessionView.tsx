@@ -138,6 +138,7 @@ export default function SessionView({
           resultByCallId={resultByCallId}
           answersByQuestionId={answersByQuestionId}
           isLast={index === visible.length - 1}
+          running={running}
         />
       ))}
       {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
@@ -355,12 +356,12 @@ function SessionWorking({
       data-phase={phase.kind}
       className="flex flex-wrap items-center gap-x-2 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
     >
-      <span aria-hidden="true" className="animate-pulse">
+      <span aria-hidden="true" className="animate-pulse-subtle">
         ◐
       </span>
       <span data-testid="session-working-phase">
         {phaseLabel(phase)}
-        <span className="animate-pulse">…</span>
+        <span className="animate-pulse-subtle">…</span>
       </span>
       {elapsedMs !== null && (
         <span
@@ -380,30 +381,42 @@ function SessionEventItem({
   resultByCallId,
   answersByQuestionId,
   isLast,
+  running = false,
 }: {
   event: SessionEvent;
   partialByCallId: Map<string, string>;
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>;
   answersByQuestionId: Map<string, string>;
   isLast: boolean;
+  running?: boolean;
 }) {
+  // Последнее событие считается стримящимся, только если шаг ещё работает.
+  const streaming = isLast && running;
   switch (event.type) {
     case 'text':
       return (
-        <div data-testid="session-text" className="session-msg session-msg--text">
-          <AgentMarkdown>{event.text}</AgentMarkdown>
+        <div className="animate-fade-in-up">
+          <div data-testid="session-text" className="session-msg session-msg--text">
+            <AgentMarkdown>{event.text}</AgentMarkdown>
+          </div>
         </div>
       );
 
     case 'thinking':
-      return <ThinkingBlock thinking={event.thinking} streaming={isLast} />;
+      return (
+        <div className="animate-fade-in-up">
+          <ThinkingBlock thinking={event.thinking} streaming={streaming} />
+        </div>
+      );
 
     case 'question':
       return (
-        <QuestionBlock
-          event={event}
-          answer={answersByQuestionId.get(event.id)}
-        />
+        <div className="animate-fade-in-up">
+          <QuestionBlock
+            event={event}
+            answer={answersByQuestionId.get(event.id)}
+          />
+        </div>
       );
 
     case 'tool_use': {
@@ -414,40 +427,60 @@ function SessionEventItem({
           ? 'running'
           : 'waiting';
       return (
-        <ToolUseBlock
-          toolName={event.toolName}
-          args={event.args}
-          partialText={partialByCallId.get(event.toolCallId)}
-          status={status}
-          durationMs={result?.durationMs ?? null}
-          isError={result?.isError ?? false}
-        />
+        <div className="animate-fade-in-up">
+          <ToolUseBlock
+            toolName={event.toolName}
+            args={event.args}
+            partialText={partialByCallId.get(event.toolCallId)}
+            status={status}
+            durationMs={result?.durationMs ?? null}
+            isError={result?.isError ?? false}
+          />
+        </div>
       );
     }
 
     case 'tool_result':
       return (
-        <ToolResultBlock
-          toolName={event.toolName}
-          isError={event.isError}
-          durationMs={event.durationMs}
-          resultText={event.resultText}
-        />
+        <div className="animate-fade-in-up">
+          <ToolResultBlock
+            toolName={event.toolName}
+            isError={event.isError}
+            durationMs={event.durationMs}
+            resultText={event.resultText}
+          />
+        </div>
       );
 
     case 'compaction_start':
     case 'compaction_end':
-      return <CompactionBanner event={event} />;
+      return (
+        <div className="animate-fade-in-up">
+          <CompactionBanner event={event} />
+        </div>
+      );
 
     case 'retry_start':
     case 'retry_end':
-      return <RetryNotice event={event} />;
+      return (
+        <div className="animate-fade-in-up">
+          <RetryNotice event={event} />
+        </div>
+      );
 
     case 'notice':
-      return <NoticeBanner event={event} />;
+      return (
+        <div className="animate-fade-in-up">
+          <NoticeBanner event={event} />
+        </div>
+      );
 
     case 'extension_error':
-      return <ExtensionErrorBanner message={event.message} />;
+      return (
+        <div className="animate-fade-in-up">
+          <ExtensionErrorBanner message={event.message} />
+        </div>
+      );
 
     default:
       // Служебные события (usage/stats/queue/session_info/status/widget/…)
@@ -530,11 +563,19 @@ function ThinkingBlock({
   thinking: string;
   streaming?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(streaming);
+
+  // Когда стрим продолжается — держим открытым, даже если пользователь свернул.
+  useEffect(() => {
+    if (streaming) setOpen(true);
+  }, [streaming]);
+
   // Свёрнутая строка-превью: во время стрима — хвост, после — первая строка.
   const preview = streaming
     ? thinking.trimEnd().slice(-80)
     : thinking.split('\n')[0].slice(0, 80);
+  // Длинный блок (больше ~12 строк по 80 символов) — включаем скролл.
+  const long = thinking.length > 960;
 
   return (
     <div
@@ -549,17 +590,20 @@ function ThinkingBlock({
         toolName="thinking"
         label={open ? '' : preview}
       />
-      {open && streaming && (
+      {streaming && (
         <div
           data-testid="session-thinking-live"
           className="px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
         >
           думает
-          <span className="animate-pulse">…</span>
+          <span className="animate-pulse-subtle">…</span>
         </div>
       )}
       {open && (
-        <pre data-testid="session-thinking-text" className="session-thinking-body">
+        <pre
+          data-testid="session-thinking-text"
+          className={`session-thinking-body animate-slide-down whitespace-pre-wrap break-words${long ? ' max-h-96 overflow-auto' : ''}`}
+        >
           {thinking}
         </pre>
       )}
@@ -619,7 +663,7 @@ function ToolUseBlock({
       {open && (
         <pre
           data-testid={`tool-use-args-${toolName}`}
-          className="session-tool-body"
+          className="session-tool-body animate-slide-down"
         >
           {argsText}
         </pre>
@@ -668,7 +712,7 @@ function ToolResultBlock({
       {open && (
         <pre
           data-testid={`tool-result-text-${toolName}`}
-          className="session-tool-body"
+          className="session-tool-body animate-slide-down"
         >
           {resultText}
         </pre>
@@ -824,7 +868,7 @@ function CompactionBanner({ event }: { event: CompactionEvent }) {
         data-state="start"
         className="flex items-center gap-2 border border-[#FFB000]/60 bg-[#1A1000] px-2 py-1 text-xs text-[#FFB000]"
       >
-        <span aria-hidden="true" className="animate-pulse">
+        <span aria-hidden="true" className="animate-pulse-subtle">
           ◐
         </span>
         <span>контекст сжимается · {event.reason}</span>
@@ -969,7 +1013,7 @@ function CollapsibleHead({
       onClick={onToggle}
       className="session-tool-head"
     >
-      <span aria-hidden="true" className="session-tool-caret">
+      <span aria-hidden="true" className="session-tool-caret transition-base">
         {open ? '▾' : '▸'}
       </span>
       <span aria-hidden="true" className="session-tool-icon">

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./animations.css";
 
 /* Tailwind v4 preflight не ставит cursor:pointer на <button>, поэтому
    возвращаем его глобально для всех кликабельных элементов. */
@@ -22,6 +23,9 @@
 
 html {
   height: 100%;
+  background-color: #0D0208;
+  /* Safari iOS: не показывать белый фон при overscroll */
+  color-scheme: dark;
 }
 
 body {
@@ -37,6 +41,7 @@ body {
 
 body {
   margin: 0;
+  overflow-x: hidden;
   background-color: #0d0208;
   color: #00ff41;
   font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', 'Cascadia Mono',
@@ -531,4 +536,46 @@ body {
 /* Фон темы highlight.js не нужен: модалка артефактов уже тёмная (#0d0208). */
 .hljs {
   background: transparent;
+}
+
+/* Панель прогресса подготовки: исчезновение через 3с после ready/error
+   (`scheduleProgressFade` навешивает класс, `onAnimationEnd` убирает DOM).
+   Использует общий keyframe `fade-out-up` из animations.css. */
+.workspace-progress--fade {
+  animation: fade-out-up 0.5s ease forwards;
+}
+
+/* ── Scrollbar — matrix theme, thin ── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #008F1140 #0D0208;
+}
+
+/* webkit (Chrome / Safari / Edge) */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #0D0208;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #008F1140;
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #00FF4160;
+}
+
+/* ── Кнопка «+» в хедере ── */
+@keyframes spin-fast {
+  to { transform: rotate(360deg); }
+}
+
+.primary-action-btn:hover {
+  animation: spin-fast 0.6s linear infinite;
+  scale: 1.25;
 }

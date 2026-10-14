@@ -322,6 +322,7 @@ describe('SessionView — события полного pi-паритета (Pha
   it('thinking: последний блок помечен streaming и показывает live-лейбл', () => {
     render(
       <SessionView
+        running
         events={[{ type: 'thinking', thinking: 'первая\nвторая' }]}
       />,
     );
@@ -502,6 +503,7 @@ describe('SessionView — индикатор «работает» (running)', ()
   it('несколько thinking подряд: отдельные блоки, streaming только у последнего', () => {
     render(
       <SessionView
+        running
         events={[
           { type: 'thinking', thinking: 'первый' },
           { type: 'thinking', thinking: 'второй' },

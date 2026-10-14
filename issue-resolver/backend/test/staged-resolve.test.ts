@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import type {
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';import type {
   ExecutionPlan,
   PipelineStep,
   StepExecutionResult,
@@ -13,6 +15,15 @@ import {
 } from '../src/workflow/room';
 
 const STEP: PipelineStep = 'resolve';
+
+/** Временные папки тестов (чистятся в afterEach). */
+const dirs: string[] = [];
+
+afterEach(() => {
+  while (dirs.length > 0) {
+    rmSync(dirs.pop() as string, { recursive: true, force: true });
+  }
+});
 
 const input = (execution: ExecutionPlan): RoomResolveInput => ({
   containerName: 'issue-resolver-issue-1',
@@ -53,6 +64,15 @@ const aborted = (summary: string): StepExecutionResult => ({
   stdout: '',
   stderr: '',
   aborted: true,
+});
+
+/** Реальный раннер заполняет `report` только при abort — обычный исход null. */
+const noReport = (): StepExecutionResult => ({
+  step: STEP,
+  exitCode: 0,
+  report: null,
+  stdout: '',
+  stderr: '',
 });
 
 const twoStages: ExecutionPlan = {
@@ -195,5 +215,38 @@ describe('runStagedResolve — последовательные этапы', () 
       'run-1/stage/2/coordinator',
       'run-1',
     ]);
+  });
+
+  it('саммари для координатора читаются из файлов отчётов, когда раннер не вернул report', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ir-room-files-'));
+    dirs.push(dir);
+    const write = (name: string, summary: string): void =>
+      writeFileSync(
+        join(dir, name),
+        JSON.stringify({ status: 'pass', summary }),
+        'utf8',
+      );
+    write('.issue-stage-1-worker-1.json', 'w1 из файла');
+    write('.issue-stage-1-worker-2.json', 'w2 из файла');
+    write('.issue-stage-1.json', 'этап из файла');
+
+    const pi = new FakePiRunner();
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+
+    await runStagedResolve(pi, input(twoStages), {
+      ...options(),
+      hostWorkspaceDir: dir,
+    });
+
+    // Координатор этапа видит содержимое файлов воркеров, а не «(see …)».
+    expect(pi.calls[2].prompt).toContain('`.issue-stage-1-worker-1.json`: w1 из файла');
+    expect(pi.calls[2].prompt).toContain('`.issue-stage-1-worker-2.json`: w2 из файла');
+    expect(pi.calls[2].prompt).not.toContain('(see ');
+    // Финальный lead — исход этапа из его файла.
+    expect(pi.calls[4].prompt).toContain('`.issue-stage-1.json`: этап из файла');
   });
 });

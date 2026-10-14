@@ -16,6 +16,8 @@ export const statusColor: Record<TaskStatus, string> = {
   completed: '#00FF41',
   failed: '#FF0033',
   cancelled: '#8A8A8A',
+  /** Агент ждёт ответа пользователя — янтарный, как и подготовка. */
+  question: '#FFB000',
 };
 
 /**
