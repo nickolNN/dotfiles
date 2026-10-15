@@ -205,7 +205,7 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     pi: FakePiRunner,
     events: SSEEvent[],
   ): void {
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
 
     const iterationRow = db
       .select()

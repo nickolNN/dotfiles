@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS iterations (
   review_context TEXT NOT NULL DEFAULT '',
   is_review_need INTEGER NOT NULL DEFAULT 0,
   steps TEXT NOT NULL,
+  amend_branch TEXT,
   model TEXT,
   step_models TEXT,
   thinking_level TEXT,
@@ -177,6 +178,20 @@ CREATE TABLE IF NOT EXISTS step_outputs (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS iteration_merge_requests (
+  id TEXT PRIMARY KEY,
+  iteration_id TEXT NOT NULL REFERENCES iterations(id) ON DELETE CASCADE,
+  repository_url TEXT NOT NULL,
+  mr_url TEXT NOT NULL,
+  mr_id TEXT NOT NULL,
+  mr_source TEXT NOT NULL,
+  head_branch TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS iteration_merge_requests_iteration_id_repository_url_unique
+  ON iteration_merge_requests(iteration_id, repository_url);
 `;
 
 export type Db = BetterSQLite3Database<typeof schema>;
@@ -211,6 +226,9 @@ function ensureIterationColumns(sqlite: Database.Database): void {
   }
   if (!columns.has('step_thinking_levels')) {
     sqlite.exec('ALTER TABLE iterations ADD COLUMN step_thinking_levels TEXT');
+  }
+  if (!columns.has('amend_branch')) {
+    sqlite.exec('ALTER TABLE iterations ADD COLUMN amend_branch TEXT');
   }
 }
 

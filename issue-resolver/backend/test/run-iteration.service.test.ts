@@ -183,7 +183,7 @@ describe('runIssueIteration — прямой вызов', () => {
       model: undefined,
     });
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
 
     const iterationRow = db
       .select()
@@ -363,7 +363,7 @@ describe('runIssueIteration — прямой вызов', () => {
       repoWorkspaces: [],
     });
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
 
     expect(
       db.select().from(iterations).where(eq(iterations.id, iteration.id)).get()
@@ -498,7 +498,7 @@ describe('runIssueIteration — преемственность итераций'
 
       expect(result).toEqual({
         iterationStatus: 'completed',
-        needsInput: false,
+        needsInput: false, mrArtifacts: [],
       });
       const prompt = pi.calls[0].prompt;
       expect(prompt).toContain('Previous iteration #1 (status unknown)');
@@ -621,7 +621,7 @@ describe('runIssueIteration — снапшот результата итерац
 
       expect(result).toEqual({
         iterationStatus: 'completed',
-        needsInput: false,
+        needsInput: false, mrArtifacts: [],
       });
       const snapshot = join(
         root,
@@ -671,7 +671,7 @@ describe('runIssueIteration — снапшот результата итерац
 
       expect(result).toEqual({
         iterationStatus: 'failed',
-        needsInput: false,
+        needsInput: false, mrArtifacts: [],
       });
       expect(
         existsSync(
@@ -711,7 +711,7 @@ describe('runIssueIteration — снапшот результата итерац
 
       expect(result).toEqual({
         iterationStatus: 'completed',
-        needsInput: false,
+        needsInput: false, mrArtifacts: [],
       });
       expect(
         existsSync(
@@ -766,10 +766,14 @@ describe('runIssueIteration — снапшот результата итерац
         repoWorkspaces,
       });
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         iterationStatus: 'completed',
         needsInput: false,
       });
+      expect(result.mrArtifacts).toHaveLength(1);
+      expect(result.mrArtifacts[0].repositoryUrl).toBe(
+        'https://b.yadro.com/scm/kos/some-repo.git',
+      );
       expect(git.commits).toHaveLength(1);
       expect(mr.calls).toHaveLength(1);
       expect(mr.calls[0].source).toBe('bitbucket');
@@ -808,7 +812,7 @@ describe('runIssueIteration — снапшот результата итерац
 
       expect(result).toEqual({
         iterationStatus: 'completed',
-        needsInput: false,
+        needsInput: false, mrArtifacts: [],
       });
       expect(
         existsSync(
@@ -912,7 +916,7 @@ describe('runIssueIteration — разовая подготовка рабоче
       repoWorkspaces,
     });
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     // Подготовка — ровно один раз на итерацию, а не на каждый шаг.
     expect(gated.prepares).toHaveLength(1);
     expect(gated.dependenciesInstalled).toEqual([
@@ -946,7 +950,7 @@ describe('runIssueIteration — разовая подготовка рабоче
       repoWorkspaces: [],
     });
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(
       events.some(
         (event) =>
@@ -1133,7 +1137,7 @@ describe('runIssueIteration — прогресс подготовки, прич�
       repoWorkspaces,
     });
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(progressOf(events)).toEqual([
       { step: 'creating_dirs', status: 'running' },
       { step: 'creating_dirs', status: 'done' },
@@ -1245,7 +1249,7 @@ describe('runIssueIteration — прогресс подготовки, прич�
       repoWorkspaces: [],
       });
 
-      expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+      expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
       const failed = events
         .filter((event) => event.type === 'iteration_status')
         .map((event) => JSON.parse(event.data) as Record<string, unknown>)
@@ -1281,7 +1285,7 @@ describe('runIssueIteration — прогресс подготовки, прич�
       repoWorkspaces: [],
     });
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
 
     const reportPath = join(root, issueId, 'report-1.md');
     expect(existsSync(reportPath)).toBe(true);
@@ -1387,7 +1391,7 @@ describe('runIssueIteration — run_instructions через анализатор
       runInput(issueId, iteration, repoWorkspaces),
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(agent.calls).toHaveLength(1);
     expect(agent.calls[0]).toMatchObject({
       repoUrl: repositories[0].repository_url,
@@ -1425,7 +1429,7 @@ describe('runIssueIteration — run_instructions через анализатор
       runInput(issueId, iteration, repoWorkspaces),
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(agent.calls).toHaveLength(0);
     const row = repoRow(db, repositories[0].repository_url);
     expect(row?.run_instructions_status).toBe('generated');
@@ -1460,7 +1464,7 @@ describe('runIssueIteration — run_instructions через анализатор
       runInput(issueId, iteration, repoWorkspaces),
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     const row = repoRow(db, repositories[0].repository_url);
     expect(row?.run_instructions_status).toBe('failed');
     expect(row?.run_instructions).toBeNull();
@@ -1501,7 +1505,7 @@ describe('runIssueIteration — run_instructions через анализатор
       repositories: disabledRepositories,
     });
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     // Клонирование выполнено, но анализатор не вызван и install не запускался.
     expect(git.prepares).toHaveLength(1);
     expect(agent.calls).toHaveLength(0);

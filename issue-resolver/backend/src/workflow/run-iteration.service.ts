@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path';
 import type { Db } from '../db/client';
 import { allocateDevPort, releaseIssueDevPorts } from '../port-allocator';
 import { listAttachableRelPaths } from '../db/issue-files.repo';
+import { insertMergeRequest } from '../db/iteration-mr.repo';
 import {
   getRepositoryByUrl,
   updateRepositoryRunInstructions,
@@ -42,7 +43,7 @@ import type { ContainerController } from '../docker/controller';
 import type { GitPrepareResult, GitService } from '../git/service';
 import type { PiRunner } from '../pi/runner';
 import type { StepSessionRegistry } from '../pi/session-registry';
-import type { MrClient } from '../pr/mr';
+import { detectGitHost, type MrClient } from '../pr/mr';
 import type { SseHub } from '../sse/hub';
 import type {
   BootstrapperFactory,
@@ -50,7 +51,11 @@ import type {
   RunIterationResult,
   StepRunStore,
 } from '../workflow/engine';
-import { prepareWorkspace, runIteration } from '../workflow/engine';
+import {
+  featureBranchName,
+  prepareWorkspace,
+  runIteration,
+} from '../workflow/engine';
 import type { WorkspaceProgress } from '../workflow/engine';
 import {
   DEFAULT_WORKSPACE_ROOT,
@@ -186,6 +191,8 @@ export interface RunIssueIterationInput {
     steps: PipelineStep[];
     reviewContext?: string;
     isReviewNeed?: boolean;
+    /** Имя существующей feature-ветки MR для amend-итерации. */
+    amendBranch?: string | null;
   };
   repositories: {
     repository_url: string;
@@ -731,6 +738,7 @@ export async function runIssueIteration(
     review_context: input.iteration.reviewContext ?? '',
     is_review_need: input.iteration.isReviewNeed ?? false,
     steps: input.iteration.steps,
+    amendBranch: input.iteration.amendBranch,
     status: 'running',
     created_at: now,
     updated_at: now,
@@ -871,6 +879,7 @@ export async function runIssueIteration(
         previousOutcome,
         attachmentPaths,
         devServerPort,
+        amendBranch: input.iteration.amendBranch,
       },
     );
   } catch (error) {
@@ -900,7 +909,29 @@ export async function runIssueIteration(
       ts: failedAt,
     });
     await writeIterationReport(db, deps, input, 'failed');
-    return { iterationStatus: 'failed', needsInput: false };
+    return { iterationStatus: 'failed', needsInput: false, mrArtifacts: [] };
+  }
+
+  // Сохраняем созданные на pr-шаге MR в БД: из них потом берутся комментарии
+  // ревью для fix-after-review. Best-effort — сбой записи не роняет итерацию.
+  if (result.mrArtifacts.length > 0) {
+    const createdAt = new Date().toISOString();
+    for (const artifact of result.mrArtifacts) {
+      try {
+        insertMergeRequest(db, {
+          iterationId: input.iteration.id,
+          repositoryUrl: artifact.repositoryUrl,
+          mrUrl: artifact.mrUrl,
+          // TODO: хранить честный numeric id с хостинга (сейчас заглушка).
+          mrId: artifact.mrUrl,
+          mrSource: detectGitHost(artifact.repositoryUrl),
+          headBranch: featureBranchName(input.issue.title, input.iteration.id),
+          createdAt,
+        });
+      } catch (error) {
+        console.error('failed to persist merge request', error);
+      }
+    }
   }
 
   // Снапшот результата по итерациям: только для успешно завершённых итераций,

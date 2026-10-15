@@ -9,6 +9,7 @@ import type {
   Iteration,
   JiraValidationResult,
   ModelDescriptor,
+  MrStatus,
   PromptMode,
   PromptResult,
   RepoBranchesResponse,
@@ -251,6 +252,99 @@ export async function getStepRuns(
   }
 
   return (await response.json()) as StepRunWithEvents[];
+}
+
+/**
+ * MR/PR задачи для UI: адрес, статус на хостинге и счётчики ревью-комментариев.
+ * `unresolvedCount` — незакрытые (требующие правок) комментарии.
+ */
+export interface MergeRequestInfo {
+  repositoryUrl: string;
+  mrUrl: string;
+  mrId: string;
+  mrSource: 'gitlab' | 'github' | 'bitbucket';
+  status: MrStatus;
+  commentCount: number;
+  unresolvedCount: number;
+}
+
+function asCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function asMrSource(value: unknown): MergeRequestInfo['mrSource'] {
+  return value === 'github' || value === 'bitbucket' ? value : 'gitlab';
+}
+
+function asMrStatus(value: unknown): MrStatus {
+  return value === 'merged' || value === 'closed' ? value : 'open';
+}
+
+function isMergeRequestsWrapper(
+  value: unknown,
+): value is { mergeRequests: unknown[] } {
+  if (value === null || typeof value !== 'object') return false;
+  return Array.isArray((value as { mergeRequests?: unknown }).mergeRequests);
+}
+
+/**
+ * Приводит ответ бэкенда к списку MR. Принимает и «голый» массив, и обёртку
+ * `{ mergeRequests: [...] }`; строки без URL отбрасываются, чтобы карточка не
+ * рендерила битую ссылку.
+ */
+function normalizeMergeRequests(payload: unknown): MergeRequestInfo[] {
+  let list: unknown[] = [];
+  if (Array.isArray(payload)) {
+    list = payload;
+  } else if (isMergeRequestsWrapper(payload)) {
+    list = payload.mergeRequests;
+  }
+
+  return list.flatMap((raw) => {
+    if (!raw || typeof raw !== 'object') return [];
+    const row = raw as Record<string, unknown>;
+    if (typeof row.mrUrl !== 'string' || !row.mrUrl) return [];
+    return [
+      {
+        repositoryUrl:
+          typeof row.repositoryUrl === 'string' ? row.repositoryUrl : '',
+        mrUrl: row.mrUrl,
+        mrId: typeof row.mrId === 'string' ? row.mrId : '',
+        mrSource: asMrSource(row.mrSource),
+        status: asMrStatus(row.status),
+        commentCount: asCount(row.commentCount),
+        unresolvedCount: asCount(row.unresolvedCount),
+      },
+    ];
+  });
+}
+
+export async function fetchMergeRequests(
+  issueId: string,
+): Promise<MergeRequestInfo[]> {
+  const response = await fetch(
+    `${API_BASE}/issues/${issueId}/merge-requests`,
+  );
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return normalizeMergeRequests((await response.json()) as unknown);
+}
+
+/** Новая итерация с контекстом из комментариев ревью (fix-after-review). */
+export async function fixAfterReview(issueId: string): Promise<Iteration> {
+  const response = await fetch(
+    `${API_BASE}/issues/${issueId}/fix-after-review`,
+    { method: 'POST' },
+  );
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Iteration;
 }
 
 /** Минимальная проверка формы `RoomAgent` (защита от мусора в ответе). */

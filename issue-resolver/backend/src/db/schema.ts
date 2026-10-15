@@ -75,6 +75,11 @@ export const iterations = sqliteTable(
       .notNull()
       .default(false),
     steps: text('steps', { mode: 'json' }).$type<PipelineStep[]>().notNull(),
+    /**
+     * Существующая feature-ветка MR для amend-итерации (fix-after-review).
+     * Задан — pr-шаг force-push'ит в неё, новый MR не создаётся.
+     */
+    amend_branch: text('amend_branch'),
     model: text('model'),
     step_models: text('step_models', { mode: 'json' }).$type<StepModels>(),
     thinking_level: text('thinking_level').$type<ThinkingLevel>(),
@@ -254,3 +259,28 @@ export const stepOutputs = sqliteTable('step_outputs', {
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
 });
+
+/**
+ * Созданные MR/PR: один MR на репозиторий за итерацию.
+ * Хранит URL, ID для API-запросов, хост и feature-ветку для amend-итераций.
+ */
+export const iterationMergeRequests = sqliteTable(
+  'iteration_merge_requests',
+  {
+    id: text('id').primaryKey(),
+    iteration_id: text('iteration_id')
+      .notNull()
+      .references(() => iterations.id, { onDelete: 'cascade' }),
+    repository_url: text('repository_url').notNull(),
+    mr_url: text('mr_url').notNull(),
+    mr_id: text('mr_id').notNull(),
+    mr_source: text('mr_source').$type<'gitlab' | 'github' | 'bitbucket'>().notNull(),
+    head_branch: text('head_branch').notNull(),
+    created_at: text('created_at').notNull(),
+  },
+  (table) => ({
+    uniqueIterationRepo: uniqueIndex(
+      'iteration_merge_requests_iteration_id_repository_url_unique',
+    ).on(table.iteration_id, table.repository_url),
+  }),
+);

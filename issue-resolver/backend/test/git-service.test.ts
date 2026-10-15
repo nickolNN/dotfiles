@@ -396,3 +396,53 @@ describe('GitCliService.prepare — идемпотентность', () => {
     expect(calls).toEqual([]);
   });
 });
+describe('GitCliService — commitAndPush forcePush (amend)', () => {
+  it('forcePush → дополнительный push --force-with-lease в ветку', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ir-force-'));
+    tempDirs.push(repo);
+
+    const calls: string[][] = [];
+    const exec: GitExecFile = (_file, args) => {
+      calls.push(args);
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const service = new GitCliService(path.join(repo, 'originals'), exec);
+
+    await service.commitAndPush({
+      repoPath: repo,
+      branchName: 'feature/kos-1-fix-abcd12',
+      commitMessage: 'feat: fix',
+      forcePush: true,
+    });
+
+    expect(
+      calls.some(
+        (args) =>
+          args.includes('push') &&
+          args.includes('--force-with-lease') &&
+          args.includes('origin') &&
+          args.includes('feature/kos-1-fix-abcd12'),
+      ),
+    ).toBe(true);
+  });
+
+  it('без forcePush → --force-with-lease не вызывается', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ir-noforce-'));
+    tempDirs.push(repo);
+
+    const calls: string[][] = [];
+    const exec: GitExecFile = (_file, args) => {
+      calls.push(args);
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const service = new GitCliService(path.join(repo, 'originals'), exec);
+
+    await service.commitAndPush({
+      repoPath: repo,
+      branchName: 'feature/x',
+      commitMessage: 'feat: fix',
+    });
+
+    expect(calls.some((args) => args.includes('--force-with-lease'))).toBe(false);
+  });
+});

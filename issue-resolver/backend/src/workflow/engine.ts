@@ -153,6 +153,11 @@ export interface RunIterationInput {
   /** Токен для MR/PR (в проде — из secrets). */
   mrToken?: string;
   /**
+   * Имя существующей feature-ветки MR для amend-итерации (fix-after-review).
+   * Задан — pr-шаг force-push'ит в неё, новый MR не создаётся.
+   */
+  amendBranch?: string | null;
+  /**
    * Готовые рабочие копии репозиториев (clone + install уже выполнены
    * `prepareWorkspace` один раз при инициализации задачи). Если не задано —
    * движок считает, что репозиториев нет.
@@ -182,6 +187,8 @@ export interface RunIterationInput {
 export interface RunIterationResult {
   iterationStatus: TaskStatus;
   needsInput: boolean;
+  /** Артефакты созданных MR (пустой массив, если pr-шаг не выполнялся). */
+  mrArtifacts: MrResultArtifact[];
 }
 
 const IMAGE = 'dotfiles-agent';
@@ -670,6 +677,8 @@ export async function runIteration(
   let stepRetries = 0;
   // Фидбек прошлого упавшего шага (review/test) для следующего resolve.
   let feedback: string | null = null;
+  // Артефакты созданных MR (pr-шаг).
+  let mrArtifacts: MrResultArtifact[] = [];
   // Рекомендация refine о топологии resolve: план (summary) и execution.
   // Заполняется только успешным refine-шагом; до него — null (single).
   let refinedPlan: string | null = null;
@@ -887,7 +896,7 @@ export async function runIteration(
         continue;
       }
 
-      return { iterationStatus: 'failed', needsInput: false };
+      return { iterationStatus: 'failed', needsInput: false, mrArtifacts: [] };
     }
 
     // Отчёт шага — источник истины в рабочей папке задачи. В RPC-режиме
@@ -923,7 +932,7 @@ export async function runIteration(
     }
 
     if (status === 'aborted') {
-      return { iterationStatus: 'cancelled', needsInput: false };
+      return { iterationStatus: 'cancelled', needsInput: false, mrArtifacts: [] };
     }
 
     // Фаза 4: успешный pr-шаг публикует результат — commit/push + MR — для
@@ -933,7 +942,7 @@ export async function runIteration(
       try {
         const prTitle = report?.title || input.issue.title;
         const prDescription = report?.description || report?.summary || '';
-        await publishPrResult(
+        mrArtifacts = await publishPrResult(
           deps,
           input,
           repoWorkspaces,
@@ -949,7 +958,7 @@ export async function runIteration(
     }
 
     if (status === 'needs_input') {
-      return { iterationStatus: 'failed', needsInput: true };
+      return { iterationStatus: 'failed', needsInput: true, mrArtifacts: [] };
     }
 
     // Self-retry для refine/resolve при логическом падении (шаг завершился,
@@ -984,7 +993,7 @@ export async function runIteration(
     switch (decision.kind) {
       case 'advance':
         if (decision.iterationCompleted) {
-          return { iterationStatus: 'completed', needsInput: false };
+          return { iterationStatus: 'completed', needsInput: false, mrArtifacts };
         }
         stepIndex += 1;
         stepRetries = 0;
@@ -997,14 +1006,14 @@ export async function runIteration(
         stepRetries = 0;
         break;
       case 'needs_input':
-        return { iterationStatus: 'failed', needsInput: true };
+        return { iterationStatus: 'failed', needsInput: true, mrArtifacts: [] };
       case 'iteration_failed':
-        return { iterationStatus: 'failed', needsInput: false };
+        return { iterationStatus: 'failed', needsInput: false, mrArtifacts: [] };
     }
   }
 
   // Пустой конвейер: запускать нечего — итерация тривиально завершена.
-  return { iterationStatus: 'completed', needsInput: false };
+  return { iterationStatus: 'completed', needsInput: false, mrArtifacts: [] };
 }
 
 /** Артефакт результата MR для снапшота итерации (result.json). */
@@ -1091,12 +1100,16 @@ async function publishPrResult(
     // создаёт ветку от текущего HEAD; она же — head создаваемого MR.
     // `squashBase` сквошит все коммиты в один — MR всегда = 1 commit.
     const baseBranch = baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch;
-    const featureBranch = featureBranchName(input.issue.title, input.iteration.id);
+    // Amend-итерация (fix-after-review) обновляет существующую ветку MR
+    // force-push'ем; новая ветка не создаётся.
+    const featureBranch =
+      input.amendBranch ?? featureBranchName(input.issue.title, input.iteration.id);
     const commit = await deps.git.commitAndPush({
       repoPath: workspace.path,
       branchName: featureBranch,
       commitMessage: `feat: ${input.issue.title}`,
       squashBase: `origin/${baseBranch}`,
+      forcePush: input.amendBranch ? true : undefined,
     });
     deps.sse.publish(
       streamEvent(
@@ -1107,6 +1120,12 @@ async function publishPrResult(
         `committed ${commit.branchName}`,
       ),
     );
+
+    // Amend-итерация обновляет уже существующий MR force-push'ем — новый
+    // MR не создаём и артефакт не пишем.
+    if (input.amendBranch) {
+      continue;
+    }
 
     const mr = await deps.mr.createMr({
       repositoryUrl: workspace.repoUrl,

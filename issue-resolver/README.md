@@ -132,6 +132,8 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 | `GET /issues/:id/result/files/archive` | — | `application/gzip` (`Content-Disposition: attachment; filename="issue-<id>.tar.gz"`) — tar.gz из того же отфильтрованного списка плюс сам артефакт результата из снапшота итерации; нет completed-итерации или нечего паковать → `404 { error: 'result not found' }` |
 | `GET /issues/:id/iterations` | — | `Iteration[]` (по `number` возр.) / `404` |
 | `POST /issues/:id/iterations` | `{ context, review_context?, is_review_need?, steps?, model? }` (JSON) **или** multipart (`payload` + `files`) | `201 Iteration`; запускает прогон в фоне; файлы итерации — в `attachments/iteration-<n>/` |
+| `GET /issues/:issueId/merge-requests` | — | `MergeRequestInfo[]` — MR/PR задачи с живым статусом с хостинга (`getMr`) и счётчиками ревью-комментариев (`commentCount`/`unresolvedCount`); недоступный хостинг деградирует до `status: 'open'` и нулей / `404 { error: 'issue not found' }` |
+| `POST /issues/:issueId/fix-after-review` | — | `201 Iteration` — amend-итерация по комментариям ревью к MR последней итерации: `steps = ['refine','resolve','review','test','pr']`, `context` дополнен структурированным JSON комментариев, `review_context` — сырой текст; `amend_branch` = head-ветка MR, pr-шаг force-push'ит в неё (новый MR не создаётся). Нет MR → `404 { error: 'no merge requests for issue' }` / `404 { error: 'issue not found' }` |
 | `GET /issues/:id/files` | — | `IssueFile[]` (загруженные файлы задачи; `rel_path` от корня рабочей папки, `iteration_id` для группировки) / `404` |
 | `DELETE /issues/:id` | — | `202 { ok: true }` — удаление фоновое (процессы → контейнер → рабочая папка → БД); прогресс — SSE `issue_deleting` (фазы), финал — `issue_deleted` / `404 { error }` |
 | `DELETE /files/:fileId` | — | `204`; удаляет строку и файл с диска (best-effort, guard от path traversal) / `404` |
@@ -491,7 +493,13 @@ URL (`RepoUrlInput`) живёт на экране «Репозитории» и 
   `pr`-шаг коммитит (`feat: <title>`), пушит **feature-ветку**
   `issue/<issueId>-<iterationId>` (base-ветка защищена от прямого push) и
   создаёт MR/PR `head=feature → base=base_branch` только для репозиториев с
-  `create_mr: true`; хост (GitLab/GitHub) определяется по URL.
+  `create_mr: true`; хост (GitLab/GitHub) определяется по URL. Созданные MR
+  сохраняются в `iteration_merge_requests` (итерация, репозиторий, URL, id,
+  хост, head-ветка). `GET /issues/:issueId/merge-requests` отдаёт их UI с
+  живым статусом и счётчиками комментариев. `POST /issues/:issueId/fix-after-review`
+  собирает комментарии с хостинга и запускает amend-итерацию с `amend_branch`: pr-шаг
+  force-push'ит (`--force-with-lease`) в существующую ветку MR и не создаёт
+  новый MR.
   Шаг `pr` присутствует в конвейере только при `desired_result: 'pr'` (для
   остальных значений он удаляется). Для репозиториев с `create_mr: false`
   результат остаётся файлами в рабочей папке. При 0 репозиториев `pr`-шаг не

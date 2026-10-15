@@ -103,6 +103,11 @@ export interface GitCommitInput {
    * локально (обычно base-ветка: `master`, `main`).
    */
   squashBase?: string;
+  /**
+   * Дополнительно выполнить `push --force-with-lease` в ветку. Нужно для
+   * amend-итераций (fix-after-review): обновляем существующую ветку MR.
+   */
+  forcePush?: boolean;
 }
 
 export interface GitCommitResult {
@@ -529,14 +534,35 @@ export class GitCliService implements GitService {
       '-m',
       input.commitMessage,
     ]).catch(() => undefined);
-    await this.git([
-      '-C',
-      input.repoPath,
-      'push',
-      '--set-upstream',
-      'origin',
-      input.branchName,
-    ]);
+    if (input.forcePush) {
+      // Amend: обычный push может быть отвергнут (non-fast-forward), поэтому
+      // его сбой не фатален — ветку обновляет force-with-lease ниже.
+      await this.git([
+        '-C',
+        input.repoPath,
+        'push',
+        '--set-upstream',
+        'origin',
+        input.branchName,
+      ]).catch(() => undefined);
+      await this.git([
+        '-C',
+        input.repoPath,
+        'push',
+        '--force-with-lease',
+        'origin',
+        input.branchName,
+      ]);
+    } else {
+      await this.git([
+        '-C',
+        input.repoPath,
+        'push',
+        '--set-upstream',
+        'origin',
+        input.branchName,
+      ]);
+    }
     return { pushed: true, branchName: input.branchName };
   }
 }

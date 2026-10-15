@@ -157,7 +157,7 @@ describe('runIssueIteration — статус running', () => {
       repoWorkspaces: [],
     });
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
 
     const statuses = events
       .filter((event) => event.type === 'iteration_status')
@@ -201,7 +201,7 @@ describe('runIssueIteration — статус running', () => {
       repoWorkspaces: [],
     });
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     expect(
       db.select().from(iterations).where(eq(iterations.id, iteration.id)).get()
         ?.status,

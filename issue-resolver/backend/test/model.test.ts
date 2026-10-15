@@ -164,7 +164,7 @@ describe('model — runIssueIteration → pi.run', () => {
       },
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(pi.calls).toHaveLength(1);
     expect(pi.calls[0].options?.model).toBe('M');
   });
@@ -316,7 +316,7 @@ describe('step_models — runIssueIteration → pi.run', () => {
       },
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(pi.calls.map((call) => call.options?.model)).toEqual([
       'fallback',
       'review-only',

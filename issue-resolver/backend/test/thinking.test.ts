@@ -255,7 +255,7 @@ describe('thinking_level — runIssueIteration → pi.run', () => {
       },
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(pi.calls.map((call) => call.options?.thinkingLevel)).toEqual([
       'medium',
       'high',

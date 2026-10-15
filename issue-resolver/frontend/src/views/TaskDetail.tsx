@@ -27,6 +27,7 @@ import {
   createIterationWithFiles,
   deleteIssueFile,
   devServerPortOf,
+  fixAfterReview,
   getIssue,
   getIssueFiles,
   getIterations,
@@ -42,6 +43,7 @@ import {
   sendIterationMessage,
   sendUiResponse,
   stopDevServers,
+  type MergeRequestInfo,
 } from '../api/client';
 import {
   DELETE_TIMEOUT_MS,
@@ -72,6 +74,7 @@ import SessionStatsBar, {
 } from '../components/SessionStatsBar';
 import StepReportView from '../components/StepReportView';
 import { thinkingLevelsFor } from '../constants/thinking-levels';
+import { useMergeRequests } from '../hooks/useMergeRequests';
 import { statusColor, stepStatusColor } from '../theme';
 import {
   REPO_PREP_COLORS,
@@ -411,6 +414,130 @@ const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)] transition-base';
 const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
 
+/** Подписи и цвета бейджа статуса MR в матричной палитре. */
+const MR_STATUS_LABELS: Record<MergeRequestInfo['status'], string> = {
+  open: 'open',
+  merged: 'merged',
+  closed: 'closed',
+};
+const MR_STATUS_COLORS: Record<MergeRequestInfo['status'], string> = {
+  open: '#00FF41',
+  merged: '#9D7CFF',
+  closed: '#FF0033',
+};
+
+/** MR завершён (merged/closed): правки после ревью для него не запускаем. */
+function isMrTerminal(status: MergeRequestInfo['status']): boolean {
+  return status === 'merged' || status === 'closed';
+}
+
+/**
+ * Подпись ссылки на MR: GitLab нумерует `!id`, GitHub/Bitbucket — `#id`.
+ * Бэкенд пока может хранить заглушку (URL) вместо числового id — её не
+ * показываем, оставляем нейтральное «MR».
+ */
+function mrLinkLabel(mergeRequest: MergeRequestInfo): string {
+  const id = mergeRequest.mrId;
+  if (!id || id.includes('/') || id.length > 16) return 'MR';
+  return mergeRequest.mrSource === 'gitlab' ? `MR !${id}` : `MR #${id}`;
+}
+
+interface MergeRequestCardProps {
+  fullName: string;
+  mergeRequest: MergeRequestInfo | null;
+  loading: boolean;
+  /** Есть незавершённая итерация — запускать правки нельзя. */
+  blocked: boolean;
+  /** Запрос fix-after-review уже в полёте. */
+  submitting: boolean;
+  onFixAfterReview: (mergeRequest: MergeRequestInfo) => void;
+}
+
+/**
+ * Карточка MR/PR репозитория: ссылка, цветной бейдж статуса, число
+ * незакрытых комментариев и кнопка «Исправить после ревью».
+ */
+function MergeRequestCard({
+  fullName,
+  mergeRequest,
+  loading,
+  blocked,
+  submitting,
+  onFixAfterReview,
+}: MergeRequestCardProps) {
+  if (!mergeRequest) {
+    return (
+      <div
+        data-testid="merge-request-card"
+        data-repo={fullName}
+        className="mt-1 w-full border border-dashed border-[#008F11]/60 px-2 py-1 text-[11px] text-[#00FF41]/50"
+      >
+        {loading ? `${fullName}: загрузка MR…` : `${fullName}: MR ещё не создан`}
+      </div>
+    );
+  }
+
+  const terminal = isMrTerminal(mergeRequest.status);
+  const hasUnresolved = mergeRequest.unresolvedCount > 0;
+  const disabled = terminal || blocked || submitting;
+
+  return (
+    <div
+      data-testid="merge-request-card"
+      data-repo={fullName}
+      data-status={mergeRequest.status}
+      className="mt-1 w-full border border-[#008F11] bg-[#002B00]/30 px-2 py-1.5 text-[11px]"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <a
+          data-testid="merge-request-link"
+          href={mergeRequest.mrUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[#00B4FF] underline decoration-dotted underline-offset-2 hover:text-[#00FF41] transition-base"
+        >
+          {mrLinkLabel(mergeRequest)}
+        </a>
+        <span
+          data-testid="merge-request-status"
+          className="border px-1 py-0.5 text-[10px] uppercase tracking-wider"
+          style={{
+            color: MR_STATUS_COLORS[mergeRequest.status],
+            borderColor: MR_STATUS_COLORS[mergeRequest.status],
+          }}
+        >
+          {MR_STATUS_LABELS[mergeRequest.status]}
+        </span>
+        <span
+          data-testid="merge-request-unresolved"
+          className={hasUnresolved ? 'text-[#FFB000]' : 'text-[#00FF41]/50'}
+        >
+          незакрытых комментариев: {mergeRequest.unresolvedCount}
+        </span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          data-testid="fix-after-review"
+          disabled={disabled}
+          onClick={() => onFixAfterReview(mergeRequest)}
+          className="min-h-7 border border-[#00B4FF] bg-[#001018] px-2 py-0.5 font-medium text-[#00B4FF] hover:bg-[#00B4FF] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#001018] disabled:hover:text-[#00B4FF] transition-base"
+        >
+          {submitting ? 'Запуск…' : 'Исправить после ревью'}
+        </button>
+        {terminal && (
+          <span className="text-[#00FF41]/50">
+            MR уже {MR_STATUS_LABELS[mergeRequest.status]}, правки недоступны
+          </span>
+        )}
+        {!terminal && blocked && (
+          <span className="text-[#FFB000]">итерация выполняется…</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface TaskDetailProps {
   issueId?: string | null;
   /** Открыть модалку результата сразу после загрузки (deep-link `…/result`). */
@@ -501,6 +628,11 @@ export default function TaskDetail({
   const [abortError, setAbortError] = useState<string | null>(null);
   const [repeatingId, setRepeatingId] = useState<string | null>(null);
   const [repeatError, setRepeatError] = useState<string | null>(null);
+  // «Исправить после ревью» — единственный запрос в полёте для всех карточек.
+  const [fixingAfterReview, setFixingAfterReview] = useState(false);
+  const [fixAfterReviewError, setFixAfterReviewError] = useState<string | null>(
+    null,
+  );
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
     null,
   );
@@ -1210,6 +1342,12 @@ export default function TaskDetail({
         state.issue.status !== 'pending' &&
         state.issue.status !== 'preparing';
   // Сводка по репозиториям для шапки: статус — из накопленного прогресса.
+  const {
+    mergeRequests,
+    loading: mergeRequestsLoading,
+    error: mergeRequestsError,
+  } = useMergeRequests(issueId, refreshTick);
+
   const repoRows =
     state.status === 'ready'
       ? state.issue.repositories.map((repository) => ({
@@ -1554,6 +1692,45 @@ export default function TaskDetail({
     }
   }
 
+  /**
+   * Запуск новой итерации по комментариям ревью: подтверждение → POST
+   * `fix-after-review` → перезагрузка итераций (SSE сам подхватит события).
+   */
+  async function handleFixAfterReview(mergeRequest: MergeRequestInfo) {
+    if (!issueId || !canStart) return;
+
+    const message =
+      mergeRequest.unresolvedCount > 0
+        ? `Запустить исправление после ревью? Незакрытых комментариев: ${mergeRequest.unresolvedCount}.`
+        : 'Незакрытых комментариев нет. Всё равно запустить исправление?';
+    if (!window.confirm(message)) return;
+
+    setFixAfterReviewError(null);
+    setFixingAfterReview(true);
+
+    try {
+      const created = await fixAfterReview(issueId);
+      const iterations = await getIterations(issueId);
+      setState((current) =>
+        current.status === 'ready'
+          ? {
+              ...current,
+              iterations: [...iterations].sort((a, b) => a.number - b.number),
+            }
+          : current,
+      );
+      setSelectedIterationId(created.id);
+      setScrollToIterations(true);
+      setRefreshTick((tick) => tick + 1);
+    } catch (error) {
+      setFixAfterReviewError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setFixingAfterReview(false);
+    }
+  }
+
   async function handleQuestionResponse(
     question: QuestionEvent,
     payload: { value?: string; confirmed?: boolean; cancelled?: boolean },
@@ -1869,6 +2046,51 @@ export default function TaskDetail({
                     </li>
                   ))}
                 </ul>
+                {repoRows.some(({ repository }) => repository.create_mr) && (
+                  <div
+                    data-testid="merge-request-section"
+                    className="mt-2 space-y-1"
+                  >
+                    {repoRows
+                      .filter(({ repository }) => repository.create_mr)
+                      .map(({ repository, fullName }) => (
+                        <MergeRequestCard
+                          key={repository.id}
+                          fullName={fullName}
+                          mergeRequest={
+                            mergeRequests.find(
+                              (mr) =>
+                                mr.repositoryUrl === repository.repository_url,
+                            ) ?? null
+                          }
+                          loading={mergeRequestsLoading}
+                          blocked={!canStart}
+                          submitting={fixingAfterReview}
+                          onFixAfterReview={(mr) =>
+                            void handleFixAfterReview(mr)
+                          }
+                        />
+                      ))}
+                    {mergeRequestsError && (
+                      <p
+                        role="alert"
+                        data-testid="merge-requests-error"
+                        className="text-[10px] text-[#FF0033]"
+                      >
+                        Не удалось загрузить MR: {mergeRequestsError}
+                      </p>
+                    )}
+                    {fixAfterReviewError && (
+                      <p
+                        role="alert"
+                        data-testid="fix-after-review-error"
+                        className="text-[10px] text-[#FF0033]"
+                      >
+                        {fixAfterReviewError}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             {state.issue.jira_issue_url && (

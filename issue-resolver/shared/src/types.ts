@@ -125,6 +125,11 @@ export interface Iteration {
   /** Нужен ли запуск Reviewer. */
   is_review_need: boolean;
   steps: PipelineStep[];
+  /**
+   * Имя существующей feature-ветки MR для amend-итерации
+   * (fix-after-review): pr-шаг force-push'ит в неё, новый MR не создаётся.
+   */
+  amendBranch?: string | null;
   status: TaskStatus;
   /** Общая модель-фолбек для всех шагов (обратная совместимость). */
   model?: string | null;
@@ -809,4 +814,37 @@ export interface UpdateTagRequest {
   name?: string;
   description?: string;
   repositories?: { repository_id: string; bootstrap_enabled?: boolean }[];
+}
+
+/** Статус MR/PR (запрашивается с хостинга). */
+export type MrStatus = 'open' | 'merged' | 'closed';
+
+/** Состояние MR/PR с хостинга. */
+export interface MrState {
+  mrId: string;
+  mrUrl: string;
+  status: MrStatus;
+  title: string;
+  description: string;
+}
+
+/** Комментарий к MR/PR (человеческое ревью). */
+export interface MrComment {
+  id: string;
+  author: string;
+  body: string;
+  createdAt: string;
+  /** Закрыт ли комментарий автором (resolved). */
+  resolved: boolean;
+}
+
+/** Сохранённые данные MR в БД. */
+export interface MergeRequestRecord {
+  iterationId: string;
+  repositoryUrl: string;
+  mrUrl: string;
+  mrId: string;
+  mrSource: 'gitlab' | 'github' | 'bitbucket';
+  headBranch: string;
+  createdAt: string;
 }

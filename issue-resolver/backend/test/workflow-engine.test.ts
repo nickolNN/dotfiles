@@ -194,7 +194,7 @@ describe('runIteration — один шаг', () => {
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:success']);
 
     expect(store.outputs).toHaveLength(1);
@@ -240,7 +240,7 @@ describe('runIteration — один шаг', () => {
 
     // В момент исполнения шага прогон в store — running.
     expect(observed).toEqual(['running']);
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     // Завершение перезаписывает running финальным статусом.
     expect(trace(store)).toEqual(['resolve#1:success']);
   });
@@ -375,7 +375,7 @@ describe('runIteration — один шаг', () => {
     const result = await runIteration(deps, makeInput(['resolve']));
 
     // resolve#1 упал, resolve#2 (self-retry) прошёл → completed.
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:failed', 'resolve#2:success']);
     expect(pi.calls).toHaveLength(2);
   });
@@ -390,7 +390,7 @@ describe('runIteration — один шаг', () => {
 
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual([
       'resolve#1:failed',
       'resolve#2:failed',
@@ -514,7 +514,7 @@ describe('runIteration — один шаг', () => {
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: true });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: true, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:needs_input']);
   });
 });
@@ -527,7 +527,7 @@ describe('runIteration — канонический порядок шагов', 
 
     const result = await runIteration(deps, makeInput(['resolve', 'refine']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
     expect(pi.calls).toHaveLength(2);
   });
@@ -542,7 +542,7 @@ describe('runIteration — канонический порядок шагов', 
       makeInput(['review', 'resolve', 'resolve', 'review']),
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:success', 'review#1:success']);
     expect(pi.calls).toHaveLength(2);
   });
@@ -577,7 +577,7 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:success']);
     expect(store.outputs[0].report).toBe('');
   });
@@ -618,7 +618,7 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     const result = await runIteration(deps, makeInput(['resolve']));
 
     // 4 попытки (1 + 3 self-retry) — все неудачные из-за файла.
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual([
       'resolve#1:failed',
       'resolve#2:failed',
@@ -641,7 +641,7 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: true });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: true, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:needs_input']);
     expect(JSON.parse(store.outputs[0].report)).toEqual({
       status: 'blocked',
@@ -657,7 +657,7 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:success']);
     expect(store.outputs[0].report).toBe('');
   });
@@ -673,7 +673,7 @@ describe('runIteration — цикл фидбека', () => {
 
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual([
       'resolve#1:success',
       'review#1:failed',
@@ -693,7 +693,7 @@ describe('runIteration — цикл фидбека', () => {
 
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: true });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: true, mrArtifacts: [] });
     expect(trace(store)).toEqual([
       'resolve#1:success',
       'review#1:failed',
@@ -729,7 +729,7 @@ describe('runIteration — abort', () => {
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
 
     // Терминальный abort: ни retry (review#2), ни следующих шагов.
-    expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:success', 'review#1:aborted']);
     expect(pi.calls).toHaveLength(2);
     // Отчёт и output всё равно фиксируются для прерванного шага.
@@ -852,7 +852,7 @@ describe('runIteration — без репозиториев', () => {
 
     const result = await runIteration(deps, emptyReposInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(git.prepares).toEqual([]);
     expect(pi.calls).toHaveLength(1);
     expect(pi.calls[0].options?.cwd).toBe('/workspaces/issue-1');
@@ -865,7 +865,7 @@ describe('runIteration — без репозиториев', () => {
 
     const result = await runIteration(deps, emptyReposInput(['resolve', 'pr']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(git.prepares).toEqual([]);
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
@@ -926,7 +926,9 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result.iterationStatus).toBe('completed');
+    expect(result.needsInput).toBe(false);
+    expect(result.mrArtifacts).toHaveLength(2);
 
     // commit/push: по одному на репозиторий, в уникальную feature-ветку.
     // base (`main`/`develop`) защищена от прямого push — туда не пушим.
@@ -957,6 +959,13 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       token: 'dummy-token',
     });
 
+    // mrArtifacts теперь возвращаются из движка.
+    expect(result.mrArtifacts).toHaveLength(2);
+    expect(result.mrArtifacts[0].repositoryUrl).toBe('https://github.com/acme/app.git');
+    expect(result.mrArtifacts[1].repositoryUrl).toBe(
+      'git@gitlab.example.com:team/lib.git',
+    );
+
     // log-события о commit (system) и MR (mr) ушли в SSE с честными stream.
     const systemData = events
       .filter((event) => event.type === 'log' && event.stream === 'system')
@@ -978,6 +987,27 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     }
   });
 
+  it('amendBranch: force-push в существующую ветку, новый MR не создаётся', async () => {
+    const { deps, pi, git, mr } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('pr'));
+
+    const result = await runIteration(deps, {
+      ...makePrInput(['resolve', 'pr']),
+      amendBranch: 'feature/kos-1-fix-abcd12',
+    });
+
+    expect(result.iterationStatus).toBe('completed');
+    // Amend обновляет существующий MR — новых артефактов нет.
+    expect(result.mrArtifacts).toEqual([]);
+    expect(mr.calls).toEqual([]);
+    expect(git.commits).toHaveLength(2);
+    for (const commit of git.commits) {
+      expect(commit.branchName).toBe('feature/kos-1-fix-abcd12');
+      expect(commit.forcePush).toBe(true);
+    }
+  });
+
   it('branch protection: push в feature-ветку, MR head≠base (base не пушится)', async () => {
     const { deps, pi, git, mr } = makeDeps();
     pi.enqueue(pass('resolve'));
@@ -985,7 +1015,9 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result.iterationStatus).toBe('completed');
+    expect(result.needsInput).toBe(false);
+    expect(result.mrArtifacts).toHaveLength(2);
     // Регрессия: раньше push шёл в `workspace.branch` (= base), что Bitbucket
     // отвергает на protected-ветке. Теперь push только в feature-ветку.
     expect(git.commits).toHaveLength(2);
@@ -1013,7 +1045,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       makePrInput(['resolve', 'pr'], 'dummy-token', repositories),
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(git.prepares).toEqual([]);
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
@@ -1033,7 +1065,13 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       makePrInput(['resolve', 'pr'], 'dummy-token', repositories),
     );
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result.iterationStatus).toBe('completed');
+    expect(result.needsInput).toBe(false);
+    // MR только для второго репо.
+    expect(result.mrArtifacts).toHaveLength(1);
+    expect(result.mrArtifacts[0].repositoryUrl).toBe(
+      'git@gitlab.example.com:team/lib.git',
+    );
     expect(git.commits).toHaveLength(1);
     expect(mr.calls).toHaveLength(1);
     expect(mr.calls[0].repositoryUrl).toBe(
@@ -1050,7 +1088,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
     // pr-шаг был успешен — падение публикации MR не должно его отменить.
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     // commit/push первого репо успел пройти, MR не создан (ошибка на createMr).
     expect(git.commits).toHaveLength(1);
     expect(mr.calls).toEqual([]);
@@ -1064,7 +1102,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     // commit/push упал до записи — ни коммитов, ни MR.
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
@@ -1077,7 +1115,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
   });
@@ -1088,7 +1126,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     const result = await runIteration(deps, makePrInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
   });
@@ -1128,7 +1166,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
 
     // refine + 2 workers + coordinator = 4 pi-вызова (3 на resolve-часть).
@@ -1238,7 +1276,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false, mrArtifacts: [] });
     // refine + 2 воркера = 3 вызова; координатор после abort не запускался.
     expect(pi.calls).toHaveLength(3);
     const resolveRunId = store.runs[1].id;
@@ -1255,7 +1293,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
     expect(pi.calls).toHaveLength(2);
     expect(pi.calls[1].options?.stepRunId).toBe(store.runs[1].id);
@@ -1298,7 +1336,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
 
     const resolveRunId = store.runs[1].id;
@@ -1324,7 +1362,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual(['resolve#1:success']);
     expect(pi.calls).toHaveLength(1);
   });

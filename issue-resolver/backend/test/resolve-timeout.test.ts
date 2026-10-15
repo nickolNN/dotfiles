@@ -287,7 +287,7 @@ describe('runIteration — падение/зависание pi-агента з�
 
     const result = await runIteration(deps, makeInput(['resolve'], 25));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual([
       'resolve#1:failed',
       'resolve#2:failed',
@@ -318,7 +318,7 @@ describe('runIteration — падение/зависание pi-агента з�
 
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     // refine успешен, resolve — 4 попытки (1 осн + 3 self-retry), все failed.
     expect(trace(store)).toEqual([
       'refine#1:success',
@@ -350,7 +350,7 @@ describe('runIteration — падение/зависание pi-агента з�
 
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual([
       'refine#1:success',
       'resolve#1:failed',
@@ -373,7 +373,7 @@ describe('runIteration — падение/зависание pi-агента з�
 
     const result = await runIteration(deps, makeInput(['refine', 'resolve'], 20));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual([
       'refine#1:success',
       'resolve#1:failed',
@@ -396,7 +396,7 @@ describe('runIteration — падение/зависание pi-агента з�
 
     const result = await runIteration(deps, makeInput(['refine', 'resolve'], 20));
 
-    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false, mrArtifacts: [] });
     expect(trace(store)).toEqual([
       'refine#1:success',
       'resolve#1:failed',

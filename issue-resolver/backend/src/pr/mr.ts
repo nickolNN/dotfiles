@@ -4,6 +4,8 @@
  * GitLab/GitHub через global fetch — без новых зависимостей.
  */
 
+import type { MrComment, MrState } from '@issue-resolver/shared';
+
 export interface MrCreateInput {
   /** 'git@gitlab...:project.git' (ssh) или https-URL. */
   repositoryUrl: string;
@@ -26,6 +28,20 @@ export interface MrCreateResult {
 
 export interface MrClient {
   createMr(input: MrCreateInput): Promise<MrCreateResult>;
+
+  /** Состояние MR (open/merged/closed) с хостинга. */
+  getMr(
+    repositoryUrl: string,
+    mrId: string,
+    token: string,
+  ): Promise<MrState>;
+
+  /** Комментарии к MR (человеческое ревью). */
+  getMrComments(
+    repositoryUrl: string,
+    mrId: string,
+    token: string,
+  ): Promise<MrComment[]>;
 }
 
 /**
@@ -86,11 +102,25 @@ export function detectGitHost(
  */
 export class FakeMrClient implements MrClient {
   readonly calls: MrCreateInput[] = [];
+  readonly getMrCalls: { repositoryUrl: string; mrId: string; token: string }[] = [];
+  readonly getMrCommentsCalls: { repositoryUrl: string; mrId: string; token: string }[] = [];
   private pendingError: Error | null = null;
+  private fakeMrState: MrState | null = null;
+  private fakeMrComments: MrComment[] | null = null;
 
   /** Следующий createMr отклонится этой ошибкой. */
   failNextWith(err: Error): void {
     this.pendingError = err;
+  }
+
+  /** Задать ответ для getMr. */
+  setMrState(state: MrState): void {
+    this.fakeMrState = state;
+  }
+
+  /** Задать ответ для getMrComments. */
+  setMrComments(comments: MrComment[]): void {
+    this.fakeMrComments = comments;
   }
 
   async createMr(input: MrCreateInput): Promise<MrCreateResult> {
@@ -120,6 +150,26 @@ export class FakeMrClient implements MrClient {
       };
     }
     return { mrUrl: `${webBase}/-/merge_requests/${id}`, id };
+  }
+
+  async getMr(
+    _repositoryUrl: string,
+    mrId: string,
+    _token: string,
+  ): Promise<MrState> {
+    this.getMrCalls.push({ repositoryUrl: _repositoryUrl, mrId, token: _token });
+    if (this.fakeMrState) return this.fakeMrState;
+    throw new Error(`FakeMrClient.getMr not set up (mrId=${mrId})`);
+  }
+
+  async getMrComments(
+    _repositoryUrl: string,
+    mrId: string,
+    _token: string,
+  ): Promise<MrComment[]> {
+    this.getMrCommentsCalls.push({ repositoryUrl: _repositoryUrl, mrId, token: _token });
+    if (this.fakeMrComments) return this.fakeMrComments;
+    throw new Error(`FakeMrClient.getMrComments not set up (mrId=${mrId})`);
   }
 }
 
@@ -258,6 +308,208 @@ export class HttpMrClient implements MrClient {
       mrUrl: `https://${host}/projects/${project}/repos/${repo}/pull-requests/${data.id}`,
       id: String(data.id),
     };
+  }
+
+  async getMr(
+    repositoryUrl: string,
+    mrId: string,
+    callToken: string,
+  ): Promise<MrState> {
+    const source = detectGitHost(repositoryUrl);
+    const token = callToken || this.token;
+
+    if (source === 'github') {
+      const { owner, repo } = githubOwnerRepo(repositoryUrl);
+      const host = hostOf(repositoryUrl);
+      const apiBase =
+        host === 'github.com'
+          ? 'https://api.github.com'
+          : `https://${host}/api/v3`;
+      const response = await fetch(
+        `${apiBase}/repos/${owner}/${repo}/pulls/${mrId}`,
+        {
+          headers: {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+      if (!response.ok) throw new Error(`github get pr failed: ${response.status}`);
+      const data = (await response.json()) as {
+        number: number;
+        html_url: string;
+        state: string;
+        title: string;
+        body: string | null;
+      };
+      return {
+        mrId: String(data.number),
+        mrUrl: data.html_url,
+        status: data.state === 'open' ? 'open' : data.state === 'closed' ? 'closed' : 'merged',
+        title: data.title,
+        description: data.body ?? '',
+      };
+    }
+
+    if (source === 'gitlab') {
+      const path = gitlabProjectPath(repositoryUrl);
+      const host = hostOf(repositoryUrl);
+      const response = await fetch(
+        `https://${host}/api/v4/projects/${encodeURIComponent(path)}/merge_requests/${mrId}`,
+        { headers: { 'PRIVATE-TOKEN': token } },
+      );
+      if (!response.ok) throw new Error(`gitlab get mr failed: ${response.status}`);
+      const data = (await response.json()) as {
+        iid: number;
+        web_url: string;
+        state: string;
+        title: string;
+        description: string | null;
+      };
+      return {
+        mrId: String(data.iid),
+        mrUrl: data.web_url,
+        status: data.state === 'opened' ? 'open' : data.state === 'closed' ? 'closed' : 'merged',
+        title: data.title,
+        description: data.description ?? '',
+      };
+    }
+
+    // Bitbucket
+    const { project, repo } = bitbucketProjectRepo(repositoryUrl);
+    const host = hostOf(repositoryUrl);
+    const response = await fetch(
+      `https://${host}/rest/api/1.0/projects/${project}/repos/${repo}/pull-requests/${mrId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) throw new Error(`bitbucket get pr failed: ${response.status}`);
+    const data = (await response.json()) as {
+      id: number;
+      state: string;
+      title: string;
+      description: string | null;
+    };
+    return {
+      mrId: String(data.id),
+      mrUrl: `https://${host}/projects/${project}/repos/${repo}/pull-requests/${data.id}`,
+      status: data.state === 'OPEN' ? 'open' : data.state === 'DECLINED' ? 'closed' : 'merged',
+      title: data.title,
+      description: data.description ?? '',
+    };
+  }
+
+  async getMrComments(
+    repositoryUrl: string,
+    mrId: string,
+    callToken: string,
+  ): Promise<MrComment[]> {
+    const source = detectGitHost(repositoryUrl);
+    const token = callToken || this.token;
+
+    if (source === 'github') {
+      const { owner, repo } = githubOwnerRepo(repositoryUrl);
+      const host = hostOf(repositoryUrl);
+      const apiBase =
+        host === 'github.com'
+          ? 'https://api.github.com'
+          : `https://${host}/api/v3`;
+      // GitHub: /issues/{number}/comments + /pulls/{number}/reviews
+      const [issueResp, reviewResp] = await Promise.all([
+        fetch(`${apiBase}/repos/${owner}/${repo}/issues/${mrId}/comments`, {
+          headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${apiBase}/repos/${owner}/${repo}/pulls/${mrId}/reviews`, {
+          headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` },
+        }),
+      ]);
+      const comments: MrComment[] = [];
+      if (issueResp.ok) {
+        const data = (await issueResp.json()) as Array<{
+          id: number;
+          user: { login: string };
+          body: string;
+          created_at: string;
+        }>;
+        for (const c of data) {
+          comments.push({
+            id: String(c.id),
+            author: c.user?.login ?? 'unknown',
+            body: c.body,
+            createdAt: c.created_at,
+            resolved: false,
+          });
+        }
+      }
+      if (reviewResp.ok) {
+        const reviews = (await reviewResp.json()) as Array<{
+          id: number;
+          user: { login: string };
+          body: string;
+          submitted_at: string;
+          state: string;
+        }>;
+        for (const r of reviews) {
+          if (r.body) {
+            comments.push({
+              id: `review-${r.id}`,
+              author: r.user?.login ?? 'unknown',
+              body: r.body,
+              createdAt: r.submitted_at,
+              resolved: r.state === 'APPROVED',
+            });
+          }
+        }
+      }
+      return comments;
+    }
+
+    if (source === 'gitlab') {
+      const path = gitlabProjectPath(repositoryUrl);
+      const host = hostOf(repositoryUrl);
+      const response = await fetch(
+        `https://${host}/api/v4/projects/${encodeURIComponent(path)}/merge_requests/${mrId}/notes?sort=asc&per_page=100`,
+        { headers: { 'PRIVATE-TOKEN': token } },
+      );
+      if (!response.ok) throw new Error(`gitlab get notes failed: ${response.status}`);
+      const data = (await response.json()) as Array<{
+        id: number;
+        author: { name: string };
+        body: string;
+        created_at: string;
+        resolvable: boolean;
+        resolved: boolean;
+      }>;
+      return data.map((n) => ({
+        id: String(n.id),
+        author: n.author?.name ?? 'unknown',
+        body: n.body,
+        createdAt: n.created_at,
+        resolved: n.resolvable ? n.resolved : false,
+      }));
+    }
+
+    // Bitbucket
+    const { project, repo } = bitbucketProjectRepo(repositoryUrl);
+    const host = hostOf(repositoryUrl);
+    const response = await fetch(
+      `https://${host}/rest/api/1.0/projects/${project}/repos/${repo}/pull-requests/${mrId}/comments`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) throw new Error(`bitbucket get comments failed: ${response.status}`);
+    const data = (await response.json()) as Array<{
+      id: number;
+      author: { displayName: string };
+      text: string;
+      createdDate: number;
+      state: string;
+    }>;
+    return data.map((c) => ({
+      id: String(c.id),
+      author: c.author?.displayName ?? 'unknown',
+      body: c.text,
+      createdAt: new Date(c.createdDate).toISOString(),
+      resolved: c.state === 'RESOLVED',
+    }));
   }
 }
 
