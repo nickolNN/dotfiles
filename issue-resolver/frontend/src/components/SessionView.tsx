@@ -383,7 +383,7 @@ function SessionWorking({
     <div
       data-testid="session-working"
       data-phase={phase.kind}
-      className="sticky bottom-0 z-10 flex flex-wrap items-center gap-x-2 border-t border-[#008F11]/40 bg-[#000200] px-2 py-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
+      className="flex flex-wrap items-center gap-x-2 border-t border-[#008F11]/40 bg-[#000200] px-2 py-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
     >
       <span aria-hidden="true" className="animate-pulse-subtle">
         ◐

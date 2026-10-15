@@ -4,7 +4,8 @@ import type { SessionEvent } from '../api/session-events';
 import { getRoomAgents } from '../api/client';
 import { subscribeToAgentEvents } from '../api/sse';
 import AutoScrollBox from './AutoScrollBox';
-import { formatTokens } from './SessionStatsBar';
+import { formatTokens, TokenDownIcon, TokenUpIcon } from './SessionStatsBar';
+import { CacheIcon } from './TokenStats';
 import SessionView from './SessionView';
 import { formatDuration, useNow } from '../lib/time';
 
@@ -46,6 +47,10 @@ export interface StageGroup {
   /** Подпись этапа: `stageName`, иначе «Этап N». */
   name: string;
   tokens: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
   cost: number;
   /** Wall-time этапа (от первого старта до последнего конца); null без тайминга. */
   wallMs: number | null;
@@ -63,7 +68,6 @@ export interface StageGroup {
 export function groupAgentsByStage(
   agents: RoomAgent[],
   now: number,
-  endedAt: Record<string, number>,
 ): StageGroup[] {
   const byStage = new Map<number, RoomAgent[]>();
   for (const agent of agents) {
@@ -77,6 +81,10 @@ export function groupAgentsByStage(
     .sort(([a], [b]) => a - b)
     .map(([stage, stageAgents]) => {
       let tokens = 0;
+      let input = 0;
+      let output = 0;
+      let cacheRead = 0;
+      let cacheWrite = 0;
       let cost = 0;
       const models: string[] = [];
       let contextPercent: number | null = null;
@@ -84,7 +92,12 @@ export function groupAgentsByStage(
       let lastEnd = Number.NEGATIVE_INFINITY;
 
       for (const agent of stageAgents) {
-        tokens += agent.stats?.tokens.total ?? 0;
+        const t = agent.stats?.tokens;
+        tokens += t?.total ?? 0;
+        input += t?.input ?? 0;
+        output += t?.output ?? 0;
+        cacheRead += t?.cacheRead ?? 0;
+        cacheWrite += t?.cacheWrite ?? 0;
         cost += agent.stats?.cost ?? 0;
 
         const model = agent.stats?.model?.trim();
@@ -104,7 +117,7 @@ export function groupAgentsByStage(
           const end =
             agent.status === 'running'
               ? now
-              : (endedAt[agent.id] ?? now);
+              : (endMillis(agent) ?? now);
           lastEnd = Math.max(lastEnd, Math.max(start, end));
         }
       }
@@ -117,7 +130,7 @@ export function groupAgentsByStage(
           ? Math.max(0, lastEnd - firstStart)
           : null;
 
-      return { stage, name, tokens, cost, wallMs, models, contextPercent };
+      return { stage, name, tokens, input, output, cacheRead, cacheWrite, cost, wallMs, models, contextPercent };
     });
 }
 
@@ -180,18 +193,26 @@ function startMillis(agent: RoomAgent): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/** Конец агента в мс эпохи; null, если тайминга нет/битый ISO или running. */
+function endMillis(agent: RoomAgent): number | null {
+  if (agent.status === 'running' || !agent.endedAt) return null;
+  const parsed = Date.parse(agent.endedAt);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /**
  * Длительность агента: у running — живой `now - start`, у терминального —
- * зафиксированный на момент перехода конец (иначе `now`). null без старта.
+ * `endedAt - startedAt` (из бэкенда), иначе `now - start`.
  */
 function agentDurationMs(
   agent: RoomAgent,
   now: number,
-  endedAt: Record<string, number>,
 ): number | null {
   const start = startMillis(agent);
   if (start === null) return null;
-  const end = agent.status === 'running' ? now : (endedAt[agent.id] ?? now);
+  const end = agent.status === 'running'
+    ? now
+    : (endMillis(agent) ?? now);
   return Math.max(0, end - start);
 }
 
@@ -237,9 +258,6 @@ export default function RoomAgentTabs({
   const [liveByAgent, setLiveByAgent] = useState<
     Record<string, SessionEvent[]>
   >({});
-  // Конец работы терминального агента: фиксируем при первом наблюдении, чтобы
-  // elapsed на вкладке не «полз» после завершения (у бэкенда нет endedAt).
-  const [endedAt, setEndedAt] = useState<Record<string, number>>({});
   // Тик опроса статусов, пока есть работающий агент.
   const [pollTick, setPollTick] = useState(0);
   // Итерация, для которой уже загружен список: смена итерации — это сброс и
@@ -258,7 +276,6 @@ export default function RoomAgentTabs({
       // Новая итерация: прошлый выбор и live-буферы больше не актуальны.
       setSelectedId(null);
       setLiveByAgent({});
-      setEndedAt({});
       setAgentsState({ status: 'loading' });
     } else {
       // Фоновое обновление не должно мигать «Загрузка…» и терять вкладки.
@@ -273,18 +290,6 @@ export default function RoomAgentTabs({
         const sorted = sortAgents(Array.isArray(agents) ? agents : []);
         setAgentsState({ status: 'ready', agents: sorted });
         setSelectedId((current) => pickDefaultAgentId(sorted, current));
-        setEndedAt((current) => {
-          const stamp = Date.now();
-          const next = { ...current };
-          let changed = false;
-          for (const agent of sorted) {
-            if (agent.status !== 'running' && next[agent.id] === undefined) {
-              next[agent.id] = stamp;
-              changed = true;
-            }
-          }
-          return changed ? next : current;
-        });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -364,29 +369,52 @@ export default function RoomAgentTabs({
   // когда все завершились).
   const stepTotals = useMemo(() => {
     let tokens = 0;
+    let input = 0;
+    let output = 0;
+    let cacheRead = 0;
+    let cacheWrite = 0;
     let cost = 0;
     let firstStart = Number.POSITIVE_INFINITY;
+    let lastEnd = Number.NEGATIVE_INFINITY;
+    let anyRunning = false;
     for (const agent of agents) {
-      tokens += agent.stats?.tokens.total ?? 0;
+      const t = agent.stats?.tokens;
+      tokens += t?.total ?? 0;
+      input += t?.input ?? 0;
+      output += t?.output ?? 0;
+      cacheRead += t?.cacheRead ?? 0;
+      cacheWrite += t?.cacheWrite ?? 0;
       cost += agent.stats?.cost ?? 0;
       const start = startMillis(agent);
-      if (start !== null) firstStart = Math.min(firstStart, start);
+      if (start !== null) {
+        firstStart = Math.min(firstStart, start);
+        const end =
+          agent.status === 'running'
+            ? now
+            : (endMillis(agent) ?? now);
+        lastEnd = Math.max(lastEnd, Math.max(start, end));
+        if (agent.status === 'running') anyRunning = true;
+      }
     }
-    const wallMs = Number.isFinite(firstStart)
-      ? Math.max(0, now - firstStart)
-      : null;
-    return { tokens, cost, wallMs };
+    // Если все агенты завершены — фактическая длительность шага
+    // (lastEnd - firstStart) из бэкендового endedAt.
+    // Если хоть один running — elapsed с начала.
+    const wallMs =
+      Number.isFinite(firstStart) && Number.isFinite(lastEnd)
+        ? Math.max(0, anyRunning ? now - firstStart : lastEnd - firstStart)
+        : null;
+    return { tokens, input, output, cacheRead, cacheWrite, cost, wallMs };
   }, [agents, now]);
 
   // Сводка по этапам staged-режима (обычная комната и финальный координатор
   // без `stage` в неё не входят).
   const stageGroups = useMemo(
-    () => groupAgentsByStage(agents, now, endedAt),
-    [agents, now, endedAt],
+    () => groupAgentsByStage(agents, now),
+    [agents, now],
   );
 
   const selectedDuration = selected
-    ? formatDuration(agentDurationMs(selected, now, endedAt))
+    ? formatDuration(agentDurationMs(selected, now))
     : '';
 
   if (agentsState.status === 'loading') {
@@ -429,8 +457,21 @@ export default function RoomAgentTabs({
         data-testid="room-step-summary"
         className="mb-1 text-[10px] tracking-wider text-[#00FF41]/60"
       >
-        Всего: {formatTokens(stepTotals.tokens)} токенов ·{' '}
-        {formatCost(stepTotals.cost)} ·{' '}
+        Всего:{' '}
+        <span className="inline-flex items-baseline gap-0.5">
+          <TokenUpIcon />
+          {formatTokens(stepTotals.input)}
+        </span>{' '}
+        <span className="inline-flex items-baseline gap-0.5">
+          <TokenDownIcon />
+          {formatTokens(stepTotals.output)}
+        </span>{' '}
+        <span className="inline-flex items-baseline gap-0.5">
+          <CacheIcon />
+          {formatTokens(stepTotals.cacheRead + stepTotals.cacheWrite)}
+        </span>{' '}
+        · {formatCost(stepTotals.cost)}{' '}
+        ·{' '}
         {stepTotals.wallMs === null
           ? '—'
           : formatDuration(stepTotals.wallMs)}
@@ -451,10 +492,23 @@ export default function RoomAgentTabs({
               >
                 {group.name}
               </span>{' '}
-              · <span data-testid="room-stage-tokens">
-                {formatTokens(group.tokens)}
+              ·{' '}
+              <span
+                data-testid="room-stage-tokens"
+                className="inline-flex items-baseline gap-0.5"
+              >
+                <TokenUpIcon />
+                {formatTokens(group.input)}
               </span>{' '}
-              токенов ·{' '}
+              <span className="inline-flex items-baseline gap-0.5">
+                <TokenDownIcon />
+                {formatTokens(group.output)}
+              </span>{' '}
+              <span className="inline-flex items-baseline gap-0.5">
+                <CacheIcon />
+                {formatTokens(group.cacheRead + group.cacheWrite)}
+              </span>{' '}
+              ·{' '}
               <span data-testid="room-stage-cost">
                 {formatCost(group.cost)}
               </span>{' '}

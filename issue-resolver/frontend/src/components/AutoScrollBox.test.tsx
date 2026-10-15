@@ -28,29 +28,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('AutoScrollBox — кнопка «вниз» и пиннинг ко дну', () => {
-  it('рендерит плавающую кнопку с testid, aria-label и стартовым «pinned»', () => {
+describe('AutoScrollBox — кнопка live и авто-прокрутка', () => {
+  it('рендерит плавающую кнопку с testid, aria-label и стартовым live=ON', () => {
     render(<AutoScrollBox scrollKey={0}>вывод</AutoScrollBox>);
 
     const button = screen.getByTestId('scroll-to-bottom');
     expect(button).toHaveAttribute('aria-label');
-    expect(button).toHaveAttribute('data-pinned', 'true');
+    expect(button).toHaveAttribute('data-live', 'true');
     expect(button).toHaveAttribute('aria-pressed', 'true');
+    expect(button).toHaveTextContent('● live');
+    // ON = яркая (активный режим)
+    expect(button.className).toContain('shadow-[0_0_8px_rgba(0,255,65,0.5)]');
   });
 
-  it('пока у дна — новые события авто-скроллят вниз', () => {
+  it('live ON — новые события авто-скроллят вниз', () => {
     const { rerender } = render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
     const el = scrollEl();
     setLayout(el, { scrollHeight: 777, clientHeight: 300 });
-    el.scrollTop = 477; // ровно у дна
-    fireEvent.scroll(el);
 
     rerender(<AutoScrollBox scrollKey={1}>x</AutoScrollBox>);
 
     expect(el.scrollTop).toBe(777);
   });
 
-  it('скролл вверх ставит авто-следование на паузу', () => {
+  it('live ON — скролл пользователя не выключает авто-следование (жёсткий режим)', () => {
     const { rerender } = render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
     const el = scrollEl();
     setLayout(el, { scrollHeight: 777, clientHeight: 300 });
@@ -58,16 +59,18 @@ describe('AutoScrollBox — кнопка «вниз» и пиннинг ко д�
     el.scrollTop = 0; // пользователь отмотал наверх
     fireEvent.scroll(el);
 
+    // Кнопка всё ещё показывает live (ON) — прокрутка пользователя
+    // не снимает режим.
     const button = screen.getByTestId('scroll-to-bottom');
-    expect(button).toHaveAttribute('data-pinned', 'false');
+    expect(button).toHaveAttribute('data-live', 'true');
 
     rerender(<AutoScrollBox scrollKey={1}>x</AutoScrollBox>);
 
-    // Авто-скролл не «дёргает» пользователя обратно ко дну.
-    expect(el.scrollTop).toBe(0);
+    // Авто-скролл всё равно утащит ко дну — live ON.
+    expect(el.scrollTop).toBe(777);
   });
 
-  it('клик по кнопке форсит пиннинг и мгновенный прыжок ко дну (behavior: auto)', () => {
+  it('клик по кнопке: ON → OFF (без скролла), OFF → ON (скролл ко дну)', () => {
     render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
     const el = scrollEl();
     setLayout(el, { scrollHeight: 777, clientHeight: 300 });
@@ -75,34 +78,38 @@ describe('AutoScrollBox — кнопка «вниз» и пиннинг ко д�
     (el as unknown as { scrollTo: (options: ScrollToOptions) => void }).scrollTo =
       scrollTo;
 
-    el.scrollTop = 0;
-    fireEvent.scroll(el);
-    expect(screen.getByTestId('scroll-to-bottom')).toHaveAttribute(
-      'data-pinned',
-      'false',
-    );
-
+    // Шаг 1: ON → OFF — скролл НЕ дёргается, кнопка становится приглушённой.
     fireEvent.click(screen.getByTestId('scroll-to-bottom'));
+    const offButton = screen.getByTestId('scroll-to-bottom');
+    expect(offButton).toHaveAttribute('data-live', 'false');
+    expect(offButton).toHaveTextContent('● live');
+    // OFF = приглушённая
+    expect(offButton.className).toContain('text-[#00FF41]/40');
+    // scrollTo не вызывался при выключении.
+    expect(scrollTo).not.toHaveBeenCalled();
 
+    // Шаг 2: OFF → ON — скролл ко дну, кнопка яркая.
+    fireEvent.click(screen.getByTestId('scroll-to-bottom'));
+    const onButton = screen.getByTestId('scroll-to-bottom');
+    expect(onButton).toHaveAttribute('data-live', 'true');
+    expect(onButton).toHaveTextContent('● live');
+    expect(onButton.className).toContain('shadow-[0_0_8px_rgba(0,255,65,0.5)]');
     expect(scrollTo).toHaveBeenCalledWith({ top: 777, behavior: 'auto' });
     expect(el.scrollTop).toBe(777);
-    expect(screen.getByTestId('scroll-to-bottom')).toHaveAttribute(
-      'data-pinned',
-      'true',
-    );
   });
 
-  it('после клика авто-следование снова работает', () => {
+  it('live OFF — новые события НЕ авто-скроллят', () => {
     const { rerender } = render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
     const el = scrollEl();
     setLayout(el, { scrollHeight: 777, clientHeight: 300 });
 
-    el.scrollTop = 0;
-    fireEvent.scroll(el); // отмотано — пауза
-    fireEvent.click(screen.getByTestId('scroll-to-bottom')); // форсим пиннинг
+    // Выключаем live.
+    fireEvent.click(screen.getByTestId('scroll-to-bottom'));
 
+    el.scrollTop = 100;
     rerender(<AutoScrollBox scrollKey={1}>x</AutoScrollBox>);
 
-    expect(el.scrollTop).toBe(777);
+    // Позиция не изменилась — live OFF.
+    expect(el.scrollTop).toBe(100);
   });
 });

@@ -469,6 +469,8 @@ export interface RoomAgent {
   status: 'running' | 'finished' | 'aborted' | 'failed';
   /** ISO-таймстамп регистрации агента; null для записей без тайминга. */
   startedAt: string | null;
+  /** ISO-таймстамп завершения/аборта агента; отсутствует/null пока running. */
+  endedAt?: string | null;
   /**
    * Агрегированные токены/cost/context агента: usage-события его сессии,
    * поверх — последнее `stats`-событие (`get_session_stats`). null, пока
