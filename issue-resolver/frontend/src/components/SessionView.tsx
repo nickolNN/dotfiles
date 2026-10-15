@@ -65,6 +65,8 @@ interface AnalyzedEvents {
    * выбранной опции в блоке вопроса. */
   answersByQuestionId: Map<string, string>;
   bashText: string | null;
+  /** Последний `partialText` живого `thinking_update` (финального блока ещё нет). */
+  liveThinking: string | null;
   chrome: SessionChrome;
 }
 
@@ -96,14 +98,21 @@ export default function SessionView({
     resultByCallId,
     answersByQuestionId,
     bashText,
+    liveThinking,
     chrome,
   } = analyzed;
 
   useDocumentTitle(chrome.title);
 
   const now = useNow(running);
-  const phase = workingPhase(visible, resultByCallId);
+  const phase = workingPhase(visible, resultByCallId, liveThinking !== null);
   const elapsedMs = running ? workingElapsedMs(now, startedAt) : null;
+  // Живой блок размышления: финального `thinking` ещё нет, показываем
+  // накопленный partial и держим его «стримящимся».
+  const liveThinkingBlock =
+    running && liveThinking !== null ? (
+      <ThinkingBlock thinking={liveThinking} streaming />
+    ) : null;
 
   if (visible.length === 0) {
     return (
@@ -116,6 +125,7 @@ export default function SessionView({
         >
           {emptyMessage ?? 'Событий сессии пока нет.'}
         </div>
+        {liveThinkingBlock}
         {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
         {bashText !== null && <BashBlock text={bashText} />}
         <SessionWidgets widgets={chrome.widgetsBelow} placement="belowEditor" />
@@ -141,6 +151,7 @@ export default function SessionView({
           running={running}
         />
       ))}
+      {liveThinkingBlock}
       {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
       {bashText !== null && <BashBlock text={bashText} />}
       <SessionWidgets widgets={chrome.widgetsBelow} placement="belowEditor" />
@@ -172,6 +183,7 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
   let queue: { steering: string[]; followUp: string[] } | null = null;
   let title: string | null = null;
   let editorText: string | null = null;
+  let liveThinking: string | null = null;
 
   for (const event of events) {
     switch (event.type) {
@@ -234,6 +246,17 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
       case 'editor_text':
         editorText = event.text;
         break;
+      case 'thinking_update':
+        // Живой стрим размышления: запоминаем последний partialText для
+        // отдельного live-блока; в `visible` его не пушим (готового блока нет).
+        liveThinking = event.partialText;
+        break;
+      case 'thinking':
+        // Финальный блок приходит ПОСЛЕ своих update'ов — ретирит live-partial,
+        // чтобы не было дубля.
+        visible.push(event);
+        liveThinking = null;
+        break;
       default:
         visible.push(event);
     }
@@ -245,6 +268,7 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
     resultByCallId,
     answersByQuestionId,
     bashText: bashDeltas.length > 0 ? bashDeltas.join('') : null,
+    liveThinking,
     chrome: {
       sessionName,
       thinkingLevel,
@@ -280,11 +304,16 @@ type WorkingPhase =
   | { kind: 'text' }
   | { kind: 'idle' };
 
-/** Фаза по последнему видимому событию лога. */
+/**
+ * Фаза по последнему видимому событию лога. Живой `thinking_update` (финального
+ * блока ещё нет) имеет приоритет: агент прямо сейчас «думает».
+ */
 function workingPhase(
   visible: SessionEvent[],
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>,
+  liveThinking = false,
 ): WorkingPhase {
+  if (liveThinking) return { kind: 'thinking' };
   const last = visible[visible.length - 1];
   if (!last) return { kind: 'idle' };
   if (last.type === 'tool_use' && !resultByCallId.has(last.toolCallId)) {

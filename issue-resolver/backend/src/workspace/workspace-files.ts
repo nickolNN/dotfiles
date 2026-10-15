@@ -5,9 +5,12 @@
  * Рабочая папка — cwd агента в контейнере; внутри неё лежат как результат
  * (`report.md`/`report.html`/`result.json`), так и произвольные файлы, которые
  * агент создал сам (сайты, скрипты, картинки). Служебные `.`-записи
- * (`.iteration-results`, `.issue-step-result.json`, `.git`, …) и загруженные
- * пользователем вложения (`attachments/`) в список не попадают.
+ * (`.iteration-results`, `.issue-step-result.json`, `.git`, …), загруженные
+ * пользователем вложения (`attachments/`) и рабочие копии клонированных
+ * репозиториев (каталог с `.git`) в список не попадают: репозиторий — вход
+ * задачи, а не артефакт её итерации.
  */
+import { existsSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import { join, posix, resolve, sep } from 'node:path';
 import type { WorkspaceFile } from '@issue-resolver/shared';
@@ -15,6 +18,14 @@ import { workspaceHostDirFor } from './paths';
 
 /** Подпапка загрузок пользователя; в список порождённых файлов не входит. */
 const ATTACHMENTS_DIR = 'attachments';
+
+/**
+ * Каталог — рабочая копия клонированного репозитория? Признак — `.git` внутри
+ * (каталог или файл worktree/submodule). Такое поддерево целиком пропускается.
+ */
+function isRepoWorkingCopy(dir: string): boolean {
+  return existsSync(join(dir, '.git'));
+}
 
 const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   '.html': 'text/html',
@@ -74,6 +85,10 @@ export async function listWorkspaceFiles(
       }
       if (entry.isDirectory()) {
         if (name === ATTACHMENTS_DIR || name === 'node_modules') {
+          continue;
+        }
+        // Код клонированного репозитория — вход задачи, не артефакт итерации.
+        if (isRepoWorkingCopy(join(absDir, name))) {
           continue;
         }
         await walk(join(absDir, name), posix.join(relDir, name));

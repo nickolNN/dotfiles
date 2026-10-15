@@ -615,10 +615,16 @@ export class RpcSessionParser {
         this.thinkingByIndex.set(index, '');
         this.thinkingOrder.push(index);
       }
-      this.thinkingByIndex.set(
-        index,
-        `${this.thinkingByIndex.get(index) ?? ''}${message.delta}`,
-      );
+      const partialText = `${this.thinkingByIndex.get(index) ?? ''}${message.delta}`;
+      this.thinkingByIndex.set(index, partialText);
+      // Живое обновление thinking уходит подписчикам (SSE) сразу, но НЕ
+      // персистится в collected: финальный авторитетный {type:'thinking'}
+      // эмитит thinking_end/flush, как text_end фиксирует {type:'text'}.
+      this.handler.onEvent?.({
+        type: 'thinking_update',
+        contentIndex: index,
+        partialText,
+      });
       return;
     }
 

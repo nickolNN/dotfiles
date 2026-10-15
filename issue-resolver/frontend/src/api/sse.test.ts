@@ -10,6 +10,7 @@ function envelope(event: unknown): string {
 describe('parseStepEventPayload — распознавание SessionEvent', () => {
   it.each<SessionEvent>([
     { type: 'thinking', thinking: 'размышляю' },
+    { type: 'thinking_update', contentIndex: 0, partialText: 'частично' },
     {
       type: 'usage',
       usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 },

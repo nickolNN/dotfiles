@@ -549,4 +549,28 @@ describe('TaskDetail — статистика карточки шага', () => 
     const cost = await screen.findByTestId('step-cost');
     expect(cost).toHaveTextContent('$0.0123');
   });
+
+  it('single-шаг: футер показывает exec-время, модель и CTX одновременно', async () => {
+    stubFetch([
+      makeStepRun({
+        status: 'success',
+        created_at: '2026-10-09T00:00:00.000Z',
+        updated_at: '2026-10-09T00:01:00.000Z',
+        stats: makeStats({
+          contextUsage: {
+            tokens: 42_000,
+            contextWindow: 200_000,
+            percent: 21,
+          },
+        }),
+      }),
+    ]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    // exec-время шага из created_at/updated_at.
+    expect(await screen.findByTestId('step-duration')).toHaveTextContent('1м');
+    const tokens = await screen.findByTestId('step-tokens');
+    expect(tokens).toHaveTextContent('Claude Sonnet 4');
+    expect(tokens).toHaveTextContent('CTX 21%');
+  });
 });

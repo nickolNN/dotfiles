@@ -7,9 +7,14 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_GIT_TIMEOUT_MS = 60_000;
+/**
+ * Таймаут git-операций. Дефолт 5 мин: `clone --bare` реальных репозиториев
+ * легко не укладывается в минуту (aqua-com, 60 МБ — ~75 с), а по этому таймауту
+ * идёт и первичный прогрев originals-кэша. Env `GIT_TIMEOUT_MS`.
+ */
+const DEFAULT_GIT_TIMEOUT_MS = 300_000;
 
-/** Таймаут git-операций: env `GIT_TIMEOUT_MS` (default 60000). */
+/** Таймаут git-операций: env `GIT_TIMEOUT_MS` (default 300000). */
 export const gitTimeoutMs = (): number => {
   const raw = Number(process.env.GIT_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_GIT_TIMEOUT_MS;
@@ -65,7 +70,8 @@ function describeGitError(
   if (detail?.killed) {
     return new Error(
       `git ${args.join(' ')} timed out after ${timeoutMs}ms` +
-        (detail.signal ? ` (signal ${detail.signal})` : ''),
+        (detail.signal ? ` (signal ${detail.signal})` : '') +
+        ` — увеличить таймаут: GIT_TIMEOUT_MS`,
     );
   }
   return error instanceof Error ? error : new Error(String(error));

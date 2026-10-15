@@ -21,8 +21,11 @@
 ```bash
 npm install
 
-# backend: Fastify на 0.0.0.0:8080 (PORT переопределяет порт)
-cd backend && npm run start
+# backend: Fastify на 127.0.0.1:8080 (PORT переопределяет порт; наружу не выводится)
+# ISSUE_RESOLVER_LOCAL=1 обязателен для dev без docker: без него workspace root
+# остаётся docker-дефолтом /workspaces, которого в dev-контейнере нет → EACCES
+# на первой же задаче. В docker-ветке (ISSUE_RESOLVER_USE_REAL=1) /workspaces есть.
+cd backend && ISSUE_RESOLVER_LOCAL=1 npm run start
 
 # frontend: Vite dev-сервер на 0.0.0.0:5173, проксирует /issue-resolver → http://localhost:8080
 cd frontend && npm run dev -- --host 0.0.0.0 --port 5173
@@ -45,10 +48,12 @@ cd frontend && npx playwright test
 гасит backend + frontend; режим задаётся `IR_MODE=local|docker` (дефолт `local`),
 PID-файлы и логи — в `/tmp` (переопределяются `IR_PID_DIR`/`IR_LOG_DIR`).
 
-**Доступ по локальной сети (LAN).** Backend слушает `0.0.0.0:8080`, Vite —
-`0.0.0.0:5173` и проксирует `/issue-resolver` на `localhost:8080`, поэтому
-наружу достаточно опубликовать один порт UI. `bin/up.sh` в конце работы печатает
-готовую host-команду. `agent-fwd up 5173:5173`
+**Доступ по локальной сети (LAN).** Vite слушает `0.0.0.0:5173` и
+проксирует `/issue-resolver` на `127.0.0.1:8080`, поэтому наружу достаточно
+опубликовать один порт UI — сам backend слушает только loopback
+(`HOST = '127.0.0.1'` в `backend/src/server.ts`) и наружу не выводится.
+`bin/up.sh` в конце работы печатает готовую host-команду.
+`agent-fwd up 5173:5173`
 (на хосте, где есть Docker CLI и `docker.sock`) поднимает sidecar, публикующий
 `5173` контейнера на `0.0.0.0` хоста — UI открывается по `http://<host-IP>:5173`.
 Сам бэкенд наружу не выводится. Внутри dev-контейнера docker CLI/`docker.sock`
@@ -98,7 +103,13 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 подготовки — `ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS` (мс, дефолт 30 мин; тот
 же минимум 60с): прокидывается в `PiBootstrapperAgent` через
 `bootstrapperFactoryFor`, чтобы зависший анализатор не держал задачу в
-`preparing` вечно. Данные лежат в SQLite
+`preparing` вечно. Таймаут git-операций — `GIT_TIMEOUT_MS` (мс, дефолт 5 мин):
+под него попадает и первичный прогрев originals-кэша (`clone --bare`), который
+на медленной сети идёт десятки секунд. Без `ISSUE_RESOLVER_DATA_DIR` кэш живёт
+в `/tmp/issue-resolver/originals` и теряется при пересоздании контейнера — тогда
+следующий прогон снова платит за полный клон (при заданном `DATA_DIR` он лежит
+в `<DATA_DIR>/originals`). Ожидание порта dev-сервера —
+`DEV_SERVER_PORT_TIMEOUT_MS` (мс, дефолт 30 с). Данные лежат в SQLite
 (`backend/data/issue-resolver.db`, таблицы
 создаются идемпотентно при старте).
 
@@ -116,8 +127,9 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 | `GET /issues/:id/container-stats-stream` | — | SSE: живой поток статистики контейнера (docker stats `stream`). Отдаёт `text/event-stream` и шлёт только keepalive `: keepalive`, а сами события `container_stats` публикует в общую шину — их доставляет `GET /issues/:id/stream`. `404 { error }` (нет задачи) / `404 { containerName, error: 'container_not_found' }` / `503 { containerName, error: 'container_stats_unavailable' }` |
 | `GET /issues/:id/result` | — | результат задачи inline: `report.md` (`text/markdown`) или `report.html` (`text/html`); нет файла → `404 { error: 'result not found' }` |
 | `GET /issues/:id/result/download` | — | тот же файл как `Content-Disposition: attachment; filename="report.md"` (или `report.html`) / `404` |
-| `GET /issues/:id/result/files` | — | `WorkspaceFile[]` (порождённые файлы последней completed-итерации из рабочей папки; исключены `attachments/`, скрытые `.`-пути и сам артефакт результата) / `404` |
+| `GET /issues/:id/result/files` | — | `WorkspaceFile[]` (порождённые файлы последней completed-итерации из рабочей папки; исключены `attachments/`, скрытые `.`-пути, `node_modules/`, рабочие копии клонированных репозиториев (каталог с `.git`) и сам артефакт результата) / `404` |
 | `GET /issues/:id/result/files/content?path=<rel_path>` | — | содержимое файла как `Content-Disposition: attachment` / `404` |
+| `GET /issues/:id/result/files/archive` | — | `application/gzip` (`Content-Disposition: attachment; filename="issue-<id>.tar.gz"`) — tar.gz из того же отфильтрованного списка плюс сам артефакт результата из снапшота итерации; нет completed-итерации или нечего паковать → `404 { error: 'result not found' }` |
 | `GET /issues/:id/iterations` | — | `Iteration[]` (по `number` возр.) / `404` |
 | `POST /issues/:id/iterations` | `{ context, review_context?, is_review_need?, steps?, model? }` (JSON) **или** multipart (`payload` + `files`) | `201 Iteration`; запускает прогон в фоне; файлы итерации — в `attachments/iteration-<n>/` |
 | `GET /issues/:id/files` | — | `IssueFile[]` (загруженные файлы задачи; `rel_path` от корня рабочей папки, `iteration_id` для группировки) / `404` |
@@ -209,6 +221,14 @@ context», когда не пуст). Шаг `pr` добавляется в ко
 хотя бы у одного репозитория, но итоговое наличие `pr` определяется
 `desired_result` (см. выше). `Issue.description` хранит исходный
 `additional_context`.
+
+**SSE-потоки.** Каждый SSE-ответ открывается комментарием `: connected`
+(см. `openSse` в `backend/src/routes/stream.ts`). Это не данные, а требование к
+прокси: и Vite dev-proxy, и nginx держат блок заголовков в буфере до первого
+байта тела, поэтому поток, который сразу ничего не пишет, у клиента не
+открывается (`EventSource` остаётся в CONNECTING). До этого фикса через
+dev-прокси `container-stats-stream` открывался лишь на первом `: keepalive`
+спустя 15 с, а поток без событий — никогда.
 
 `SSEEvent`: `{ type: 'log' | 'step_status' | 'step_event' | 'iteration_status' |
 'workspace_progress' | 'bootstrap_log' | 'issue_deleting' | 'issue_deleted' |
@@ -643,7 +663,8 @@ URL (`RepoUrlInput`) живёт на экране «Репозитории» и 
   отсутствие `desired_result`/`pr` скрывает их совсем. Рядом с «Скачать»
   появляются отдельные ссылки скачивания файлов, порождённых агентом в рабочей
   папке последней completed-итерации (`GET /issues/:id/result/files/content`,
-  список — `GET /issues/:id/result/files`): каждый файл — своя ссылка
+  список — `GET /issues/:id/result/files`, тот же фильтр: без клонов репозиториев):
+  каждый файл — своя ссылка
   `Скачать <имя>` с размером; служебные `.`-пути, `attachments/` и сам артефакт
   результата исключены, пустой список ничего не рендерит. Если рабочая папка
   задачи удалена, а issue в БД осталась (`Issue.workspace_missing === true`), в

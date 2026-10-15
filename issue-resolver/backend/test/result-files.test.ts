@@ -98,6 +98,29 @@ describe('listWorkspaceFiles', () => {
     expect(byPath.has('attachments/a.txt')).toBe(false);
   });
 
+  it('пропускает рабочие копии клонированных репозиториев (каталог с .git)', async () => {
+    const root = await tempRoot();
+    const issueId = 'issue-2';
+    const dir = join(root, issueId);
+    // Клон репозитория: код, служебный .git и поставленные зависимости.
+    await mkdir(join(dir, 'aqua-com', '.git', 'objects'), { recursive: true });
+    await mkdir(join(dir, 'aqua-com', 'node_modules', 'left-pad'), {
+      recursive: true,
+    });
+    await writeFile(join(dir, 'aqua-com', 'src.ts'), 'export {};');
+    await writeFile(
+      join(dir, 'aqua-com', 'node_modules', 'left-pad', 'index.js'),
+      '',
+    );
+    // Артефакты итерации — на верхнем уровне, рядом с клоном.
+    await writeFile(join(dir, 'plan.md'), '# plan');
+    await writeFile(join(dir, 'report.md'), '# report');
+
+    const files = await listWorkspaceFiles(root, issueId, new Set());
+
+    expect(files.map((file) => file.rel_path)).toEqual(['plan.md', 'report.md']);
+  });
+
   it('отсутствующая рабочая папка → пустой список', async () => {
     const root = await tempRoot();
     expect(await listWorkspaceFiles(root, 'nope', new Set())).toEqual([]);

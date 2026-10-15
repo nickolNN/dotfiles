@@ -27,6 +27,7 @@ import {
   type RoomPromptInput,
   type WorkerSummary,
 } from './prompts';
+import { readStageOutcomes } from './stage-outcomes';
 import { resolveAgentTimeoutMs, withAgentTimeout } from './timeout';
 
 /** Вход комнаты resolve: общий prompt-контекст + план и адрес контейнера. */
@@ -299,12 +300,20 @@ export async function runStagedResolve(
     input.execution,
     input.maxExecutors ?? DEFAULT_MAX_ROOM_EXECUTORS,
   );
-  const outcomes: { stage: NormalizedStage; outcome: string }[] = [];
+  // Самовосстановление после падения этапа: этапы с уже записанным
+  // `.issue-stage-<i>.json` считаются завершёнными и не перезапускаются, а их
+  // исходы уходят финальному координатору. Без hostWorkspaceDir — все этапы.
+  const resume = readStageOutcomes(options.hostWorkspaceDir, stages);
+  const outcomes: { stage: NormalizedStage; outcome: string }[] = [
+    ...resume.completed,
+  ];
   // Копилка телеметрии всех агентов шага (воркеры + координаторы этапов) —
   // в конце суммируется вместе с финальным координатором.
   const allStats: SessionStats[] = [];
 
   for (const stage of stages) {
+    // Этапы до resumeIndex уже имеют персистентный исход — не повторяем их.
+    if (stage.index < resume.resumeIndex) continue;
     if (stage.executors >= 2) {
       const workItems: RoomWorkItem[] = stage.decomposition.map(
         (task, index) => ({ index, task }),

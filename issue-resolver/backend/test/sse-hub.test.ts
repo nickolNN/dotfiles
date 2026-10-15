@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
 import { createDb } from '../src/db/client';
 import { InMemorySseHub } from '../src/sse/hub';
+import { readSseData } from './fixtures/sse';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 
@@ -112,10 +113,42 @@ describe('GET /stream (глобальный SSE)', () => {
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error('no response body');
-      const { value } = await reader.read();
-      expect(new TextDecoder().decode(value)).toBe(
+      expect(await readSseData(reader)).toBe(
         `data: ${JSON.stringify(event)}\n\n`,
       );
+
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+    } finally {
+      controller.abort();
+    }
+  });
+
+  it('открывается стартовым комментарием, не дожидаясь событий', async () => {
+    const app = buildApp(createDb(':memory:'), { sse: new InMemorySseHub() });
+    openApps.push(app);
+
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const address = app.server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('server has no TCP address');
+    }
+
+    const controller = new AbortController();
+    try {
+      // В шину не публикуем ни одного события: молчащий поток обязан отдать
+      // первый байт сам, иначе прокси буферизует заголовки и EventSource не
+      // переходит в open (регрессия «мёртвого» UI в dev-режиме).
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/issue-resolver/api/v1/stream`,
+        { signal: controller.signal },
+      );
+
+      expect(response.status).toBe(200);
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('no response body');
+      const { value } = await reader.read();
+      expect(new TextDecoder().decode(value)).toBe(': connected\n\n');
 
       controller.abort();
       await reader.cancel().catch(() => undefined);

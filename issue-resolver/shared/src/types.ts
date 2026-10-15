@@ -269,6 +269,9 @@ export type CompactionReason = 'manual' | 'threshold' | 'overflow';
 export type SessionEvent =
   | { type: 'text'; text: string }
   | { type: 'thinking'; thinking: string }
+  // Живое накопление размышления во время стрима (`thinking_delta`).
+  // Не персистится в step_outputs.events: авторитетный блок — `thinking`.
+  | { type: 'thinking_update'; contentIndex: number; partialText: string }
   | {
       type: 'usage';
       usage: SessionUsage;

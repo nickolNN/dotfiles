@@ -8,6 +8,7 @@ import { createDb } from '../src/db/client';
 import { issues, iterations, stepRuns } from '../src/db/schema';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import { InMemorySseHub } from '../src/sse/hub';
+import { readSseData } from './fixtures/sse';
 
 const ISSUES_PATH = '/issue-resolver/api/v1/issues';
 const NOW = '2026-06-01T00:00:00.000Z';
@@ -173,8 +174,7 @@ describe('GET /issues/:id/stream', () => {
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error('no response body');
-      const { value } = await reader.read();
-      expect(new TextDecoder().decode(value)).toBe(
+      expect(await readSseData(reader)).toBe(
         `data: ${JSON.stringify(event)}\n\n`,
       );
 
@@ -406,8 +406,7 @@ describe('GET /iterations/:id/agents/stream', () => {
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error('no response body');
-      const { value } = await reader.read();
-      expect(new TextDecoder().decode(value)).toBe(
+      expect(await readSseData(reader)).toBe(
         `data: ${JSON.stringify(target)}\n\n`,
       );
       controller.abort();

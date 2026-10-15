@@ -39,6 +39,88 @@ type AgentsState =
   | { status: 'ready'; agents: RoomAgent[] }
   | { status: 'error'; message: string };
 
+/** Агрегат по одному этапу staged-режима (сводка над вкладками агентов). */
+export interface StageGroup {
+  /** 1-based номер этапа. */
+  stage: number;
+  /** Подпись этапа: `stageName`, иначе «Этап N». */
+  name: string;
+  tokens: number;
+  cost: number;
+  /** Wall-time этапа (от первого старта до последнего конца); null без тайминга. */
+  wallMs: number | null;
+  /** Уникальные модели агентов этапа (пусто, если телеметрии нет). */
+  models: string[];
+  /** Максимальный context% среди агентов этапа; null, если данных нет. */
+  contextPercent: number | null;
+}
+
+/**
+ * Группирует агентов staged-режима по `stage` (по возрастанию) и считает
+ * агрегаты этапа. Агенты без `stage` (обычная комната, финальный координатор)
+ * в сводку не попадают. Чистая функция — экспортируется для точечных тестов.
+ */
+export function groupAgentsByStage(
+  agents: RoomAgent[],
+  now: number,
+  endedAt: Record<string, number>,
+): StageGroup[] {
+  const byStage = new Map<number, RoomAgent[]>();
+  for (const agent of agents) {
+    if (agent.stage == null) continue;
+    const list = byStage.get(agent.stage);
+    if (list) list.push(agent);
+    else byStage.set(agent.stage, [agent]);
+  }
+
+  return [...byStage.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([stage, stageAgents]) => {
+      let tokens = 0;
+      let cost = 0;
+      const models: string[] = [];
+      let contextPercent: number | null = null;
+      let firstStart = Number.POSITIVE_INFINITY;
+      let lastEnd = Number.NEGATIVE_INFINITY;
+
+      for (const agent of stageAgents) {
+        tokens += agent.stats?.tokens.total ?? 0;
+        cost += agent.stats?.cost ?? 0;
+
+        const model = agent.stats?.model?.trim();
+        if (model && !models.includes(model)) models.push(model);
+
+        const percent = agent.stats?.contextUsage?.percent;
+        if (typeof percent === 'number' && Number.isFinite(percent)) {
+          contextPercent =
+            contextPercent === null
+              ? percent
+              : Math.max(contextPercent, percent);
+        }
+
+        const start = startMillis(agent);
+        if (start !== null) {
+          firstStart = Math.min(firstStart, start);
+          const end =
+            agent.status === 'running'
+              ? now
+              : (endedAt[agent.id] ?? now);
+          lastEnd = Math.max(lastEnd, Math.max(start, end));
+        }
+      }
+
+      const name =
+        stageAgents.find((agent) => agent.stageName?.trim())?.stageName?.trim() ??
+        `Этап ${stage}`;
+      const wallMs =
+        Number.isFinite(firstStart) && Number.isFinite(lastEnd)
+          ? Math.max(0, lastEnd - firstStart)
+          : null;
+
+      return { stage, name, tokens, cost, wallMs, models, contextPercent };
+    });
+}
+
 /** Цвет статуса вкладки/подписи (терминальные аварийные — красные). */
 const STATUS_COLOR: Record<RoomAgent['status'], string> = {
   running: '#00FF41',
@@ -296,6 +378,13 @@ export default function RoomAgentTabs({
     return { tokens, cost, wallMs };
   }, [agents, now]);
 
+  // Сводка по этапам staged-режима (обычная комната и финальный координатор
+  // без `stage` в неё не входят).
+  const stageGroups = useMemo(
+    () => groupAgentsByStage(agents, now, endedAt),
+    [agents, now, endedAt],
+  );
+
   const selectedDuration = selected
     ? formatDuration(agentDurationMs(selected, now, endedAt))
     : '';
@@ -346,6 +435,50 @@ export default function RoomAgentTabs({
           ? '—'
           : formatDuration(stepTotals.wallMs)}
       </p>
+      {stageGroups.length > 0 && (
+        <div data-testid="room-stage-summary" className="mb-1 space-y-0.5">
+          {stageGroups.map((group) => (
+            <p
+              key={group.stage}
+              data-testid="room-stage-group"
+              data-stage={group.stage}
+              data-stage-name={group.name}
+              className="text-[10px] tracking-wider text-[#00FF41]/60"
+            >
+              <span
+                data-testid="room-stage-name"
+                className="text-[#00FF41]/80"
+              >
+                {group.name}
+              </span>{' '}
+              · <span data-testid="room-stage-tokens">
+                {formatTokens(group.tokens)}
+              </span>{' '}
+              токенов ·{' '}
+              <span data-testid="room-stage-cost">
+                {formatCost(group.cost)}
+              </span>{' '}
+              ·{' '}
+              <span data-testid="room-stage-duration">
+                {group.wallMs === null ? '—' : formatDuration(group.wallMs)}
+              </span>{' '}
+              ·{' '}
+              <span data-testid="room-stage-models">
+                {group.models.length > 0 ? group.models.join(', ') : '—'}
+              </span>
+              {group.contextPercent !== null && (
+                <>
+                  {' '}
+                  ·{' '}
+                  <span data-testid="room-stage-context">
+                    CTX {Math.round(group.contextPercent)}%
+                  </span>
+                </>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
       <div
         role="tablist"
         aria-label="Агенты комнаты"

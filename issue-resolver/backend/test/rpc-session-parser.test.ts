@@ -157,8 +157,47 @@ describe('RpcSessionParser', () => {
 
     expect(out).toEqual([]);
     expect(parser.stdout()).toBe('');
-    expect(events).toEqual([{ type: 'thinking', thinking: 'думаю над этим' }]);
+    // Живой стрим: thinking_update на каждую дельту, авторитетный thinking — на end.
+    expect(events).toEqual([
+      { type: 'thinking_update', contentIndex: 0, partialText: 'думаю ' },
+      { type: 'thinking_update', contentIndex: 0, partialText: 'думаю над этим' },
+      { type: 'thinking', thinking: 'думаю над этим' },
+    ]);
+    // thinking_update НЕ персистится: в collected только финальный thinking,
+    // поэтому step_outputs.events остаётся bounded.
     expect(parser.events()).toEqual([{ type: 'thinking', thinking: 'думаю над этим' }]);
+    expect(parser.events().some((event) => event.type === 'thinking_update')).toBe(false);
+    expect(parser.events().filter((event) => event.type === 'thinking')).toHaveLength(1);
+  });
+
+  it('thinking_update: растущий partialText, свой contentIndex, без дублей финала', () => {
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    parser.handle({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_delta', contentIndex: 2, delta: 'a' },
+    });
+    parser.handle({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_delta', contentIndex: 2, delta: 'bc' },
+    });
+    parser.handle({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'thinking_end',
+        contentIndex: 2,
+        content: { type: 'thinking', thinking: 'abc' },
+      },
+    });
+
+    expect(events).toEqual([
+      { type: 'thinking_update', contentIndex: 2, partialText: 'a' },
+      { type: 'thinking_update', contentIndex: 2, partialText: 'abc' },
+      { type: 'thinking', thinking: 'abc' },
+    ]);
+    // Финальный thinking — ровно один, thinking_update в collected отсутствует.
+    expect(parser.events()).toEqual([{ type: 'thinking', thinking: 'abc' }]);
   });
 
   it('thinking_end со строковым content → авторитетный текст', () => {
@@ -185,8 +224,8 @@ describe('RpcSessionParser', () => {
   });
 
   it('message_start сбрасывает аккумуляторы: каждое сообщение эмитит свои thinking+text', () => {
-    const events: SessionEvent[] = [];
-    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+    const emitted: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => emitted.push(event) });
 
     const assistantMessage = (tag: string): void => {
       parser.handle({ type: 'message_start', message: { role: 'assistant' } });
@@ -217,7 +256,11 @@ describe('RpcSessionParser', () => {
     assistantMessage('M2');
     assistantMessage('M3');
 
+    // Живые thinking_update игнорируем: проверяем именно персистентные блоки.
+    const events = emitted.filter((event) => event.type !== 'thinking_update');
+
     // Регрессия: раньше был ровно 1 thinking + 1 text на всю сессию.
+    expect(emitted.filter((event) => event.type === 'thinking_update')).toHaveLength(3);
     expect(events.map((event) => event.type)).toEqual([
       'thinking',
       'text',

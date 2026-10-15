@@ -89,6 +89,16 @@ const twoStages: ExecutionPlan = {
   ],
 };
 
+/** Три одиночных этапа — для проверки resume по файлам исходов. */
+const threeStages: ExecutionPlan = {
+  mode: 'stages',
+  stages: [
+    { index: 1, name: 'One', task: 't1', executors: 1 },
+    { index: 2, name: 'Two', task: 't2', executors: 1 },
+    { index: 3, name: 'Three', task: 't3', executors: 1 },
+  ],
+};
+
 describe('runStagedResolve — последовательные этапы', () => {
   it('этап1 воркеры → координатор этапа1 → этап2 → финальный lead; id со /stage/', async () => {
     const pi = new FakePiRunner();
@@ -226,9 +236,10 @@ describe('runStagedResolve — последовательные этапы', () 
         JSON.stringify({ status: 'pass', summary }),
         'utf8',
       );
+    // Файлов этапов нет — resume не срабатывает, все этапы исполняются;
+    // воркер-отчёты читаются с диска.
     write('.issue-stage-1-worker-1.json', 'w1 из файла');
     write('.issue-stage-1-worker-2.json', 'w2 из файла');
-    write('.issue-stage-1.json', 'этап из файла');
 
     const pi = new FakePiRunner();
     pi.enqueue(noReport());
@@ -246,7 +257,127 @@ describe('runStagedResolve — последовательные этапы', () 
     expect(pi.calls[2].prompt).toContain('`.issue-stage-1-worker-1.json`: w1 из файла');
     expect(pi.calls[2].prompt).toContain('`.issue-stage-1-worker-2.json`: w2 из файла');
     expect(pi.calls[2].prompt).not.toContain('(see ');
-    // Финальный lead — исход этапа из его файла.
-    expect(pi.calls[4].prompt).toContain('`.issue-stage-1.json`: этап из файла');
+    // Файлов этапов нет — финальный lead падает в фолбек «(see …)».
+    expect(pi.calls[4].prompt).toContain('`.issue-stage-1.json`: (see .issue-stage-1.json)');
+  });
+});
+
+describe('runStagedResolve — resume по файлам исходов этапов', () => {
+  const writeOutcome = (dir: string, index: number, summary: string): void =>
+    writeFileSync(
+      join(dir, `.issue-stage-${index}.json`),
+      JSON.stringify({ status: 'pass', summary }),
+      'utf8',
+    );
+
+  it('этапы 1–2 готовы → исполняется только этап 3 и финальный lead; исходы 1–2 переданы', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ir-room-resume-'));
+    dirs.push(dir);
+    writeOutcome(dir, 1, 'этап1 готов');
+    writeOutcome(dir, 2, 'этап2 готов');
+
+    const pi = new FakePiRunner();
+    pi.enqueue(noReport()); // этап 3
+    pi.enqueue(noReport()); // финальный lead
+
+    await runStagedResolve(pi, input(threeStages), {
+      ...options(),
+      hostWorkspaceDir: dir,
+    });
+
+    // Этапы 1–2 не перезапускаются: сразу этап 3 + финал.
+    expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
+      'run-1/stage/3/coordinator',
+      'run-1',
+    ]);
+    // Финальный lead видит исходы уже готовых этапов из их файлов.
+    expect(pi.calls[1].prompt).toContain('`.issue-stage-1.json`: этап1 готов');
+    expect(pi.calls[1].prompt).toContain('`.issue-stage-2.json`: этап2 готов');
+    // Исход этапа 3 (только что прогнанного) тоже доходит до финального lead.
+    expect(pi.calls[1].prompt).toContain('`.issue-stage-3.json`: (see .issue-stage-3.json)');
+  });
+
+  it('все этапы готовы → запускается только финальный lead (ни одного этапа)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ir-room-resume-all-'));
+    dirs.push(dir);
+    writeOutcome(dir, 1, 'готов1');
+    writeOutcome(dir, 2, 'готов2');
+    writeOutcome(dir, 3, 'готов3');
+
+    const pi = new FakePiRunner();
+    pi.enqueue(noReport()); // только финальный lead
+
+    await runStagedResolve(pi, input(threeStages), {
+      ...options(),
+      hostWorkspaceDir: dir,
+    });
+
+    expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual(['run-1']);
+    expect(pi.calls[0].prompt).toContain('`.issue-stage-1.json`: готов1');
+    expect(pi.calls[0].prompt).toContain('`.issue-stage-3.json`: готов3');
+  });
+
+  it('нет файлов исходов → все этапы с 1 (поведение не изменилось)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ir-room-resume-empty-'));
+    dirs.push(dir);
+
+    const pi = new FakePiRunner();
+    pi.enqueue(noReport()); // этап 1
+    pi.enqueue(noReport()); // этап 2
+    pi.enqueue(noReport()); // этап 3
+    pi.enqueue(noReport()); // финальный lead
+
+    await runStagedResolve(pi, input(threeStages), {
+      ...options(),
+      hostWorkspaceDir: dir,
+    });
+
+    expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
+      'run-1/stage/1/coordinator',
+      'run-1/stage/2/coordinator',
+      'run-1/stage/3/coordinator',
+      'run-1',
+    ]);
+  });
+
+  it('испорченный файл этапа → этап считается незавершённым и перезапускается', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ir-room-resume-bad-'));
+    dirs.push(dir);
+    writeFileSync(join(dir, '.issue-stage-1.json'), '{ not json', 'utf8');
+
+    const pi = new FakePiRunner();
+    pi.enqueue(noReport()); // этап 1 (перезапуск)
+    pi.enqueue(noReport()); // этап 2
+    pi.enqueue(noReport()); // этап 3
+    pi.enqueue(noReport()); // финальный lead
+
+    await runStagedResolve(pi, input(threeStages), {
+      ...options(),
+      hostWorkspaceDir: dir,
+    });
+
+    expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
+      'run-1/stage/1/coordinator',
+      'run-1/stage/2/coordinator',
+      'run-1/stage/3/coordinator',
+      'run-1',
+    ]);
+  });
+
+  it('без hostWorkspaceDir → все этапы с 1 (in-memory фейки не ломаются)', async () => {
+    const pi = new FakePiRunner();
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+
+    await runStagedResolve(pi, input(threeStages), options());
+
+    expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
+      'run-1/stage/1/coordinator',
+      'run-1/stage/2/coordinator',
+      'run-1/stage/3/coordinator',
+      'run-1',
+    ]);
   });
 });

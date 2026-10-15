@@ -195,6 +195,7 @@ export function parseBootstrapLogPayload(
 const SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'text',
   'thinking',
+  'thinking_update',
   'usage',
   'stats',
   'question',

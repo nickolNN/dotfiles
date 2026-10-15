@@ -25,6 +25,27 @@ const GLOBAL_CONTAINER_STATS_CONTAINER = 'host';
 /** issueId-псевдоним событий глобального потока (задачи у них нет). */
 const GLOBAL_CONTAINER_STATS_ISSUE_ID = '__global__';
 
+/**
+ * Открывает SSE-ответ: заголовки + стартовый комментарий «: connected».
+ *
+ * Комментарий нужен не клиенту, а прокси (Vite dev-proxy, nginx): они держат
+ * блок заголовков в буфере, пока не придёт первый байт тела. Стрим, который
+ * сразу ничего не пишет, выглядит для `EventSource` незапустившимся: через
+ * dev-прокси `container-stats-stream` открывался лишь на первом keepalive
+ * (15 с), а поток без событий — никогда. Один байт после `flushHeaders()`
+ * снимает буферизацию; через него открываются все SSE-ответы.
+ */
+function openSse(reply: FastifyReply): void {
+  reply.raw.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  reply.raw.flushHeaders();
+  reply.raw.write(': connected\n\n');
+}
+
 /** Терминальные статусы итерации: повторный abort — no-op. */
 const TERMINAL_ITERATION_STATUSES: ReadonlySet<string> = new Set([
   'completed',
@@ -96,13 +117,7 @@ function attachContainerStatsStream(
   stream: NodeJS.ReadableStream,
   issueId: string,
 ): void {
-  reply.raw.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-  reply.raw.flushHeaders();
+  openSse(reply);
 
   // Комментарий-keepalive, чтобы прокси не рвали простаивающее соединение.
   const heartbeat = setInterval(() => {
@@ -167,13 +182,7 @@ export async function streamRoutes(
   // Глобальный поток: все события шины без фильтра по задаче/итерации.
   // Нужен списку задач, который не слушает per-issue канал.
   app.get(GLOBAL_STREAM_PATH, async (request, reply) => {
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    reply.raw.flushHeaders();
+    openSse(reply);
     const unsubscribe = hub.subscribeGlobal((event) => {
       reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     });
@@ -192,14 +201,7 @@ export async function streamRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      reply.raw.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
-      // Отправляем заголовки сразу, не дожидаясь первого события.
-      reply.raw.flushHeaders();
+      openSse(reply);
 
       const unsubscribe = hub.subscribeByIssue(id, (event) => {
         reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -409,13 +411,7 @@ export async function streamRoutes(
       return reply.status(400).send({ error: 'agentId is required' });
     }
 
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    reply.raw.flushHeaders();
+    openSse(reply);
     const unsubscribe = hub.subscribe(request.params.id, (event) => {
       // agentId только у эмитов агентов комнаты; прочие — не наш поток.
       if (event.agentId !== agentId) return;

@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type { RoomAgent, SessionStats } from '@issue-resolver/shared';
 import type { SessionEvent } from '../api/session-events';
 import RoomAgentTabs from './RoomAgentTabs';
@@ -294,6 +302,8 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
 
     const { unmount } = render(<RoomAgentTabs iterationId="iter-1" />);
     await screen.findByTestId('room-agents');
+    // Эффект подписки разворачивается после коммита — дожидаемся EventSource.
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const source = FakeEventSource.instances[0];
 
     unmount();
@@ -405,5 +415,162 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     expect(summary).toHaveTextContent('$0');
     // Без старта время агента не показываем.
     expect(screen.queryByTestId('room-agent-duration')).toBeNull();
+  });
+
+  it('staged-режим: сводка по этапам агрегирует токены/cost/модели/CTX', async () => {
+    stubFetch([
+      makeAgent({
+        id: 'stage-1/worker/0',
+        index: 1,
+        label: 'Этап 1 · Воркер 1',
+        stage: 1,
+        stageName: 'Сбор',
+        status: 'finished',
+        startedAt: new Date(Date.now() - 20_000).toISOString(),
+        stats: makeStats({
+          model: 'Claude Sonnet 4',
+          tokens: {
+            input: 1000,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 1000,
+          },
+          cost: 0.01,
+          contextUsage: { tokens: 1000, contextWindow: 200_000, percent: 12 },
+        }),
+      } as Partial<RoomAgent>),
+      makeAgent({
+        id: 'stage-1/coordinator',
+        role: 'coordinator',
+        index: null,
+        label: 'Этап 1 · Координатор',
+        stage: 1,
+        stageName: 'Сбор',
+        status: 'finished',
+        startedAt: new Date(Date.now() - 10_000).toISOString(),
+        stats: makeStats({
+          model: 'Claude Opus 4',
+          tokens: {
+            input: 2000,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 2000,
+          },
+          cost: 0.02,
+          contextUsage: { tokens: 2000, contextWindow: 200_000, percent: 30 },
+        }),
+      } as Partial<RoomAgent>),
+      makeAgent({
+        id: 'stage-2/worker/0',
+        index: 1,
+        label: 'Этап 2 · Воркер 1',
+        stage: 2,
+        stageName: 'Реализация',
+        status: 'running',
+        stats: makeStats({
+          model: 'Claude Sonnet 4',
+          tokens: {
+            input: 500,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 500,
+          },
+          cost: 0.005,
+          contextUsage: null,
+        }),
+      } as Partial<RoomAgent>),
+      makeAgent({
+        id: 'final',
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        stage: null,
+      } as Partial<RoomAgent>),
+    ]);
+
+    render(<RoomAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('room-agents');
+
+    const groups = screen.getAllByTestId('room-stage-group');
+    expect(groups).toHaveLength(2);
+
+    // Этап 1: воркер + координатор → токены/cost суммируются, модели
+    // различаются без дублей, CTX — максимум по этапу.
+    expect(groups[0]).toHaveAttribute('data-stage', '1');
+    expect(groups[0]).toHaveAttribute('data-stage-name', 'Сбор');
+    expect(within(groups[0]).getByTestId('room-stage-name')).toHaveTextContent(
+      'Сбор',
+    );
+    expect(within(groups[0]).getByTestId('room-stage-tokens')).toHaveTextContent(
+      '3k',
+    );
+    expect(within(groups[0]).getByTestId('room-stage-cost')).toHaveTextContent(
+      '$0.03',
+    );
+    expect(
+      within(groups[0]).getByTestId('room-stage-models'),
+    ).toHaveTextContent('Claude Sonnet 4, Claude Opus 4');
+    expect(
+      within(groups[0]).getByTestId('room-stage-context'),
+    ).toHaveTextContent('CTX 30%');
+    // Wall-time этапа посчитан (а не «—»): агенты завершились.
+    expect(
+      within(groups[0]).getByTestId('room-stage-duration').textContent,
+    ).not.toBe('—');
+
+    // Этап 2: один воркер без contextUsage → CTX-сегмента нет.
+    expect(groups[1]).toHaveAttribute('data-stage', '2');
+    expect(groups[1]).toHaveAttribute('data-stage-name', 'Реализация');
+    expect(within(groups[1]).getByTestId('room-stage-tokens')).toHaveTextContent(
+      '500',
+    );
+    expect(within(groups[1]).getByTestId('room-stage-cost')).toHaveTextContent(
+      '$0.005',
+    );
+    expect(within(groups[1]).queryByTestId('room-stage-context')).toBeNull();
+
+    // Финальный координатор (stage === null) в сводку не входит — групп ровно 2
+    // и все вкладки (включая финального lead) остаются на месте.
+    expect(screen.getAllByTestId('room-agent-tab')).toHaveLength(4);
+  });
+
+  it('staged-сводка переживает null stats и отсутствие моделей/CTX', async () => {
+    stubFetch([
+      makeAgent({
+        id: 'stage-3/worker/0',
+        index: 1,
+        label: 'Этап 3 · Воркер 1',
+        stage: 3,
+        stageName: 'Проверка',
+        status: 'finished',
+        stats: null,
+      } as Partial<RoomAgent>),
+    ]);
+
+    render(<RoomAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('room-agents');
+
+    const group = screen.getByTestId('room-stage-group');
+    expect(group).toHaveTextContent('Проверка');
+    expect(group).toHaveTextContent('0 токенов');
+    expect(group).toHaveTextContent('$0');
+    expect(within(group).getByTestId('room-stage-models')).toHaveTextContent('—');
+    expect(within(group).queryByTestId('room-stage-context')).toBeNull();
+    // Без startedAt времени этапа нет.
+    expect(within(group).getByTestId('room-stage-duration')).toHaveTextContent(
+      '—',
+    );
+  });
+
+  it('обычная комната без stage не показывает сводку по этапам', async () => {
+    stubFetch(AGENTS);
+
+    render(<RoomAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('room-agents');
+
+    expect(screen.queryByTestId('room-stage-summary')).toBeNull();
   });
 });

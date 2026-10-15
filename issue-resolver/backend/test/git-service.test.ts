@@ -22,17 +22,17 @@ afterEach(async () => {
 });
 
 describe('gitTimeoutMs', () => {
-  it('читает GIT_TIMEOUT_MS, иначе default 60000', () => {
+  it('читает GIT_TIMEOUT_MS, иначе default 300000', () => {
     const previous = process.env.GIT_TIMEOUT_MS;
     try {
       delete process.env.GIT_TIMEOUT_MS;
-      expect(gitTimeoutMs()).toBe(60_000);
+      expect(gitTimeoutMs()).toBe(300_000);
 
       process.env.GIT_TIMEOUT_MS = '1500';
       expect(gitTimeoutMs()).toBe(1500);
 
       process.env.GIT_TIMEOUT_MS = 'not-a-number';
-      expect(gitTimeoutMs()).toBe(60_000);
+      expect(gitTimeoutMs()).toBe(300_000);
     } finally {
       if (previous === undefined) delete process.env.GIT_TIMEOUT_MS;
       else process.env.GIT_TIMEOUT_MS = previous;

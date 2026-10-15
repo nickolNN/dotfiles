@@ -236,8 +236,9 @@ describe('RpcPiRunner — статистика сессии', () => {
     emit(child, { type: 'response', command: 'get_session_stats', success: true, data: {} });
 
     const result = await promise;
-    // 'stats' — финальный get_session_stats в конце сессии.
-    expect(events).toEqual(['thinking', 'stats']);
+    // thinking_delta стримится живым thinking_update; 'thinking' — авторитетный
+    // финал; 'stats' — финальный get_session_stats в конце сессии.
+    expect(events).toEqual(['thinking_update', 'thinking', 'stats']);
     expect(chunks).toEqual([]);
     expect(result.stdout).toBe('');
     expect(result.stats?.userMessages).toBe(0);
