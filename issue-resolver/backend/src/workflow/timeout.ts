@@ -13,8 +13,8 @@
 /** Минимально допустимый таймаут pi-агента из env — 60 секунд. */
 export const MIN_RESOLVE_AGENT_TIMEOUT_MS = 60_000;
 
-/** Дефолтный таймаут одного resolve-агента — 90 минут. */
-export const DEFAULT_RESOLVE_AGENT_TIMEOUT_MS = 90 * 60_000;
+/** Дефолтный таймаут одного resolve-агента — 180 минут (3 часа). */
+export const DEFAULT_RESOLVE_AGENT_TIMEOUT_MS = 180 * 60_000;
 
 /** Env-переменная таймаута pi-агента (мс). */
 export const RESOLVE_AGENT_TIMEOUT_ENV =
@@ -41,7 +41,7 @@ export function resolveAgentTimeoutMs(
 export const BOOTSTRAPPER_TIMEOUT_ENV =
   'ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS';
 
-/** Дефолтный таймаут bootstrapper'а — те же 90 минут, что и у resolve-агента. */
+/** Дефолтный таймаут bootstrapper'а — те же 180 минут, что и у resolve-агента. */
 export const DEFAULT_BOOTSTRAPPER_TIMEOUT_MS = DEFAULT_RESOLVE_AGENT_TIMEOUT_MS;
 
 /**
