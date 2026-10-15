@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionStats } from '@issue-resolver/shared';
 import AgentMarkdown from './AgentMarkdown';
 import SessionStatsBar from './SessionStatsBar';
@@ -61,7 +61,12 @@ interface AnalyzedEvents {
   visible: SessionEvent[];
   partialByCallId: Map<string, string>;
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>;
+  /** Ответы пользователя по id вопроса (`question_answered`) — для закрепления
+   * выбранной опции в блоке вопроса. */
+  answersByQuestionId: Map<string, string>;
   bashText: string | null;
+  /** Последний `partialText` живого `thinking_update` (финального блока ещё нет). */
+  liveThinking: string | null;
   chrome: SessionChrome;
 }
 
@@ -73,8 +78,9 @@ interface AnalyzedEvents {
  *
  * Служебные события прозрачности (`usage`, `stats`, `queue`, `thinking_level`,
  * `session_info`, `status`, `widget`, `title`, `tool_update`, `bash`,
- * `editor_text`) не рисуются «голыми» строками: они собираются в отдельную
- * обвязку (шапка/очередь/статусы/виджеты/футер) или баннеры.
+ * `editor_text`, `question_answered`) не рисуются «голыми» строками: они
+ * собираются в отдельную обвязку (шапка/очередь/статусы/виджеты/футер) или
+ * баннеры, а ответы на вопросы — в `Map<questionId, answer>`.
  */
 export default function SessionView({
   events,
@@ -86,14 +92,27 @@ export default function SessionView({
   onRecallQueued,
 }: SessionViewProps) {
   const analyzed = useMemo(() => analyzeEvents(events), [events]);
-  const { visible, partialByCallId, resultByCallId, bashText, chrome } =
-    analyzed;
+  const {
+    visible,
+    partialByCallId,
+    resultByCallId,
+    answersByQuestionId,
+    bashText,
+    liveThinking,
+    chrome,
+  } = analyzed;
 
   useDocumentTitle(chrome.title);
 
   const now = useNow(running);
-  const phase = workingPhase(visible, resultByCallId);
+  const phase = workingPhase(visible, resultByCallId, liveThinking !== null);
   const elapsedMs = running ? workingElapsedMs(now, startedAt) : null;
+  // Живой блок размышления: финального `thinking` ещё нет, показываем
+  // накопленный partial и держим его «стримящимся».
+  const liveThinkingBlock =
+    running && liveThinking !== null ? (
+      <ThinkingBlock thinking={liveThinking} streaming />
+    ) : null;
 
   if (visible.length === 0) {
     return (
@@ -106,6 +125,7 @@ export default function SessionView({
         >
           {emptyMessage ?? 'Событий сессии пока нет.'}
         </div>
+        {liveThinkingBlock}
         {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
         {bashText !== null && <BashBlock text={bashText} />}
         <SessionWidgets widgets={chrome.widgetsBelow} placement="belowEditor" />
@@ -126,9 +146,12 @@ export default function SessionView({
           event={event}
           partialByCallId={partialByCallId}
           resultByCallId={resultByCallId}
+          answersByQuestionId={answersByQuestionId}
           isLast={index === visible.length - 1}
+          running={running}
         />
       ))}
+      {liveThinkingBlock}
       {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
       {bashText !== null && <BashBlock text={bashText} />}
       <SessionWidgets widgets={chrome.widgetsBelow} placement="belowEditor" />
@@ -149,6 +172,7 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
     string,
     { isError: boolean; durationMs: number | null }
   >();
+  const answersByQuestionId = new Map<string, string>();
   const bashDeltas: string[] = [];
   const statuses = new Map<string, string>();
   const widgetsAbove = new Map<string, string[]>();
@@ -159,12 +183,17 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
   let queue: { steering: string[]; followUp: string[] } | null = null;
   let title: string | null = null;
   let editorText: string | null = null;
+  let liveThinking: string | null = null;
 
   for (const event of events) {
     switch (event.type) {
       case 'usage':
       case 'stats':
         // Живут только в футере статистики.
+        break;
+      case 'question_answered':
+        // Ответ на вопрос: закрепляем в блоке вопроса, отдельной строки нет.
+        answersByQuestionId.set(event.questionId, event.answer);
         break;
       case 'tool_update':
         partialByCallId.set(event.toolCallId, event.partialText);
@@ -217,6 +246,17 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
       case 'editor_text':
         editorText = event.text;
         break;
+      case 'thinking_update':
+        // Живой стрим размышления: запоминаем последний partialText для
+        // отдельного live-блока; в `visible` его не пушим (готового блока нет).
+        liveThinking = event.partialText;
+        break;
+      case 'thinking':
+        // Финальный блок приходит ПОСЛЕ своих update'ов — ретирит live-partial,
+        // чтобы не было дубля.
+        visible.push(event);
+        liveThinking = null;
+        break;
       default:
         visible.push(event);
     }
@@ -226,7 +266,9 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
     visible,
     partialByCallId,
     resultByCallId,
+    answersByQuestionId,
     bashText: bashDeltas.length > 0 ? bashDeltas.join('') : null,
+    liveThinking,
     chrome: {
       sessionName,
       thinkingLevel,
@@ -262,11 +304,16 @@ type WorkingPhase =
   | { kind: 'text' }
   | { kind: 'idle' };
 
-/** Фаза по последнему видимому событию лога. */
+/**
+ * Фаза по последнему видимому событию лога. Живой `thinking_update` (финального
+ * блока ещё нет) имеет приоритет: агент прямо сейчас «думает».
+ */
 function workingPhase(
   visible: SessionEvent[],
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>,
+  liveThinking = false,
 ): WorkingPhase {
+  if (liveThinking) return { kind: 'thinking' };
   const last = visible[visible.length - 1];
   if (!last) return { kind: 'idle' };
   if (last.type === 'tool_use' && !resultByCallId.has(last.toolCallId)) {
@@ -336,14 +383,14 @@ function SessionWorking({
     <div
       data-testid="session-working"
       data-phase={phase.kind}
-      className="flex flex-wrap items-center gap-x-2 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
+      className="sticky bottom-0 z-10 flex flex-wrap items-center gap-x-2 border-t border-[#008F11]/40 bg-[#000200] px-2 py-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
     >
-      <span aria-hidden="true" className="animate-pulse">
+      <span aria-hidden="true" className="animate-pulse-subtle">
         ◐
       </span>
       <span data-testid="session-working-phase">
         {phaseLabel(phase)}
-        <span className="animate-pulse">…</span>
+        <span className="animate-pulse-subtle">…</span>
       </span>
       {elapsedMs !== null && (
         <span
@@ -361,26 +408,45 @@ function SessionEventItem({
   event,
   partialByCallId,
   resultByCallId,
+  answersByQuestionId,
   isLast,
+  running = false,
 }: {
   event: SessionEvent;
   partialByCallId: Map<string, string>;
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>;
+  answersByQuestionId: Map<string, string>;
   isLast: boolean;
+  running?: boolean;
 }) {
+  // Последнее событие считается стримящимся, только если шаг ещё работает.
+  const streaming = isLast && running;
   switch (event.type) {
     case 'text':
       return (
-        <div data-testid="session-text" className="session-msg session-msg--text">
-          <AgentMarkdown>{event.text}</AgentMarkdown>
+        <div className="animate-fade-in-up">
+          <div data-testid="session-text" className="session-msg session-msg--text">
+            <AgentMarkdown>{event.text}</AgentMarkdown>
+          </div>
         </div>
       );
 
     case 'thinking':
-      return <ThinkingBlock thinking={event.thinking} streaming={isLast} />;
+      return (
+        <div className="animate-fade-in-up">
+          <ThinkingBlock thinking={event.thinking} streaming={streaming} />
+        </div>
+      );
 
     case 'question':
-      return <QuestionBlock event={event} />;
+      return (
+        <div className="animate-fade-in-up">
+          <QuestionBlock
+            event={event}
+            answer={answersByQuestionId.get(event.id)}
+          />
+        </div>
+      );
 
     case 'tool_use': {
       const result = resultByCallId.get(event.toolCallId);
@@ -390,40 +456,60 @@ function SessionEventItem({
           ? 'running'
           : 'waiting';
       return (
-        <ToolUseBlock
-          toolName={event.toolName}
-          args={event.args}
-          partialText={partialByCallId.get(event.toolCallId)}
-          status={status}
-          durationMs={result?.durationMs ?? null}
-          isError={result?.isError ?? false}
-        />
+        <div className="animate-fade-in-up">
+          <ToolUseBlock
+            toolName={event.toolName}
+            args={event.args}
+            partialText={partialByCallId.get(event.toolCallId)}
+            status={status}
+            durationMs={result?.durationMs ?? null}
+            isError={result?.isError ?? false}
+          />
+        </div>
       );
     }
 
     case 'tool_result':
       return (
-        <ToolResultBlock
-          toolName={event.toolName}
-          isError={event.isError}
-          durationMs={event.durationMs}
-          resultText={event.resultText}
-        />
+        <div className="animate-fade-in-up">
+          <ToolResultBlock
+            toolName={event.toolName}
+            isError={event.isError}
+            durationMs={event.durationMs}
+            resultText={event.resultText}
+          />
+        </div>
       );
 
     case 'compaction_start':
     case 'compaction_end':
-      return <CompactionBanner event={event} />;
+      return (
+        <div className="animate-fade-in-up">
+          <CompactionBanner event={event} />
+        </div>
+      );
 
     case 'retry_start':
     case 'retry_end':
-      return <RetryNotice event={event} />;
+      return (
+        <div className="animate-fade-in-up">
+          <RetryNotice event={event} />
+        </div>
+      );
 
     case 'notice':
-      return <NoticeBanner event={event} />;
+      return (
+        <div className="animate-fade-in-up">
+          <NoticeBanner event={event} />
+        </div>
+      );
 
     case 'extension_error':
-      return <ExtensionErrorBanner message={event.message} />;
+      return (
+        <div className="animate-fade-in-up">
+          <ExtensionErrorBanner message={event.message} />
+        </div>
+      );
 
     default:
       // Служебные события (usage/stats/queue/session_info/status/widget/…)
@@ -432,7 +518,19 @@ function SessionEventItem({
   }
 }
 
-function QuestionBlock({ event }: { event: QuestionEvent }) {
+function QuestionBlock({
+  event,
+  answer,
+}: {
+  event: QuestionEvent;
+  answer?: string;
+}) {
+  const options = event.options ?? [];
+  // Подсвечиваем опцию только если ответ ей точно соответствует; введённый
+  // текст (не совпавший ни с одной опцией) показываем строкой без подсветки.
+  const selected =
+    answer !== undefined && options.includes(answer) ? answer : null;
+
   return (
     <div data-testid="session-question" className="session-question">
       <div className="session-question-head">
@@ -448,12 +546,39 @@ function QuestionBlock({ event }: { event: QuestionEvent }) {
       {event.message && (
         <p className="session-question-message">{event.message}</p>
       )}
-      {event.options && event.options.length > 0 && (
+      {options.length > 0 && (
         <p
           data-testid="session-question-options"
           className="session-question-options"
         >
-          {event.options.join(' / ')}
+          {options.map((option, index) => (
+            <Fragment key={`${index}-${option}`}>
+              {index > 0 && ' / '}
+              <span
+                data-testid="session-question-option"
+                data-selected={
+                  selected === null ? 'false' : String(option === selected)
+                }
+                className={
+                  selected === null
+                    ? undefined
+                    : option === selected
+                      ? 'font-bold text-[#00FF41]'
+                      : 'text-[#00FF41]/40'
+                }
+              >
+                {option}
+              </span>
+            </Fragment>
+          ))}
+        </p>
+      )}
+      {answer !== undefined && (
+        <p
+          data-testid="session-question-answer"
+          className="session-question-answer mt-1 font-bold text-[#00FF41]"
+        >
+          Ответ: {answer}
         </p>
       )}
     </div>
@@ -467,11 +592,28 @@ function ThinkingBlock({
   thinking: string;
   streaming?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(streaming);
+  const bodyRef = useRef<HTMLPreElement | null>(null);
+
+  // Когда стрим продолжается — держим открытым, даже если пользователь свернул.
+  useEffect(() => {
+    if (streaming) setOpen(true);
+  }, [streaming]);
+
+  // Во время стрима прижимаем растущий текст ко дну: блок прокручивается
+  // внутри себя, а не распирает карточку и не сдвигает строку статуса снизу.
+  useEffect(() => {
+    if (streaming && open && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [thinking, streaming, open]);
+
   // Свёрнутая строка-превью: во время стрима — хвост, после — первая строка.
   const preview = streaming
     ? thinking.trimEnd().slice(-80)
     : thinking.split('\n')[0].slice(0, 80);
+  // Стримящийся или длинный блок — ограничиваем по высоте и скроллим внутри.
+  const bounded = streaming || thinking.length > 960;
 
   return (
     <div
@@ -486,17 +628,21 @@ function ThinkingBlock({
         toolName="thinking"
         label={open ? '' : preview}
       />
-      {open && streaming && (
+      {streaming && (
         <div
           data-testid="session-thinking-live"
           className="px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
         >
           думает
-          <span className="animate-pulse">…</span>
+          <span className="animate-pulse-subtle">…</span>
         </div>
       )}
       {open && (
-        <pre data-testid="session-thinking-text" className="session-thinking-body">
+        <pre
+          ref={bodyRef}
+          data-testid="session-thinking-text"
+          className={`session-thinking-body animate-slide-down whitespace-pre-wrap break-words${bounded ? ' max-h-96 overflow-auto' : ''}`}
+        >
           {thinking}
         </pre>
       )}
@@ -556,7 +702,7 @@ function ToolUseBlock({
       {open && (
         <pre
           data-testid={`tool-use-args-${toolName}`}
-          className="session-tool-body"
+          className="session-tool-body animate-slide-down"
         >
           {argsText}
         </pre>
@@ -605,7 +751,7 @@ function ToolResultBlock({
       {open && (
         <pre
           data-testid={`tool-result-text-${toolName}`}
-          className="session-tool-body"
+          className="session-tool-body animate-slide-down"
         >
           {resultText}
         </pre>
@@ -761,7 +907,7 @@ function CompactionBanner({ event }: { event: CompactionEvent }) {
         data-state="start"
         className="flex items-center gap-2 border border-[#FFB000]/60 bg-[#1A1000] px-2 py-1 text-xs text-[#FFB000]"
       >
-        <span aria-hidden="true" className="animate-pulse">
+        <span aria-hidden="true" className="animate-pulse-subtle">
           ◐
         </span>
         <span>контекст сжимается · {event.reason}</span>
@@ -906,7 +1052,7 @@ function CollapsibleHead({
       onClick={onToggle}
       className="session-tool-head"
     >
-      <span aria-hidden="true" className="session-tool-caret">
+      <span aria-hidden="true" className="session-tool-caret transition-base">
         {open ? '▾' : '▸'}
       </span>
       <span aria-hidden="true" className="session-tool-icon">

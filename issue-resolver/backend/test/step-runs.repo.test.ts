@@ -14,6 +14,7 @@ import { createDb } from '../src/db/client';
 import type { Db } from '../src/db/client';
 import { issues, iterations, stepOutputs, stepRuns } from '../src/db/schema';
 import {
+  appendStepRunEvent,
   createStepOutput,
   createStepRun,
   getStepRun,
@@ -374,6 +375,87 @@ describe('createStepOutput', () => {
   });
 });
 
+describe('appendStepRunEvent', () => {
+  const questionEvent: SessionEvent = {
+    type: 'question',
+    id: 'q1',
+    method: 'select',
+    title: 'Выбор?',
+  };
+  const answeredEvent: SessionEvent = {
+    type: 'question_answered',
+    questionId: 'q1',
+    answer: 'A',
+  };
+
+  it('дозаписывает события по одному, сохраняя порядок', async () => {
+    const db = makeDb();
+    const iterationId = seedIteration(db);
+    const run = await createStepRun(db, {
+      iterationId,
+      step: 'resolve',
+      attempt: 1,
+      context: 'ctx',
+    });
+
+    await appendStepRunEvent(db, run.id, questionEvent);
+    await appendStepRunEvent(db, run.id, answeredEvent);
+
+    const stored = db.select().from(stepRuns).where(eq(stepRuns.id, run.id)).get();
+    expect(stored?.events).toEqual([questionEvent, answeredEvent]);
+  });
+
+  it('до output-строки события отдаются в StepRunWithLog.events (переживают reload)', async () => {
+    const db = makeDb();
+    const iterationId = seedIteration(db);
+    const run = await createStepRun(db, {
+      iterationId,
+      step: 'resolve',
+      attempt: 1,
+      context: 'ctx',
+    });
+
+    await appendStepRunEvent(db, run.id, questionEvent);
+
+    const rows = await listStepRunsWithLog(db, iterationId);
+    expect(rows[0].report).toBeNull();
+    expect(rows[0].events).toEqual([questionEvent]);
+  });
+
+  it('полный набор output-строки имеет приоритет над дозалитыми событиями', async () => {
+    const db = makeDb();
+    const iterationId = seedIteration(db);
+    const run = await createStepRun(db, {
+      iterationId,
+      step: 'resolve',
+      attempt: 1,
+      context: 'ctx',
+    });
+
+    await appendStepRunEvent(db, run.id, questionEvent);
+    const fullEvents: SessionEvent[] = [
+      { type: 'text', text: 'готово' },
+      questionEvent,
+      answeredEvent,
+    ];
+    await createStepOutput(db, {
+      stepRunId: run.id,
+      report: '{}',
+      events: fullEvents,
+    });
+
+    const rows = await listStepRunsWithLog(db, iterationId);
+    expect(rows[0].events).toEqual(fullEvents);
+  });
+
+  it('несуществующий прогон — no-op без исключения', async () => {
+    const db = makeDb();
+    await expect(
+      appendStepRunEvent(db, randomUUID(), questionEvent),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('listStepRunsWithLog', () => {
   it('join: шаг с output → stdout/stderr/report заполнены, порядок step-first', async () => {
     const db = makeDb();
@@ -445,6 +527,52 @@ describe('listStepRunsWithLog', () => {
     const iterationId = seedIteration(db);
 
     expect(await listStepRunsWithLog(db, iterationId)).toEqual([]);
+  });
+});
+
+describe('ensureStepRunColumns (миграция)', () => {
+  it('добавляет events в legacy step_runs и идемпотентна', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ir-step-run-'));
+    const file = join(dir, 'legacy.db');
+    try {
+      const raw = new Database(file);
+      raw.exec(`
+        CREATE TABLE step_runs (
+          id TEXT PRIMARY KEY,
+          iteration_id TEXT NOT NULL,
+          step TEXT NOT NULL,
+          attempt INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          context TEXT NOT NULL,
+          feedback TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+      raw.close();
+
+      createDb(file);
+      createDb(file); // повторный запуск не должен падать
+
+      const check = new Database(file);
+      const columns = (
+        check.pragma('table_info(step_runs)') as { name: string }[]
+      ).map((column) => column.name);
+      check
+        .prepare(
+          "INSERT INTO step_runs (id, iteration_id, step, attempt, status, context, created_at, updated_at) VALUES ('r1','it1','resolve',1,'pending','','2026-01-01','2026-01-01')",
+        )
+        .run();
+      const stored = check
+        .prepare("SELECT events FROM step_runs WHERE id = 'r1'")
+        .get() as { events?: string };
+      check.close();
+
+      expect(columns).toContain('events');
+      expect(stored.events).toBe('[]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

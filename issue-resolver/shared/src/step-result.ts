@@ -6,6 +6,7 @@ import type {
   StepReportStatus,
   StepRunStatus,
 } from './types';
+import { parseExecutionPlan } from './execution';
 
 const VALID_REPORT_STATUSES: readonly StepReportStatus[] = [
   'pass',
@@ -78,6 +79,45 @@ export function parseSessionStats(
 }
 
 /**
+ * Суммирует статистику нескольких pi-агентов шага (воркеры + координаторы
+ * room/stages) в один агрегат для `step_outputs.stats`. Модель/сессия
+ * (`model`, `sessionId`, `avgTokensPerSecond`) и `contextUsage` у суммы не
+ * задаются — это свойства конкретного агента, а не шага. `cost` суммируется
+ * только по не-null значениям; если их нет — null. Все элементы null/undefined
+ * → null (нет телеметрии).
+ */
+export function sumSessionStats(
+  stats: readonly (SessionStats | null | undefined)[],
+): SessionStats | null {
+  const present = stats.filter((entry): entry is SessionStats => entry != null);
+  if (present.length === 0) return null;
+
+  const sum = (pick: (entry: SessionStats) => number): number =>
+    present.reduce((acc, entry) => acc + pick(entry), 0);
+
+  const costs = present
+    .map((entry) => entry.cost)
+    .filter((cost): cost is number => cost != null);
+
+  return {
+    userMessages: sum((entry) => entry.userMessages),
+    assistantMessages: sum((entry) => entry.assistantMessages),
+    toolCalls: sum((entry) => entry.toolCalls),
+    toolResults: sum((entry) => entry.toolResults),
+    totalMessages: sum((entry) => entry.totalMessages),
+    tokens: {
+      input: sum((entry) => entry.tokens.input),
+      output: sum((entry) => entry.tokens.output),
+      cacheRead: sum((entry) => entry.tokens.cacheRead),
+      cacheWrite: sum((entry) => entry.tokens.cacheWrite),
+      total: sum((entry) => entry.tokens.total),
+    },
+    cost: costs.length > 0 ? costs.reduce((acc, cost) => acc + cost, 0) : null,
+    contextUsage: null,
+  };
+}
+
+/**
  * Разбор `.issue-step-result.json`, который пишет шаг конвейера.
  * Возвращает null, если строка пустая, не JSON, не объект, без status
  * или с невалидным status. Поля scenarios/findings опциональны.
@@ -111,11 +151,18 @@ export function parseStepReport(json: string): StepReport | null {
   return {
     status: status as StepReportStatus,
     summary: typeof obj.summary === 'string' ? obj.summary : '',
+    ...(typeof obj.title === 'string' ? { title: obj.title } : {}),
+    ...(typeof obj.description === 'string'
+      ? { description: obj.description }
+      : {}),
     ...(Array.isArray(obj.scenarios)
       ? { scenarios: obj.scenarios as StepReportScenario[] }
       : {}),
     ...(Array.isArray(obj.findings)
       ? { findings: obj.findings as StepReportFinding[] }
+      : {}),
+    ...(parseExecutionPlan(obj.execution)
+      ? { execution: parseExecutionPlan(obj.execution) as import('./types').ExecutionPlan }
       : {}),
   };
 }

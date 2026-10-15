@@ -42,6 +42,46 @@ describe('POST /issues — успешное создание', () => {
     expect(typeof body.created_at).toBe('string');
   });
 
+  it('bootstrap_enabled:false сохраняется per-repo, отсутствие → true', async () => {
+    const response = await post({
+      title: 'Без бутстрапа',
+      repositories: [
+        {
+          repository_url: 'https://github.com/acme/app.git',
+          base_branch: 'main',
+          bootstrap_enabled: false,
+        },
+        {
+          repository_url: 'https://github.com/acme/lib.git',
+          base_branch: 'main',
+        },
+      ],
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+
+    const responseByUrl = new Map<string, boolean>(
+      body.repositories.map((repo: { repository_url: string; bootstrap_enabled: boolean }) => [
+        repo.repository_url,
+        repo.bootstrap_enabled,
+      ]),
+    );
+    expect(responseByUrl.get('https://github.com/acme/app.git')).toBe(false);
+    expect(responseByUrl.get('https://github.com/acme/lib.git')).toBe(true);
+
+    const dbByUrl = new Map<string, boolean>(
+      db
+        .select()
+        .from(issueRepositories)
+        .where(eq(issueRepositories.issue_id, body.id))
+        .all()
+        .map((row) => [row.repository_url, row.bootstrap_enabled]),
+    );
+    expect(dbByUrl.get('https://github.com/acme/app.git')).toBe(false);
+    expect(dbByUrl.get('https://github.com/acme/lib.git')).toBe(true);
+  });
+
   it('title передан без jira → 201, jira_issue_url === null', async () => {
     const response = await post({
       title: 'Моя задача',
@@ -123,10 +163,40 @@ describe('POST /issues — успешное создание', () => {
     expect(iterationRows[0].steps).toEqual(['resolve', 'review']);
   });
 
-  it('is_review_need:true → review и test сразу после resolve', async () => {
+  it('шаги: review-only НЕ добавляет test', async () => {
     const response = await post({
-      title: 'Ревью',
-      is_review_need: true,
+      title: 'Только ревью',
+      pipeline_steps: ['review'],
+      repositories: [
+        { repository_url: 'https://github.com/acme/app.git', base_branch: 'main' },
+      ],
+    });
+
+    expect(response.statusCode).toBe(201);
+    const steps = response.json().pipeline_steps as string[];
+    expect(steps).toEqual(['resolve', 'review']);
+    expect(steps).not.toContain('test');
+  });
+
+  it('шаги: test-only НЕ добавляет review', async () => {
+    const response = await post({
+      title: 'Только тест',
+      pipeline_steps: ['test'],
+      repositories: [
+        { repository_url: 'https://github.com/acme/app.git', base_branch: 'main' },
+      ],
+    });
+
+    expect(response.statusCode).toBe(201);
+    const steps = response.json().pipeline_steps as string[];
+    expect(steps).toEqual(['resolve', 'test']);
+    expect(steps).not.toContain('review');
+  });
+
+  it('шаги: review+test — оба и в исходном порядке', async () => {
+    const response = await post({
+      title: 'Ревью и тест',
+      pipeline_steps: ['review', 'test'],
       repositories: [
         { repository_url: 'https://github.com/acme/app.git', base_branch: 'main' },
       ],
@@ -134,17 +204,31 @@ describe('POST /issues — успешное создание', () => {
 
     expect(response.statusCode).toBe(201);
     expect(response.json().pipeline_steps).toEqual([
-      'refine',
       'resolve',
       'review',
       'test',
     ]);
   });
 
+  it('шаги: без review/test в pipeline_steps — ни одного (is_review_need больше не навязывает)', async () => {
+    const response = await post({
+      title: 'Без ревью, но с флагом',
+      is_review_need: true,
+      repositories: [
+        { repository_url: 'https://github.com/acme/app.git', base_branch: 'main' },
+      ],
+    });
+
+    expect(response.statusCode).toBe(201);
+    const steps = response.json().pipeline_steps as string[];
+    expect(steps).toEqual(['refine', 'resolve']);
+    expect(steps).not.toContain('review');
+    expect(steps).not.toContain('test');
+  });
+
   it('create_mr:true у репозитория → pr в конец', async () => {
     const response = await post({
       title: 'MR',
-      desired_result: 'pr',
       repositories: [
         {
           repository_url: 'https://github.com/acme/app.git',
@@ -158,11 +242,10 @@ describe('POST /issues — успешное создание', () => {
     expect(response.json().pipeline_steps).toEqual(['refine', 'resolve', 'pr']);
   });
 
-  it('is_review_need:true + create_mr:true → refine,resolve,review,test,pr', async () => {
+  it('pipeline_steps review+test + create_mr:true → pr в конец', async () => {
     const response = await post({
-      title: 'Ревью + MR',
-      is_review_need: true,
-      desired_result: 'pr',
+      title: 'Ревью + тест + MR',
+      pipeline_steps: ['review', 'test'],
       repositories: [
         {
           repository_url: 'https://github.com/acme/app.git',
@@ -174,7 +257,6 @@ describe('POST /issues — успешное создание', () => {
 
     expect(response.statusCode).toBe(201);
     expect(response.json().pipeline_steps).toEqual([
-      'refine',
       'resolve',
       'review',
       'test',

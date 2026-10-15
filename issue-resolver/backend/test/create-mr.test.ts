@@ -29,7 +29,6 @@ describe('create_mr — per-repo режим сдачи (spec-parity)', () => {
       url: ROUTE_PATH,
       payload: {
         title: 'С MR',
-        desired_result: 'pr',
         repositories: [{ ...REPOSITORIES[0], create_mr: true }],
       },
     });
@@ -69,7 +68,6 @@ describe('create_mr — per-repo режим сдачи (spec-parity)', () => {
       url: ROUTE_PATH,
       payload: {
         title: 'Итерация с MR',
-        desired_result: 'pr',
         repositories: [{ ...REPOSITORIES[0], create_mr: true }],
       },
     });

@@ -30,4 +30,13 @@ pi/trust.json
 pi/*.sh
 pi/web-search-cache/
 dotfiles-agent/certs/
+node_modules/
+.vitest/
 
+.issue-resolver/
+
+# рантайм/артефакты агентских прогонов (не контент репо)
+.pnpm-store/
+/.issue-step-result.json
+/plan.md
+issue-resolver/backend/test-results/

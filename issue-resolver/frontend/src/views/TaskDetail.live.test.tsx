@@ -158,6 +158,117 @@ describe('TaskDetail — live SSE', () => {
     expect(calls.iterations).toBe(1);
   });
 
+  it('iteration_status question → янтарный статус задачи, ответ → снова running', async () => {
+    stubFetch();
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    act(() => {
+      FakeEventSource.instances[0].emit({
+        type: 'iteration_status',
+        issueId: 'issue-1',
+        iterationId: 'iter-1',
+        data: JSON.stringify({
+          iterationId: 'iter-1',
+          status: 'question',
+          needsInput: true,
+        }),
+        ts: '2026-10-09T00:00:00.000Z',
+      });
+    });
+
+    const questionLabel = await screen.findByText('question');
+    expect(questionLabel).toHaveStyle({ color: '#FFB000' });
+
+    act(() => {
+      FakeEventSource.instances[0].emit({
+        type: 'iteration_status',
+        issueId: 'issue-1',
+        iterationId: 'iter-1',
+        data: JSON.stringify({
+          iterationId: 'iter-1',
+          status: 'running',
+          needsInput: false,
+        }),
+        ts: '2026-10-09T00:00:00.000Z',
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText('question')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('step_status нового прогона (refine→resolve) → список шагов перезапрашивается, Resolve появляется', async () => {
+    const issue = makeIssue({ pipeline_steps: ['refine', 'resolve'] });
+    const iteration = makeIteration({ steps: ['refine', 'resolve'] });
+    const refineRun = {
+      id: 'run-refine',
+      iteration_id: 'iter-1',
+      step: 'refine',
+      attempt: 1,
+      status: 'success',
+      context: '',
+      feedback: null,
+      created_at: '2026-10-09T00:00:00.000Z',
+      updated_at: '2026-10-09T00:00:00.000Z',
+      stdout: '',
+      stderr: '',
+      events: [],
+      stats: null,
+      report: null,
+      screenshots_dir: null,
+    };
+    const resolveRun = {
+      ...refineRun,
+      id: 'run-resolve',
+      step: 'resolve',
+      status: 'running',
+    };
+    let runs = [refineRun];
+    const stepRunCalls = { count: 0 };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/step-runs')) {
+        stepRunCalls.count += 1;
+        return Promise.resolve(jsonResponse(runs));
+      }
+      if (url.endsWith('/iterations')) {
+        return Promise.resolve(jsonResponse([iteration]));
+      }
+      return Promise.resolve(jsonResponse(issue));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+    const steps = within(await screen.findByTestId('iteration-steps'));
+    expect(await steps.findByText('Планирование')).toBeInTheDocument();
+    expect(steps.queryByText('Исполнение')).toBeNull();
+
+    // Движок создал новый прогон resolve и опубликовал `running` (только
+    // stepRunId, без step/attempt) — без перечитки списка его не отрисовать.
+    runs = [refineRun, resolveRun];
+    act(() => {
+      FakeEventSource.instances[0].emit({
+        type: 'step_status',
+        issueId: 'issue-1',
+        iterationId: 'iter-1',
+        stepRunId: 'run-resolve',
+        data: 'running',
+        ts: '2026-10-09T00:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId('iteration-steps')).getByText('Исполнение'),
+      ).toBeInTheDocument();
+    });
+    expect(stepRunCalls.count).toBeGreaterThanOrEqual(2);
+  });
+
   it('модалка: новые события авто-скроллят вывод вниз', async () => {
     const issue = makeIssue();
     const iteration = makeIteration();
@@ -290,7 +401,7 @@ describe('TaskDetail — live SSE', () => {
     expect(source.close).toHaveBeenCalledTimes(1);
   });
 
-  it('pending-шаг сразу в live-режиме, step_status running сохраняет session и баннер', async () => {
+  it('pending-шаг сразу в live-режиме, step_status running сохраняет session и inline-вопрос', async () => {
     const issue = makeIssue();
     const iteration = makeIteration();
     const stepRun = {
@@ -334,9 +445,10 @@ describe('TaskDetail — live SSE', () => {
     await screen.findByText('Fix login bug');
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
 
-    // Снапшот pending: шаг уже активен → карточка рендерит SessionView + баннер.
+    // Снапшот pending: шаг уже активен → карточка рендерит SessionView,
+    // а вопрос виден inline на странице задачи.
     expect(screen.getByTestId('step-session')).toBeInTheDocument();
-    expect(screen.getByTestId('step-pending-question')).toHaveTextContent(
+    expect(screen.getByTestId('inline-question')).toHaveTextContent(
       'Какой подход выбрать?',
     );
 
@@ -354,12 +466,12 @@ describe('TaskDetail — live SSE', () => {
     await waitFor(() =>
       expect(screen.getByTestId('step-session')).toBeInTheDocument(),
     );
-    expect(screen.getByTestId('step-pending-question')).toHaveTextContent(
+    expect(screen.getByTestId('inline-question')).toHaveTextContent(
       'Какой подход выбрать?',
     );
   });
 
-  it('развёрнутая модалка шага показывает баннер вопроса перед SessionView', async () => {
+  it('развёрнутая модалка шага показывает SessionView, а вопрос — inline вне модалки', async () => {
     const issue = makeIssue();
     const iteration = makeIteration();
     const stepRun = {
@@ -403,15 +515,14 @@ describe('TaskDetail — live SSE', () => {
     await screen.findByText('Fix login bug');
     fireEvent.click(await screen.findByTestId('step-expand'));
 
+    // Вопрос больше не рисуется внутри развёрнутой модалки шага.
     const scroll = screen.getByTestId('step-log-scroll');
-    const banner = within(scroll).getByTestId('step-pending-question');
-    expect(banner).toHaveTextContent('Какой подход выбрать?');
-    expect(banner).toHaveTextContent('вариант-a / вариант-b');
+    expect(within(scroll).getByTestId('modal-session')).toBeInTheDocument();
+    expect(within(scroll).queryByTestId('inline-question')).toBeNull();
 
-    const session = within(scroll).getByTestId('modal-session');
-    expect(
-      banner.compareDocumentPosition(session) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // Он виден inline на странице задачи.
+    expect(screen.getByTestId('inline-question')).toHaveTextContent(
+      'Какой подход выбрать?',
+    );
   });
 });

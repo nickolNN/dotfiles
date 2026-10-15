@@ -190,6 +190,60 @@ describe('SessionView — чат структурированных событи
     expect(
       within(block).getByTestId('session-question-options'),
     ).toHaveTextContent('вариант-a / вариант-b');
+    // Без ответа строка «Ответ:» не показывается, обе опции нейтральны.
+    expect(within(block).queryByTestId('session-question-answer')).toBeNull();
+    const optionSpans = within(block).getAllByTestId('session-question-option');
+    expect(optionSpans).toHaveLength(2);
+    expect(optionSpans.map((o) => o.dataset.selected)).toEqual(['false', 'false']);
+  });
+
+  it('question + question_answered: выбранная опция подсвечена и показан «Ответ:»', () => {
+    const events: SessionEvent[] = [
+      {
+        type: 'question',
+        id: 'q-1',
+        method: 'select',
+        title: 'Какой подход выбрать?',
+        options: ['вариант-a', 'вариант-b'],
+      },
+      { type: 'question_answered', questionId: 'q-1', answer: 'вариант-b' },
+    ];
+    render(<SessionView events={events} />);
+
+    const block = screen.getByTestId('session-question');
+    // Событие ответа не создаёт отдельную карточку вопроса.
+    expect(screen.getAllByTestId('session-question')).toHaveLength(1);
+    expect(
+      within(block).getByTestId('session-question-answer'),
+    ).toHaveTextContent('Ответ: вариант-b');
+
+    const options = within(block).getAllByTestId('session-question-option');
+    expect(options.map((o) => o.dataset.selected)).toEqual(['false', 'true']);
+    expect(options[1].className).toContain('font-bold');
+    expect(options[0].className).not.toContain('font-bold');
+  });
+
+  it('question_answered с введённым текстом: строка «Ответ:» без подсветки опций', () => {
+    const events: SessionEvent[] = [
+      {
+        type: 'question',
+        id: 'q-2',
+        method: 'input',
+        title: 'Свой вариант?',
+        options: ['вариант-a', 'вариант-b'],
+      },
+      { type: 'question_answered', questionId: 'q-2', answer: 'свой текст' },
+    ];
+    render(<SessionView events={events} />);
+
+    const block = screen.getByTestId('session-question');
+    expect(
+      within(block).getByTestId('session-question-answer'),
+    ).toHaveTextContent('Ответ: свой текст');
+
+    const options = within(block).getAllByTestId('session-question-option');
+    expect(options.map((o) => o.dataset.selected)).toEqual(['false', 'false']);
+    expect(options.every((o) => !o.className.includes('font-bold'))).toBe(true);
   });
 
   it('stats: футер не рендерится при stats = null', () => {

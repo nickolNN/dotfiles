@@ -68,7 +68,15 @@ export function formatDateTime(iso: string): string {
 }
 
 /** Статус итерации с максимальным номером; null для пустого списка. */
-export function statusOfIssue(iterations: Iteration[]): TaskStatus | null {
+export function statusOfIssue(
+  iterations: Iteration[],
+  /** Прямой статус задачи (поле `issues.status`). Приоритетнее статуса итераций. */
+  issueStatus?: TaskStatus,
+): TaskStatus | null {
+  // Статус «вопрос» живёт на задаче, а не на итерации — итерация остаётся
+  // `running`, пока агент ждёт ответа. Без этого перезагрузка страницы теряет
+  // статус `question`.
+  if (issueStatus === 'question') return 'question';
   if (iterations.length === 0) return null;
 
   const latest = iterations.reduce((max, current) =>
@@ -78,15 +86,19 @@ export function statusOfIssue(iterations: Iteration[]): TaskStatus | null {
 }
 
 /**
+ * Активная итерация: ещё выполняется (`running`), запущена, но не стартовала
+ * (`pending`), или готовит рабочую папку (`preparing`). Повтор/начало новой по
+ * такой итерации запрещены.
+ */
+export function isIterationActive(status: TaskStatus): boolean {
+  return status === 'running' || status === 'pending' || status === 'preparing';
+}
+
+/**
  * Можно ли начать новую итерацию: итераций нет либо последняя
  * (max number) завершена, провалена или отменена.
  */
 export function canStartIteration(iterations: Iteration[]): boolean {
   const status = statusOfIssue(iterations);
-  return (
-    status === null ||
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'cancelled'
-  );
+  return status === null || !isIterationActive(status);
 }

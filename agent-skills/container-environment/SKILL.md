@@ -35,18 +35,19 @@ survive has to live in the workspace or the sessions/skills volumes.
 - LSPs / formatters / linters: `eslint_d`, `stylelint`,
   `typescript-language-server`, `bash-language-server`, `gopls`,
   `golangci-lint`, `delve`, …
-- CLI: `git`, `gh`, `jq`, `ripgrep`/`rg`, `fd`, `fzf`, `htop`, `unzip`
+- CLI: `git`, `gh`, `git-lfs`, `jq`, `ripgrep`/`rg`, `fd`, `fzf`, `htop`, `unzip`
 - browser automation: `agent-browser` (system Chromium), playwright
   (chromium/firefox/webkit), puppeteer (shares the system Chromium via
   `PUPPETEER_EXECUTABLE_PATH`)
 - the pi coding agent itself + `pi-lens`, `pi-goal`,
   `pi-agents-talk-to-each-other`, `web-search-mcp`
-- baked skills (18): agent-browser, caveman, clean-code, code-review,
-  codebase-design, domain-modeling, glyph, grill-me, handoff,
+- baked remote skills (17): agent-browser, caveman, clean-code, code-review,
+  codebase-design, domain-modeling, glyph, handoff,
   improve-codebase-architecture, ponytail, retro, tdd, teach,
-  to-questionnaire, wayfinder, web-design-guidelines, writing-great-skills
-- repo skills (3, re-synced every launch): container-environment,
-  coordinator, geo-bypass
+  to-questionnaire, wayfinder, web-design-guidelines, writing-for-agents
+- repo skills (6, re-synced every launch): container-environment,
+  coordinator, geo-bypass, handoff (overrides the cloned handoff), pr,
+  refine
 
 See `dotfiles-agent/Dockerfile` for the authoritative list.
 

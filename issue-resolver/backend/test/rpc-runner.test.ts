@@ -236,8 +236,9 @@ describe('RpcPiRunner — статистика сессии', () => {
     emit(child, { type: 'response', command: 'get_session_stats', success: true, data: {} });
 
     const result = await promise;
-    // 'stats' — финальный get_session_stats в конце сессии.
-    expect(events).toEqual(['thinking', 'stats']);
+    // thinking_delta стримится живым thinking_update; 'thinking' — авторитетный
+    // финал; 'stats' — финальный get_session_stats в конце сессии.
+    expect(events).toEqual(['thinking_update', 'thinking', 'stats']);
     expect(chunks).toEqual([]);
     expect(result.stdout).toBe('');
     expect(result.stats?.userMessages).toBe(0);
@@ -293,6 +294,36 @@ describe('RpcPiRunner — статистика сессии', () => {
     });
     const result = await promise;
     expect(result.stats).toEqual(STATS);
+    // Ответ уходит тем же путём, что и `question`: live + в collected → персист.
+    expect(result.events).toContainEqual({
+      type: 'question_answered',
+      questionId: 'ui-1',
+      answer: 'да',
+    });
+  });
+
+  it('registry.respond confirm → question_answered «Да»', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+    const registry = new InMemoryStepSessionRegistry();
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', {
+      registry,
+      stepRunId: 'run-2',
+      iterationId: 'iter-2',
+    });
+
+    expect(registry.respond('run-2', { id: 'ui-2', confirmed: true })).toBe(
+      true,
+    );
+    settle(child);
+    const result = await promise;
+    expect(result.events).toContainEqual({
+      type: 'question_answered',
+      questionId: 'ui-2',
+      answer: 'Да',
+    });
   });
 
   it('abort зависшей сессии → SIGKILL, раннер резолвит aborted', async () => {
@@ -465,5 +496,152 @@ describe('RpcPiRunner — command bridge', () => {
       data: STATS,
     });
     await promise;
+  });
+});
+
+describe('RpcPiRunner — комната агента per-task (PI_AGENT_ROOM)', () => {
+  it('local + issueId → PI_AGENT_ROOM в env, cwd/stdio сохранены', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', {
+      cwd: '/workspace/issue-1',
+      issueId: 'abc-123',
+    });
+
+    const options = spawnMock.mock.calls[0][2] as {
+      cwd?: string;
+      stdio?: unknown;
+      env?: NodeJS.ProcessEnv;
+    };
+    expect(options.env?.PI_AGENT_ROOM).toBe('issue-abc-123');
+    expect(options.cwd).toBe('/workspace/issue-1');
+    expect(options.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+
+    settle(child);
+    await promise;
+  });
+
+  it('local без issueId → env отсутствует', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', { cwd: '/tmp' });
+
+    const options = spawnMock.mock.calls[0][2] as { env?: unknown };
+    expect('env' in options).toBe(false);
+
+    settle(child);
+    await promise;
+  });
+
+  it('docker + issueId → -e PI_AGENT_ROOM перед именем контейнера', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'docker');
+    const promise = runner.run('container-1', 'prompt', { issueId: 'abc-123' });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('-e') + 1]).toBe('PI_AGENT_ROOM=issue-abc-123');
+    expect(args.indexOf('-e')).toBeLessThan(args.indexOf('container-1'));
+
+    settle(child);
+    await promise;
+  });
+
+  it('docker без issueId → флага -e нет', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'docker');
+    const promise = runner.run('container-1', 'prompt');
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain('-e');
+
+    settle(child);
+    await promise;
+  });
+});
+
+describe('RpcPiRunner — уровень размышления (--thinking)', () => {
+  it('local + thinkingLevel → --thinking <level> в argv pi', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', { thinkingLevel: 'high' });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--thinking') + 1]).toBe('high');
+
+    settle(child);
+    await promise;
+  });
+
+  it('local без thinkingLevel → флага --thinking нет', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt');
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain('--thinking');
+
+    settle(child);
+    await promise;
+  });
+
+  it('docker + thinkingLevel → --thinking <level> после --model', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'docker');
+    const promise = runner.run('container-1', 'prompt', {
+      model: 'm-1',
+      thinkingLevel: 'xhigh',
+    });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--model') + 1]).toBe('m-1');
+    expect(args[args.indexOf('--thinking') + 1]).toBe('xhigh');
+
+    settle(child);
+    await promise;
+  });
+});
+
+describe('RpcPiRunner — скорость генерации', () => {
+  it('usage-событие доходит до onEvent со speed после порога', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+    const events: SessionEvent[] = [];
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', {
+      onEvent: (event) => events.push(event),
+    });
+
+    emit(child, { type: 'message_update', usage: { output: 10, totalTokens: 10 } });
+    vi.setSystemTime(1000);
+    emit(child, { type: 'message_update', usage: { output: 30, totalTokens: 40 } });
+
+    const usage = events.filter(
+      (event): event is Extract<SessionEvent, { type: 'usage' }> =>
+        event.type === 'usage',
+    );
+    expect(usage.at(-1)).toMatchObject({
+      speed: { tokensPerSecond: 20, avgTokensPerSecond: 30 },
+    });
+
+    settle(child);
+    const result = await promise;
+    expect(result.events?.some((event) => event.type === 'usage')).toBe(true);
   });
 });

@@ -3,6 +3,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import type {
   Issue,
   Iteration,
+  SessionSpeed,
   SessionStats,
   StepRunWithLog,
 } from '@issue-resolver/shared';
@@ -11,6 +12,10 @@ import TaskDetail, {
   shortPath,
   stepChangedFiles,
 } from './TaskDetail';
+import {
+  formatAvgSpeed,
+  formatInstantSpeed,
+} from '../components/SessionStatsBar';
 import type { SessionEvent } from '../api/session-events';
 
 function makeIssue(): Issue {
@@ -402,5 +407,170 @@ describe('TaskDetail — статистика карточки шага', () => 
     expect(screen.getByTestId('step-screenshots')).toHaveTextContent(
       'shots/run-1',
     );
+  });
+
+  it('live usage со speed → step-speed с мгновенной и средней', async () => {
+    stubFetch([
+      makeStepRun({
+        status: 'running',
+        stats: null,
+        events: [
+          {
+            type: 'usage',
+            usage: {
+              input: 1500,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 1500,
+            },
+            cost: null,
+            speed: { tokensPerSecond: 63.5, avgTokensPerSecond: 42 },
+          },
+        ],
+      }),
+    ]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    const tokens = await screen.findByTestId('step-tokens');
+    const speed = within(tokens).getByTestId('step-speed');
+    expect(speed).toHaveTextContent('63.5 t/s');
+    expect(speed).toHaveTextContent('avg 42 t/s');
+    // Существующие сегменты не сломаны.
+    expect(within(tokens).getByTestId('session-token-in')).toHaveTextContent(
+      '1.5k',
+    );
+    expect(tokens).toHaveTextContent('0 вызовов');
+  });
+
+  it('speed только с мгновенной (avg null) → без «avg»', async () => {
+    // Общий тип SessionSpeed требует оба поля, но футер защитно обрабатывает
+    // частичное окно (avg ещё не посчитано) — моделируем null-приведением.
+    stubFetch([
+      makeStepRun({
+        status: 'running',
+        stats: null,
+        events: [
+          {
+            type: 'usage',
+            usage: {
+              input: 1500,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 1500,
+            },
+            cost: null,
+            speed: {
+              tokensPerSecond: 63.5,
+              avgTokensPerSecond: null as unknown as number,
+            },
+          },
+        ],
+      }),
+    ]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    const speed = within(await screen.findByTestId('step-tokens')).getByTestId(
+      'step-speed',
+    );
+    expect(speed).toHaveTextContent('63.5 t/s');
+    expect(speed).not.toHaveTextContent('avg');
+  });
+
+  it('stats без speed → step-speed отсутствует', async () => {
+    stubFetch([makeStepRun({ stats: makeStats() })]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    const tokens = await screen.findByTestId('step-tokens');
+    expect(within(tokens).queryByTestId('step-speed')).toBeNull();
+    // Существующие сегменты не сломаны.
+    expect(tokens).toHaveTextContent('Claude Sonnet 4');
+    expect(within(tokens).getByTestId('session-token-in')).toHaveTextContent(
+      '1.2k',
+    );
+    expect(tokens).toHaveTextContent('3 вызовов');
+  });
+
+  it('формат скорости: мгновенная — 1 знак, средняя — Math.round', () => {
+    expect(formatInstantSpeed(63.5)).toBe('63.5');
+    expect(formatInstantSpeed(42)).toBe('42.0');
+    expect(formatAvgSpeed(42.4)).toBe('42');
+    expect(formatAvgSpeed(42.6)).toBe('43');
+  });
+
+  it('room-resolve: футер показывает агрегат run.stats и step-cost, не координаторские events', async () => {
+    const refine = makeStepRun({
+      id: 'run-refine',
+      step: 'refine',
+      status: 'success',
+      report: JSON.stringify({
+        status: 'pass',
+        summary: 'room',
+        execution: { mode: 'room', executors: 2 },
+      }),
+    });
+    const resolve = makeStepRun({
+      status: 'success',
+      stats: makeStats({
+        // Агрегат шага: воркеры + координатор.
+        toolCalls: 7,
+        tokens: { input: 2400, output: 500, cacheRead: 10, cacheWrite: 5, total: 2915 },
+        cost: 0.0123,
+      }),
+      events: [
+        {
+          type: 'stats',
+          // Stats-событие последнего координатора — НЕ должно попасть в футер.
+          stats: makeStats({
+            model: 'coordinator-model',
+            tokens: { input: 1200, output: 500, cacheRead: 0, cacheWrite: 0, total: 1700 },
+          }),
+        },
+      ],
+    });
+    stubFetch([refine, resolve]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    const tokens = await screen.findByTestId('step-tokens');
+    expect(within(tokens).getByTestId('session-token-in')).toHaveTextContent(
+      '2.4k',
+    );
+    expect(within(tokens).getByTestId('session-token-out')).toHaveTextContent(
+      '500',
+    );
+    expect(tokens).toHaveTextContent('7 вызовов');
+    // Координаторское stats-событие проигнорировано (иначе было бы 1.2k/model).
+    expect(tokens).not.toHaveTextContent('coordinator-model');
+    expect(within(tokens).getByTestId('session-token-in')).not.toHaveTextContent(
+      '1.2k',
+    );
+
+    const cost = await screen.findByTestId('step-cost');
+    expect(cost).toHaveTextContent('$0.0123');
+  });
+
+  it('single-шаг: футер показывает exec-время, модель и CTX одновременно', async () => {
+    stubFetch([
+      makeStepRun({
+        status: 'success',
+        created_at: '2026-10-09T00:00:00.000Z',
+        updated_at: '2026-10-09T00:01:00.000Z',
+        stats: makeStats({
+          contextUsage: {
+            tokens: 42_000,
+            contextWindow: 200_000,
+            percent: 21,
+          },
+        }),
+      }),
+    ]);
+    render(<TaskDetail issueId="issue-1" />);
+
+    // exec-время шага из created_at/updated_at.
+    expect(await screen.findByTestId('step-duration')).toHaveTextContent('1м');
+    const tokens = await screen.findByTestId('step-tokens');
+    expect(tokens).toHaveTextContent('Claude Sonnet 4');
+    expect(tokens).toHaveTextContent('CTX 21%');
   });
 });

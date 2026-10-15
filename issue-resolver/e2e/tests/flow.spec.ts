@@ -1,12 +1,14 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { createRepo } from '../helpers';
 
 const REPO_URL = 'https://github.com/acme/e2e.git';
 
-// Абсолютный URL, чтобы cleanup не зависел от Vite-прокси.
-const API_BASE = 'http://localhost:8080/issue-resolver/api/v1';
+// Относительный URL: request-контекст Playwright разрешает его против
+// `use.baseURL` (vite :5196), а vite проксирует на мок-бэкенд.
+const API_BASE = '/issue-resolver/api/v1';
 
 /**
- * Удаляет созданные тестом задачи через реальный API (каскадом уходят
+ * Удаляет созданные тестом задачи через API мок-бэкенда (каскадом уходят
  * repositories/iterations/step_runs/step_outputs). Ошибки cleanup не должны
  * ронять тест — только логируются.
  */
@@ -50,6 +52,27 @@ async function cleanupCreatedIssues(
 }
 
 /**
+ * Создаёт задачу через реальную форму NewIssue поверх мок-бэкенда:
+ * сохраняет репозиторий (страница «Репозитории») и выбирает его в форме.
+ */
+async function createIssueThroughUi(page: Page, title: string): Promise<void> {
+  await createRepo(page, REPO_URL, 'main');
+
+  await page.goto('/#/new');
+  await expect(
+    page.getByRole('heading', { name: 'Создание задачи' }),
+  ).toBeVisible();
+  await page.getByLabel('Заголовок').fill(title);
+
+  await page.getByRole('button', { name: 'Добавить репозиторий' }).click();
+  await page.getByTestId('repository-select-0').selectOption({ index: 1 });
+  await expect(page.getByTestId('repository-branch-0')).not.toHaveValue('');
+
+  await page.getByRole('button', { name: 'Запустить', exact: true }).click();
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
+}
+
+/**
  * Первая волна UI-сценариев. Заголовки уникальны через Date.now(),
  * селекторы — по реальным aria-labels/text из NewIssue/TasksList/TaskDetail.
  */
@@ -69,55 +92,20 @@ test.describe('Issue Resolver UI', () => {
     const title = `E2E-${Date.now()}`;
     createdTitles.push(title);
 
-    await page.goto('/');
-
-    // Главная страница — список задач; форма создания открывается по «+».
-    await expect(
-      page.getByRole('heading', { name: 'Мои задачи' }),
-    ).toBeVisible();
-    await page.getByRole('button', { name: 'Создать задачу' }).click();
-    await expect(
-      page.getByRole('heading', { name: 'Создание задачи' }),
-    ).toBeVisible();
-
-    await page.getByLabel('Заголовок').fill(title);
-    // Репозитории по умолчанию пусты — поле «Адрес» появляется после
-    // нажатия «Добавить репозиторий».
-    await page.getByRole('button', { name: 'Добавить репозиторий' }).click();
-    await page.getByLabel('Адрес').fill(REPO_URL);
-    await page.getByLabel('Базовая ветка').fill('main');
-    await page.getByRole('button', { name: 'Запустить' }).click();
+    await createIssueThroughUi(page, title);
 
     // После создания App переключается на деталь новой задачи.
-    await expect(page.getByRole('heading', { name: title })).toBeVisible();
     await expect(page.getByText('Итерация #1')).toBeVisible();
   });
 
   test('деталь + новая итерация', async ({ page }) => {
-    // Фейковый репо: git clone падает быстро (auth), движок помечает
-    // итерацию failed — ждём этот settle до клика по кнопке новой итерации.
+    // Мок-агент завершает resolve быстро — ждём settle итерации до клика по
+    // кнопке новой итерации.
     test.setTimeout(120_000);
     const title = `E2E-${Date.now()}`;
     createdTitles.push(title);
 
-    await page.goto('/');
-    await expect(
-      page.getByRole('heading', { name: 'Мои задачи' }),
-    ).toBeVisible();
-    await page.getByRole('button', { name: 'Создать задачу' }).click();
-    await expect(
-      page.getByRole('heading', { name: 'Создание задачи' }),
-    ).toBeVisible();
-    await page.getByLabel('Заголовок').fill(title);
-    // Репозитории по умолчанию пусты — поле «Адрес» появляется после
-    // нажатия «Добавить репозиторий».
-    await page.getByRole('button', { name: 'Добавить репозиторий' }).click();
-    await page.getByLabel('Адрес').fill(REPO_URL);
-    await page.getByLabel('Базовая ветка').fill('main');
-    await page.getByRole('button', { name: 'Запустить' }).click();
-
-    // Создание ведёт сразу на деталь новой задачи.
-    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+    await createIssueThroughUi(page, title);
 
     // Backend автосоздаёт итерацию #1 при создании задачи.
     await expect(page.getByText('Итерация #1')).toBeVisible();

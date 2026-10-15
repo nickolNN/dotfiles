@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type {
   CreateIterationRequest,
   Issue,
@@ -10,60 +10,91 @@ import type {
   SessionCommand,
   SessionControlSnapshot,
   StepModels,
+  StepThinkingLevels,
   StepRunStatus,
+  ThinkingLevel,
+  WorkspaceFile,
 } from '@issue-resolver/shared';
-import { formatDateTime, formatRelativeTime } from '@issue-resolver/shared';
-import { canStartIteration, parseStepReport } from '@issue-resolver/shared';
+import {
+  extractRepoNameFromUrl,
+  formatDateTime,
+  formatRelativeTime,
+} from '@issue-resolver/shared';
+import { canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
 import {
   abortIteration,
   createIteration,
   createIterationWithFiles,
   deleteIssueFile,
+  devServerPortOf,
   getIssue,
   getIssueFiles,
   getIterations,
   getIterationControl,
   getModels,
   getQuestionAnswers,
+  getResultFiles,
   getStepRuns,
   promptIteration,
+  repeatIteration,
+  resultFilesArchiveUrl,
   sendIterationCommand,
   sendIterationMessage,
   sendUiResponse,
+  stopDevServers,
 } from '../api/client';
-import { subscribeToIssueEvents } from '../api/sse';
+import {
+  DELETE_TIMEOUT_MS,
+  subscribeToIssueEvents,
+  type BootstrapLogPayload,
+} from '../api/sse';
 import {
   sessionEventsOf,
   type SessionEvent,
   type StepRunWithEvents,
 } from '../api/session-events';
 import AgentMarkdown from '../components/AgentMarkdown';
+import ArtifactsModal from '../components/ArtifactsModal';
 import AutoScrollBox from '../components/AutoScrollBox';
 import FilePicker from '../components/FilePicker';
 import IssueFilesList from '../components/IssueFilesList';
 import MarkdownEditor from '../components/MarkdownEditor';
+import RoomAgentTabs from '../components/RoomAgentTabs';
 import SessionView from '../components/SessionView';
 import SessionStatsBar, {
+  formatAvgSpeed,
+  formatCost,
+  formatInstantSpeed,
   formatTokens,
   resolveFooter,
   TokenDownIcon,
   TokenUpIcon,
 } from '../components/SessionStatsBar';
+import StepReportView from '../components/StepReportView';
+import { thinkingLevelsFor } from '../constants/thinking-levels';
 import { statusColor, stepStatusColor } from '../theme';
+import {
+  REPO_PREP_COLORS,
+  REPO_PREP_LABELS,
+  REPO_PREP_MARKS,
+  repoDevPort,
+  repoFullNameFromUrl,
+  repoPrepStatus,
+} from './repoPrep';
 
 const STEP_OPTIONS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
-  { value: 'refine', label: 'Refine' },
-  { value: 'resolve', label: 'Resolve' },
-  { value: 'review', label: 'Review' },
-  { value: 'test', label: 'Test' },
+  { value: 'refine', label: 'Планирование' },
+  { value: 'resolve', label: 'Исполнение' },
+  { value: 'review', label: 'Код-ревью' },
+  { value: 'test', label: 'Тест' },
   { value: 'pr', label: 'PR' },
 ];
 
 const STEP_LABELS: Record<PipelineStep, string> = {
-  refine: 'Refine',
-  resolve: 'Resolve',
-  review: 'Review',
-  test: 'Test',
+  refine: 'Планирование',
+  resolve: 'Исполнение',
+  review: 'Код-ревью',
+  test: 'Тест',
   pr: 'PR',
 };
 
@@ -77,12 +108,103 @@ const PIPELINE_ORDER: readonly PipelineStep[] = [
   'pr',
 ];
 
+/**
+ * Room-режим итерации: ПОСЛЕДНИЙ refine-отчёт (по attempt) рекомендовал
+ * комнату. Это ровно то условие, по которому движок запускает `runRoomResolve`
+ * (`planExecutionMode(execution) === 'room'`); нет refine/execution → single.
+ */
+function isRoomIteration(runs: StepRunWithEvents[]): boolean {
+  const latestRefine = runs
+    .filter((run) => run.step === 'refine')
+    .sort((a, b) => b.attempt - a.attempt)[0];
+  const mode = parseStepReport(latestRefine?.report ?? '')?.execution?.mode;
+  // staged-резолв (последовательные этапы) отображается теми же вкладками
+  // комнаты: агенты несут `stage`, порядок/подписи разбирает RoomAgentTabs.
+  return mode === 'room' || mode === 'stages';
+}
+
 /** Интерактивный вопрос живой pi-сессии (`extension_ui_request`). */
 type QuestionEvent = Extract<SessionEvent, { type: 'question' }>;
 
 /** Режим отправки сообщения в живую сессию: `prompt` — новая инструкция,
  * `steer` — прервать текущий ход, `followUp` — встать в очередь. */
 type SendMode = 'prompt' | 'steer' | 'followUp';
+
+/** Статус шага подготовки рабочей папки из `workspace_progress`. */
+type WorkspaceStepStatus = 'running' | 'done' | 'warning' | 'error';
+
+/**
+ * Один шаг подготовки. Ключ уникален парой step+repo: `cloning` публикуется
+ * на каждый репозиторий.
+ */
+type WorkspaceProgressStep = {
+  key: string;
+  step: string;
+  repo?: string;
+  status: WorkspaceStepStatus;
+  message?: string;
+  /** Порт поднятого dev-сервера (шаг `dev_server`). */
+  devPort?: number;
+};
+
+/** Накопленный прогресс разовой подготовки одной итерации. */
+type WorkspaceProgress = {
+  steps: WorkspaceProgressStep[];
+  /** Пришёл терминальный `ready`/`error` — готовим затухание. */
+  finished: boolean;
+  /** Анимация исчезновения уже запущена. */
+  fading: boolean;
+  /** Анимация закончилась — панель больше не рендерим. */
+  dismissed: boolean;
+};
+
+/** Порция живого лога бутстрапера: текст вывода + его поток. */
+type BootstrapLogChunk = Pick<BootstrapLogPayload, 'kind' | 'text'>;
+
+const WORKSPACE_STEP_LABELS: Record<string, string> = {
+  creating_dirs: 'Создание рабочей папки',
+  cloning: 'Клонирование',
+  installing: 'Установка зависимостей',
+  dev_server: 'Запуск dev-сервера',
+  checking_instructions: 'Проверка инструкции запуска',
+  bootstrapping: 'Bootstrapping',
+  analyzing: 'Настройка проекта',
+  ready: 'Готово',
+};
+
+const WORKSPACE_STEP_STATUSES: ReadonlySet<string> = new Set([
+  'running',
+  'done',
+  'warning',
+  'error',
+]);
+
+const WORKSPACE_STEP_COLORS: Record<WorkspaceStepStatus, string> = {
+  running: '#FFB000',
+  done: '#00FF41',
+  warning: '#FFB000',
+  error: '#FF0033',
+};
+
+/** Подпись шага подготовки: если шаг привязан к репозиторию — дописываем его. */
+function workspaceStepLabel(step: string, repo?: string): string {
+  const label = WORKSPACE_STEP_LABELS[step] ?? step;
+  return repo ? `${label} ${repo}` : label;
+}
+
+/** Иконка статуса шага: running — ⏳, done — ✓, error — ✕. */
+function workspaceStepMark(status: WorkspaceStepStatus): string {
+  switch (status) {
+    case 'done':
+      return '✓';
+    case 'warning':
+      return '!';
+    case 'error':
+      return '✕';
+    default:
+      return '⏳';
+  }
+}
 
 /**
  * Статусы, после которых последующие шаги итерации уже не выполнятся:
@@ -248,6 +370,24 @@ function CalendarIcon({ className }: { className?: string }) {
   );
 }
 
+/** Inline-иконка «стоп» (квадрат) для гашения dev-серверов. */
+function StopIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="6" y="6" width="12" height="12" rx="1" />
+    </svg>
+  );
+}
+
 /** Inline-иконка обновления (дата последнего изменения). */
 function RefreshIcon({ className }: { className?: string }) {
   return (
@@ -268,16 +408,27 @@ function RefreshIcon({ className }: { className?: string }) {
 }
 
 const inputClass =
-  'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
+  'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)] transition-base';
 const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
 
 interface TaskDetailProps {
   issueId?: string | null;
-  onBack?: () => void;
   /** Открыть модалку результата сразу после загрузки (deep-link `…/result`). */
   autoOpenResult?: boolean;
 }
 
+/**
+ * Имя файла результата для атрибута `download`: без него браузер при 404
+ * (JSON-тело) сохранял бы `download.json` вместо осмысленного имени.
+ */
+function resultFilenameFor(desiredResult: Issue['desired_result']): string {
+  switch (desiredResult) {
+    case 'html':
+      return 'report.html';
+    default:
+      return 'report.md';
+  }
+}
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
@@ -289,18 +440,49 @@ type StepRunsState =
   | { status: 'error'; message: string }
   | { status: 'ready'; stepRuns: StepRunWithEvents[] };
 
+function filterArtifacts(files: IssueFile[]): IssueFile[] {
+  return files.filter((file) => {
+    const path = file.rel_path;
+    // Исключаем служебные каталоги и lock-файлы.
+    if (
+      path.startsWith('node_modules/') ||
+      path.startsWith('.git/') ||
+      path.startsWith('.yarn/') ||
+      path.startsWith('.cache/')
+    ) {
+      return false;
+    }
+    const name = file.name;
+    if (
+      name === 'package-lock.json' ||
+      name === 'yarn.lock' ||
+      name === 'bun.lockb' ||
+      name === 'pnpm-lock.yaml' ||
+      name.endsWith('.log')
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
 export default function TaskDetail({
   issueId,
-  onBack,
   autoOpenResult,
 }: TaskDetailProps) {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [context, setContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [issueFiles, setIssueFiles] = useState<IssueFile[]>([]);
+  // Файлы, порождённые агентом в рабочей папке последней completed-итерации
+  // (кроме самого артефакта результата).
+  const [resultFiles, setResultFiles] = useState<WorkspaceFile[]>([]);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
   const [stepModels, setStepModels] = useState<StepModels>({});
+  const [stepThinkingLevels, setStepThinkingLevels] =
+    useState<StepThinkingLevels>({});
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -317,16 +499,22 @@ export default function TaskDetail({
   const [messageError, setMessageError] = useState<string | null>(null);
   const [aborting, setAborting] = useState(false);
   const [abortError, setAbortError] = useState<string | null>(null);
+  const [repeatingId, setRepeatingId] = useState<string | null>(null);
+  const [repeatError, setRepeatError] = useState<string | null>(null);
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
     null,
   );
   const modalScrollRef = useRef<HTMLDivElement | null>(null);
+  const modalPinnedRef = useRef(true);
   const [resultOpen, setResultOpen] = useState(false);
   const [resultText, setResultText] = useState<string | null>(null);
   const [resultError, setResultError] = useState<'missing' | 'error' | null>(
     null,
   );
   const [resultLoading, setResultLoading] = useState(false);
+  const [jiraPreviewOpen, setJiraPreviewOpen] = useState(false);
+  const [jiraPreviewText, setJiraPreviewText] = useState<string | null>(null);
+  const [jiraPreviewLoading, setJiraPreviewLoading] = useState(false);
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(
     null,
   );
@@ -334,6 +522,22 @@ export default function TaskDetail({
   const [answeredQuestionIds, setAnsweredQuestionIds] = useState<Set<string>>(
     () => new Set(),
   );
+
+  const [stoppingDevServers, setStoppingDevServers] = useState(false);
+  // Задача удаляется (SSE `issue_deleting`): показываем заглушку вместо
+  // карточки, а на `issue_deleted` уходим на список.
+  const [deleting, setDeleting] = useState(false);
+  // Предупреждение, если финал удаления не пришёл за `DELETE_TIMEOUT_MS`.
+  const [deleteTimeoutError, setDeleteTimeoutError] = useState<string | null>(
+    null,
+  );
+  const deleteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [devServerError, setDevServerError] = useState<string | null>(null);
+  const [devPortCopied, setDevPortCopied] = useState(false);
+  const devPortCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [questionError, setQuestionError] = useState<string | null>(null);
   // Живой статус шага из `step_status`: снапшот `stepRuns` не обновляется во
@@ -341,6 +545,20 @@ export default function TaskDetail({
   const [liveStatusByRun, setLiveStatusByRun] = useState<
     Record<string, StepRunStatus>
   >({});
+  // Прогресс разовой подготовки рабочей папки (`workspace_progress`):
+  // событие issue-уровневое, id итерации в нём нет — панель одна на задачу.
+  const [workspaceProgress, setWorkspaceProgress] =
+    useState<WorkspaceProgress | null>(null);
+  // Живой лог агента-бутстрапера (`bootstrap_log`): порции stdout/stderr по
+  // репозиториям, пока идёт шаг `bootstrapping` разовой подготовки.
+  const [bootstrapLogs, setBootstrapLogs] = useState<
+    Record<string, BootstrapLogChunk[]>
+  >({});
+  // Ошибка подготовки из `iteration_status` (`status: 'failed'`, поле error).
+  const [iterationErrors, setIterationErrors] = useState<
+    Record<string, string>
+  >({});
+  const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Управление живой pi-сессией (модель/thinking/очередь/компакция). `null`,
   // пока активного шаг-сеанса нет (409) или роут ещё не ответил — тогда
@@ -356,8 +574,8 @@ export default function TaskDetail({
   const [paletteIndex, setPaletteIndex] = useState(0);
   // Мягко подвести список к началу после создания новой итерации.
   const [scrollToIterations, setScrollToIterations] = useState(false);
-  const panelRef = useRef<HTMLElement | null>(null);
-  const iterationsRef = useRef<HTMLElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const iterationsRef = useRef<HTMLDivElement | null>(null);
 
   // На входе показываем верх страницы: там же — свежайшая итерация.
   useEffect(() => {
@@ -366,6 +584,16 @@ export default function TaskDetail({
       panel.scrollIntoView({ block: 'start' });
     }
   }, [issueId]);
+
+  // Сбрасываем таймер подсветки «Скопировано» при размонтировании.
+  useEffect(
+    () => () => {
+      if (devPortCopiedTimerRef.current) {
+        clearTimeout(devPortCopiedTimerRef.current);
+      }
+    },
+    [],
+  );
 
   // После успешного создания новой итерации она становится первой в списке;
   // подводим к нему, не трогая AutoScrollBox живого шага.
@@ -386,6 +614,16 @@ export default function TaskDetail({
   /** Шаг активен: ещё не завершён (pending — до старта/в коротком окне). */
   const isActiveStatus = (status: StepRunStatus) =>
     status === 'running' || status === 'pending';
+
+  /**
+   * Шаг, чей неотвеченный вопрос ещё нужно показывать: помимо активных, это
+   * `needs_input` — шаг завершился blocked-отчётом (exit 0 + status blocked)
+   * и ждёт ответа. В карточке шага он не «живой» (там `isActiveStatus`), но
+   * вопрос из его событий обязан всплывать, иначе задача в статусе `question`
+   * при открытии не показывает вопрос.
+   */
+  const isQuestionEligibleStatus = (status: StepRunStatus) =>
+    isActiveStatus(status) || status === 'needs_input';
 
   useEffect(() => {
     if (!issueId) return;
@@ -465,22 +703,6 @@ export default function TaskDetail({
         if (cancelled) return;
         const loadedRuns = Array.isArray(runs) ? runs : [];
         setStepRuns({ status: 'ready', stepRuns: loadedRuns });
-        // Персистентные events авторитетны: сбрасываем live-буферы для уже
-        // загруженных шагов, чтобы после reload не было дублей. Буферы шагов,
-        // которых пока нет в ответе, сохраняем (гонка на старте).
-        setLiveEventsByRun((current) => {
-          const loadedIds = new Set(loadedRuns.map((run) => run.id));
-          const next: Record<string, SessionEvent[]> = {};
-          let changed = false;
-          for (const [runId, events] of Object.entries(current)) {
-            if (loadedIds.has(runId)) {
-              changed = true;
-            } else {
-              next[runId] = events;
-            }
-          }
-          return changed ? next : current;
-        });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -518,7 +740,7 @@ export default function TaskDetail({
     let cancelled = false;
     getIssueFiles(issueId)
       .then((list) => {
-        if (!cancelled) setIssueFiles(list);
+        if (!cancelled) setIssueFiles(filterArtifacts(list));
       })
       .catch(() => {
         if (!cancelled) setIssueFiles([]);
@@ -528,11 +750,35 @@ export default function TaskDetail({
     };
   }, [issueId, refreshTick]);
 
+  /** Запускает затухание панели прогресса через 3с после `ready`/`error`. */
+  const scheduleProgressFade = () => {
+    if (progressTimerRef.current) return;
+    progressTimerRef.current = setTimeout(() => {
+      progressTimerRef.current = null;
+      setWorkspaceProgress((current) => {
+        if (!current || current.fading) return current;
+        return { ...current, fading: true };
+      });
+    }, 3000);
+  };
+
+  /** `onAnimationEnd`: убирает отыгравшую панель из DOM. */
+  const dismissProgress = () => {
+    setWorkspaceProgress((current) =>
+      current ? { ...current, dismissed: true } : current,
+    );
+  };
+
   useEffect(() => {
     if (!issueId) return;
 
     setLiveEventsByRun({});
     setLiveStatusByRun({});
+    setWorkspaceProgress(null);
+    setBootstrapLogs({});
+    setIterationErrors({});
+    setDeleting(false);
+    setDeleteTimeoutError(null);
 
     const unsubscribe = subscribeToIssueEvents(issueId, {
       onStepEvent: (payload, raw) => {
@@ -547,22 +793,67 @@ export default function TaskDetail({
       },
       onStepStatus: (event) => {
         const stepRunId = event.stepRunId;
-        const status = event.data;
+        // `data` — плоская строка статуса ИЛИ JSON `{status, step, model}`
+        // (для status='running'). Разбираем оба варианта, чтобы терминальные
+        // статусы и новый формат одинаково доходили до карточки.
+        let status: string = event.data;
+        try {
+          const parsed = JSON.parse(event.data) as { status?: unknown };
+          if (typeof parsed?.status === 'string') status = parsed.status;
+        } catch {
+          // старый формат — строка
+        }
         if (stepRunId && isStepRunStatus(status)) {
           setLiveStatusByRun((current) => ({
             ...current,
             [stepRunId]: status,
           }));
+          // Снапшот `stepRuns` не знает о новом прогоне (движок создаёт
+          // step_run на каждый шаг: refine→resolve), а `step_status` несёт
+          // только stepRunId без step/attempt — без перечитки карточка
+          // нового шага не отрисуется. Перечитываем и на терминальном
+          // статусе: он же подтягивает отчёт завершившегося шага.
+          setRefreshTick((tick) => tick + 1);
         }
       },
       onIterationStatus: (event) => {
-        // data — JSON-строка iteration_status; статус лежит внутри, а не в
-        // поле самого SSEEvent. Без разбора карточка не замечает completed/failed.
-        let status: string | undefined;
+        // data — JSON-строка iteration_status; статус и текст ошибки лежат
+        // внутри, а не в поле самого SSEEvent. Без разбора карточка не
+        // замечает completed/failed и не показывает ошибку подготовки.
+        let parsedData: { status?: string; error?: string } = {};
         try {
-          status = (JSON.parse(event.data) as { status?: string }).status;
+          parsedData = JSON.parse(event.data) as {
+            status?: string;
+            error?: string;
+          };
         } catch {
-          status = undefined;
+          parsedData = {};
+        }
+        const status = parsedData.status;
+        const error =
+          typeof parsedData.error === 'string' ? parsedData.error : undefined;
+        const failedIterationId = event.iterationId;
+        if (status === 'failed' && error && failedIterationId) {
+          setIterationErrors((current) => ({
+            ...current,
+            [failedIterationId]: error,
+          }));
+        }
+        if (status === 'question' || status === 'running') {
+          // Живой статус задачи: `question` пока агент ждёт ответа, обратно
+          // в `running` после ответа — без перезагрузки карточки.
+          setState((current) =>
+            current.status === 'ready'
+              ? { ...current, issue: { ...current.issue, status } }
+              : current,
+          );
+          // Вопрос дозаписывается в `step_runs.events` уже после первичной
+          // загрузки. Перечитываем прогоны, чтобы вопрос, персистентный на
+          // момент перехода в `question`, не терялся (напр. при переподключении
+          // SSE, когда live-событие не пришло).
+          if (status === 'question') {
+            setRefreshTick((tick) => tick + 1);
+          }
         }
         if (
           status === 'completed' ||
@@ -589,21 +880,122 @@ export default function TaskDetail({
             });
         }
       },
+      onWorkspaceProgress: (payload) => {
+        if (!WORKSPACE_STEP_STATUSES.has(payload.status)) return;
+        const status = payload.status as WorkspaceStepStatus;
+        // Первый шаг новой подготовки: прошлая панель уже отыграла —
+        // начинаем с чистого листа (иначе dismissed-панель не вернулась бы).
+        const fresh =
+          payload.step === 'creating_dirs' && status === 'running';
+        if (fresh && progressTimerRef.current) {
+          clearTimeout(progressTimerRef.current);
+          progressTimerRef.current = null;
+        }
+        // Новая подготовка — прошлый лог бутстрапера больше не актуален.
+        if (fresh) setBootstrapLogs({});
+        const key = `${payload.step}:${payload.repo ?? ''}`;
+        setWorkspaceProgress((current) => {
+          const entry: WorkspaceProgress =
+            fresh || !current
+              ? { steps: [], finished: false, fading: false, dismissed: false }
+              : current;
+          const existing = entry.steps.findIndex((step) => step.key === key);
+          const next: WorkspaceProgressStep = {
+            key,
+            step: payload.step,
+            repo: payload.repo,
+            status,
+            message: payload.message,
+            devPort: payload.devPort,
+          };
+          const steps =
+            existing >= 0
+              ? entry.steps.map((step, index) =>
+                  index === existing ? { ...step, ...next } : step,
+                )
+              : [...entry.steps, next];
+          const finished =
+            entry.finished || payload.step === 'ready' || status === 'error';
+          return { ...entry, steps, finished };
+        });
+        if (payload.step === 'ready' || status === 'error') {
+          scheduleProgressFade();
+        }
+      },
+      onBootstrapLog: (payload) => {
+        setBootstrapLogs((current) => {
+          const chunks = current[payload.repo] ?? [];
+          const next = [
+            ...chunks,
+            { kind: payload.kind, text: payload.text },
+          ].slice(-500);
+          return { ...current, [payload.repo]: next };
+        });
+      },
+      onIssueDeleting: (payload) => {
+        if (payload.issueId !== issueId) return;
+        if (payload.phase === 'error') {
+          if (deleteTimeoutRef.current) {
+            clearTimeout(deleteTimeoutRef.current);
+            deleteTimeoutRef.current = null;
+          }
+          setDeleting(false);
+          setDeleteTimeoutError(
+            payload.message ?? 'Не удалось удалить задачу',
+          );
+          return;
+        }
+        setDeleting(true);
+      },
+      onIssueDeleted: (payload) => {
+        if (payload.issueId !== issueId) return;
+        if (deleteTimeoutRef.current) {
+          clearTimeout(deleteTimeoutRef.current);
+          deleteTimeoutRef.current = null;
+        }
+        setDeleting(true);
+        window.location.hash = '#/';
+      },
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      if (progressTimerRef.current) {
+        clearTimeout(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
+      if (deleteTimeoutRef.current) {
+        clearTimeout(deleteTimeoutRef.current);
+        deleteTimeoutRef.current = null;
+      }
+    };
   }, [issueId]);
 
-  // Пока открыта модалка вопроса, Escape обрабатывается ею: фоновую
-  // карточку шага не закрываем. Значение синхронизируем через ref ниже
-  // (объявление pendingQuestion идёт после эффектов).
-  const pendingQuestionRef = useRef<QuestionEvent | null>(null);
+  // Страховка от «зависшего» удаления: если SSE замолчал и за
+  // `DELETE_TIMEOUT_MS` не пришёл ни `issue_deleted`, ни `phase: 'error'` —
+  // снимаем заглушку и предупреждаем, что задача могла удалиться частично.
+  useEffect(() => {
+    if (!deleting) return;
+    deleteTimeoutRef.current = setTimeout(() => {
+      deleteTimeoutRef.current = null;
+      setDeleting(false);
+      setDeleteTimeoutError(
+        'Таймаут удаления. Задача может быть удалена частично. Обновите страницу.',
+      );
+    }, DELETE_TIMEOUT_MS);
+    return () => {
+      if (deleteTimeoutRef.current) {
+        clearTimeout(deleteTimeoutRef.current);
+        deleteTimeoutRef.current = null;
+      }
+    };
+  }, [deleting]);
 
   useEffect(() => {
     if (expandedStepRunId === null) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !pendingQuestionRef.current) {
+      if (event.key === 'Escape') {
         setExpandedStepRunId(null);
       }
     };
@@ -622,6 +1014,17 @@ export default function TaskDetail({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [resultOpen]);
+
+  useEffect(() => {
+    if (!jiraPreviewOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setJiraPreviewOpen(false);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [jiraPreviewOpen]);
 
   // Deep-link из списка задач: `#/tasks/<id>/result` сразу открывает
   // модалку результата после готовности задачи. `openResult` — function
@@ -650,11 +1053,45 @@ export default function TaskDetail({
       ]
     : [];
 
-  // Модалка вывода: как у pi — новые события прокручивают лог вниз.
+  // Модалка вывода: автоскролл вниз только пока пользователь прибит ко дну.
+  const handleModalScroll = useCallback(() => {
+    const el = modalScrollRef.current;
+    if (!el) return;
+    modalPinnedRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+  }, []);
+
   useEffect(() => {
     const el = modalScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && modalPinnedRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [expandedEvents]);
+
+  // Авто-скролл внутри карточки итерации к running-воркеру.
+  // Когда статус шага меняется на running (или появляется новый running),
+  // скроллим карточку этого шага в зону видимости.
+  useEffect(() => {
+    if (stepRuns.status !== 'ready') return;
+    const runs = stepRuns.stepRuns;
+    // Найти первый running-воркер.
+    const firstRunning = runs.find((run) => {
+      const status = liveStatusByRun[run.id] ?? statusOf(run);
+      return isActiveStatus(status);
+    });
+    if (!firstRunning) return;
+
+    // Небольшая задержка — дать DOM отрендериться после изменения состояния.
+    const timer = setTimeout(() => {
+      const el = document.querySelector(
+        `[data-step-run-id="${firstRunning.id}"]`,
+      );
+      if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [stepRuns, liveStatusByRun]);
 
   // Question-события активной итерации (персист + live) в порядке появления,
   // без дублей по id. Учитываем только ещё выполняющиеся шаги: вопрос
@@ -665,7 +1102,7 @@ export default function TaskDetail({
     const seen = new Set<string>();
     const questions: QuestionEvent[] = [];
     for (const run of stepRuns.stepRuns) {
-      if (!isActiveStatus(statusOf(run))) continue;
+      if (!isQuestionEligibleStatus(statusOf(run))) continue;
       for (const event of [
         ...sessionEventsOf(run),
         ...(liveEventsByRun[run.id] ?? []),
@@ -680,7 +1117,7 @@ export default function TaskDetail({
   }, [stepRuns, liveEventsByRun, liveStatusByRun]);
 
   // Вопрос уместен, только пока активная итерация ещё выполняется, шаг
-  // активен (running/pending — см. фильтр `questionEvents`) и ответ не пришёл
+  // активен (running/pending/needs_input — см. фильтр `questionEvents`) и ответ не пришёл
   // ни от сервера, ни локально. Персистентные вопросы завершённых прогонов и
   // уже отвеченные (`question-answers`) не всплывают после перезагрузки.
   const activeIteration =
@@ -688,18 +1125,18 @@ export default function TaskDetail({
       ? state.iterations.find((iteration) => iteration.id === activeIterationId)
       : undefined;
 
-  const pendingQuestion =
-    activeIteration?.status === 'running' && activeIterationId
-      ? (questionEvents.find(
-          (question) => !answeredQuestionIds.has(question.id),
-        ) ?? null)
-      : null;
+  // Неотвеченные вопросы активной итерации: каждый рисуется баннером, а
+  // `activeQuestionId` определяет, какая модалка открыта. Так закрытая модалка
+  // не прячет вопрос — баннер остаётся кликабельным.
+  const unansweredQuestions = useMemo(
+    () =>
+      questionEvents.filter(
+        (question) => !answeredQuestionIds.has(question.id),
+      ),
+    [questionEvents, answeredQuestionIds],
+  );
 
-  // window-хендлер Escape не видит pendingQuestion напрямую — держим ref в
-  // актуальном состоянии, чтобы фоновая карточка не закрывалась под модалкой.
-  useEffect(() => {
-    pendingQuestionRef.current = pendingQuestion;
-  }, [pendingQuestion]);
+
 
   const iterationRunning = activeIteration?.status === 'running';
 
@@ -752,10 +1189,73 @@ export default function TaskDetail({
     state.status === 'ready' &&
     (state.issue.desired_result === 'md' ||
       state.issue.desired_result === 'html');
+  // Порт dev-сервера задачи (выделяет backend). Нет порта → индикатор скрыт.
+  const devServerPort =
+    state.status === 'ready' ? devServerPortOf(state.issue) : null;
+  // Готов ли результат задачи: эндпоинт отдаёт результат последней
+  // completed-итерации, а снапшот создаётся в момент её завершения. Значит
+  // готовность = есть хоть одна завершённая итерация (не важно, что лежит
+  // в отчёте resolve-шага).
+  const resultReady =
+    state.status === 'ready' &&
+    state.iterations.some((iteration) => iteration.status === 'completed');
+  // Подготовка завершена: либо пришёл терминальный `ready`, либо задача уже
+  // вышла из фазы подготовки (после перезагрузки SSE-события не реплеятся).
+  const workspaceReady =
+    workspaceProgress !== null
+      ? workspaceProgress.steps.some(
+          (step) => step.step === 'ready' && step.status === 'done',
+        )
+      : state.status === 'ready' &&
+        state.issue.status !== 'pending' &&
+        state.issue.status !== 'preparing';
+  // Сводка по репозиториям для шапки: статус — из накопленного прогресса.
+  const repoRows =
+    state.status === 'ready'
+      ? state.issue.repositories.map((repository) => ({
+          repository,
+          fullName: repoFullNameFromUrl(repository.repository_url),
+          status: repoPrepStatus(
+            extractRepoNameFromUrl(repository.repository_url),
+            repository.bootstrap_enabled,
+            workspaceProgress?.steps ?? [],
+            workspaceReady,
+          ),
+          devPort: repoDevPort(
+            extractRepoNameFromUrl(repository.repository_url),
+            workspaceProgress?.steps ?? [],
+          ),
+        }))
+      : [];
+
+  // Список порождённых файлов. Best-effort: сеть/не-2xx → пустой список,
+  // чтобы шапка не падала. Перезагружается с refreshTick (терминал итерации,
+  // новая итерация) и когда результат становится готов.
+  useEffect(() => {
+    if (!issueId || !resultReady) {
+      setResultFiles([]);
+      return;
+    }
+    let cancelled = false;
+    getResultFiles(issueId)
+      .then((list) => {
+        if (!cancelled) setResultFiles(list);
+      })
+      .catch(() => {
+        if (!cancelled) setResultFiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [issueId, resultReady, refreshTick]);
+  // Room-режим итерации: последний refine рекомендовал комнату. Для активного
+  // resolve карточка шага показывает вкладки агентов вместо одной сессии.
+  const roomIteration =
+    stepRuns.status === 'ready' && isRoomIteration(stepRuns.stepRuns);
   const hint = !context.trim()
     ? 'Укажи контекст для новой итерации.'
     : selectedSteps.includes('review')
-      ? 'После Resolver автоматически запустится Reviewer.'
+      ? 'После Resolver автоматически запустится Код-ревью.'
       : 'Итерация завершится сразу после работы Resolver.';
 
   // Один живой тик на все карточки шагов: активные показывают elapsed.
@@ -778,6 +1278,30 @@ export default function TaskDetail({
       const next: StepModels = { ...current };
       if (value) {
         next[step] = value;
+      } else {
+        delete next[step];
+      }
+      return next;
+    });
+
+    // Смена модели сбрасывает уровень, несовместимый с её thinkingLevels.
+    const allowed = value
+      ? thinkingLevelsFor(models.find((model) => model.id === value))
+      : [];
+    setStepThinkingLevels((current) => {
+      const level = current[step];
+      if (!level || (value && allowed.includes(level))) return current;
+      const next: StepThinkingLevels = { ...current };
+      delete next[step];
+      return next;
+    });
+  }
+
+  function updateStepThinkingLevel(step: PipelineStep, value: string) {
+    setStepThinkingLevels((current) => {
+      const next: StepThinkingLevels = { ...current };
+      if (value) {
+        next[step] = value as ThinkingLevel;
       } else {
         delete next[step];
       }
@@ -842,6 +1366,15 @@ export default function TaskDetail({
       ),
     ) as StepModels;
 
+    // В тело идут только thinking-уровни выбранных шагов.
+    const activeStepThinkingLevels = Object.fromEntries(
+      Object.entries(stepThinkingLevels).filter(
+        ([step]) =>
+          chosenSteps.has(step as PipelineStep) &&
+          (step !== 'pr' || prAvailable),
+      ),
+    ) as StepThinkingLevels;
+
     const request: CreateIterationRequest = {
       context,
       is_review_need: selectedSteps.includes('review'),
@@ -849,6 +1382,10 @@ export default function TaskDetail({
       steps: effectiveSteps.length > 0 ? effectiveSteps : undefined,
       step_models:
         Object.keys(activeStepModels).length > 0 ? activeStepModels : undefined,
+      step_thinking_levels:
+        Object.keys(activeStepThinkingLevels).length > 0
+          ? activeStepThinkingLevels
+          : undefined,
     };
 
     setFormError(null);
@@ -878,6 +1415,49 @@ export default function TaskDetail({
       setFormError(error instanceof Error ? error.message : String(error));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleStopDevServers() {
+    if (state.status !== 'ready') return;
+    const id = state.issue.id;
+    setStoppingDevServers(true);
+    setDevServerError(null);
+    try {
+      await stopDevServers(id);
+      // Backend гасит процессы и обнуляет порт — отражаем это локально, не
+      // дожидаясь следующего GET.
+      setState((current) =>
+        current.status === 'ready'
+          ? {
+              ...current,
+              issue: { ...current.issue, dev_server_port: null },
+            }
+          : current,
+      );
+    } catch (error) {
+      setDevServerError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setStoppingDevServers(false);
+    }
+  }
+
+  async function copyDevServerPort(port: number) {
+    try {
+      await navigator.clipboard?.writeText(String(port));
+      setDevPortCopied(true);
+      if (devPortCopiedTimerRef.current) {
+        clearTimeout(devPortCopiedTimerRef.current);
+      }
+      devPortCopiedTimerRef.current = setTimeout(
+        () => setDevPortCopied(false),
+        1500,
+      );
+    } catch {
+      // Clipboard может быть недоступен (нет прав/не secure context) —
+      // порт всё равно виден в индикаторе.
     }
   }
 
@@ -940,6 +1520,37 @@ export default function TaskDetail({
       setAbortError(error instanceof Error ? error.message : String(error));
     } finally {
       setAborting(false);
+    }
+  }
+
+  async function handleRepeat(iteration: Iteration) {
+    if (!issueId) return;
+    if (isIterationActive(iteration.status)) {
+      setRepeatError(
+        'Нельзя повторить активную итерацию — дождитесь её завершения или отмены.',
+      );
+      return;
+    }
+    setRepeatError(null);
+    setRepeatingId(iteration.id);
+
+    try {
+      const created = await repeatIteration(iteration.id);
+      const iterations = await getIterations(issueId);
+      setState((current) =>
+        current.status === 'ready'
+          ? {
+              ...current,
+              iterations: [...iterations].sort((a, b) => a.number - b.number),
+            }
+          : current,
+      );
+      setSelectedIterationId(created.id);
+      setRefreshTick((tick) => tick + 1);
+    } catch (error) {
+      setRepeatError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRepeatingId(null);
     }
   }
 
@@ -1036,7 +1647,7 @@ export default function TaskDetail({
     setResultError(null);
     if (state.status !== 'ready') return;
     // HTML отдаётся как есть через iframe; markdown (md) тянем текстом.
-    if (state.issue.desired_result !== 'md') return;
+    if (state.issue.desired_result === 'html') return;
 
     setResultLoading(true);
     try {
@@ -1059,33 +1670,65 @@ export default function TaskDetail({
     }
   }
 
+  async function openJiraPreview() {
+    setJiraPreviewOpen(true);
+    setJiraPreviewText(null);
+    if (state.status !== 'ready' || !state.issue.jira_issue_url) return;
+    setJiraPreviewLoading(true);
+    try {
+      const response = await fetch(
+        `/issue-resolver/api/v1/issues/${state.issue.id}/jira-preview`,
+      );
+      if (!response.ok) throw new Error('not found');
+      setJiraPreviewText(await response.text());
+    } catch {
+      setJiraPreviewText(null);
+    } finally {
+      setJiraPreviewLoading(false);
+    }
+  }
+
   if (!issueId) {
     return (
-      <section className="panel mx-auto max-w-3xl py-6 px-3 sm:px-4 md:px-6">
+      <div className="mx-auto max-w-4xl py-6 px-3 sm:px-4 md:px-6">
         <header className="mb-6">
           <h2 className="glow text-xl font-semibold text-[#00FF41]">Задача</h2>
         </header>
         <div className="rounded-none border border-dashed border-[#008F11] p-8 text-center text-sm text-[#00FF41]/60">
           Выберите задачу из списка.
         </div>
-      </section>
+      </div>
+    );
+  }
+
+  if (deleting) {
+    return (
+      <div className="mx-auto max-w-4xl py-6 px-3 sm:px-4 md:px-6">
+        <div
+          data-testid="task-deleting"
+          className="flex items-center justify-center gap-2 rounded-none border border-dashed border-[#008F11] p-8 text-center text-sm italic text-[#00FF41]/60"
+        >
+          <span
+            aria-hidden="true"
+            className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-[#00FF41]/30 border-t-[#00FF41]"
+          />
+          Задача удаляется...
+        </div>
+      </div>
     );
   }
 
   return (
-    <section
+    <div
       ref={panelRef}
-      className="panel mx-auto max-w-3xl py-6 px-3 sm:px-4 md:px-6"
+      className="mx-auto max-w-4xl py-6 px-3 sm:px-4 md:px-6"
     >
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-        <button
-          type="button"
-          className="hidden min-h-12 text-sm font-medium text-[#008F11] hover:text-[#00FF41] sm:inline-flex"
-          onClick={() => onBack?.()}
-        >
-          ← Мои задачи
-        </button>
-
+      <div className="space-y-4">
+      <div
+        data-testid="task-island"
+        className="rounded-none border border-[#008F11] p-4"
+      >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         {state.status === 'ready' && (
           <div className="flex shrink-0 items-center gap-3 text-xs text-[#00FF41]/60">
             <span
@@ -1114,10 +1757,19 @@ export default function TaskDetail({
         )}
       </div>
 
+      {deleteTimeoutError && (
+        <p
+          role="alert"
+          data-testid="delete-timeout"
+          className="mb-4 text-sm font-medium text-[#FFB000]"
+        >
+          {deleteTimeoutError}
+        </p>
+      )}
+
       {state.status === 'loading' && (
         <p className="text-sm text-[#00FF41]/60">Загрузка…</p>
       )}
-
       {state.status === 'error' && (
         <p role="alert" className="text-sm font-medium text-[#FF0033]">
           Не удалось загрузить задачу: {state.message}
@@ -1135,83 +1787,243 @@ export default function TaskDetail({
               Не удалось ответить на вопрос: {questionError}
             </p>
           )}
-          <header className="mb-6">
+          <header>
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="glow min-w-0 break-words text-xl font-semibold text-[#00FF41]">
                 {state.issue.title}
               </h2>
               <span
-                className="shrink-0 text-xs uppercase tracking-wider"
+                data-testid="issue-status"
+                data-status={state.issue.status}
+                className="shrink-0 text-xs uppercase tracking-wider transition-base"
                 style={{ color: statusColor[state.issue.status] }}
               >
                 {state.issue.status}
               </span>
+              {state.issue.workspace_missing === true && (
+                <span
+                  data-testid="workspace-missing"
+                  title="Рабочая папка задачи была удалена"
+                  className="shrink-0 border border-[#FFB000] px-2 py-0.5 text-xs font-medium text-[#FFB000]"
+                >
+                  Файлы задачи отсутствуют
+                </span>
+              )}
             </div>
-            {resultAvailable && (
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  data-testid="open-result"
-                  onClick={() => void openResult()}
-                  className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208]"
-                >
-                  Показать результат
-                </button>
-                <a
-                  data-testid="download-result"
-                  href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
-                  download
-                  className="min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]"
-                >
-                  Скачать
-                </a>
+            {repoRows.length > 0 && (
+              <div
+                data-testid="repo-status"
+                className="mt-3 border border-[#008F11] bg-[#002B00]/30 px-3 py-2"
+              >
+                <h4 className="mb-1 text-xs uppercase tracking-wider text-[#00FF41]/60">
+                  Репозитории
+                </h4>
+                <ul className="space-y-1">
+                  {repoRows.map(({ repository, fullName, status, devPort }) => (
+                    <li
+                      key={repository.id}
+                      data-testid="repo-status-row"
+                      data-repo={fullName}
+                      data-status={status}
+                      className="flex flex-wrap items-center gap-2 text-xs"
+                    >
+                      <span
+                        data-testid="repo-status-dot"
+                        data-status={status}
+                        role="img"
+                        aria-label={REPO_PREP_LABELS[status]}
+                        title={REPO_PREP_LABELS[status]}
+                        className="transition-base"
+                        style={{ color: REPO_PREP_COLORS[status] }}
+                      >
+                        {REPO_PREP_MARKS[status]}
+                      </span>
+                      <span className="text-[#00FF41]">{fullName}</span>
+                      <span className="text-[#00FF41]/50">
+                        {repository.branch_name}
+                      </span>
+                      <span className="text-[#00FF41]/50">
+                        {REPO_PREP_LABELS[status]}
+                      </span>
+                      {status === 'ready' && devPort !== undefined && (
+                        <span
+                          data-testid="repo-dev-port"
+                          className="text-[#00B4FF]"
+                        >
+                          Dev: localhost:{devPort}
+                        </span>
+                      )}
+                      {repository.create_mr && (
+                        <span
+                          data-testid="repo-mr-badge"
+                          className="border border-[#00B4FF] px-1 py-0.5 text-[10px] text-[#00B4FF]"
+                        >
+                          MR
+                        </span>
+                      )}
+                      {repository.bootstrap_enabled === false && (
+                        <span className="text-[#FFB000]">
+                          (запуск отключён)
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
             {state.issue.jira_issue_url && (
-              <a
-                className="mt-2 inline-block break-all text-sm text-[#00B4FF] underline"
-                href={state.issue.jira_issue_url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {state.issue.jira_issue_url}
-              </a>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  data-testid="open-jira-preview"
+                  onClick={() => void openJiraPreview()}
+                  className="min-h-9 rounded-none border border-[#00B4FF] bg-[#001018] px-3 py-1 text-xs font-medium text-[#00B4FF] hover:bg-[#00B4FF] hover:text-[#0D0208] transition-base"
+                >
+                  Jira
+                </button>
+              </div>
             )}
-          </header>
-
-          <div className="mb-8 grid gap-4 md:grid-cols-2">
-            {state.issue.repositories.map((repository) => (
-              <div
-                key={repository.id}
-                className="rounded-none border border-[#008F11] p-4 text-sm"
-              >
-                <p className="break-all text-[#00FF41]">
-                  {repository.repository_url}
-                </p>
-                <p className="mt-1 text-[#00FF41]/60">
-                  Ветка: {repository.branch_name}
-                </p>
-                {repository.create_mr && (
-                  <span
-                    data-testid="repo-mr-badge"
-                    className="mt-2 inline-block border border-[#00B4FF] px-2 py-0.5 text-xs text-[#00B4FF]"
+            {devServerPort !== null && (
+              <div className="mt-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="dev-server-port"
+                    title="Скопировать порт dev-сервера"
+                    aria-label={`Скопировать порт dev-сервера ${devServerPort}`}
+                    onClick={() => void copyDevServerPort(devServerPort)}
+                    className="inline-flex min-h-9 items-center gap-2 rounded-none border border-[#00FF41] bg-[#003B00]/40 px-3 py-1 font-mono text-xs text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] transition-base"
                   >
-                    MR
-                  </span>
+                    <span
+                      aria-hidden="true"
+                      className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#00FF41] animate-pulse-subtle"
+                    />
+                    <span data-testid="dev-server-port-value">
+                      :{devServerPort}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="stop-dev-servers"
+                    disabled={stoppingDevServers}
+                    onClick={() => void handleStopDevServers()}
+                    className="inline-flex min-h-9 items-center gap-1.5 rounded-none border border-[#FF0033] bg-[#2B0000]/40 px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#2B0000]/40 disabled:hover:text-[#FF0033] transition-base"
+                  >
+                    <StopIcon className="h-3.5 w-3.5" />
+                    {stoppingDevServers ? 'Остановка…' : 'Остановить'}
+                  </button>
+                  {devPortCopied && (
+                    <span className="text-xs text-[#00FF41]/60">
+                      Скопировано
+                    </span>
+                  )}
+                </div>
+                {devServerError && (
+                  <p
+                    role="alert"
+                    className="mt-2 text-xs font-medium text-[#FF0033]"
+                  >
+                    Не удалось остановить dev-серверы: {devServerError}
+                  </p>
                 )}
               </div>
-            ))}
-          </div>
+            )}
+            {resultAvailable && (
+              <div className="mt-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="open-result"
+                    disabled={!resultReady}
+                    onClick={() => void openResult()}
+                    className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#003B00] disabled:hover:text-[#00FF41] transition-base"
+                  >
+                    Показать результат
+                  </button>
+                  <a
+                    data-testid="download-result"
+                    href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
+                    download={resultFilenameFor(state.issue.desired_result)}
+                    aria-disabled={resultReady ? undefined : true}
+                    tabIndex={resultReady ? undefined : -1}
+                    onClick={(event) => {
+                      if (!resultReady) event.preventDefault();
+                    }}
+                    className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium transition-base ${
+                      resultReady
+                        ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
+                        : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
+                    }`}
+                  >
+                    Скачать
+                  </a>
+                  <a
+                    data-testid="download-archive"
+                    href={resultFilesArchiveUrl(state.issue.id)}
+                    download={`issue-${state.issue.id}.tar.gz`}
+                    aria-disabled={resultReady ? undefined : true}
+                    tabIndex={resultReady ? undefined : -1}
+                    onClick={(event) => {
+                      if (!resultReady) event.preventDefault();
+                    }}
+                    className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium transition-base ${
+                      resultReady
+                        ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
+                        : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
+                    }`}
+                  >
+                    Скачать всё (.tar.gz)
+                  </a>
+                  <button
+                    type="button"
+                    data-testid="open-artifacts"
+                    onClick={() => setArtifactsOpen(true)}
+                    disabled={!resultReady || resultFiles.length === 0}
+                    className="min-h-9 rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#008F11] disabled:hover:text-[#00FF41]/80 transition-base"
+                  >
+                    Артефакты ({resultFiles.length})
+                  </button>
+                </div>
+              </div>
+            )}
+            <IssueFilesList
+              files={issueFiles.filter((file) => file.iteration_id === null)}
+              onDelete={handleDeleteFile}
+              deletingId={deletingFileId}
+            />
+          </header>
 
-          <IssueFilesList
-            files={issueFiles}
-            iterations={state.iterations}
-            onDelete={handleDeleteFile}
-            deletingId={deletingFileId}
-          />
+          {/* Inline questions: visible directly on the task page, no modal */}
+          {unansweredQuestions.length > 0 && (
+            <div className="mt-3 space-y-3">
+              {unansweredQuestions.map((question) => (
+                <InlineQuestion
+                  key={question.id}
+                  question={question}
+                  submitting={questionSubmitting}
+                  error={questionError}
+                  onSubmit={(payload) =>
+                    void handleQuestionResponse(question, payload)
+                  }
+                  onCancel={() =>
+                    void handleQuestionResponse(question, { cancelled: true })
+                  }
+                />
+              ))}
+            </div>
+          )}
+
+          <div>
+          </div>
+        </>
+      )}
+      </div>
 
           {canStart && (
-          <section className="mb-8">
+          <section
+            data-testid="new-iteration-island"
+            className="rounded-none border border-[#008F11] p-4"
+          >
             <h3 className="glow mb-1 text-lg font-semibold text-[#00FF41]">
               Новая итерация
             </h3>
@@ -1252,42 +2064,80 @@ export default function TaskDetail({
                       isResolve || (!prBlocked && selectedSteps.includes(step.value));
                     const modelEnabled =
                       chosenSteps.has(step.value) && !prBlocked;
+                    const selectedModel = models.find(
+                      (model) => model.id === stepModels[step.value],
+                    );
+                    const thinkingLevels = thinkingLevelsFor(selectedModel);
+                    const thinkingEnabled = Boolean(stepModels[step.value]);
                     return (
                       <div
                         key={step.value}
                         className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                       >
-                        <label className="flex items-center gap-2 text-sm text-[#00FF41]/80">
-                          <input
-                            type="checkbox"
-                            className="accent-[#00FF41]"
-                            checked={checked}
-                            disabled={isResolve || prBlocked}
-                            onChange={() => toggleStep(step.value)}
-                          />
-                          {isResolve
-                            ? 'Resolve (всегда)'
-                            : prBlocked
-                              ? `${step.label} (нужен репозиторий)`
-                              : step.label}
-                        </label>
+                        <div className="flex flex-col">
+                          <label className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80">
+                            <input
+                              type="checkbox"
+                              className="accent-[#00FF41] transition-base"
+                              checked={checked}
+                              disabled={isResolve || prBlocked}
+                              onChange={() => toggleStep(step.value)}
+                            />
+                            {isResolve
+                              ? 'Исполнение (всегда)'
+                              : prBlocked
+                                ? `${step.label} (нужен репозиторий)`
+                                : step.label}
+                          </label>
+                          {step.value === 'refine' && (
+                            <span
+                              data-testid="refine-planner-hint"
+                              className="pl-6 text-xs text-[#00FF41]/60"
+                            >
+                              Планируем — решает, запускать ли resolve комнатой
+                              агентов; без Планирования всегда ровно один агент.
+                            </span>
+                          )}
+                        </div>
                         {modelEnabled && (
-                          <select
-                            aria-label={`Модель для шага ${step.label}`}
-                            className={`${inputClass} sm:w-64`}
-                            value={stepModels[step.value] ?? ''}
-                            onChange={(event) =>
-                              updateStepModel(step.value, event.target.value)
-                            }
-                            disabled={modelsLoading}
-                          >
-                            <option value="">По умолчанию</option>
-                            {models.map((model) => (
-                              <option key={model.id} value={model.id}>
-                                {model.name ?? model.id}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <select
+                              aria-label={`Модель для шага ${step.label}`}
+                              className={`${inputClass} sm:w-64`}
+                              value={stepModels[step.value] ?? ''}
+                              onChange={(event) =>
+                                updateStepModel(step.value, event.target.value)
+                              }
+                              disabled={modelsLoading}
+                            >
+                              <option value="">По умолчанию</option>
+                              {models.map((model) => (
+                                <option key={model.id} value={model.id}>
+                                  {model.name ?? model.id}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              aria-label={`Уровень размышления для шага ${step.label}`}
+                              className={`${inputClass} sm:w-40`}
+                              value={stepThinkingLevels[step.value] ?? ''}
+                              onChange={(event) =>
+                                updateStepThinkingLevel(
+                                  step.value,
+                                  event.target.value,
+                                )
+                              }
+                              disabled={!thinkingEnabled}
+                            >
+                              <option value="">По умолчанию</option>
+                              {thinkingEnabled &&
+                                thinkingLevels.map((level) => (
+                                  <option key={level} value={level}>
+                                    {level}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
                         )}
                       </div>
                     );
@@ -1306,7 +2156,7 @@ export default function TaskDetail({
                 <button
                   type="submit"
                   disabled={!canStart || !context.trim() || submitting}
-                  className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 md:w-auto"
+                  className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 md:w-auto transition-base"
                 >
                   {submitting
                     ? 'Создание итерации…'
@@ -1317,14 +2167,98 @@ export default function TaskDetail({
           </section>
           )}
 
-          <section ref={iterationsRef} className="mb-8">
-            <h3 className="glow mb-1 text-lg font-semibold text-[#00FF41]">
-              Итерации
-            </h3>
-            <p className="mb-4 text-sm text-[#00FF41]/60">
-              История запусков задачи и дополнительный контекст для каждого
-              запуска.
-            </p>
+          {state.status === 'ready' &&
+            workspaceProgress &&
+            !workspaceProgress.dismissed && (
+            <div
+              data-testid="workspace-progress"
+              data-fading={workspaceProgress.fading ? 'true' : 'false'}
+              onAnimationEnd={() => dismissProgress()}
+              className={`mb-4 border border-[#008F11] bg-[#002B00]/40 px-3 py-2${
+                workspaceProgress.fading ? ' workspace-progress--fade' : ''
+              }`}
+            >
+              <h4 className="mb-2 text-xs uppercase tracking-wider text-[#00FF41]/60">
+                Подготовка проектов
+              </h4>
+              <ul className="space-y-1">
+                {workspaceProgress.steps.map((step) => (
+                  <li
+                    key={step.key}
+                    data-testid="workspace-step"
+                    data-step={step.step}
+                    data-status={step.status}
+                    className="flex flex-wrap items-center gap-2 text-xs animate-fade-in-up"
+                    style={{ color: WORKSPACE_STEP_COLORS[step.status] }}
+                  >
+                    <span aria-hidden="true">
+                      {workspaceStepMark(step.status)}
+                    </span>
+                    <span>{workspaceStepLabel(step.step, step.repo)}</span>
+                    {step.message && (
+                      <span
+                        style={{
+                          color:
+                            step.status === 'warning'
+                              ? '#FFB000'
+                              : '#FF0033',
+                        }}
+                      >
+                        {step.message}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {Object.keys(bootstrapLogs).length > 0 && (
+                <div
+                  data-testid="bootstrap-log"
+                  className="mt-2 max-h-48 overflow-auto border border-[#008F11] bg-[#0D0208] p-2 font-mono text-[11px] leading-snug"
+                >
+                  {Object.entries(bootstrapLogs).map(([repo, chunks]) => (
+                    <div
+                      key={repo}
+                      data-testid="bootstrap-log-repo"
+                      data-repo={repo}
+                    >
+                      <div className="mb-1 text-[#00FF41]/60">{repo}</div>
+                      <pre className="whitespace-pre-wrap break-all">
+                        {chunks.map((chunk, index) => (
+                          <span
+                            key={index}
+                            data-kind={chunk.kind}
+                            className={
+                              chunk.kind === 'stderr'
+                                ? undefined
+                                : 'text-[#00FF41]/90'
+                            }
+                            style={
+                              chunk.kind === 'stderr'
+                                ? { color: '#FF0033' }
+                                : undefined
+                            }
+                          >
+                            {chunk.text}
+                          </span>
+                        ))}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {state.status === 'ready' && (
+          <div ref={iterationsRef} className="space-y-3">
+            {repeatError && (
+              <p
+                role="alert"
+                className="mb-3 text-xs font-medium text-[#FF0033]"
+              >
+                {repeatError}
+              </p>
+            )}
 
             {state.iterations.length === 0 ? (
               <div className="rounded-none border border-dashed border-[#008F11] p-6 text-center text-sm text-[#00FF41]/60">
@@ -1346,7 +2280,7 @@ export default function TaskDetail({
                         setSelectedIterationId(iteration.id);
                       }
                     }}
-                    className={`cursor-pointer rounded-none border border-[#008F11] p-4 text-sm${isSelected ? ' ring-1 ring-[#00FF41] bg-[#003B00]/40' : ''}`}
+                    className={`cursor-pointer rounded-none border border-[#008F11] p-4 text-sm transition-base${isSelected ? ' ring-1 ring-[#00FF41] bg-[#003B00]/40' : ''}`}
                   >
                     <div className="flex flex-wrap items-center gap-3">
                       <span className="text-[#00FF41]">
@@ -1374,11 +2308,28 @@ export default function TaskDetail({
                             event.stopPropagation();
                             void handleAbort(iteration.id);
                           }}
-                          className="min-h-8 shrink-0 border border-[#FF0033] bg-[#2A0008] px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50"
+                          className="min-h-8 shrink-0 border border-[#FF0033] bg-[#2A0008] px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50 transition-base"
                         >
                           {aborting ? 'Прерываем…' : 'Прервать'}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        data-testid="repeat-iteration"
+                        disabled={
+                          repeatingId === iteration.id ||
+                          isIterationActive(iteration.status)
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleRepeat(iteration);
+                        }}
+                        className="min-h-8 shrink-0 border border-[#008F11] bg-[#002B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+                      >
+                        {repeatingId === iteration.id
+                          ? 'Повторяем…'
+                          : '↻ Повторить'}
+                      </button>
                     </div>
 
                     {iteration.status === 'running' && abortError && (
@@ -1395,6 +2346,14 @@ export default function TaskDetail({
                         {iteration.context}
                       </p>
                     )}
+
+                    <IssueFilesList
+                      files={issueFiles.filter(
+                        (file) => file.iteration_id === iteration.id,
+                      )}
+                      onDelete={handleDeleteFile}
+                      deletingId={deletingFileId}
+                    />
 
                     {iteration.steps.length > 0 && (
                       <ul className="mt-2 flex flex-wrap gap-2">
@@ -1437,7 +2396,7 @@ export default function TaskDetail({
                                 data-status={status}
                                 className={`flex items-center gap-1 border px-2 py-0.5 text-xs${
                                   isActive
-                                    ? ' animate-pulse border-[#00FF41] text-[#00FF41]'
+                                    ? ' animate-pulse-subtle border-[#00FF41] text-[#00FF41]'
                                     : ' border-[#008F11]'
                                 }`}
                                 style={
@@ -1446,7 +2405,7 @@ export default function TaskDetail({
                                     : { color: stepStatusColor[status] }
                                 }
                               >
-                                <span>{step}</span>
+                                <span className="transition-base">{step}</span>
                                 <span aria-hidden="true">
                                   {stepRunMark(status)}
                                 </span>
@@ -1462,6 +2421,16 @@ export default function TaskDetail({
                         data-testid="iteration-steps"
                         className="mt-3 border-t border-[#008F11]/40 pt-3"
                       >
+                        {iterationErrors[iteration.id] && (
+                          <p
+                            role="alert"
+                            data-testid="iteration-error"
+                            className="mb-3 border border-[#FF0033] bg-[#2A0008] px-3 py-2 text-xs font-medium text-[#FF0033]"
+                          >
+                            ❌ Ошибка подготовки:{' '}
+                            {iterationErrors[iteration.id]}
+                          </p>
+                        )}
                         <h4 className="mb-2 text-xs uppercase tracking-wider text-[#00FF41]/60">
                           Шаги
                         </h4>
@@ -1500,14 +2469,22 @@ export default function TaskDetail({
                                   stepDurationMs(run, stepLive, now),
                                 );
                                 const changedFiles = stepChangedFiles(events);
+                                // room/stages-resolve шлёт stats-события каждого
+                                // агента на общий шаг; футер должен показать
+                                // агрегат `run.stats` (тотал шага), а не stats
+                                // последнего координатора — пустые events
+                                // заставляют resolveFooter взять prop.
+                                const isRoomResolve =
+                                  roomIteration && run.step === 'resolve';
                                 const footer = resolveFooter(
-                                  events,
+                                  isRoomResolve ? [] : events,
                                   run.stats ?? null,
                                 );
                                 return (
                                   <li
                                     key={run.id}
                                     data-testid="step-run-log"
+                                    data-step-run-id={run.id}
                                     className="rounded-none border border-[#008F11] p-3 text-xs"
                                   >
                                     <div className="flex flex-wrap items-center gap-2">
@@ -1533,7 +2510,7 @@ export default function TaskDetail({
                                           event.stopPropagation();
                                           setExpandedStepRunId(run.id);
                                         }}
-                                        className="ml-auto shrink-0 border border-[#008F11] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]"
+                                        className="ml-auto shrink-0 border border-[#008F11] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] transition-base"
                                       >
                                         Развернуть
                                       </button>
@@ -1541,26 +2518,29 @@ export default function TaskDetail({
 
                                     {isActiveStatus(runStatus) ? (
                                       <>
-                                        {pendingQuestion &&
-                                          expandedStepRunId !== run.id && (
-                                            <PendingQuestionBanner
-                                              question={pendingQuestion}
-                                            />
-                                          )}
-                                        <AutoScrollBox
-                                          scrollKey={events.length}
-                                          className="mt-2 h-[300px] overflow-auto border border-[#008F11] bg-[#000200] p-2"
-                                        >
-                                          <div data-testid="step-session">
-                                            <SessionView
-                                              events={events}
-                                              stats={run.stats ?? null}
-                                              running={stepLive}
-                                              startedAt={run.created_at}
-                                              showFooter={false}
-                                            />
-                                          </div>
-                                        </AutoScrollBox>
+
+                                        {roomIteration &&
+                                        run.step === 'resolve' ? (
+                                          <RoomAgentTabs
+                                            iterationId={run.iteration_id}
+                                            refreshKey={refreshTick}
+                                          />
+                                        ) : (
+                                          <AutoScrollBox
+                                            scrollKey={events.length}
+                                            className="mt-2 h-[300px] overflow-auto border border-[#008F11] bg-[#000200] p-2"
+                                          >
+                                            <div data-testid="step-session">
+                                              <SessionView
+                                                events={events}
+                                                stats={run.stats ?? null}
+                                                running={stepLive}
+                                                startedAt={run.created_at}
+                                                showFooter={false}
+                                              />
+                                            </div>
+                                          </AutoScrollBox>
+                                        )}
                                       </>
                                     ) : aborted ? (
                                       <div
@@ -1613,6 +2593,11 @@ export default function TaskDetail({
                                           ⏱ {duration}
                                         </span>
                                       )}
+                                      {run.stats?.cost != null && (
+                                        <span data-testid="step-cost">
+                                          · {formatCost(run.stats.cost)}
+                                        </span>
+                                      )}
                                       {footer && (
                                         <span data-testid="step-tokens">
                                           {footer.model !== null &&
@@ -1644,6 +2629,33 @@ export default function TaskDetail({
                                             ·
                                           </span>{' '}
                                           {footer.toolCalls ?? 0} вызовов
+                                          {(footer.tokensPerSecond !== null ||
+                                            footer.avgTokensPerSecond !==
+                                              null) && (
+                                            <>
+                                              {' '}
+                                              <span className="session-stats-sep">
+                                                ·
+                                              </span>{' '}
+                                              <span data-testid="step-speed">
+                                                {footer.tokensPerSecond !==
+                                                  null &&
+                                                  `${formatInstantSpeed(
+                                                    footer.tokensPerSecond,
+                                                  )} t/s`}
+                                                {footer.tokensPerSecond !==
+                                                  null &&
+                                                  footer.avgTokensPerSecond !==
+                                                    null &&
+                                                  ' · '}
+                                                {footer.avgTokensPerSecond !==
+                                                  null &&
+                                                  `avg ${formatAvgSpeed(
+                                                    footer.avgTokensPerSecond,
+                                                  )} t/s`}
+                                              </span>
+                                            </>
+                                          )}
                                         </span>
                                       )}
                                       <span data-testid="step-files">
@@ -1695,10 +2707,9 @@ export default function TaskDetail({
                 })}
               </ul>
             )}
-          </section>
-
-        </>
-      )}
+          </div>
+          )}
+      </div>
 
       {resultOpen && state.status === 'ready' && resultAvailable && (
         <div
@@ -1719,7 +2730,7 @@ export default function TaskDetail({
                 data-testid="result-modal-close"
                 aria-label="Закрыть"
                 onClick={() => setResultOpen(false)}
-                className="ml-auto shrink-0 border border-[#008F11] px-3 py-1 text-sm text-[#00FF41] hover:border-[#00FF41] hover:bg-[#003B00]"
+                className="ml-auto shrink-0 border border-[#008F11] px-3 py-1 text-sm text-[#00FF41] hover:border-[#00FF41] hover:bg-[#003B00] transition-base"
               >
                 ✕
               </button>
@@ -1757,6 +2768,58 @@ export default function TaskDetail({
         </div>
       )}
 
+      {jiraPreviewOpen && state.status === 'ready' && (
+        <div
+          data-testid="jira-preview-modal"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setJiraPreviewOpen(false)}
+          className="fixed inset-0 z-50 flex flex-col bg-[#0D0208]/95 py-4 px-2 sm:px-4"
+        >
+          <div
+            className="flex min-h-0 w-full flex-1 flex-col border border-[#00B4FF] bg-[#0D0208]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="flex flex-wrap items-center gap-3 border-b border-[#008F11] py-4 px-2 sm:px-4">
+              <h3 className="text-lg font-semibold text-[#00B4FF]">
+                Jira: {state.issue.jira_issue_url && extractIssueKeyFromUrl(state.issue.jira_issue_url)}
+              </h3>
+              <button
+                type="button"
+                className="ml-auto min-h-9 border border-[#008F11] px-3 py-1 text-xs text-[#008F11] hover:bg-[#008F11]/20 hover:text-[#00FF41]"
+                onClick={() => setJiraPreviewOpen(false)}
+              >
+                Закрыть
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto px-2 py-4 sm:px-6">
+              {jiraPreviewLoading ? (
+                <p className="text-sm text-[#00FF41]/60">
+                  Загрузка…
+                </p>
+              ) : jiraPreviewText !== null ? (
+                <div data-testid="jira-preview-markdown">
+                  <AgentMarkdown>{jiraPreviewText}</AgentMarkdown>
+                </div>
+              ) : (
+                <p className="text-sm text-[#FF0033]">
+                  Не удалось загрузить данные Jira
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {state.status === 'ready' && (
+        <ArtifactsModal
+          issueId={state.issue.id}
+          files={resultFiles}
+          open={artifactsOpen}
+          onClose={() => setArtifactsOpen(false)}
+        />
+      )}
+
       {expandedStepRun && (
         <div
           data-testid="step-log-modal"
@@ -1789,7 +2852,7 @@ export default function TaskDetail({
                 data-testid="step-log-modal-close"
                 aria-label="Закрыть"
                 onClick={() => setExpandedStepRunId(null)}
-                className="ml-auto shrink-0 border border-[#008F11] px-3 py-1 text-sm text-[#00FF41] hover:border-[#00FF41] hover:bg-[#003B00]"
+                className="ml-auto shrink-0 border border-[#008F11] px-3 py-1 text-sm text-[#00FF41] hover:border-[#00FF41] hover:bg-[#003B00] transition-base"
               >
                 ✕
               </button>
@@ -1797,13 +2860,11 @@ export default function TaskDetail({
 
             <div
               ref={modalScrollRef}
+              onScroll={handleModalScroll}
               data-testid="step-log-scroll"
               className="min-h-0 flex-1 space-y-4 overflow-auto py-4 px-2 sm:px-4"
             >
-              {pendingQuestion &&
-                isActiveStatus(statusOf(expandedStepRun)) && (
-                  <PendingQuestionBanner question={pendingQuestion} />
-                )}
+
               {expandedEvents.length > 0 ? (
                 <section>
                   <h4 className="mb-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50">
@@ -1858,7 +2919,7 @@ export default function TaskDetail({
                       data-testid="modal-report"
                       className="border border-[#008F11] bg-[#000200] p-2"
                     >
-                      <AgentMarkdown>{expandedStepRun.report}</AgentMarkdown>
+                      <StepReportView raw={expandedStepRun.report} />
                     </div>
                   </section>
                 )}
@@ -1928,7 +2989,7 @@ export default function TaskDetail({
                       data-testid="control-compact"
                       disabled={controlBusy}
                       onClick={() => setCompactOpen((open) => !open)}
-                      className="min-h-8 border border-[#FFB000] px-2 py-0.5 text-[#FFB000] hover:bg-[#FFB000] hover:text-[#0D0208] disabled:opacity-50"
+                      className="min-h-8 border border-[#FFB000] px-2 py-0.5 text-[#FFB000] hover:bg-[#FFB000] hover:text-[#0D0208] disabled:opacity-50 transition-base"
                     >
                       compact
                     </button>
@@ -1939,7 +3000,7 @@ export default function TaskDetail({
                       onClick={() =>
                         void runControlCommand({ type: 'clear_queue' })
                       }
-                      className="min-h-8 border border-[#008F11] px-2 py-0.5 text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:opacity-50"
+                      className="min-h-8 border border-[#008F11] px-2 py-0.5 text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:opacity-50 transition-base"
                     >
                       очистить очередь
                     </button>
@@ -1965,14 +3026,14 @@ export default function TaskDetail({
                       type="button"
                       data-testid="compact-run"
                       onClick={submitCompact}
-                      className="min-h-9 shrink-0 border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50"
+                      className="min-h-9 shrink-0 border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50 transition-base"
                     >
                       Сжать
                     </button>
                     <button
                       type="button"
                       onClick={() => setCompactOpen(false)}
-                      className="min-h-9 shrink-0 border border-[#008F11] px-3 py-1 text-xs text-[#00FF41]/80 hover:border-[#00FF41]"
+                      className="min-h-9 shrink-0 border border-[#008F11] px-3 py-1 text-xs text-[#00FF41]/80 hover:border-[#00FF41] transition-base"
                     >
                       Отмена
                     </button>
@@ -2038,7 +3099,7 @@ export default function TaskDetail({
                     <button
                       type="submit"
                       disabled={!message.trim() || messageSending}
-                      className="min-h-9 shrink-0 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50"
+                      className="min-h-9 shrink-0 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50 transition-base"
                     >
                       {messageSending ? 'Отправка…' : 'Отправить'}
                     </button>
@@ -2052,7 +3113,7 @@ export default function TaskDetail({
                         void handleAbort(activeIterationId);
                       }
                     }}
-                    className="min-h-9 shrink-0 border border-[#FF0033] bg-[#2A0008] px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50"
+                    className="min-h-9 shrink-0 border border-[#FF0033] bg-[#2A0008] px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50 transition-base"
                   >
                     {aborting ? 'Прерываем…' : 'Прервать'}
                   </button>
@@ -2079,7 +3140,7 @@ export default function TaskDetail({
                         data-testid={`command-option-${command.name}`}
                         data-active={index === activePaletteIndex ? 'true' : 'false'}
                         onClick={() => setMessage(`/${command.name} `)}
-                        className={`block w-full px-2 py-1 text-left hover:bg-[#003B00]${index === activePaletteIndex ? ' bg-[#003B00]' : ''}`}
+                        className={`block w-full px-2 py-1 text-left hover:bg-[#003B00]${index === activePaletteIndex ? ' bg-[#003B00]' : ''} transition-base`}
                       >
                         <span className="text-[#00FF41]">
                           /{command.name}
@@ -2140,78 +3201,33 @@ export default function TaskDetail({
         </div>
       )}
 
-      {pendingQuestion && activeIterationId && (
-        <QuestionModal
-          key={pendingQuestion.id}
-          question={pendingQuestion}
-          submitting={questionSubmitting}
-          error={questionError}
-          onSubmit={(payload) =>
-            void handleQuestionResponse(pendingQuestion, payload)
-          }
-          onCancel={() =>
-            void handleQuestionResponse(pendingQuestion, { cancelled: true })
-          }
-        />
-      )}
-    </section>
-  );
-}
 
-/** Баннер ожидаемого ответа агента: виден на превью running-шага и в
- * развёрнутой модалке до появления интерактивной `question-modal`. */
-function PendingQuestionBanner({ question }: { question: QuestionEvent }) {
-  const options = question.options ?? [];
-  return (
-    <div
-      data-testid="step-pending-question"
-      className="mt-2 border border-[#FFB000] bg-[#1A1000] p-2"
-    >
-      <p className="text-[10px] uppercase tracking-wider text-[#FFB000]">
-        Агент ждёт ответа
-      </p>
-      <p className="mt-1 break-words text-xs text-[#FFB000]">
-        {question.title}
-      </p>
-      {options.length > 0 && (
-        <p className="mt-1 break-words text-[10px] text-[#FFB000]/80">
-          {options.join(' / ')}
-        </p>
-      )}
     </div>
   );
 }
 
-interface QuestionModalProps {
-  question: QuestionEvent;
-  submitting: boolean;
-  error: string | null;
-  onSubmit: (payload: { value?: string; confirmed?: boolean }) => void;
-  onCancel: () => void;
-}
-
-/**
- * Модалка интерактивного вопроса pi-расширения. Тип `method` определяет
- * контрол: select → radio, confirm → Да/Нет, input → строка, editor → textarea.
- * state локальный, ремоунт по `key={question.id}` сбрасывает ответ между
- * вопросами.
- */
-function QuestionModal({
+/** Inline-вопрос агента: отображается прямо на странице задачи, не в модалке.
+ * Тип `method` определяет контрол: select → radio, confirm → Да/Нет,
+ * input → строка, editor → textarea. */
+function InlineQuestion({
   question,
   submitting,
   error,
   onSubmit,
   onCancel,
-}: QuestionModalProps) {
+}: {
+  question: QuestionEvent;
+  submitting: boolean;
+  error: string | null;
+  onSubmit: (payload: { value?: string; confirmed?: boolean }) => void;
+  onCancel: () => void;
+}) {
   const [value, setValue] = useState(
     question.prefill ?? question.options?.[0] ?? '',
   );
   const isConfirm = question.method === 'confirm';
   const submitLabel = question.method === 'editor' ? 'Отправить' : 'Ответить';
 
-  // Автофокус при монтировании (ремоунт по key={question.id}): у input/editor
-  // каретка в конец значения, чтобы префилл не оставлял её в позиции 0;
-  // select/confirm — автофокус на radio-варианте / кнопке «Да» в JSX.
   const inputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -2225,163 +3241,150 @@ function QuestionModal({
 
   return (
     <div
-      data-testid="question-modal"
-      role="dialog"
-      aria-modal="true"
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          if (!submitting) onCancel();
-        }
-      }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#0D0208]/95 py-4 px-2 sm:px-4"
+      data-testid="inline-question"
+      className="border border-[#FFB000] bg-[#1A1000] p-3"
     >
-      <div
-        data-testid="question-prompt"
-        className="w-full max-w-lg border border-[#00FF41] bg-[#0D0208] py-5 px-3 sm:px-5 shadow-[0_0_18px_rgba(0,255,65,0.35)]"
-      >
-        <header className="mb-3 flex items-center gap-2">
-          <span className="glow text-sm font-semibold text-[#00FF41]">
-            Агент спрашивает
-          </span>
-          <span className="text-[10px] uppercase tracking-wider text-[#00FF41]/50">
-            {question.method}
-          </span>
-        </header>
+      <header className="mb-2 flex items-center gap-2">
+        <span className="text-xs font-semibold text-[#FFB000]">
+          Агент спрашивает
+        </span>
+        <span className="text-[10px] uppercase tracking-wider text-[#FFB000]/50">
+          {question.method}
+        </span>
+      </header>
 
-        <p className="break-words text-sm text-[#00FF41]">{question.title}</p>
-        {question.message && (
-          <p className="mt-2 whitespace-pre-wrap break-words text-xs text-[#00FF41]/70">
-            {question.message}
-          </p>
-        )}
+      <p className="break-words text-sm text-[#FFB000]">{question.title}</p>
+      {question.message && (
+        <p className="mt-1 whitespace-pre-wrap break-words text-xs text-[#FFB000]/70">
+          {question.message}
+        </p>
+      )}
 
-        {question.method === 'select' && (
-          <fieldset
-            className="mt-4 space-y-2"
-            disabled={submitting}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                if (!submitting && value.trim() !== '') onSubmit({ value });
-              }
-            }}
-          >
-            {(question.options ?? []).map((option) => (
-              <label
-                key={option}
-                className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80"
-              >
-                <input
-                  type="radio"
-                  name={`question-${question.id}`}
-                  className="accent-[#00FF41]"
-                  value={option}
-                  autoFocus={value === option}
-                  checked={value === option}
-                  onChange={() => setValue(option)}
-                  disabled={submitting}
-                />
-                {option}
-              </label>
-            ))}
-          </fieldset>
-        )}
-
-        {question.method === 'input' && (
-          <input
-            ref={inputRef}
-            type="text"
-            aria-label="Ответ"
-            className={`${inputClass} mt-4`}
-            value={value}
-            placeholder={question.placeholder ?? ''}
-            onChange={(event) => setValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (
-                event.key === 'Enter' &&
-                !event.shiftKey &&
-                !event.ctrlKey &&
-                !event.metaKey &&
-                !event.altKey
-              ) {
-                event.preventDefault();
-                if (!submitting && value.trim() !== '') onSubmit({ value });
-              }
-            }}
-            disabled={submitting}
-          />
-        )}
-
-        {question.method === 'editor' && (
-          <textarea
-            ref={editorRef}
-            aria-label="Ответ"
-            className={`${inputClass} mt-4`}
-            rows={5}
-            value={value}
-            placeholder={question.placeholder ?? ''}
-            onChange={(event) => setValue(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                event.preventDefault();
-                if (!submitting && value.trim() !== '') onSubmit({ value });
-              }
-            }}
-            disabled={submitting}
-          />
-        )}
-
-        {error && (
-          <p role="alert" className="mt-3 text-xs font-medium text-[#FF0033]">
-            {error}
-          </p>
-        )}
-
-        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
-          {isConfirm && (
-            <>
-              <button
-                type="button"
+      {question.method === 'select' && (
+        <fieldset
+          className="mt-3 space-y-2"
+          disabled={submitting}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              if (!submitting && value.trim() !== '') onSubmit({ value });
+            }
+          }}
+        >
+          {(question.options ?? []).map((option) => (
+            <label
+              key={option}
+              className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80"
+            >
+              <input
+                type="radio"
+                name={`question-${question.id}`}
+                className="accent-[#00FF41]"
+                value={option}
+                autoFocus={value === option}
+                checked={value === option}
+                onChange={() => setValue(option)}
                 disabled={submitting}
-                onClick={() => onSubmit({ confirmed: false })}
-                className="min-h-9 rounded-none border border-[#FF0033] px-4 py-1 text-sm font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50"
-              >
-                Нет
-              </button>
-              <button
-                type="button"
-                disabled={submitting}
-                autoFocus
-                onClick={() => onSubmit({ confirmed: true })}
-                className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-4 py-1 text-sm font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50"
-              >
-                Да
-              </button>
-            </>
-          )}
+              />
+              {option}
+            </label>
+          ))}
+        </fieldset>
+      )}
 
-          {!isConfirm && (
+      {question.method === 'input' && (
+        <input
+          ref={inputRef}
+          type="text"
+          aria-label="Ответ"
+          className={`${inputClass} mt-3`}
+          value={value}
+          placeholder={question.placeholder ?? ''}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (
+              event.key === 'Enter' &&
+              !event.shiftKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.altKey
+            ) {
+              event.preventDefault();
+              if (!submitting && value.trim() !== '') onSubmit({ value });
+            }
+          }}
+          disabled={submitting}
+        />
+      )}
+
+      {question.method === 'editor' && (
+        <textarea
+          ref={editorRef}
+          aria-label="Ответ"
+          className={`${inputClass} mt-3`}
+          rows={5}
+          value={value}
+          placeholder={question.placeholder ?? ''}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+              event.preventDefault();
+              if (!submitting && value.trim() !== '') onSubmit({ value });
+            }
+          }}
+          disabled={submitting}
+        />
+      )}
+
+      {error && (
+        <p role="alert" className="mt-2 text-xs font-medium text-[#FF0033]">
+          {error}
+        </p>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        {isConfirm && (
+          <>
             <button
               type="button"
-              disabled={submitting || value.trim() === ''}
-              onClick={() => onSubmit({ value })}
-              className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-4 py-1 text-sm font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50"
+              disabled={submitting}
+              onClick={() => onSubmit({ confirmed: false })}
+              className="min-h-9 rounded-none border border-[#FF0033] px-4 py-1 text-sm font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50 transition-base"
             >
-              {submitting ? 'Отправка…' : submitLabel}
+              Нет
             </button>
-          )}
+            <button
+              type="button"
+              disabled={submitting}
+              autoFocus
+              onClick={() => onSubmit({ confirmed: true })}
+              className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-4 py-1 text-sm font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+            >
+              Да
+            </button>
+          </>
+        )}
 
+        {!isConfirm && (
           <button
             type="button"
-            data-testid="question-cancel"
-            disabled={submitting}
-            onClick={onCancel}
-            className="min-h-9 rounded-none border border-[#008F11] px-4 py-1 text-sm font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:opacity-50"
+            disabled={submitting || value.trim() === ''}
+            onClick={() => onSubmit({ value })}
+            className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-4 py-1 text-sm font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 transition-base"
           >
-            Отмена
+            {submitting ? 'Отправка…' : submitLabel}
           </button>
-        </div>
+        )}
+
+        <button
+          type="button"
+          data-testid="question-cancel"
+          disabled={submitting}
+          onClick={onCancel}
+          className="min-h-9 rounded-none border border-[#008F11] px-4 py-1 text-sm font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:opacity-50 transition-base"
+        >
+          Отмена
+        </button>
       </div>
     </div>
   );

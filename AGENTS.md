@@ -80,6 +80,11 @@
 - `pi/sync-home-pc-models.sh` — patches `contextWindow` in `models.json`
   from the live home-pc llama-swap `/v1/models`; run after changing a
   preset on the PC
+- `pi/sync-thinking-rules.sh` — syncs `reasoning` / `thinkingLevelMap` in
+  `models.json` from pi's model catalog (`models-store.json`, refreshed by
+  `pi update --models`); matches custom-provider models by normalized
+  id/name plus an `ALIASES` map and touches no other field; run `--dry-run`
+  first
 - Long-term memory is `pi-memory` (listed in `pi/settings.json`): the host
   store is `~/.config/pi/memory`, set via `PI_MEMORY_DIR` in `~/.zshrc`;
   container agents write to the shared `agent-memory` Docker volume
@@ -99,6 +104,10 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `agent-attach`, `agent-fwd`, `agent-stop`
 - Containers are per-directory (`container-name.sh`); durable state is in
   volumes, so recreating a container is cheap and safe
+- Agent rooms are per-task: `spawn-pi-agent.sh` (`--room NAME`) and
+  `attach.sh -- pi` set `PI_AGENT_ROOM` to the folder basename (the
+  `pi-agents-talk-to-each-other` extension then ignores the global
+  `defaultRoom`); issue-resolver runs step agents in `issue-<issue_id>`
 - `agent-skills/` is re-synced into the container on every launch, so a new
   skill shows up without a rebuild (rebuild only to bake it into the image)
 - Ports come in two flavors:

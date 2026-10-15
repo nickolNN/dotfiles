@@ -285,6 +285,12 @@ step_outputs (
   - Обмен контекстом — **явно** через сообщения и файлы (context, feedback),
     не через session-memory (решение: «контейнер переиспользуем, свежая
     pi-сессия на итерацию»).
+- **Самопроверка vs даунстрим**: промптам `refine`/`resolve` передаётся
+  канонический список включённых шагов (`pipeline_steps`), и они согласуют
+  объём самопроверки с шагами верификации: при включённых `review`/`test` не
+  дублируют их (только локальные self-checks — build/typecheck/unit smoke),
+  иначе `resolve` сам становится финальным гейтом и план несёт полную
+  самопроверку.
 - Переходы:
   - `review`/`test` → `success` ⇒ следующий шаг; `failed` ⇒ откат на `resolve`
     с `feedback` (attempt+1).
@@ -400,30 +406,44 @@ Playwright используется в двух ролях:
    + фидбек предыдущих шагов + выходной контракт + hard-rules.
 2. **Корректный `--dir`** на `workspaces/<issue-id>/<repo>`, ветка уже
    создана/чекаутнута до запуска агента.
-3. **Тулы и allowlist по шагу** (`--tools`, MCP exposure): `resolve` — без
-   прав на build/test/commit/push; `review`/`test` — build/test/browser
-   разрешены.
-4. **Скиллы шага** присутствуют в контейнере: `pr`, `code-review`, `grill-me`,
-   `tdd`, `coordinator` (+ языковые при необходимости).
+3. **Права по шагу** (фиксируются текстом шага в `prompts/*.md`, не allowlistом
+   тулов): `resolve` — build/test/typecheck разрешены как самопроверка,
+   commit/push запрещены (публикует бэкенд после успешного `pr`); `review` —
+   только чтение исходников и read-only git (`git status`/`git diff`), без
+   сборок и браузера; `test` — приложение в браузере (Playwright), код не
+   правит; `pr` — текст MR, рабочее дерево читается, но не меняется.
+4. **Скиллы шага** присутствуют в контейнере: `refine` (grilling-интервью шага
+   `refine`), `pr`, `code-review`, `tdd` (+ языковые при необходимости).
+   `coordinator` в пайплайне не используется: роли раздаёт движок, а скилл
+   описывает ручную комнату.
 5. **Git identity + creds** настроены до запуска (`user.name/email`, хостовые
    creds из dotfiles-agent).
 6. **Выходной контракт**: каждый шаг пишет структурированный
    `.issue-step-result.json` + возвращает `exit code` → оркестратор
    детерминированно парсит (обобщение `.issue-reviewer-result.json` оригинала).
-   Формат `.issue-step-result.json`:
+   Формат `.issue-step-result.json` (каноническое описание — в
+   `prompts/output-contract.md`, который движок добавляет каждому шагу):
    ```json
    {
      "status": "pass" | "fail" | "blocked",
      "summary": "текст",
-     "scenarios": [{ "name": "...", "status": "pass"|"fail", "details": "..." }],
-     "findings": [{ "severity": "minor"|"major"|"critical", "description": "..." }]
+     "scenarios": [{ "name": "...", "expected": "...", "actual": "..." }],
+     "findings": [{ "severity": "info|low|minor|major|critical", "title": "...", "detail": "file:line — что не так" }]
    }
    ```
+   Парсер (`shared/src/step-result.ts`) принимает и старую форму
+   (`scenarios[].status`/`details`, `findings[].description`) — промпты учат
+   новой. Шаг `pr` дополнительно кладёт `title`/`description` (текст MR),
+   шаг `refine` — `execution` (рекомендация топологии).
    Маппинг в `StepRunStatus` (реализовано в `shared/step-result.ts`):
    `exit 0` + (`pass`/null) → `success`; `exit 0` + `blocked` → `needs_input`;
    иначе → `failed`.
-7. **Мультиагентность**: для сложных шагов — room (coordinator + workers) с
-   непересекающимися файлами; room-механика включена.
+7. **Мультиагентность**: `refine` рекомендует топологию (`execution.mode` =
+   `single`/`room`/`stages`), а решает детерминированно движок
+   (`planExecutionMode`, потолок `DEFAULT_MAX_ROOM_EXECUTORS`): room —
+   coordinator + N воркеров с непересекающимися файлами, stages — этапы
+   строго по порядку с финальным lead. Промпты ролей —
+   `prompts/resolve-{room,stages}-{worker,lead,final}.md`.
 8. **Чёткие hard-rules** шага (запреты: commit/push у resolve без финального
    шага pr; build/test только по разрешению).
 9. **Ожидания стрима**: stdout/stderr уходят в SSE — агент структурирует вывод

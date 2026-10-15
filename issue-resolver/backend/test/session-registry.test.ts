@@ -124,21 +124,390 @@ describe('InMemoryStepSessionRegistry', () => {
     expect(spy.aborts).toEqual([]);
   });
 
-  it('перерегистрация iteration ведёт на новый stepRunId; stale unregister его не сносит', () => {
+  it('multi-session: steerByIteration/abortByIteration broadcast на все сессии', () => {
     const registry = new InMemoryStepSessionRegistry();
     const first = spyControl();
     const second = spyControl();
     registry.register('run-1', 'iter-1', first.control);
     registry.register('run-2', 'iter-1', second.control);
 
-    expect(registry.steerByIteration('iter-1', 'second')).toBe(true);
-    expect(second.steers).toEqual(['second']);
-    expect(first.steers).toEqual([]);
+    expect(registry.steerByIteration('iter-1', 'all')).toBe(true);
+    expect(registry.abortByIteration('iter-1')).toBe(true);
 
-    // Удаление уже неактивного run-1 не должно ломать обратную ссылку на run-2.
+    // Broadcast: обе сессии итерации получили и steer, и abort.
+    expect(first.steers).toEqual(['all']);
+    expect(second.steers).toEqual(['all']);
+    expect(first.aborts).toHaveLength(1);
+    expect(second.aborts).toHaveLength(1);
+  });
+
+  it('multi-session: unregister одной оставляет hasByIteration, последней — снимает', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('run-1', 'iter-1', spyControl().control);
+    registry.register('run-2', 'iter-1', spyControl().control);
+
     registry.unregister('run-1');
-    expect(registry.steerByIteration('iter-1', 'still-second')).toBe(true);
-    expect(second.steers).toEqual(['second', 'still-second']);
+    expect(registry.hasByIteration('iter-1')).toBe(true);
+
+    registry.unregister('run-2');
+    expect(registry.hasByIteration('iter-1')).toBe(false);
+    expect(registry.abortByIteration('iter-1')).toBe(false);
+  });
+
+  it('anchor: prompt/send/respond идут на последнюю зарегистрированную сессию', async () => {
+    const registry = new InMemoryStepSessionRegistry();
+    const first = spyControl();
+    const second = spyControl();
+    registry.register('run-1', 'iter-1', first.control);
+    registry.register('run-2', 'iter-1', second.control);
+
+    await registry.promptByIteration('iter-1', 'anchor');
+    await registry.sendByIteration('iter-1', { type: 'get_state' });
+    registry.respondByIteration('iter-1', { id: 'ui-1', value: 'y' });
+
+    // Anchor = последняя зарегистрированная (в фазе room — координатор).
+    expect(second.prompts).toEqual([{ message: 'anchor' }]);
+    expect(second.commands).toEqual([{ type: 'get_state' }]);
+    expect(second.responses).toEqual([{ id: 'ui-1', value: 'y' }]);
+    expect(first.prompts).toEqual([]);
+    expect(first.commands).toEqual([]);
+    expect(first.responses).toEqual([]);
+  });
+
+  it('anchor: после снятия последней сессии якорем становится предыдущая', async () => {
+    const registry = new InMemoryStepSessionRegistry();
+    const first = spyControl();
+    const second = spyControl();
+    registry.register('run-1', 'iter-1', first.control);
+    registry.register('run-2', 'iter-1', second.control);
+
+    registry.unregister('run-2');
+    expect(registry.steerByIteration('iter-1', 'now-first')).toBe(true);
+    expect(first.steers).toEqual(['now-first']);
+    expect(second.steers).toEqual([]);
+  });
+
+  it('single-режим: одна сессия — поведение как раньше (без регресса)', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    const spy = spyControl();
+    registry.register('run-1', 'iter-1', spy.control);
+
+    expect(registry.steerByIteration('iter-1', 'hi')).toBe(true);
+    expect(registry.abortByIteration('iter-1')).toBe(true);
+    expect(spy.steers).toEqual(['hi']);
+    expect(spy.aborts).toHaveLength(1);
+  });
+
+  it('listAgents: агенты комнаты в порядке регистрации, статус меняется при unregister', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base/worker/0', 'iter-1', spyControl().control, {
+      id: 'base/worker/0',
+      role: 'worker',
+      index: 1,
+      label: 'Воркер 1',
+    });
+    registry.register('base/worker/1', 'iter-1', spyControl().control, {
+      id: 'base/worker/1',
+      role: 'worker',
+      index: 2,
+      label: 'Воркер 2',
+    });
+    registry.register('base', 'iter-1', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    expect(registry.listAgents('iter-1')).toEqual([
+      {
+        id: 'base/worker/0',
+        role: 'worker',
+        index: 1,
+        label: 'Воркер 1',
+        stage: null,
+        stageName: null,
+        status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+      {
+        id: 'base/worker/1',
+        role: 'worker',
+        index: 2,
+        label: 'Воркер 2',
+        stage: null,
+        stageName: null,
+        status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+      {
+        id: 'base',
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        stage: null,
+        stageName: null,
+        status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+    ]);
+
+    registry.unregister('base/worker/0', 'failed');
+    // Вкладка завершённого агента остаётся, но живой сессии уже нет.
+    expect(registry.listAgents('iter-1')[0].status).toBe('failed');
+    expect(registry.steer('base/worker/0', 'x')).toBe(false);
+    expect(registry.listAgents('iter-1')).toHaveLength(3);
+    expect(registry.listAgents('iter-unknown')).toEqual([]);
+  });
+
+  it('listAgents: unregister без статуса → finished; single-сессия без agent не попадает', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('run-single', 'iter-2', spyControl().control);
+    registry.register('base', 'iter-2', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    registry.unregister('base');
+    expect(registry.listAgents('iter-2')).toEqual([
+      {
+        id: 'base',
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        stage: null,
+        stageName: null,
+        status: 'finished',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+    ]);
+  });
+
+  it('listAgents: stage/stageName агента комнаты попадают в снимок', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base/stage/1/worker/0', 'iter-stage', spyControl().control, {
+      id: 'base/stage/1/worker/0',
+      role: 'worker',
+      index: 1,
+      label: 'Этап 1 · Воркер 1',
+      stage: 1,
+      stageName: 'Сбор контекста',
+    });
+    registry.register('base', 'iter-stage', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    expect(registry.listAgents('iter-stage')).toEqual([
+      {
+        id: 'base/stage/1/worker/0',
+        role: 'worker',
+        index: 1,
+        label: 'Этап 1 · Воркер 1',
+        stage: 1,
+        stageName: 'Сбор контекста',
+        status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+      {
+        id: 'base',
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        stage: null,
+        stageName: null,
+        status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+    ]);
+  });
+
+  it('recordEvent: usage агрегируется в stats, cost null пока его не было', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base/worker/0', 'iter-3', spyControl().control, {
+      id: 'base/worker/0',
+      role: 'worker',
+      index: 1,
+      label: 'Воркер 1',
+    });
+
+    // До событий — тайминг есть, телеметрии нет.
+    const before = registry.listAgents('iter-3')[0];
+    expect(before.startedAt).toEqual(expect.any(String));
+    expect(before.stats).toBeNull();
+
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 10, output: 2, cacheRead: 3, cacheWrite: 1, total: 16 },
+      cost: null,
+    });
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0, total: 6 },
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 },
+    });
+
+    expect(registry.listAgents('iter-3')[0].stats).toEqual({
+      userMessages: 0,
+      assistantMessages: 0,
+      toolCalls: 0,
+      toolResults: 0,
+      totalMessages: 0,
+      tokens: { input: 15, output: 3, cacheRead: 3, cacheWrite: 1, total: 22 },
+      cost: 3,
+      contextUsage: null,
+    });
+  });
+
+  it('recordEvent: кумулятивные снапшоты одного ответа схлопываются, ответы суммируются', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base/worker/0', 'iter-cumulative', spyControl().control, {
+      id: 'base/worker/0',
+      role: 'worker',
+      index: 1,
+      label: 'Воркер 1',
+    });
+
+    // Ответ 1: total растёт 50 → 100 (кумулятив) — берём последний снапшот.
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 40, output: 10, cacheRead: 0, cacheWrite: 0, total: 50 },
+      cost: null,
+    });
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 80, output: 20, cacheRead: 0, cacheWrite: 0, total: 100 },
+      cost: null,
+    });
+    // Ответ 2: total упал → новая граница, предыдущий ответ суммируется.
+    registry.recordEvent('base/worker/0', {
+      type: 'usage',
+      usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, total: 5 },
+      cost: null,
+    });
+
+    expect(registry.listAgents('iter-cumulative')[0].stats?.tokens).toEqual({
+      input: 84,
+      output: 21,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 105,
+    });
+  });
+
+  it('recordEvent: последнее stats-событие даёт contextUsage/счётчики/model; токены — из usage', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base', 'iter-4', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    registry.recordEvent('base', {
+      type: 'usage',
+      usage: { input: 7, output: 1, cacheRead: 0, cacheWrite: 0, total: 8 },
+      cost: null,
+    });
+    registry.recordEvent('base', {
+      type: 'stats',
+      stats: {
+        model: 'Claude Sonnet 4',
+        userMessages: 2,
+        assistantMessages: 3,
+        toolCalls: 4,
+        toolResults: 5,
+        totalMessages: 5,
+        tokens: { input: 999, output: 999, cacheRead: 0, cacheWrite: 0, total: 1998 },
+        cost: 42,
+        contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 },
+      },
+    });
+
+    const stats = registry.listAgents('iter-4')[0].stats;
+    expect(stats).toMatchObject({
+      model: 'Claude Sonnet 4',
+      userMessages: 2,
+      assistantMessages: 3,
+      toolCalls: 4,
+      toolResults: 5,
+      totalMessages: 5,
+      tokens: { input: 7, output: 1, cacheRead: 0, cacheWrite: 0, total: 8 },
+      contextUsage: { tokens: 100, contextWindow: 1000, percent: 10 },
+    });
+  });
+
+  it('recordEvent: без usage токены/cost берутся из stats-события', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('base', 'iter-5', spyControl().control, {
+      id: 'base',
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+
+    registry.recordEvent('base', {
+      type: 'stats',
+      stats: {
+        userMessages: 0,
+        assistantMessages: 1,
+        toolCalls: 0,
+        toolResults: 0,
+        totalMessages: 1,
+        tokens: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0, total: 7 },
+        cost: 0,
+        contextUsage: null,
+      },
+    });
+
+    expect(registry.listAgents('iter-5')[0].stats).toMatchObject({
+      tokens: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0, total: 7 },
+      cost: 0,
+    });
+  });
+
+  it('recordEvent: не-агентская (single) сессия игнорируется', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    registry.register('run-single', 'iter-6', spyControl().control);
+
+    registry.recordEvent('run-single', {
+      type: 'usage',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      cost: null,
+    });
+    registry.recordEvent('unknown', {
+      type: 'usage',
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+      cost: null,
+    });
+
+    expect(registry.listAgents('iter-6')).toEqual([]);
+  });
+
+  it('listAgents: FIFO-эвикция при >64 итерациях с агентами', () => {
+    const registry = new InMemoryStepSessionRegistry();
+    for (let i = 0; i < 65; i += 1) {
+      const iterationId = `iter-${i}`;
+      registry.register(`${iterationId}/worker/0`, iterationId, spyControl().control, {
+        id: `${iterationId}/worker/0`,
+        role: 'worker',
+        index: 1,
+        label: 'Воркер 1',
+      });
+    }
+
+    expect(registry.listAgents('iter-0')).toEqual([]);
+    expect(registry.listAgents('iter-64')).toHaveLength(1);
   });
 
   it('promptByIteration/sendByIteration резолвят активную сессию; без → null', async () => {

@@ -12,9 +12,12 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
   && echo "LUA_ARCH=$LUA_ARCH" >> /etc/environment
 
 # ── System dependencies + gh CLI repo ──────────────────────────
+# tini   → PID 1 init that reaps orphaned/zombie children (MCP servers,
+#          browser helpers) which a plain `sleep infinity` PID 1 ignores.
+# git-lfs → pull/push LFS-tracked assets in cloned repos.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  git curl jq build-essential python3 unzip ripgrep fd-find fzf \
-  htop luarocks \
+  git git-lfs curl jq build-essential python3 unzip ripgrep fd-find fzf \
+  htop luarocks tini \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -274,10 +277,30 @@ RUN for i in 1 2 3; do \
       echo "Pi packages attempt $i failed, retrying..."; sleep 5; \
       [ "$i" -lt 3 ] || { echo "FATAL: pi package install failed after 3 attempts"; exit 1; }; \
     done \
-  && rm -rf /home/agent/.npm
+  # Drop install/download caches in the SAME layer that produced them (a
+  # later `rm` only whiteouts and still ships the bytes). yarn/go-build/qmd
+  # are defensive: today they are runtime caches, but if a future install
+  # step populates them they must not be baked into the image. qmd models
+  # in particular are dead weight while PI_MEMORY_QMD_UPDATE=off.
+  && rm -rf /home/agent/.npm /home/agent/.cache/yarn \
+            /home/agent/.cache/go-build /home/agent/.cache/qmd
+
+# ── Per-process room override (PI_AGENT_ROOM) ────────────────────
+# Honor PI_AGENT_ROOM so each task forces its own room (issue-resolver
+# sets issue-<id>) above the global defaultRoom. Fail loudly if upstream
+# reshapes the line this patch anchors to.
+RUN ROOM_EXT=/home/agent/.pi/agent/npm/node_modules/pi-agents-talk-to-each-other/extensions/agent-room/index.ts \
+  && grep -q 'const defaultRoom = readConfig().defaultRoom;' "$ROOM_EXT" \
+  && sed -i 's/const defaultRoom = readConfig().defaultRoom;/const defaultRoom = process.env.PI_AGENT_ROOM || readConfig().defaultRoom;/' "$ROOM_EXT" \
+  && grep -q "process.env.PI_AGENT_ROOM" "$ROOM_EXT" \
+  || { echo "ERROR: room extension anchor not found — PI_AGENT_ROOM patch failed"; exit 1; }
 
 # ── Remote skills: parallel git clone --depth 1 ─────────────────
 # (no skills CLI → no simple-git hangs). Format: repo:subpath.
+# `writing-great-skills` was renamed upstream to `writing-for-agents`
+# (mattpocock/skills) — the stale path 404s and the clone loop used to
+# swallow it; only the live name is listed, and the loop now fails the build
+# if any listed source is missing.
 RUN git config --global protocol.version 2 \
   && git config --global --add safe.directory /home/agent/workspace \
   && export GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true \
@@ -292,11 +315,10 @@ RUN git config --global protocol.version 2 \
        "mattpocock/skills:skills/engineering/improve-codebase-architecture" \
        "mattpocock/skills:skills/engineering/tdd" \
        "mattpocock/skills:skills/engineering/retro" \
-       "mattpocock/skills:skills/productivity/grill-me" \
        "mattpocock/skills:skills/productivity/handoff" \
        "mattpocock/skills:skills/productivity/to-questionnaire" \
        "mattpocock/skills:skills/productivity/teach" \
-       "mattpocock/skills:skills/productivity/writing-great-skills" \
+       "mattpocock/skills:skills/productivity/writing-for-agents" \
        "vercel-labs/agent-skills:skills/web-design-guidelines" \
        "dietrichgebert/ponytail:skills/ponytail" \
        "yonatangross/orchestkit:src/skills/glyph" \
@@ -312,6 +334,7 @@ RUN git config --global protocol.version 2 \
        pids="$pids $!"; \
      done \
   && for p in $pids; do wait "$p" || echo "Clone failed: $p"; done \
+  && missing="" \
   && for entry; do \
        repo="${entry%%:*}"; subpath="${entry#*:}"; \
        if [ "$subpath" = "." ]; then \
@@ -319,8 +342,19 @@ RUN git config --global protocol.version 2 \
        else \
          skill="$(basename "$subpath")"; src="$TMP/$repo/$subpath"; \
        fi; \
-       cp -r "$src" "$HOME/.agents/skills/$skill" && echo "  -> $skill"; \
+       # A failed clone (network hiccup, renamed/removed upstream path) must
+       # not silently drop a skill: record it and fail after the loop.
+       if [ -d "$src" ]; then \
+         cp -r "$src" "$HOME/.agents/skills/$skill" && echo "  -> $skill"; \
+       else \
+         echo "WARNING: skill source missing: $repo/$subpath"; \
+         missing="$missing $skill"; \
+       fi; \
      done \
+  && if [ -n "$missing" ]; then \
+       echo "FATAL: remote skill(s) missing after clone:$missing" >&2; \
+       exit 1; \
+     fi \
   && rm -rf "$TMP" \
   && mkdir -p "$HOME/.agents/skills/clean-code" \
   && curl -fsSL \
@@ -408,4 +442,14 @@ ENV PI_MEMORY_QMD_UPDATE=off
 VOLUME /home/agent/.pi/agent/sessions
 VOLUME /home/agent/.pi/agent/memory
 VOLUME /home/agent/.pi/agent/rooms
+
+# ── PID 1 init ───────────────────────────────────────────────────
+# tini as PID 1 reaps zombie children (chrome-devtools-mcp, browser helpers)
+# that a plain `sleep infinity` init ignores. The launch scripts
+# (spawn-pi-agent.sh / attach.sh) override the ENTRYPOINT with
+# `--entrypoint sleep`, so they pass `--init` instead to get the same
+# docker-init (tini) reaper at PID 1. docker-compose.yml keeps the
+# ENTRYPOINT below (it only overrides `command`).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]
 

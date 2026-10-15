@@ -49,7 +49,10 @@ export default function FilePicker({
   return (
     <div data-testid="file-picker">
       <div className="mb-1 flex items-center justify-between">
-        <label className={labelClass} htmlFor={id}>
+        <label
+          className={`${labelClass}${id && !disabled ? ' cursor-pointer' : ''}`}
+          htmlFor={id}
+        >
           {label}
         </label>
         {files.length > 0 && (

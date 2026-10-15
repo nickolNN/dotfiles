@@ -3,4 +3,9 @@ dist/
 *.log
 .DS_Store
 .env
+backend/config.json
 backend/data/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/.playwright/

@@ -161,7 +161,7 @@ describe('TaskDetail — результат шага', () => {
     expect(screen.queryByTestId('step-summary')).toBeNull();
   });
 
-  it('карточка pending-шага → живой session + баннер вопроса, без «Результат отсутствует.»', async () => {
+  it('карточка pending-шага → живой session + inline-вопрос, без «Результат отсутствует.»', async () => {
     stubFetch([
       makeStepRun({
         status: 'pending',
@@ -182,7 +182,7 @@ describe('TaskDetail — результат шага', () => {
     await screen.findByText('Fix login bug');
 
     expect(await screen.findByTestId('step-session')).toBeInTheDocument();
-    expect(screen.getByTestId('step-pending-question')).toBeInTheDocument();
+    expect(screen.getByTestId('inline-question')).toBeInTheDocument();
     expect(screen.queryByText('Результат отсутствует.')).toBeNull();
   });
 

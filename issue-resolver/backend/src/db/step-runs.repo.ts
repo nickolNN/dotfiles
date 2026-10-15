@@ -59,6 +59,21 @@ function parseEvents(raw: string | null): SessionEvent[] {
   }
 }
 
+/**
+ * События прогона: пока output-строки нет, берём дозалитые `step_runs.events`
+ * (в первую очередь вопросы); с её появлением полный набор из `step_outputs`
+ * становится источником истины.
+ */
+function pickStepRunEvents(
+  outputEvents: string | null,
+  runEvents: SessionEvent[] | null | undefined,
+): SessionEvent[] {
+  if (outputEvents !== null) {
+    return parseEvents(outputEvents);
+  }
+  return Array.isArray(runEvents) ? runEvents : [];
+}
+
 /** Битый/пустой JSON статистики деградирует до null. */
 function parseStats(raw: string | null): SessionStats | null {
   if (!raw) return null;
@@ -108,6 +123,32 @@ export async function updateStepRun(
     throw new Error(`Шаг не найден: ${id}`);
   }
   return updated;
+}
+
+/**
+ * Дозапись одного события сессии в прогон шага. Нужна, пока шаг в работе и
+ * строки `step_outputs` ещё нет: например, вопрос агента должен пережить
+ * перезагрузку страницы, хотя полный набор событий уходит в `step_outputs`
+ * только на финише шага. Чтение-изменение-запись синхронна (better-sqlite3).
+ */
+export async function appendStepRunEvent(
+  db: Db,
+  stepRunId: string,
+  event: SessionEvent,
+): Promise<void> {
+  const existing = db
+    .select({ events: stepRuns.events })
+    .from(stepRuns)
+    .where(eq(stepRuns.id, stepRunId))
+    .get();
+
+  const currentEvents: SessionEvent[] = existing?.events ?? [];
+  currentEvents.push(event);
+
+  db.update(stepRuns)
+    .set({ events: currentEvents, updated_at: nowIso() })
+    .where(eq(stepRuns.id, stepRunId))
+    .run();
 }
 
 /**
@@ -172,7 +213,9 @@ export async function listStepRunsWithLog(
       ...getTableColumns(stepRuns),
       stdout: stepOutputs.stdout,
       stderr: stepOutputs.stderr,
-      events: stepOutputs.events,
+      // События output-строки вынесены под отдельный псевдоним: у `step_runs`
+      // теперь тоже есть колонка `events` (инкрементальная дозапись до финиша).
+      outputEvents: stepOutputs.events,
       stats: stepOutputs.stats,
       report: stepOutputs.report,
       screenshots_dir: stepOutputs.screenshots_dir,
@@ -183,11 +226,11 @@ export async function listStepRunsWithLog(
     .orderBy(stepRank, asc(stepRuns.attempt))
     .all();
 
-  return rows.map((row) => ({
+  return rows.map(({ outputEvents, ...row }) => ({
     ...row,
     stdout: row.stdout ?? '',
     stderr: row.stderr ?? '',
-    events: parseEvents(row.events),
+    events: pickStepRunEvents(outputEvents, row.events),
     stats: parseStats(row.stats ?? null),
     report: row.report ?? null,
     screenshots_dir: row.screenshots_dir ?? null,

@@ -135,7 +135,7 @@ const pass = () => ({ step: 'resolve' as const, exitCode: 0, report: { status: '
 const fail = () => ({ step: 'resolve' as const, exitCode: 1, report: { status: 'fail' as const, summary: 'no' }, stdout: '', stderr: '' });
 
 describe('runIssueIteration — статус running', () => {
-  it('success: iteration_status running до completed; итог completed в БД', async () => {
+  it('success: preparing → running → completed; итог completed в БД', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db);
     const { deps, pi, sse } = makeDeps();
@@ -154,6 +154,7 @@ describe('runIssueIteration — статус running', () => {
         steps: ['resolve'],
       },
       repositories: REPOSITORIES,
+      repoWorkspaces: [],
     });
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
@@ -161,7 +162,9 @@ describe('runIssueIteration — статус running', () => {
     const statuses = events
       .filter((event) => event.type === 'iteration_status')
       .map((event) => JSON.parse(event.data).status as string);
+    // Подготовка вынесена в prepareIssueWorkspace: итерация стартует сразу running.
     expect(statuses[0]).toBe('running');
+    expect(statuses).toContain('running');
     expect(statuses.at(-1)).toBe('completed');
     expect(statuses.indexOf('running')).toBeLessThan(
       statuses.indexOf('completed'),
@@ -181,6 +184,9 @@ describe('runIssueIteration — статус running', () => {
     const { issueId, iteration } = seedIteration(db);
     const { deps, pi } = makeDeps();
     pi.enqueue(fail());
+    pi.enqueue(fail());
+    pi.enqueue(fail());
+    pi.enqueue(fail());
 
     const result = await runIssueIteration(db, deps, {
       issue: { id: issueId, title: 'Running-задача', pipelineSteps: ['resolve'] },
@@ -192,6 +198,7 @@ describe('runIssueIteration — статус running', () => {
         steps: ['resolve'],
       },
       repositories: REPOSITORIES,
+      repoWorkspaces: [],
     });
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });

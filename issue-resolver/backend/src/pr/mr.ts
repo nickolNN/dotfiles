@@ -16,7 +16,7 @@ export interface MrCreateInput {
   /** MR-токен (в реальном коде — из secrets/конфига). */
   token: string;
   /** Выводится из repositoryUrl через detectGitHost. */
-  source: 'gitlab' | 'github';
+  source: 'gitlab' | 'github' | 'bitbucket';
 }
 
 export interface MrCreateResult {
@@ -28,8 +28,18 @@ export interface MrClient {
   createMr(input: MrCreateInput): Promise<MrCreateResult>;
 }
 
+/**
+ * Токены MR по хостам-источникам. Используются как fallback, когда
+ * per-call `input.token` пуст: приоритет `input.token > tokens[source] > token`.
+ */
+export interface MrTokens {
+  gitlab?: string;
+  github?: string;
+  bitbucket?: string;
+}
+
 /** Хост из https-URL или ssh-стиля `git@host:path`. */
-function hostOf(repositoryUrl: string): string {
+export function hostOf(repositoryUrl: string): string {
   const trimmed = repositoryUrl.trim();
   if (!trimmed) throw new Error('unknown git host');
 
@@ -47,15 +57,26 @@ function hostOf(repositoryUrl: string): string {
  * Определяет хост по URL/ssh-строке репозитория.
  * - host содержит 'github' → 'github'
  * - host содержит 'gitlab' → 'gitlab'
+ * - host содержит 'bitbucket'/'stash' или путь `/scm/` (Bitbucket Server)
+ *   → 'bitbucket'
  * - иначе → throw Error('unknown git host')
  *
  * ssh-стиль `git@...` обрабатывается так же, как https (сравнение по хосту),
  * поэтому self-hosted `git@gitlab.example.com:files-web.git` → gitlab.
  */
-export function detectGitHost(repositoryUrl: string): 'gitlab' | 'github' {
+export function detectGitHost(
+  repositoryUrl: string,
+): 'gitlab' | 'github' | 'bitbucket' {
   const host = hostOf(repositoryUrl);
   if (host.includes('github')) return 'github';
   if (host.includes('gitlab')) return 'gitlab';
+  if (
+    host.includes('bitbucket') ||
+    host.includes('stash') ||
+    /\/scm\//.test(repositoryUrl)
+  ) {
+    return 'bitbucket';
+  }
   throw new Error('unknown git host');
 }
 
@@ -84,6 +105,20 @@ export class FakeMrClient implements MrClient {
       .replace(/^[^@/]+@/, 'https://')
       .replace(/:/, '/')
       .replace(/\.git$/, '');
+    if (input.source === 'bitbucket') {
+      const { project, repo } = bitbucketProjectRepo(input.repositoryUrl);
+      return {
+        mrUrl: `https://${hostOf(input.repositoryUrl)}/projects/${project}/repos/${repo}/pull-requests/${id}`,
+        id,
+      };
+    }
+    if (input.source === 'github') {
+      const { owner, repo } = githubOwnerRepo(input.repositoryUrl);
+      return {
+        mrUrl: `https://${hostOf(input.repositoryUrl)}/${owner}/${repo}/pull/${id}`,
+        id,
+      };
+    }
     return { mrUrl: `${webBase}/-/merge_requests/${id}`, id };
   }
 }
@@ -96,6 +131,10 @@ interface GitLabMrResponse {
 interface GitHubPrResponse {
   number: number;
   html_url: string;
+}
+
+interface BitbucketPrResponse {
+  id: number;
 }
 
 /**
@@ -114,13 +153,23 @@ interface GitHubPrResponse {
  *   /api/v3/repos/...; github.com: https://api.github.com/repos/...)
  *   headers: Authorization: Bearer <token>, Accept: application/vnd.github+json
  *   body:    { head, base, title, body }
+ * Bitbucket Server: POST {host}/rest/api/1.0/projects/{project}/repos/{repo}/pull-requests
+ *   headers: Authorization: Bearer <token>
+ *   body:    { title, description, fromRef: { id }, toRef: { id } }
  */
 export class HttpMrClient implements MrClient {
-  /** Токен по умолчанию из конфига/фабрики; input.token имеет приоритет. */
-  constructor(private readonly token = '') {}
+  /**
+   * `token` — общий дефолт из конфига/фабрики; `tokens` — per-host токены
+   * (`BITBUCKET_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN`). Приоритет:
+   * `input.token` > `tokens[source]` > `token`.
+   */
+  constructor(
+    private readonly token = '',
+    private readonly tokens: MrTokens = {},
+  ) {}
 
   async createMr(input: MrCreateInput): Promise<MrCreateResult> {
-    const token = input.token || this.token;
+    const token = input.token || this.tokens[input.source] || this.token;
 
     if (input.source === 'gitlab') {
       const path = gitlabProjectPath(input.repositoryUrl);
@@ -148,29 +197,67 @@ export class HttpMrClient implements MrClient {
       return { mrUrl: data.web_url, id: String(data.iid) };
     }
 
-    const { owner, repo } = githubOwnerRepo(input.repositoryUrl);
+    if (input.source === 'github') {
+      const { owner, repo } = githubOwnerRepo(input.repositoryUrl);
+      const host = hostOf(input.repositoryUrl);
+      // github.com живёт на api.github.com, GitHub Enterprise Server —
+      // на собственном хосте под /api/v3.
+      const apiBase =
+        host === 'github.com'
+          ? 'https://api.github.com'
+          : `https://${host}/api/v3`;
+      const response = await fetch(
+        `${apiBase}/repos/${owner}/${repo}/pulls`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            head: input.headBranch,
+            base: input.baseBranch,
+            title: input.title,
+            body: input.description,
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`github pr failed: ${response.status}`);
+      }
+      const data = (await response.json()) as GitHubPrResponse;
+      return { mrUrl: data.html_url, id: String(data.number) };
+    }
+
+    // Bitbucket Server/Stash: project/repo — из пути `/scm/{project}/{repo}`.
+    const { project, repo } = bitbucketProjectRepo(input.repositoryUrl);
+    const host = hostOf(input.repositoryUrl);
     const response = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/pulls`,
+      `https://${host}/rest/api/1.0/projects/${project}/repos/${repo}/pull-requests`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Accept: 'application/vnd.github+json',
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          head: input.headBranch,
-          base: input.baseBranch,
           title: input.title,
-          body: input.description,
+          description: input.description,
+          fromRef: { id: input.headBranch },
+          toRef: { id: input.baseBranch },
         }),
       },
     );
     if (!response.ok) {
-      throw new Error(`github pr failed: ${response.status}`);
+      const body = await response.text().catch(() => '(body unavailable)');
+      throw new Error(`bitbucket pr failed: ${response.status} — ${body.slice(0, 500)}`);
     }
-    const data = (await response.json()) as GitHubPrResponse;
-    return { mrUrl: data.html_url, id: String(data.number) };
+    const data = (await response.json()) as BitbucketPrResponse;
+    return {
+      mrUrl: `https://${host}/projects/${project}/repos/${repo}/pull-requests/${data.id}`,
+      id: String(data.id),
+    };
   }
 }
 
@@ -197,5 +284,24 @@ function githubOwnerRepo(repositoryUrl: string): { owner: string; repo: string }
   return {
     owner: segments[segments.length - 2],
     repo: segments[segments.length - 1],
+  };
+}
+
+/** `{project}/{repo}` из URL Bitbucket Server — `/scm/{project}/{repo}`. */
+function bitbucketProjectRepo(repositoryUrl: string): {
+  project: string;
+  repo: string;
+} {
+  const path = gitlabProjectPath(repositoryUrl);
+  const segments = path.split('/').filter((segment) => segment.length > 0);
+  // Клон Bitbucket Server лежит под `/scm/{project}/{repo}` — префикс отбрасываем.
+  const cleaned =
+    segments[0]?.toLowerCase() === 'scm' ? segments.slice(1) : segments;
+  if (cleaned.length < 2) {
+    throw new Error(`cannot parse bitbucket repository: ${repositoryUrl}`);
+  }
+  return {
+    project: cleaned[cleaned.length - 2],
+    repo: cleaned[cleaned.length - 1],
   };
 }

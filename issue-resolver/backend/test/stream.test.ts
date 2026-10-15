@@ -6,7 +6,9 @@ import { buildApp } from '../src/app';
 import type { Db } from '../src/db/client';
 import { createDb } from '../src/db/client';
 import { issues, iterations, stepRuns } from '../src/db/schema';
+import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import { InMemorySseHub } from '../src/sse/hub';
+import { readSseData } from './fixtures/sse';
 
 const ISSUES_PATH = '/issue-resolver/api/v1/issues';
 const NOW = '2026-06-01T00:00:00.000Z';
@@ -172,8 +174,7 @@ describe('GET /issues/:id/stream', () => {
 
       const reader = response.body?.getReader();
       if (!reader) throw new Error('no response body');
-      const { value } = await reader.read();
-      expect(new TextDecoder().decode(value)).toBe(
+      expect(await readSseData(reader)).toBe(
         `data: ${JSON.stringify(event)}\n\n`,
       );
 
@@ -252,5 +253,166 @@ describe('POST /iterations/:id/abort', () => {
         ?.status,
     ).toBe('success');
     expect(events).toEqual([]);
+  });
+});
+
+/** Минимальный control без процесса — для регистрации агентов в реестре. */
+const noopControl = {
+  steer: () => undefined,
+  abort: () => undefined,
+  respond: () => undefined,
+  prompt: () => Promise.resolve({ ok: true, disposition: 'started' as const }),
+  send: () => Promise.resolve({ ok: true }),
+};
+
+describe('GET /iterations/:id/agents', () => {
+  it('отдаёт агентов комнаты в порядке регистрации; неизвестная итерация → 404', async () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db);
+    const iterationId = insertIteration(db, issueId, 'running');
+    const control = new InMemoryStepSessionRegistry();
+    control.register(`${iterationId}/worker/0`, iterationId, noopControl, {
+      id: `${iterationId}/worker/0`,
+      role: 'worker',
+      index: 1,
+      label: 'Воркер 1',
+    });
+    control.register(iterationId, iterationId, noopControl, {
+      id: iterationId,
+      role: 'coordinator',
+      index: null,
+      label: 'Координатор',
+    });
+    // Телеметрия воркера: usage-токены + последний stats-событие (контекст/model).
+    control.recordEvent(`${iterationId}/worker/0`, {
+      type: 'usage',
+      usage: { input: 12, output: 3, cacheRead: 0, cacheWrite: 0, total: 15 },
+      cost: null,
+    });
+    control.recordEvent(`${iterationId}/worker/0`, {
+      type: 'stats',
+      stats: {
+        model: 'test-model',
+        userMessages: 0,
+        assistantMessages: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        totalMessages: 0,
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        cost: null,
+        contextUsage: { tokens: 50, contextWindow: 200, percent: 25 },
+      },
+    });
+    const app = buildApp(db, { control });
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/issue-resolver/api/v1/iterations/${iterationId}/agents`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([
+      {
+        id: `${iterationId}/worker/0`,
+        role: 'worker',
+        index: 1,
+        label: 'Воркер 1',
+        stage: null,
+        stageName: null,
+        status: 'running',
+        startedAt: expect.any(String),
+        stats: {
+          model: 'test-model',
+          userMessages: 0,
+          assistantMessages: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          totalMessages: 0,
+          tokens: { input: 12, output: 3, cacheRead: 0, cacheWrite: 0, total: 15 },
+          cost: null,
+          contextUsage: { tokens: 50, contextWindow: 200, percent: 25 },
+        },
+      },
+      {
+        id: iterationId,
+        role: 'coordinator',
+        index: null,
+        label: 'Координатор',
+        stage: null,
+        stageName: null,
+        status: 'running',
+        startedAt: expect.any(String),
+        stats: null,
+      },
+    ]);
+
+    const missing = await app.inject({
+      method: 'GET',
+      url: `/issue-resolver/api/v1/iterations/${randomUUID()}/agents`,
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe('GET /iterations/:id/agents/stream', () => {
+  it('нет agentId → 400', async () => {
+    const app = buildApp(createDb(':memory:'));
+    openApps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/issue-resolver/api/v1/iterations/it1/agents/stream',
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('SSE: отдаёт только события выбранного agentId', async () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db);
+    const iterationId = insertIteration(db, issueId, 'running');
+    const hub = new InMemorySseHub();
+    const app = buildApp(db, { sse: hub });
+    openApps.push(app);
+
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const address = app.server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('server has no TCP address');
+    }
+    const agentId = `${iterationId}/worker/0`;
+    const controller = new AbortController();
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/issue-resolver/api/v1/iterations/${iterationId}/agents/stream?agentId=${encodeURIComponent(agentId)}`,
+        { signal: controller.signal },
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('text/event-stream');
+
+      const target: SSEEvent = {
+        type: 'step_event',
+        issueId,
+        iterationId,
+        stepRunId: iterationId,
+        agentId,
+        stream: 'system',
+        data: JSON.stringify({ stepRunId: iterationId, agentId, event: { type: 'text', text: 'x' } }),
+        ts: NOW,
+      };
+      // Чужой агент — не должен просочиться в поток.
+      hub.publish({ ...target, agentId: `${iterationId}/worker/1` });
+      hub.publish(target);
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('no response body');
+      expect(await readSseData(reader)).toBe(
+        `data: ${JSON.stringify(target)}\n\n`,
+      );
+      controller.abort();
+      await reader.cancel().catch(() => undefined);
+    } finally {
+      controller.abort();
+    }
   });
 });

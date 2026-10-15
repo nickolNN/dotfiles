@@ -322,6 +322,7 @@ describe('SessionView — события полного pi-паритета (Pha
   it('thinking: последний блок помечен streaming и показывает live-лейбл', () => {
     render(
       <SessionView
+        running
         events={[{ type: 'thinking', thinking: 'первая\nвторая' }]}
       />,
     );
@@ -502,6 +503,7 @@ describe('SessionView — индикатор «работает» (running)', ()
   it('несколько thinking подряд: отдельные блоки, streaming только у последнего', () => {
     render(
       <SessionView
+        running
         events={[
           { type: 'thinking', thinking: 'первый' },
           { type: 'thinking', thinking: 'второй' },
@@ -516,5 +518,133 @@ describe('SessionView — индикатор «работает» (running)', ()
       'false',
       'true',
     ]);
+  });
+});
+
+describe('SessionView — живое размышление (thinking_update)', () => {
+  it('running: update\u2019ы дают один live-блок с последним partial \u2014 без дубля', () => {
+    render(
+      <SessionView
+        running
+        events={[
+          { type: 'thinking_update', contentIndex: 0, partialText: 'первая' },
+          {
+            type: 'thinking_update',
+            contentIndex: 0,
+            partialText: 'первая и вторая',
+          },
+        ]}
+      />,
+    );
+
+    // ровно один блок: update'ы не пушатся в visible как отдельные строки
+    const blocks = screen.getAllByTestId('session-thinking');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toHaveAttribute('data-streaming', 'true');
+    // показан последний накопленный partial (открыт, т.к. streaming)
+    expect(screen.getByTestId('session-thinking-text')).toHaveTextContent(
+      'первая и вторая',
+    );
+    expect(screen.getByTestId('session-thinking-live')).toBeInTheDocument();
+  });
+
+  it('running: live-блок ограничен по высоте и скроллится внутри себя', () => {
+    render(
+      <SessionView
+        running
+        events={[
+          { type: 'thinking_update', contentIndex: 0, partialText: 'мысль' },
+        ]}
+      />,
+    );
+
+    // Пока стрим идёт — тело ограничено (max-h + overflow), чтобы растущий
+    // текст прокручивался внутри блока, а не распирал карточку.
+    const body = screen.getByTestId('session-thinking-text');
+    expect(body.className).toContain('max-h-96');
+    expect(body.className).toContain('overflow-auto');
+  });
+
+  it('running: живой partial делает фазу «думает» поверх предыдущего text', () => {
+    render(
+      <SessionView
+        running
+        events={[
+          { type: 'text', text: 'вступление' },
+          {
+            type: 'thinking_update',
+            contentIndex: 0,
+            partialText: 'размышляю',
+          },
+        ]}
+      />,
+    );
+
+    // Последнее ВИДИМОЕ событие — text, но агент сейчас думает.
+    expect(screen.getByTestId('session-working')).toHaveAttribute(
+      'data-phase',
+      'thinking',
+    );
+    expect(screen.getByTestId('session-thinking-text')).toHaveTextContent(
+      'размышляю',
+    );
+  });
+
+  it('финальный thinking ретирит live-partial \u2014 остаётся один финальный блок', () => {
+    const { rerender } = render(
+      <SessionView
+        running
+        events={[
+          { type: 'thinking_update', contentIndex: 0, partialText: 'partial' },
+        ]}
+      />,
+    );
+    expect(screen.getAllByTestId('session-thinking')).toHaveLength(1);
+    expect(screen.getByTestId('session-thinking-text')).toHaveTextContent(
+      'partial',
+    );
+
+    rerender(
+      <SessionView
+        running
+        events={[
+          { type: 'thinking_update', contentIndex: 0, partialText: 'partial' },
+          { type: 'thinking', thinking: 'финальный текст' },
+        ]}
+      />,
+    );
+
+    // Один финальный блок, live-partial убран, текста 'partial' больше нет.
+    const blocks = screen.getAllByTestId('session-thinking');
+    expect(blocks).toHaveLength(1);
+    expect(screen.getByTestId('session-thinking-text')).toHaveTextContent(
+      'финальный текст',
+    );
+    expect(screen.queryByText('partial')).toBeNull();
+  });
+
+  it('не-running (персистентная) сессия: thinking_update не рисует live-блок', () => {
+    render(
+      <SessionView
+        events={[
+          { type: 'thinking_update', contentIndex: 0, partialText: 'partial' },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByTestId('session-thinking')).toBeNull();
+  });
+
+  it('persisted thinking без update\u2019ов рендерится как обычный блок', () => {
+    render(
+      <SessionView events={[{ type: 'thinking', thinking: 'размышление' }]} />,
+    );
+
+    const block = screen.getByTestId('session-thinking');
+    expect(block).toHaveAttribute('data-streaming', 'false');
+    fireEvent.click(within(block).getByRole('button'));
+    expect(screen.getByTestId('session-thinking-text')).toHaveTextContent(
+      'размышление',
+    );
   });
 });

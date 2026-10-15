@@ -19,8 +19,12 @@ import { healthRoutes } from './routes/health';
 import { issuesRoutes } from './routes/issues';
 import { iterationsRoutes } from './routes/iterations';
 import { modelsRoutes } from './routes/models';
+import { reposRoutes } from './routes/repos';
+import { tagsRoutes } from './routes/tags';
 import { streamRoutes } from './routes/stream';
 import { DEFAULT_WORKSPACE_ROOT } from './workspace/paths';
+import type { ReposValidator } from './repo-resolver/validate';
+import type { RepoResolverFactory } from './repo-resolver/resolver';
 import type { Db } from './db/client';
 import type { IterationRunDeps } from './workflow/run-iteration.service';
 
@@ -69,14 +73,18 @@ function defaultRunDeps(): IterationRunDeps {
 export interface AppDeps extends Partial<IterationRunDeps> {
   /** Jira-клиент для обогащения задачи (Фаза 6); по умолчанию — фейк. */
   jira?: JiraClient;
+  /** Валидатор репозиториев для POST /repos/validate; по умолчанию — сеть. */
+  repos?: ReposValidator;
+  /** Фабрика резолверов для CRUD /repositories; по умолчанию — сеть. */
+  repoResolverFactory?: RepoResolverFactory;
 }
 
 export function buildApp(
   db: Db,
   deps: AppDeps = {},
 ): FastifyInstance {
-  const { jira = new FakeJiraClient(), ...runOverrides } = deps;
-  const runDeps: IterationRunDeps = { ...defaultRunDeps(), jira, ...runOverrides };
+  const { jira = new FakeJiraClient(), repos, repoResolverFactory, ...runOverrides } = deps;
+  const runDeps: IterationRunDeps = { ...defaultRunDeps(), ...runOverrides };
   const app = Fastify({ logger: false });
 
   // Доступ к deps для роутов и тестов (заодно виден из Fastify-инстанса).
@@ -108,9 +116,14 @@ export function buildApp(
 
   app.register(async (instance) => {
     await issuesRoutes(instance, db, runDeps, jira);
-    await iterationsRoutes(instance, db);
+    await reposRoutes(instance, db, {
+      validate: repos,
+      resolverFactory: repoResolverFactory,
+    });
+    await tagsRoutes(instance, db);
+    await iterationsRoutes(instance, db, runDeps);
     await controlRoutes(instance, runDeps.control);
-    await streamRoutes(instance, db, runDeps.sse, runDeps.control);
+    await streamRoutes(instance, db, runDeps.sse, runDeps.control, runDeps.container);
   });
 
   return app;

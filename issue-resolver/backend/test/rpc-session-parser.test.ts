@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionEvent, SessionStats } from '@issue-resolver/shared';
 import { RpcSessionParser } from '../src/pi/rpc-runner';
 
@@ -157,8 +157,47 @@ describe('RpcSessionParser', () => {
 
     expect(out).toEqual([]);
     expect(parser.stdout()).toBe('');
-    expect(events).toEqual([{ type: 'thinking', thinking: 'думаю над этим' }]);
+    // Живой стрим: thinking_update на каждую дельту, авторитетный thinking — на end.
+    expect(events).toEqual([
+      { type: 'thinking_update', contentIndex: 0, partialText: 'думаю ' },
+      { type: 'thinking_update', contentIndex: 0, partialText: 'думаю над этим' },
+      { type: 'thinking', thinking: 'думаю над этим' },
+    ]);
+    // thinking_update НЕ персистится: в collected только финальный thinking,
+    // поэтому step_outputs.events остаётся bounded.
     expect(parser.events()).toEqual([{ type: 'thinking', thinking: 'думаю над этим' }]);
+    expect(parser.events().some((event) => event.type === 'thinking_update')).toBe(false);
+    expect(parser.events().filter((event) => event.type === 'thinking')).toHaveLength(1);
+  });
+
+  it('thinking_update: растущий partialText, свой contentIndex, без дублей финала', () => {
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    parser.handle({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_delta', contentIndex: 2, delta: 'a' },
+    });
+    parser.handle({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'thinking_delta', contentIndex: 2, delta: 'bc' },
+    });
+    parser.handle({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'thinking_end',
+        contentIndex: 2,
+        content: { type: 'thinking', thinking: 'abc' },
+      },
+    });
+
+    expect(events).toEqual([
+      { type: 'thinking_update', contentIndex: 2, partialText: 'a' },
+      { type: 'thinking_update', contentIndex: 2, partialText: 'abc' },
+      { type: 'thinking', thinking: 'abc' },
+    ]);
+    // Финальный thinking — ровно один, thinking_update в collected отсутствует.
+    expect(parser.events()).toEqual([{ type: 'thinking', thinking: 'abc' }]);
   });
 
   it('thinking_end со строковым content → авторитетный текст', () => {
@@ -185,8 +224,8 @@ describe('RpcSessionParser', () => {
   });
 
   it('message_start сбрасывает аккумуляторы: каждое сообщение эмитит свои thinking+text', () => {
-    const events: SessionEvent[] = [];
-    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+    const emitted: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => emitted.push(event) });
 
     const assistantMessage = (tag: string): void => {
       parser.handle({ type: 'message_start', message: { role: 'assistant' } });
@@ -217,7 +256,11 @@ describe('RpcSessionParser', () => {
     assistantMessage('M2');
     assistantMessage('M3');
 
+    // Живые thinking_update игнорируем: проверяем именно персистентные блоки.
+    const events = emitted.filter((event) => event.type !== 'thinking_update');
+
     // Регрессия: раньше был ровно 1 thinking + 1 text на всю сессию.
+    expect(emitted.filter((event) => event.type === 'thinking_update')).toHaveLength(3);
     expect(events.map((event) => event.type)).toEqual([
       'thinking',
       'text',
@@ -816,5 +859,98 @@ describe('RpcSessionParser', () => {
 
     expect(parser.stdout()).toBe('');
     expect(parser.events()).toEqual([]);
+  });
+});
+
+describe('RpcSessionParser — скорость генерации (speed)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const usage = (parser: RpcSessionParser, output: number, total: number): void => {
+    parser.handle({ type: 'message_update', usage: { output, totalTokens: total } });
+  };
+
+  it('usage после 1s несёт speed: мгновенная (Δ) и средняя (wall-clock)', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    usage(parser, 10, 10); // якорь мгновенной, elapsed 0 → speed нет
+    vi.advanceTimersByTime(1000);
+    usage(parser, 30, 40); // Δ20/1s, средняя 30/1s
+
+    expect(events.at(-1)).toEqual({
+      type: 'usage',
+      usage: { input: 0, output: 30, cacheRead: 0, cacheWrite: 0, total: 40 },
+      cost: null,
+      speed: { tokensPerSecond: 20, avgTokensPerSecond: 30 },
+    });
+  });
+
+  it('speed отсутствует до порога: elapsed < 1s или output = 0', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    usage(parser, 0, 5); // output = 0
+    vi.advanceTimersByTime(500);
+    usage(parser, 10, 15); // elapsed 500мс < 1s
+
+    expect(events[0]).not.toHaveProperty('speed');
+    expect(events[1]).not.toHaveProperty('speed');
+  });
+
+  it('дедуп по total сохраняется: дубль не эмитится, speed не дублируется', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    usage(parser, 10, 10);
+    vi.advanceTimersByTime(1500);
+    usage(parser, 20, 30);
+    usage(parser, 20, 30); // тот же total — дубль
+
+    expect(events).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({ speed: { avgTokensPerSecond: 20 / 1.5 } });
+  });
+
+  it('stats-событие несёт avgTokensPerSecond по wall-clock сессии', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const seen: unknown[] = [];
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({
+      onStats: (stats) => seen.push(stats),
+      onEvent: (event) => events.push(event),
+    });
+
+    usage(parser, 10, 10); // старт сессии
+    vi.advanceTimersByTime(2000);
+    parser.handle({
+      type: 'response',
+      command: 'get_session_stats',
+      success: true,
+      data: { tokens: { output: 50 } },
+    });
+
+    expect(parser.stats()?.avgTokensPerSecond).toBe(25);
+    expect(seen).toEqual([parser.stats()]);
+    expect(events.at(-1)).toEqual({ type: 'stats', stats: parser.stats() });
+  });
+
+  it('stats без старта сессии не несёт avgTokensPerSecond', () => {
+    const parser = new RpcSessionParser();
+    parser.handle({
+      type: 'response',
+      command: 'get_session_stats',
+      success: true,
+      data: { tokens: { output: 50 } },
+    });
+
+    expect(parser.stats()).not.toHaveProperty('avgTokensPerSecond');
   });
 });

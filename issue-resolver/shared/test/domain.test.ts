@@ -6,6 +6,7 @@ import {
   extractRepoNameFromUrl,
   formatDateTime,
   formatRelativeTime,
+  isIterationActive,
   statusOfIssue,
 } from '../src/domain';
 import type { Iteration, TaskStatus } from '../src/types';
@@ -168,7 +169,28 @@ describe('canStartIteration', () => {
     expect(canStartIteration([iteration(1, 'pending')])).toBe(false);
   });
 
+  it('blocks while the highest iteration is preparing', () => {
+    expect(canStartIteration([iteration(1, 'preparing')])).toBe(false);
+  });
+
   it('allows starting after a cancelled highest iteration', () => {
     expect(canStartIteration([iteration(1, 'cancelled')])).toBe(true);
+  });
+});
+
+describe('isIterationActive', () => {
+  it('running и pending — активны', () => {
+    expect(isIterationActive('running')).toBe(true);
+    expect(isIterationActive('pending')).toBe(true);
+  });
+
+  it('preparing — активна (идёт подготовка рабочей папки)', () => {
+    expect(isIterationActive('preparing')).toBe(true);
+  });
+
+  it('completed, failed, cancelled — не активны', () => {
+    expect(isIterationActive('completed')).toBe(false);
+    expect(isIterationActive('failed')).toBe(false);
+    expect(isIterationActive('cancelled')).toBe(false);
   });
 });

@@ -159,6 +159,7 @@ describe('model — runIssueIteration → pi.run', () => {
           steps,
         },
         repositories: REPOSITORIES,
+        repoWorkspaces: [],
         model: 'M',
       },
     );
@@ -309,6 +310,7 @@ describe('step_models — runIssueIteration → pi.run', () => {
           steps,
         },
         repositories: REPOSITORIES,
+        repoWorkspaces: [],
         model: 'fallback',
         step_models: { review: 'review-only' },
       },

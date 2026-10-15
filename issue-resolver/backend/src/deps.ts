@@ -1,16 +1,67 @@
+import { join } from 'node:path';
 import Dockerode from 'dockerode';
 import type { AppDeps } from './app';
 import { DockerodeContainerController } from './docker/controller';
 import { LocalContainerController } from './docker/local-controller';
-import { GitCliService } from './git/service';
+import { GitCliService, originalsRootFromEnv } from './git/service';
 import { HttpJiraClient } from './jira/client';
 import { RpcPiRunner } from './pi/rpc-runner';
 import { InMemoryStepSessionRegistry } from './pi/session-registry';
 import { HttpMrClient } from './pr/mr';
+import { PiBootstrapperAgent } from './workflow/bootstrapper';
+import type { BootstrapperFactory } from './workflow/engine';
+import {
+  BOOTSTRAPPER_TIMEOUT_ENV,
+  resolveBootstrapperTimeoutMs,
+} from './workflow/timeout';
 import { DEFAULT_WORKSPACE_ROOT } from './workspace/paths';
 
 const DEFAULT_DOCKER_SOCKET = '/var/run/docker.sock';
-const DEFAULT_LOCAL_WORKSPACE_ROOT = '/home/agent/.issue-resolver/workspaces';
+
+/**
+ * Продуктовая фабрика агента-анализатора: переиспользует тот же экземпляр
+ * `PiRunner`, что и шаги конвейера, и пишет `run_instructions` через порт БД
+ * (создаётся в `runIssueIteration`). Без неё анализ не запускается (фейковый
+ * дефолт/тесты).
+ */
+function bootstrapperFactoryFor(
+  pi: RpcPiRunner,
+  defaultTimeoutMs: number,
+): BootstrapperFactory {
+  return ({
+    containerName,
+    hostWorkspaceDir,
+    model,
+    timeoutMs,
+    onStdout,
+    onStderr,
+  }) =>
+    new PiBootstrapperAgent({
+      pi,
+      containerName,
+      hostWorkspaceDir,
+      model,
+      timeoutMs: timeoutMs ?? defaultTimeoutMs,
+      onStdout,
+      onStderr,
+    });
+}
+
+/**
+ * Дефолтный корень workspace-папок в локальном режиме (без Docker).
+ *
+ * Лежит на host-bind-mount `/home/agent/workspace` (virtiofs), поэтому
+ * артефакты задач (`report.html`/`index.html` и т.п.) переживают
+ * пересоздание контейнера/комнаты, и download-эндпоинты не отдают 404.
+ *
+ * Почему не `/home/agent/.issue-resolver`: этот каталог живёт на
+ * эфемерном overlay-слое контейнера и исчезает при рестарте комнаты
+ * (durable volume'ами в `.pi` покрыты только memory/rooms/sessions).
+ *
+ * Переопределяется env `ISSUE_RESOLVER_WORKSPACE_ROOT` (см. buildDepsFromEnv).
+ */
+const DEFAULT_LOCAL_WORKSPACE_ROOT =
+  '/home/agent/workspace/.issue-resolver/workspaces';
 
 /**
  * Продуктовая фабрика deps. Без `ISSUE_RESOLVER_USE_REAL=1` возвращает пустой
@@ -22,15 +73,28 @@ const DEFAULT_LOCAL_WORKSPACE_ROOT = '/home/agent/.issue-resolver/workspaces';
  */
 export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
   if (env.ISSUE_RESOLVER_LOCAL === '1') {
+    const pi = new RpcPiRunner('resolve', 'local');
+    const bootstrapperTimeoutMs = resolveBootstrapperTimeoutMs(
+      env[BOOTSTRAPPER_TIMEOUT_ENV],
+    );
     return {
       container: new LocalContainerController(),
-      git: new GitCliService(),
-      pi: new RpcPiRunner('resolve', 'local'),
-      mr: new HttpMrClient(env.MR_TOKEN || ''),
+      git: new GitCliService(originalsRootFromEnv(env)),
+      pi,
+      mr: new HttpMrClient(env.MR_TOKEN || '', {
+        bitbucket: env.BITBUCKET_TOKEN || '',
+        github: env.GITHUB_TOKEN || '',
+        gitlab: env.GITLAB_TOKEN || '',
+      }),
       jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
       control: new InMemoryStepSessionRegistry(),
+      bootstrapperFactory: bootstrapperFactoryFor(pi, bootstrapperTimeoutMs),
+      bootstrapperTimeoutMs,
       workspaceRoot:
-        env.ISSUE_RESOLVER_WORKSPACE_ROOT || DEFAULT_LOCAL_WORKSPACE_ROOT,
+        env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
+        (env.ISSUE_RESOLVER_DATA_DIR
+          ? join(env.ISSUE_RESOLVER_DATA_DIR, 'workspaces')
+          : DEFAULT_LOCAL_WORKSPACE_ROOT),
       local: true,
     };
   }
@@ -40,15 +104,29 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
   const docker = new Dockerode({
     socketPath: env.DOCKER_SOCKET || DEFAULT_DOCKER_SOCKET,
   });
+  const pi = new RpcPiRunner();
+  const bootstrapperTimeoutMs = resolveBootstrapperTimeoutMs(
+    env[BOOTSTRAPPER_TIMEOUT_ENV],
+  );
 
   return {
     container: new DockerodeContainerController(docker),
-    git: new GitCliService(),
-    pi: new RpcPiRunner(),
-    mr: new HttpMrClient(env.MR_TOKEN || ''),
+    git: new GitCliService(originalsRootFromEnv(env)),
+    pi,
+    mr: new HttpMrClient(env.MR_TOKEN || '', {
+      bitbucket: env.BITBUCKET_TOKEN || '',
+      github: env.GITHUB_TOKEN || '',
+      gitlab: env.GITLAB_TOKEN || '',
+    }),
     jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
     control: new InMemoryStepSessionRegistry(),
+    bootstrapperFactory: bootstrapperFactoryFor(pi, bootstrapperTimeoutMs),
+    bootstrapperTimeoutMs,
     local: false,
-    workspaceRoot: env.ISSUE_RESOLVER_WORKSPACE_ROOT || DEFAULT_WORKSPACE_ROOT,
+    workspaceRoot:
+      env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
+      (env.ISSUE_RESOLVER_DATA_DIR
+        ? join(env.ISSUE_RESOLVER_DATA_DIR, 'workspaces')
+        : DEFAULT_WORKSPACE_ROOT),
   };
 }

@@ -2,18 +2,29 @@ import type {
   ControlResult,
   CreateIssueRequest,
   CreateIterationRequest,
+  CreateRepoRequest,
+  CreateTagRequest,
   Issue,
   IssueFile,
   Iteration,
+  JiraValidationResult,
   ModelDescriptor,
   PromptMode,
   PromptResult,
+  RepoBranchesResponse,
+  RepoValidationResult,
+  RoomAgent,
+  SavedRepo,
   SessionCommand,
   SessionControlSnapshot,
+  Tag,
+  UpdateRepoRequest,
+  UpdateTagRequest,
+  WorkspaceFile,
 } from '@issue-resolver/shared';
 import type { StepRunWithEvents } from './session-events';
 
-const API_BASE = '/issue-resolver/api/v1';
+export const API_BASE = '/issue-resolver/api/v1';
 
 async function readErrorMessage(response: Response): Promise<string> {
   try {
@@ -45,6 +56,155 @@ export async function getModels(): Promise<ModelDescriptor[]> {
   }
 
   return (await response.json()) as ModelDescriptor[];
+}
+
+/**
+ * Живая валидация URL репозиториев через API хостинг-платформы
+ * (`POST /repos/validate`). Бэкенд отвечает `{ results }`.
+ *
+ * Возвращает по элементу на каждый URL. Если тело ответа неожиданной формы —
+ * `[]`, чтобы вызывающий компонент не падал на `.map`/`.find`.
+ */
+export async function validateRepos(
+  urls: string[],
+): Promise<RepoValidationResult[]> {
+  const response = await fetch(`${API_BASE}/repos/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  const data = (await response.json()) as { results?: unknown };
+  return Array.isArray(data?.results)
+    ? (data.results as RepoValidationResult[])
+    : [];
+}
+
+/**
+ * Живая валидация URL Jira-задачи через Jira API
+ * (`POST /issues/validate-jira`). Бэкенд отвечает `{ url, valid, key?, issue?, error? }`.
+ */
+export async function validateJiraUrl(
+  url: string,
+): Promise<JiraValidationResult> {
+  const response = await fetch(`${API_BASE}/issues/validate-jira`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as JiraValidationResult;
+}
+
+/**
+ * Ответ POST/PUT `/repositories`: 2xx — сама сущность; 422 — репозиторий
+ * всё равно сохранён (создан/обновлён), но соединение не ok, поэтому
+ * возвращаем его из поля `repository`, а не роняем форму.
+ */
+type RepoWriteResponse =
+  | SavedRepo
+  | { error?: string; repository?: SavedRepo };
+
+async function readRepositoryResponse(response: Response): Promise<SavedRepo> {
+  const data = (await response
+    .json()
+    .catch(() => null)) as RepoWriteResponse | null;
+  if (response.ok && data && 'id' in data) {
+    return data;
+  }
+  if (data && 'repository' in data && data.repository) {
+    return data.repository;
+  }
+  const message =
+    data && 'error' in data && data.error
+      ? data.error
+      : `Запрос завершился со статусом ${response.status}`;
+  throw new Error(message);
+}
+
+export async function getRepositories(): Promise<SavedRepo[]> {
+  const response = await fetch(`${API_BASE}/repositories`);
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as SavedRepo[];
+}
+
+/**
+ * Создаёт сохранённый репозиторий: бэкенд валидирует URL и сразу сохраняет
+ * метаданные. Недоступный репозиторий → 422 (`{ error, repository }`): он
+ * всё равно сохранён со статусом `error` и возвращается.
+ */
+export async function createRepository(url: string): Promise<SavedRepo> {
+  const request: CreateRepoRequest = { url };
+  const response = await fetch(`${API_BASE}/repositories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+
+  return readRepositoryResponse(response);
+}
+
+/** Меняет URL сохранённого репозитория и перевалидирует его. */
+export async function updateRepository(
+  id: string,
+  url: string,
+): Promise<SavedRepo> {
+  const request: UpdateRepoRequest = { url };
+  const response = await fetch(`${API_BASE}/repositories/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+
+  return readRepositoryResponse(response);
+}
+
+/** Удаляет сохранённый репозиторий. */
+export async function deleteRepository(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/repositories/${id}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+/** Перепроверяет соединение с сохранённым репозиторием (live). */
+export async function validateRepository(id: string): Promise<SavedRepo> {
+  const response = await fetch(`${API_BASE}/repositories/${id}/validate`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as SavedRepo;
+}
+
+/** Живой список веток сохранённого репозитория. */
+export async function getRepositoryBranches(id: string): Promise<string[]> {
+  const response = await fetch(`${API_BASE}/repositories/${id}/branches`);
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  const data = (await response.json()) as RepoBranchesResponse;
+  return Array.isArray(data?.branches) ? data.branches : [];
 }
 
 export async function createIssue(request: CreateIssueRequest): Promise<Issue> {
@@ -91,6 +251,43 @@ export async function getStepRuns(
   }
 
   return (await response.json()) as StepRunWithEvents[];
+}
+
+/** Минимальная проверка формы `RoomAgent` (защита от мусора в ответе). */
+function isRoomAgent(value: unknown): value is RoomAgent {
+  if (!value || typeof value !== 'object') return false;
+  const agent = value as Partial<RoomAgent>;
+  return (
+    typeof agent.id === 'string' &&
+    (agent.role === 'worker' || agent.role === 'coordinator') &&
+    typeof agent.label === 'string' &&
+    (agent.status === 'running' ||
+      agent.status === 'finished' ||
+      agent.status === 'aborted' ||
+      agent.status === 'failed')
+  );
+}
+
+/**
+ * Живые агенты комнаты итерации (`GET /iterations/:id/agents`).
+ * Best-effort: пока бэкенд-роут ещё не дописан (или сеть/не-2xx/битый JSON)
+ * деградируем в `[]` — карточка resolve в room-режиме не должна падать,
+ * а `RoomAgentTabs` покажет пустое состояние.
+ */
+export async function getRoomAgents(
+  iterationId: string,
+): Promise<RoomAgent[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE}/iterations/${iterationId}/agents`,
+    );
+    if (!response.ok) return [];
+
+    const data: unknown = await response.json();
+    return Array.isArray(data) ? data.filter(isRoomAgent) : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -325,13 +522,90 @@ export async function createIteration(
   return (await response.json()) as Iteration;
 }
 
+export async function repeatIteration(
+  iterationId: string,
+): Promise<Iteration> {
+  const response = await fetch(`${API_BASE}/iterations/${iterationId}/repeat`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Iteration;
+}
+
 export async function deleteIssue(id: string): Promise<void> {
   const response = await fetch(`${API_BASE}/issues/${id}`, {
     method: 'DELETE',
   });
 
+  // 202 — удаление принято и идёт асинхронно (фазы приходят по SSE до
+  // `issue_deleted`); 204 — задача удалена синхронно. Оба статуса — успех,
+  // поэтому не роняем вызов на «не-JSON» теле ответа.
+  if (response.status === 202 || response.status === 204) {
+    return;
+  }
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
+  }
+}
+
+/**
+ * Порт dev-сервера задачи (выделяется backend при создании). `null`, если
+ * порт ещё/уже не выделен.
+ */
+export function devServerPortOf(issue: Issue): number | null {
+  return issue.dev_server_port ?? null;
+}
+
+/** Остановить dev-серверы задачи. Backend идемпотентно гасит процессы. */
+export async function stopDevServers(
+  issueId: string,
+): Promise<{ ok: boolean }> {
+  const response = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(issueId)}/stop-dev-servers`,
+    { method: 'POST' },
+  );
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as { ok: boolean };
+}
+
+/**
+ * Живая стата контейнера задачи: CPU/память/PIDs. При отсутствии контейнера
+ * (local mode) бэкенд отвечает `{ containerName, error: 'container_not_found' }`
+ * — полей с метриками тогда нет.
+ */
+export interface ContainerStats {
+  containerName: string;
+  cpuPercent?: number;
+  memoryUsageBytes?: number;
+  memoryLimitBytes?: number;
+  pids?: number;
+  error?: string;
+}
+
+/**
+ * Стата контейнера задачи (`GET /issues/:id/container-stats`). Best-effort:
+ * сеть/не-2xx/битый JSON деградируют в `null`, чтобы карточка не падала и
+ * строка статистики просто не рендерилась.
+ */
+export async function getContainerStats(
+  issueId: string,
+): Promise<ContainerStats | null> {
+  try {
+    const response = await fetch(
+      `${API_BASE}/issues/${encodeURIComponent(issueId)}/container-stats`,
+    );
+    if (!response.ok) return null;
+    return (await response.json()) as ContainerStats;
+  } catch {
+    return null;
   }
 }
 
@@ -340,6 +614,43 @@ export async function deleteIssue(id: string): Promise<void> {
 /** URL содержимого файла (inline/download, отдаётся бэкендом). */
 export function fileContentUrl(fileId: string): string {
   return `${API_BASE}/files/${fileId}/content`;
+}
+
+/** URL списка файлов, порождённых агентом в рабочей папке завершённой итерации. */
+export function resultFilesUrl(issueId: string): string {
+  return `${API_BASE}/issues/${issueId}/result/files`;
+}
+
+/** URL содержимого порождённого файла (attachment, отдаётся бэкендом). */
+export function resultFileContentUrl(
+  issueId: string,
+  relPath: string,
+): string {
+  return `${API_BASE}/issues/${issueId}/result/files/content?path=${encodeURIComponent(relPath)}`;
+}
+
+/** URL содержимого порождённого файла для предпросмотра (inline). */
+export function resultFilePreviewUrl(
+  issueId: string,
+  relPath: string,
+): string {
+  return `${resultFileContentUrl(issueId, relPath)}&inline=1`;
+}
+
+/** URL архива (tar.gz) со всеми порождёнными файлами и результатом. */
+export function resultFilesArchiveUrl(issueId: string): string {
+  return `${API_BASE}/issues/${issueId}/result/files/archive`;
+}
+
+/** Список порождённых файлов последней completed-итерации. */
+export async function getResultFiles(
+  issueId: string,
+): Promise<WorkspaceFile[]> {
+  const response = await fetch(resultFilesUrl(issueId));
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as WorkspaceFile[];
 }
 
 /**
@@ -426,6 +737,69 @@ export async function getIssueFiles(issueId: string): Promise<IssueFile[]> {
 /** Удалить вложение по id (204). */
 export async function deleteIssueFile(fileId: string): Promise<void> {
   const response = await fetch(`${API_BASE}/files/${fileId}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+// ── Теги ────────────────────────────────────────────────────────────────
+
+export async function getTags(): Promise<Tag[]> {
+  const response = await fetch(`${API_BASE}/tags`);
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Tag[];
+}
+
+export async function getTag(id: string): Promise<Tag> {
+  const response = await fetch(`${API_BASE}/tags/${id}`);
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Tag;
+}
+
+export async function createTag(request: CreateTagRequest): Promise<Tag> {
+  const response = await fetch(`${API_BASE}/tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Tag;
+}
+
+export async function updateTag(
+  id: string,
+  request: UpdateTagRequest,
+): Promise<Tag> {
+  const response = await fetch(`${API_BASE}/tags/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Tag;
+}
+
+export async function deleteTag(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/tags/${id}`, {
     method: 'DELETE',
   });
 

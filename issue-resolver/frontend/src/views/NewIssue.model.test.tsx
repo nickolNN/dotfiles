@@ -6,7 +6,7 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
-import type { Issue, ModelDescriptor } from '@issue-resolver/shared';
+import type { Issue, ModelDescriptor, SavedRepo } from '@issue-resolver/shared';
 import NewIssue from './NewIssue';
 
 const createdIssue: Issue = {
@@ -33,12 +33,37 @@ function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {
   } as Response;
 }
 
-/** Различает GET /models и POST /issues. Возвращает записи вызовов для assert'ов. */
+/** Различает GET /models, /repositories, ветки и POST /issues. */
+const SAVED_REPO: SavedRepo = {
+  id: 'repo-1',
+  url: 'https://github.com/acme/app.git',
+  platform: 'github',
+  fullName: 'acme/app',
+  defaultBranch: 'main',
+  cloneUrl: 'https://github.com/acme/app.git',
+  language: 'TypeScript',
+  description: null,
+  isPrivate: false,
+  connectionStatus: 'ok',
+  lastValidatedAt: '2026-10-12T00:00:00.000Z',
+  writeAccess: true,
+  runInstructions: null,
+  runInstructionsStatus: 'unknown',
+  createdAt: '2026-10-12T00:00:00.000Z',
+  updatedAt: '2026-10-12T00:00:00.000Z',
+};
+
 function stubFetch() {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith('/models')) {
       return Promise.resolve(jsonResponse(models));
+    }
+    if (url.endsWith('/repositories')) {
+      return Promise.resolve(jsonResponse([SAVED_REPO]));
+    }
+    if (/\/repositories\/[^/]+\/branches$/.test(url)) {
+      return Promise.resolve(jsonResponse({ branches: ['main', 'develop'] }));
     }
     if (init?.method === 'POST') {
       return Promise.resolve(jsonResponse(createdIssue, { status: 201 }));
@@ -49,18 +74,25 @@ function stubFetch() {
   return fetchMock;
 }
 
-function fillRequired() {
+async function fillRequired() {
   fireEvent.click(
     screen.getByRole('button', { name: 'Добавить репозиторий' }),
   );
+  await waitFor(() => {
+    const select = screen.getByLabelText('Репозиторий') as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    expect(select.options.length).toBeGreaterThan(1);
+  });
+  fireEvent.change(screen.getByLabelText('Репозиторий'), {
+    target: { value: 'repo-1' },
+  });
+  await waitFor(() =>
+    expect(
+      (screen.getByLabelText('Базовая ветка') as HTMLSelectElement).disabled,
+    ).toBe(false),
+  );
   fireEvent.change(screen.getByLabelText('Заголовок'), {
     target: { value: 'Fix login bug' },
-  });
-  fireEvent.change(screen.getByLabelText('Адрес'), {
-    target: { value: 'git@github.com:org/repo.git' },
-  });
-  fireEvent.change(screen.getByLabelText('Базовая ветка'), {
-    target: { value: 'main' },
   });
 }
 
@@ -85,15 +117,19 @@ describe('NewIssue — селектор модели (per-step)', () => {
 
     render(<NewIssue />);
 
-    // Всегда отмечен только resolve → один селектор с одним набором опций.
+    // Всегда отмечен только resolve → один селектор модели + один селектор
+    // thinking level (у каждого своя опция «По умолчанию»).
     expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(1);
     expect(screen.getAllByRole('option', { name: 'm2' })).toHaveLength(1);
-    expect(screen.getAllByRole('option', { name: 'По умолчанию' })).toHaveLength(1);
-    expect(screen.getByLabelText('Модель для шага Resolve')).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: 'По умолчанию' })).toHaveLength(2);
+    expect(screen.getByLabelText('Модель для шага Исполнение')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Уровень размышления для шага Исполнение'),
+    ).toBeInTheDocument();
 
     // Отмечаем ещё два шага — появляются их селекторы.
-    fireEvent.click(screen.getByLabelText('Refine'));
-    fireEvent.click(screen.getByLabelText('Review'));
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    fireEvent.click(screen.getByLabelText('Код-ревью'));
     expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(3);
   });
 
@@ -103,10 +139,10 @@ describe('NewIssue — селектор модели (per-step)', () => {
     render(<NewIssue />);
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    fireEvent.change(screen.getByLabelText('Модель для шага Resolve'), {
+    fireEvent.change(screen.getByLabelText('Модель для шага Исполнение'), {
       target: { value: 'm1' },
     });
-    fillRequired();
+    await fillRequired();
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
 
     await waitFor(() => {
@@ -122,7 +158,7 @@ describe('NewIssue — селектор модели (per-step)', () => {
     render(<NewIssue />);
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    fillRequired();
+    await fillRequired();
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
 
     await waitFor(() => {
@@ -139,19 +175,19 @@ describe('NewIssue — селектор модели (per-step)', () => {
     await screen.findAllByRole('option', { name: 'Model One' });
 
     // resolve отмечен всегда → селектор виден; refine пока снят → селектора нет.
-    expect(screen.getByLabelText('Модель для шага Resolve')).toBeEnabled();
-    expect(screen.queryByLabelText('Модель для шага Refine')).toBeNull();
+    expect(screen.getByLabelText('Модель для шага Исполнение')).toBeEnabled();
+    expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
 
-    fireEvent.click(screen.getByLabelText('Refine'));
-    const refineModel = screen.getByLabelText('Модель для шага Refine');
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    const refineModel = screen.getByLabelText('Модель для шага Планирование');
     expect(refineModel).toBeEnabled();
     fireEvent.change(refineModel, { target: { value: 'm2' } });
 
     // Снимаем шаг — его модель отфильтровывается из payload, селектор скрыт.
-    fireEvent.click(screen.getByLabelText('Refine'));
-    expect(screen.queryByLabelText('Модель для шага Refine')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Планирование'));
+    expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
 
-    fillRequired();
+    await fillRequired();
     fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
 
     await waitFor(() => {
