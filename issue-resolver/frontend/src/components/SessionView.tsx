@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionStats } from '@issue-resolver/shared';
 import AgentMarkdown from './AgentMarkdown';
 import SessionStatsBar from './SessionStatsBar';
@@ -383,7 +383,7 @@ function SessionWorking({
     <div
       data-testid="session-working"
       data-phase={phase.kind}
-      className="flex flex-wrap items-center gap-x-2 px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
+      className="sticky bottom-0 z-10 flex flex-wrap items-center gap-x-2 border-t border-[#008F11]/40 bg-[#000200] px-2 py-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
     >
       <span aria-hidden="true" className="animate-pulse-subtle">
         ◐
@@ -593,18 +593,27 @@ function ThinkingBlock({
   streaming?: boolean;
 }) {
   const [open, setOpen] = useState(streaming);
+  const bodyRef = useRef<HTMLPreElement | null>(null);
 
   // Когда стрим продолжается — держим открытым, даже если пользователь свернул.
   useEffect(() => {
     if (streaming) setOpen(true);
   }, [streaming]);
 
+  // Во время стрима прижимаем растущий текст ко дну: блок прокручивается
+  // внутри себя, а не распирает карточку и не сдвигает строку статуса снизу.
+  useEffect(() => {
+    if (streaming && open && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [thinking, streaming, open]);
+
   // Свёрнутая строка-превью: во время стрима — хвост, после — первая строка.
   const preview = streaming
     ? thinking.trimEnd().slice(-80)
     : thinking.split('\n')[0].slice(0, 80);
-  // Длинный блок (больше ~12 строк по 80 символов) — включаем скролл.
-  const long = thinking.length > 960;
+  // Стримящийся или длинный блок — ограничиваем по высоте и скроллим внутри.
+  const bounded = streaming || thinking.length > 960;
 
   return (
     <div
@@ -630,8 +639,9 @@ function ThinkingBlock({
       )}
       {open && (
         <pre
+          ref={bodyRef}
           data-testid="session-thinking-text"
-          className={`session-thinking-body animate-slide-down whitespace-pre-wrap break-words${long ? ' max-h-96 overflow-auto' : ''}`}
+          className={`session-thinking-body animate-slide-down whitespace-pre-wrap break-words${bounded ? ' max-h-96 overflow-auto' : ''}`}
         >
           {thinking}
         </pre>

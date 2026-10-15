@@ -548,6 +548,23 @@ describe('SessionView — живое размышление (thinking_update)', 
     expect(screen.getByTestId('session-thinking-live')).toBeInTheDocument();
   });
 
+  it('running: live-блок ограничен по высоте и скроллится внутри себя', () => {
+    render(
+      <SessionView
+        running
+        events={[
+          { type: 'thinking_update', contentIndex: 0, partialText: 'мысль' },
+        ]}
+      />,
+    );
+
+    // Пока стрим идёт — тело ограничено (max-h + overflow), чтобы растущий
+    // текст прокручивался внутри блока, а не распирал карточку.
+    const body = screen.getByTestId('session-thinking-text');
+    expect(body.className).toContain('max-h-96');
+    expect(body.className).toContain('overflow-auto');
+  });
+
   it('running: живой partial делает фазу «думает» поверх предыдущего text', () => {
     render(
       <SessionView
