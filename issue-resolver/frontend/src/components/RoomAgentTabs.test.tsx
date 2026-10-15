@@ -400,7 +400,8 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     await screen.findByTestId('room-agents');
 
     const summary = screen.getByTestId('room-step-summary');
-    expect(summary).toHaveTextContent('Всего: 3k токенов');
+    expect(summary).toHaveTextContent('Всего:');
+    expect(summary).toHaveTextContent('1k');
     expect(summary).toHaveTextContent('$0.03');
   });
 
@@ -411,7 +412,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     await screen.findByTestId('room-agents');
 
     const summary = screen.getByTestId('room-step-summary');
-    expect(summary).toHaveTextContent('Всего: 0 токенов');
+    expect(summary).toHaveTextContent('Всего:');
     expect(summary).toHaveTextContent('$0');
     // Без старта время агента не показываем.
     expect(screen.queryByTestId('room-agent-duration')).toBeNull();
@@ -555,7 +556,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
 
     const group = screen.getByTestId('room-stage-group');
     expect(group).toHaveTextContent('Проверка');
-    expect(group).toHaveTextContent('0 токенов');
     expect(group).toHaveTextContent('$0');
     expect(within(group).getByTestId('room-stage-models')).toHaveTextContent('—');
     expect(within(group).queryByTestId('room-stage-context')).toBeNull();

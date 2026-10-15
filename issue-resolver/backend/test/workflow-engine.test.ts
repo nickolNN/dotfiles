@@ -1173,6 +1173,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
       {
@@ -1184,6 +1185,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
       {
@@ -1195,6 +1197,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
     ]);

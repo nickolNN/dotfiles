@@ -70,6 +70,7 @@ import SessionStatsBar, {
   TokenDownIcon,
   TokenUpIcon,
 } from '../components/SessionStatsBar';
+import { CacheIcon } from '../components/TokenStats';
 import StepReportView from '../components/StepReportView';
 import { thinkingLevelsFor } from '../constants/thinking-levels';
 import { statusColor, stepStatusColor } from '../theme';
@@ -2611,9 +2612,6 @@ export default function TaskDetail({
                                             <TokenUpIcon />
                                             {formatTokens(footer.input)}
                                           </span>{' '}
-                                          <span className="session-stats-sep">
-                                            ·
-                                          </span>{' '}
                                           <span
                                             data-testid="session-token-out"
                                             className="inline-flex items-baseline gap-0.5"
@@ -2621,10 +2619,13 @@ export default function TaskDetail({
                                             <TokenDownIcon />
                                             {formatTokens(footer.output)}
                                           </span>{' '}
-                                          <span className="session-stats-sep">
-                                            ·
+                                          <span
+                                            data-testid="session-token-cache"
+                                            className="inline-flex items-baseline gap-0.5"
+                                          >
+                                            <CacheIcon />
+                                            {formatTokens(footer.cached)}
                                           </span>{' '}
-                                          кеш {formatTokens(footer.cached)}{' '}
                                           <span className="session-stats-sep">
                                             ·
                                           </span>{' '}

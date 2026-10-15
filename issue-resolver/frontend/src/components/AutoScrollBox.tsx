@@ -1,6 +1,6 @@
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -17,21 +17,18 @@ interface AutoScrollBoxProps {
   scrollKey?: unknown;
 }
 
-/** Порог в пикселях от нижнего края: ближе — считаем «прибитым» ко дну. */
-const PIN_THRESHOLD_PX = 50;
-
 /**
  * Скроллируемый контейнер с авто-прокруткой вниз при новых событиях.
  * Используется для живого вывода агента в карточке шага.
  *
- * Автоскролл работает только пока пользователь находится у нижнего края
- * (≤50px от дна). Если пользователь отмотал выше — автоскролл
- * приостанавливается и возобновляется, когда он вернётся к нижнему краю.
+ * Плавающая кнопка работает как бинарный переключатель:
+ * - **ON  («● live»)** — жёсткая авто-прокрутка ко дну на каждое новое
+ *   событие. Пользователь может крутить, но следующий апдейт всё равно
+ *   утащит вниз.
+ * - **OFF («● live»)** — авто-прокрутка отключена. Пользователь свободно
+ *   листает вывод. Клик по кнопке скроллит ко дну и снова включает ON.
  *
- * Плавающая кнопка «↓ вниз» даёт явный контроль: клик мгновенно прокручивает
- * ко дну и снова включает авто-следование (в т.ч. после того, как пиннинг
- * сбился). Пока пиннинг активен, кнопка остаётся в приглушённом «live»-виде,
- * чтобы не мешать чтению.
+ * По умолчанию режим включён (live).
  */
 export default function AutoScrollBox({
   children,
@@ -39,80 +36,121 @@ export default function AutoScrollBox({
   scrollKey,
 }: AutoScrollBoxProps) {
   const ref = useRef<HTMLDivElement | null>(null);
-  // ref нужен синхронно в эффекте автопрокрутки, state — чтобы перерисовать
-  // кнопку при смене «прибит / отмотан».
-  const pinnedRef = useRef(true);
-  const [pinned, setPinned] = useState(true);
+  const liveRef = useRef(true);
+  const [live, setLive] = useState(true);
 
-  const updatePinned = useCallback((next: boolean) => {
-    pinnedRef.current = next;
-    setPinned((current) => (current === next ? current : next));
+  /**
+   * Переключение live-режима.
+   *
+   * OFF → ON: скроллим ко дну и включаем слежение.
+   * ON  → OFF: просто выключаем, не трогаем позицию.
+   */
+  const toggleLive = useCallback(() => {
+    const el = ref.current;
+    const next = !liveRef.current;
+    liveRef.current = next;
+    setLive(next);
+
+    if (next && el) {
+      // Включили live — мгновенно прыгаем ко дну.
+      if (typeof el.scrollTo === 'function') {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+      }
+      if (el.scrollTop < el.scrollHeight - el.clientHeight) {
+        const previous = el.style.scrollBehavior;
+        el.style.scrollBehavior = 'auto';
+        el.scrollTop = el.scrollHeight;
+        el.style.scrollBehavior = previous;
+      }
+    }
   }, []);
 
-  const handleScroll = useCallback(() => {
+  /**
+   * Синхронный скролл ко дну при изменении данных.
+   *
+   * В браузере это «первый проход» — ResizeObserver ниже доведёт позицию
+   * до окончательной после всех внутренних лейаут-изменений. В jsdom
+   * (тесты, нет ResizeObserver) это единственный механизм.
+   */
+  useLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    updatePinned(
-      el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX,
-    );
-  }, [updatePinned]);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (el && pinnedRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
+    if (!el || !liveRef.current) return;
+    const previous = el.style.scrollBehavior;
+    el.style.scrollBehavior = 'auto';
+    el.scrollTop = el.scrollHeight;
+    el.style.scrollBehavior = previous;
   }, [scrollKey ?? children]);
 
   /**
-   * Принудительный прыжок ко дну. Мгновенный (`behavior: 'auto'`): smooth-
-   * анимация заставила бы `onScroll` ловить промежуточные позиции и снимать
-   * пиннинг на полпути. После прыжка снова следуем за выводом.
+   * ResizeObserver на контенте скролл-контейнера — ловит ВСЕ изменения
+   * лейаута ПОСЛЕ того, как браузер их полностью рассчитал (переносы
+   * текста, появление внутренних скроллбаров в дочерних overflow:auto
+   * блоках, завершение CSS-анимаций).
+   *
+   * Только в браузере; в jsdom ResizeObserver отсутствует — fallback
+   * на синхронный scrollTop выше.
    */
-  const jumpToBottom = useCallback(() => {
+  useLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    if (typeof el.scrollTo === 'function') {
-      el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
-    }
-    // Движки без `scrollTo` (jsdom) или если он не сдвинул позицию — ставим
-    // scrollTop напрямую, на время отключив smooth, чтобы прыжок был мгновенным.
-    if (el.scrollTop < el.scrollHeight - el.clientHeight) {
-      const previous = el.style.scrollBehavior;
-      el.style.scrollBehavior = 'auto';
-      el.scrollTop = el.scrollHeight;
-      el.style.scrollBehavior = previous;
-    }
-    updatePinned(true);
-  }, [updatePinned]);
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    const content = el.firstElementChild;
+    if (!content) return;
+
+    let rafId = 0;
+    const scrollToBottom = () => {
+      if (!liveRef.current || !el) return;
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        if (!liveRef.current || !el) return;
+        const prev = el.style.scrollBehavior;
+        el.style.scrollBehavior = 'auto';
+        el.scrollTop = el.scrollHeight;
+        el.style.scrollBehavior = prev;
+      });
+    };
+
+    const observer = new ResizeObserver(scrollToBottom);
+    observer.observe(content);
+
+    return () => {
+      observer.disconnect();
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, []);
 
   return (
     <div className="relative">
       <div
         ref={ref}
         className={className}
-        style={{ scrollBehavior: scrollKey !== undefined ? 'smooth' : 'auto' }}
-        onScroll={handleScroll}
+        style={{
+          scrollBehavior: 'auto',
+          overflowAnchor: 'none',
+        }}
       >
         {children}
       </div>
       <button
         type="button"
         data-testid="scroll-to-bottom"
-        data-pinned={pinned ? 'true' : 'false'}
-        aria-label="Прокрутить вниз"
-        aria-pressed={pinned}
+        data-live={live ? 'true' : 'false'}
+        aria-label={live ? 'Выключить авто-прокрутку' : 'Прокрутить вниз и включить авто-прокрутку'}
+        aria-pressed={live}
         title={
-          pinned ? 'Слежение за выводом включено' : 'Прокрутить вниз'
+          live
+            ? 'Авто-прокрутка включена — нажмите, чтобы выключить'
+            : 'Прокрутить вниз и включить авто-прокрутку'
         }
-        onClick={jumpToBottom}
+        onClick={toggleLive}
         className={`absolute bottom-2 right-2 z-10 border px-2 py-1 text-[10px] uppercase tracking-wider transition-base${
-          pinned
-            ? ' border-[#008F11]/50 bg-[#000200]/70 text-[#00FF41]/40 hover:text-[#00FF41]'
-            : ' border-[#00FF41] bg-[#003B00] text-[#00FF41] shadow-[0_0_8px_rgba(0,255,65,0.5)]'
+          live
+            ? ' border-[#00FF41] bg-[#003B00] text-[#00FF41] shadow-[0_0_8px_rgba(0,255,65,0.5)]'
+            : ' border-[#008F11]/50 bg-[#000200]/70 text-[#00FF41]/40 hover:text-[#00FF41]'
         }`}
       >
-        {pinned ? '● live' : '↓ вниз'}
+        ● live
       </button>
     </div>
   );

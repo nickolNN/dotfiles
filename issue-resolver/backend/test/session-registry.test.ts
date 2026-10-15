@@ -229,6 +229,7 @@ describe('InMemoryStepSessionRegistry', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
       {
@@ -240,6 +241,7 @@ describe('InMemoryStepSessionRegistry', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
       {
@@ -251,6 +253,7 @@ describe('InMemoryStepSessionRegistry', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
     ]);
@@ -284,6 +287,7 @@ describe('InMemoryStepSessionRegistry', () => {
         stageName: null,
         status: 'finished',
         startedAt: expect.any(String),
+        endedAt: expect.any(String),
         stats: null,
       },
     ]);
@@ -316,6 +320,7 @@ describe('InMemoryStepSessionRegistry', () => {
         stageName: 'Сбор контекста',
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
       {
@@ -327,6 +332,7 @@ describe('InMemoryStepSessionRegistry', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
     ]);

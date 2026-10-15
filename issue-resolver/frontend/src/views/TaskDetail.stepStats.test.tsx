@@ -194,8 +194,10 @@ describe('TaskDetail — статистика карточки шага', () => 
     expect(within(tokens).getByTestId('session-token-out')).toHaveTextContent(
       '500',
     );
-    expect(tokens.querySelectorAll('svg')).toHaveLength(2);
-    expect(tokens).toHaveTextContent('кеш 0');
+    expect(tokens.querySelectorAll('svg')).toHaveLength(3);
+    expect(within(tokens).getByTestId('session-token-cache')).toHaveTextContent(
+      '0',
+    );
     expect(tokens).toHaveTextContent('3 вызовов');
     expect(tokens).not.toHaveTextContent('$');
   });
@@ -238,7 +240,6 @@ describe('TaskDetail — статистика карточки шага', () => 
     expect(within(tokens).getByTestId('session-token-out')).toHaveTextContent(
       '500',
     );
-    expect(tokens).toHaveTextContent('кеш 0');
     expect(tokens).toHaveTextContent('3 вызовов');
   });
 

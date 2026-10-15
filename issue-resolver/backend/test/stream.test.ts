@@ -322,6 +322,7 @@ describe('GET /iterations/:id/agents', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: {
           model: 'test-model',
           userMessages: 0,
@@ -343,6 +344,7 @@ describe('GET /iterations/:id/agents', () => {
         stageName: null,
         status: 'running',
         startedAt: expect.any(String),
+        endedAt: null,
         stats: null,
       },
     ]);

@@ -264,6 +264,7 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
           stageName: agent.stageName ?? null,
           status: 'running',
           startedAt: new Date().toISOString(),
+          endedAt: null,
           stats: null,
         },
         usage: zeroUsage(),
@@ -283,7 +284,10 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
     if (!entry) return;
     this.byStepRun.delete(stepRunId);
     const agent = this.agentsByIteration.get(entry.iterationId)?.get(stepRunId);
-    if (agent) agent.agent.status = status;
+    if (agent) {
+      agent.agent.status = status;
+      agent.agent.endedAt = new Date().toISOString();
+    }
     const sessions = this.activeByIteration.get(entry.iterationId);
     if (!sessions) return;
     sessions.delete(stepRunId);
