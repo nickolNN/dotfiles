@@ -97,10 +97,10 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 Иначе — пустой объект и безопасные Fake*-адаптеры `buildApp(db, deps)`. Имя
 общего named volume для памяти модели — `ISSUE_RESOLVER_MEMORY_VOLUME` (дефолт
 `agent-memory`). Таймаут одного pi-агента шага —
-`ISSUE_RESOLVER_RESOLVE_AGENT_TIMEOUT_MS` (мс, дефолт 30 мин; значения меньше
+`ISSUE_RESOLVER_RESOLVE_AGENT_TIMEOUT_MS` (мс, дефолт 90 мин; значения меньше
 60с поднимаются до 60с): прокидывается в `RpcPiRunner` (reject + SIGKILL) и
 дополнительно страхуется внешним таймером движка. Таймаут pi-агента разовой
-подготовки — `ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS` (мс, дефолт 30 мин; тот
+подготовки — `ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS` (мс, дефолт 90 мин; тот
 же минимум 60с): прокидывается в `PiBootstrapperAgent` через
 `bootstrapperFactoryFor`, чтобы зависший анализатор не держал задачу в
 `preparing` вечно. Таймаут git-операций — `GIT_TIMEOUT_MS` (мс, дефолт 5 мин):

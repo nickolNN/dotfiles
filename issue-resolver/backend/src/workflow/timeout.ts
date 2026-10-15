@@ -13,8 +13,8 @@
 /** Минимально допустимый таймаут pi-агента из env — 60 секунд. */
 export const MIN_RESOLVE_AGENT_TIMEOUT_MS = 60_000;
 
-/** Дефолтный таймаут одного resolve-агента — 30 минут. */
-export const DEFAULT_RESOLVE_AGENT_TIMEOUT_MS = 30 * 60_000;
+/** Дефолтный таймаут одного resolve-агента — 90 минут. */
+export const DEFAULT_RESOLVE_AGENT_TIMEOUT_MS = 90 * 60_000;
 
 /** Env-переменная таймаута pi-агента (мс). */
 export const RESOLVE_AGENT_TIMEOUT_ENV =
@@ -22,7 +22,7 @@ export const RESOLVE_AGENT_TIMEOUT_ENV =
 
 /**
  * Таймаут запуска pi-агента (мс): env `ISSUE_RESOLVER_RESOLVE_AGENT_TIMEOUT_MS`,
- * но не меньше 60с. Невалидное/отсутствующее значение → дефолт 30 минут.
+ * но не меньше 60с. Невалидное/отсутствующее значение → дефолт 90 минут.
  *
  * Явный per-run override (например, короткий таймаут в тестах) задаётся
  * вызывающим кодом напрямую и не проходит через clamp этой функции.
@@ -41,13 +41,13 @@ export function resolveAgentTimeoutMs(
 export const BOOTSTRAPPER_TIMEOUT_ENV =
   'ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS';
 
-/** Дефолтный таймаут bootstrapper'а — те же 30 минут, что и у resolve-агента. */
+/** Дефолтный таймаут bootstrapper'а — те же 90 минут, что и у resolve-агента. */
 export const DEFAULT_BOOTSTRAPPER_TIMEOUT_MS = DEFAULT_RESOLVE_AGENT_TIMEOUT_MS;
 
 /**
  * Таймаут агента-анализатора `run_instructions` (мс): env
  * `ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS`, но не меньше 60с. Пустое/невалидное
- * значение → дефолт 30 минут.
+ * значение → дефолт 90 минут.
  *
  * Без него разовая подготовка — единственный этап без потолка: зависший `pi`
  * блокирует `prepareIssueWorkspace` навсегда, итерация остаётся `pending`, а

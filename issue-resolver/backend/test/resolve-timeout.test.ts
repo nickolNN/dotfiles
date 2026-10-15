@@ -234,7 +234,7 @@ const resolveOutput = (store: InMemoryStepRunStore): StepOutput => {
 };
 
 describe('resolveAgentTimeoutMs — env-таймаут', () => {
-  it('пустой/битый env → дефолт 30 минут', () => {
+  it('пустой/битый env → дефолт 90 минут', () => {
     expect(resolveAgentTimeoutMs(undefined)).toBe(
       DEFAULT_RESOLVE_AGENT_TIMEOUT_MS,
     );
@@ -255,7 +255,7 @@ describe('resolveAgentTimeoutMs — env-таймаут', () => {
 });
 
 describe('resolveBootstrapperTimeoutMs — env-таймаут подготовки', () => {
-  it('пустой/битый env → дефолт 30 минут', () => {
+  it('пустой/битый env → дефолт 90 минут', () => {
     expect(resolveBootstrapperTimeoutMs(undefined)).toBe(
       DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
     );
