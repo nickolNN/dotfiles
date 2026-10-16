@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "ISSUE_RESOLVER_LOCAL=1 tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "start:e2e": "tsx test/e2e-server.ts",
     "test": "vitest run",
