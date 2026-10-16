@@ -95,6 +95,15 @@ export function isIterationActive(status: TaskStatus): boolean {
 }
 
 /**
+ * Можно ли запустить задачу: статус `draft` и ещё нет итераций.
+ * `canStartIteration` проверяет отсутствие активных итераций — черновик
+ * попадает под это правило, потому что у него их нет.
+ */
+export function canStartDraft(status: TaskStatus, iterationsCount: number): boolean {
+  return status === 'draft' && iterationsCount === 0;
+}
+
+/**
  * Можно ли начать новую итерацию: итераций нет либо последняя
  * (max number) завершена, провалена или отменена.
  */

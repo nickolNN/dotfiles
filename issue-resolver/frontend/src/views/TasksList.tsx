@@ -47,6 +47,7 @@ type LoadState =
   | { status: 'ready'; issues: IssueWithActiveStep[] };
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
+  draft: 'Черновик',
   pending: 'В очереди',
   running: 'В работе',
   preparing: 'Подготовка',
@@ -58,6 +59,7 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
 
 /** Runtime-проверка статуса: SSE-данные приходят строками. */
 const TASK_STATUSES: ReadonlySet<string> = new Set([
+  'draft',
   'pending',
   'running',
   'preparing',

@@ -10,6 +10,7 @@ export const MATRIX = {
 
 /** Цвет индикатора статуса задачи (зелёный код + красная/синяя таблетки). */
 export const statusColor: Record<TaskStatus, string> = {
+  draft: '#8A8A8A',
   pending: '#008F11',
   running: '#00B4FF',
   preparing: '#FFB000',

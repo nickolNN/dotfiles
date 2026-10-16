@@ -221,6 +221,19 @@ export async function createIssue(request: CreateIssueRequest): Promise<Issue> {
   return (await response.json()) as Issue;
 }
 
+/** Запуск сохранённого черновика: создаёт первую итерацию и запускает конвейер. */
+export async function startIssue(issueId: string): Promise<{ ok: boolean; iterationId: string }> {
+  const response = await fetch(`${API_BASE}/issues/${issueId}/start`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as { ok: boolean; iterationId: string };
+}
+
 export async function getIssue(id: string): Promise<Issue> {
   const response = await fetch(`${API_BASE}/issues/${id}`);
 

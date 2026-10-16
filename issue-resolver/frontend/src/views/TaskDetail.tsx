@@ -20,7 +20,7 @@ import {
   formatDateTime,
   formatRelativeTime,
 } from '@issue-resolver/shared';
-import { canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
+import { canStartDraft, canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
 import {
   abortIteration,
   createIteration,
@@ -37,6 +37,7 @@ import {
   getStepRuns,
   promptIteration,
   repeatIteration,
+  startIssue,
   resultFilesArchiveUrl,
   sendIterationCommand,
   sendIterationMessage,
@@ -515,6 +516,8 @@ export default function TaskDetail({
   const [abortError, setAbortError] = useState<string | null>(null);
   const [repeatingId, setRepeatingId] = useState<string | null>(null);
   const [repeatError, setRepeatError] = useState<string | null>(null);
+  const [startingDraft, setStartingDraft] = useState(false);
+  const [startDraftError, setStartDraftError] = useState<string | null>(null);
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
     null,
   );
@@ -1602,6 +1605,34 @@ export default function TaskDetail({
     }
   }
 
+  async function handleStartDraft() {
+    if (!issueId) return;
+    setStartDraftError(null);
+    setStartingDraft(true);
+
+    try {
+      const result = await startIssue(issueId);
+      const iterations = await getIterations(issueId);
+      setState((current) =>
+        current.status === 'ready'
+          ? {
+              ...current,
+              issue: { ...current.issue, status: 'pending' },
+              iterations: [...iterations].sort((a, b) => a.number - b.number),
+            }
+          : current,
+      );
+      setSelectedIterationId(result.iterationId);
+      setRefreshTick((tick) => tick + 1);
+    } catch (error) {
+      setStartDraftError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setStartingDraft(false);
+    }
+  }
+
   async function handleQuestionResponse(
     question: QuestionEvent,
     payload: { value?: string; confirmed?: boolean; cancelled?: boolean },
@@ -2066,6 +2097,31 @@ export default function TaskDetail({
         </>
       )}
       </div>
+
+          {state.status === 'ready' && state.issue.status === 'draft' && (
+            <section className="rounded-none border border-[#008F11] p-4">
+              <h3 className="glow mb-1 text-lg font-semibold text-[#00FF41]">
+                Черновик
+              </h3>
+              <p className="mb-4 text-sm text-[#00FF41]/60">
+                Задача сохранена как черновик. Запустите её, чтобы начать
+                скачивание репозиториев и выполнение пайплайна.
+              </p>
+              {startDraftError && (
+                <p role="alert" className="mb-3 text-sm font-medium text-[#FF0033]">
+                  {startDraftError}
+                </p>
+              )}
+              <button
+                type="button"
+                disabled={startingDraft}
+                onClick={() => void handleStartDraft()}
+                className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 md:w-auto"
+              >
+                {startingDraft ? 'Запускаем…' : 'Запустить'}
+              </button>
+            </section>
+          )}
 
           {canStart && (
           <section

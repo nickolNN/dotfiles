@@ -10,7 +10,7 @@ import type {
   Iteration,
   PipelineStep,
 } from '@issue-resolver/shared';
-import { extractIssueKeyFromUrl, statusOfIssue } from '@issue-resolver/shared';
+import { extractIssueKeyFromUrl, statusOfIssue, type TaskStatus } from '@issue-resolver/shared';
 import { and, desc, eq, max } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/client';
@@ -171,7 +171,7 @@ function toIssue(
     step_models: row.step_models ?? undefined,
     thinking_level: row.thinking_level ?? null,
     step_thinking_levels: row.step_thinking_levels ?? undefined,
-    status: statusOfIssue(iterationRows.map(toIteration), row.status) ?? 'pending',
+    status: statusOfIssue(iterationRows.map(toIteration), row.status) ?? row.status ?? 'pending',
     created_at: row.created_at,
     updated_at: row.updated_at,
     workspace_missing: !existsSync(workspaceHostDirFor(workspaceRoot, row.id)),
@@ -219,7 +219,7 @@ async function saveAttachments(
   db: Db,
   deps: IterationRunDeps,
   issueId: string,
-  iterationId: string,
+  iterationId: string | null,
   iterationNumber: number,
   files: UploadInput[],
 ): Promise<void> {
@@ -1159,11 +1159,13 @@ export async function issuesRoutes(
       });
     }
 
+    const runImmediately = body.run_immediately !== false;
     const createMr = repositories.some((repository) => repository.create_mr);
     const pipelineSteps = resolvePipelineSteps(body.pipeline_steps, createMr);
     const now = new Date().toISOString();
     const issueId = randomUUID();
-    const iterationId = randomUUID();
+    const iterationId = runImmediately ? randomUUID() : null;
+    const issueStatus: TaskStatus = runImmediately ? 'pending' : 'draft';
 
     const repositoryRows = repositories.map((repository) => ({
       id: randomUUID(),
@@ -1189,7 +1191,7 @@ export async function issuesRoutes(
           step_thinking_levels: body.step_thinking_levels ?? null,
           container_name: null,
           source: jiraIssueUrl ? 'jira' : null,
-          status: 'pending',
+          status: issueStatus,
           created_at: now,
           updated_at: now,
         })
@@ -1206,109 +1208,114 @@ export async function issuesRoutes(
           .run();
       }
 
-      tx.insert(iterations)
-        .values({
-          id: iterationId,
-          issue_id: issueId,
-          number: 1,
-          context: additionalContext,
-          review_context: reviewContext,
-          is_review_need: isReviewNeed,
-          steps: pipelineSteps,
-          model: body.model ?? null,
-          step_models: body.step_models ?? null,
-          thinking_level: body.thinking_level ?? null,
-          step_thinking_levels: body.step_thinking_levels ?? null,
-          status: 'pending',
-          created_at: now,
-          updated_at: now,
-        })
-        .run();
-    });
-
-    await saveAttachments(db, deps, issueId, iterationId, 1, requestPayload.files);
-
-    const prepareDeps = {
-      container: deps.container,
-      git: deps.git,
-      sse: deps.sse,
-      local: deps.local,
-      ...(deps.bootstrapperFactory
-        ? { bootstrapperFactory: deps.bootstrapperFactory }
-        : {}),
-      bootstrapperModel: body.bootstrapper_model,
-      bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
-      workspaceRoot: deps.workspaceRoot,
-    };
-    // Подготовка + конвейер — фоновый прогон. HTTP-ответ возвращается
-    // немедленно; прогресс и статус идут через SSE.
-    void (async () => {
-      try {
-        // Сохраняем данные Jira в workspace-папку задачи ДО подготовки
-        // репозиториев — агенты видят их как файлы, к Jira API доступа нет.
-        if (jiraFull) {
-          const wsDir = workspaceHostDirFor(
-            deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
-            issueId,
-          );
-          mkdirSync(join(wsDir, 'jira'), { recursive: true });
-
-          // Полный JSON: issue.raw + comments + changelog.
-          const fullRaw = {
-            issue: jiraFull.issue.raw ?? jiraFull.issue,
-            comments: jiraFull.comments,
-            changelog: jiraFull.changelog,
-          };
-          writeFileSync(
-            join(wsDir, 'jira', `${jiraFull.issue.key}.json`),
-            JSON.stringify(fullRaw, null, 2),
-            'utf8',
-          );
-
-          // Расширенный .md: заголовок, статус, описание, комментарии, история.
-          const issue = jiraFull.issue;
-          const md = buildJiraMarkdown(jiraFull);
-          writeFileSync(
-            join(wsDir, 'jira', `${issue.key}.md`),
-            md,
-            'utf8',
-          );
-        }
-
-        const ws = await prepareIssueWorkspace(db, prepareDeps, {
-          issueId,
-          iterationId,
-          repositories,
-        });
-        void runIssueIteration(db, deps, {
-          issue: {
-            id: issueId,
-            title,
-            pipelineSteps,
-            description,
-            desiredResult,
-            jiraIssueUrl,
-          },
-          iteration: {
-            id: iterationId,
-            issueId,
+      if (runImmediately) {
+        tx.insert(iterations)
+          .values({
+            id: iterationId!,
+            issue_id: issueId,
             number: 1,
             context: additionalContext,
+            review_context: reviewContext,
+            is_review_need: isReviewNeed,
             steps: pipelineSteps,
-            reviewContext,
-            isReviewNeed,
-          },
-          repositories,
-          repoWorkspaces: ws,
-          model: body.model,
-          step_models: body.step_models,
-          thinking_level: body.thinking_level,
-          step_thinking_levels: body.step_thinking_levels,
-        }).catch((error) => console.error('run failed', error));
-      } catch (error) {
-        console.error('preparation failed, issue set to failed', error);
+            model: body.model ?? null,
+            step_models: body.step_models ?? null,
+            thinking_level: body.thinking_level ?? null,
+            step_thinking_levels: body.step_thinking_levels ?? null,
+            status: 'pending',
+            created_at: now,
+            updated_at: now,
+          })
+          .run();
       }
-    })();
+    });
+
+    // Файлы сохраняются всегда (и для черновика, и для immediate-запуска).
+    await saveAttachments(db, deps, issueId, iterationId, 1, requestPayload.files);
+
+    if (runImmediately) {
+      const prepareDeps = {
+        container: deps.container,
+        git: deps.git,
+        sse: deps.sse,
+        local: deps.local,
+        ...(deps.bootstrapperFactory
+          ? { bootstrapperFactory: deps.bootstrapperFactory }
+          : {}),
+        bootstrapperModel: body.bootstrapper_model,
+        bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+        workspaceRoot: deps.workspaceRoot,
+      };
+      // Подготовка + конвейер — фоновый прогон. HTTP-ответ возвращается
+      // немедленно; прогресс и статус идут через SSE.
+      void (async () => {
+        try {
+          // Сохраняем данные Jira в workspace-папку задачи ДО подготовки
+          // репозиториев — агенты видят их как файлы, к Jira API доступа нет.
+          if (jiraFull) {
+            const wsDir = workspaceHostDirFor(
+              deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+              issueId,
+            );
+            mkdirSync(join(wsDir, 'jira'), { recursive: true });
+
+            // Полный JSON: issue.raw + comments + changelog.
+            const fullRaw = {
+              issue: jiraFull.issue.raw ?? jiraFull.issue,
+              comments: jiraFull.comments,
+              changelog: jiraFull.changelog,
+            };
+            writeFileSync(
+              join(wsDir, 'jira', `${jiraFull.issue.key}.json`),
+              JSON.stringify(fullRaw, null, 2),
+              'utf8',
+            );
+
+            // Расширенный .md: заголовок, статус, описание, комментарии, история.
+            const issue = jiraFull.issue;
+            const md = buildJiraMarkdown(jiraFull);
+            writeFileSync(
+              join(wsDir, 'jira', `${issue.key}.md`),
+              md,
+              'utf8',
+            );
+          }
+
+          const ws = await prepareIssueWorkspace(db, prepareDeps, {
+            issueId,
+            iterationId: iterationId!,
+            repositories,
+          });
+          void runIssueIteration(db, deps, {
+            issue: {
+              id: issueId,
+              title,
+              pipelineSteps,
+              description,
+              desiredResult,
+              jiraIssueUrl,
+            },
+            iteration: {
+              id: iterationId!,
+              issueId,
+              number: 1,
+              context: additionalContext,
+              steps: pipelineSteps,
+              reviewContext,
+              isReviewNeed,
+            },
+            repositories,
+            repoWorkspaces: ws,
+            model: body.model,
+            step_models: body.step_models,
+            thinking_level: body.thinking_level,
+            step_thinking_levels: body.step_thinking_levels,
+          }).catch((error) => console.error('run failed', error));
+        } catch (error) {
+          console.error('preparation failed, issue set to failed', error);
+        }
+      })();
+    }
 
     return reply.status(201).send({
       id: issueId,
@@ -1322,9 +1329,143 @@ export async function issuesRoutes(
       step_models: body.step_models,
       thinking_level: body.thinking_level ?? null,
       step_thinking_levels: body.step_thinking_levels,
-      status: 'pending',
+      status: issueStatus,
       created_at: now,
       updated_at: now,
     });
   });
+
+  // POST /issues/:id/start — запуск сохранённого черновика.
+  app.post<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/start`,
+    async (request, reply) => {
+      const { id } = request.params;
+
+      const issue = findIssue(id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+      if (issue.status !== 'draft') {
+        return reply
+          .status(409)
+          .send({ error: 'only draft issues can be started' });
+      }
+
+      // Проверяем, что итераций нет (черновик не запускался).
+      const existingIteration = db
+        .select({ id: iterations.id })
+        .from(iterations)
+        .where(eq(iterations.issue_id, id))
+        .get();
+      if (existingIteration) {
+        return reply
+          .status(409)
+          .send({ error: 'issue already has iterations — not a draft' });
+      }
+
+      const repositories = db
+        .select()
+        .from(issueRepositories)
+        .where(eq(issueRepositories.issue_id, id))
+        .all()
+        .map((repository) => ({
+          repository_url: repository.repository_url,
+          base_branch: repository.branch_name,
+          create_mr: !!repository.create_mr,
+          bootstrap_enabled: repository.bootstrap_enabled ?? true,
+        }));
+
+      const createMr = repositories.some(
+        (repository) => repository.create_mr,
+      );
+      const pipelineSteps = resolvePipelineSteps(
+        issue.pipeline_steps,
+        createMr,
+      );
+      const now = new Date().toISOString();
+      const iterationId = randomUUID();
+
+      db.transaction((tx) => {
+        tx.update(issues)
+          .set({ status: 'pending', updated_at: now })
+          .where(eq(issues.id, id))
+          .run();
+
+        tx.insert(iterations)
+          .values({
+            id: iterationId,
+            issue_id: id,
+            number: 1,
+            context: issue.description ?? '',
+            review_context: '',
+            is_review_need: false,
+            steps: pipelineSteps,
+            model: null,
+            step_models: issue.step_models ?? null,
+            thinking_level: issue.thinking_level ?? null,
+            step_thinking_levels: issue.step_thinking_levels ?? null,
+            status: 'pending',
+            created_at: now,
+            updated_at: now,
+          })
+          .run();
+      });
+
+      const prepareDeps = {
+        container: deps.container,
+        git: deps.git,
+        sse: deps.sse,
+        local: deps.local,
+        ...(deps.bootstrapperFactory
+          ? { bootstrapperFactory: deps.bootstrapperFactory }
+          : {}),
+        bootstrapperModel: undefined,
+        bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+        workspaceRoot: deps.workspaceRoot,
+      };
+
+      void (async () => {
+        try {
+          const ws = await prepareIssueWorkspace(db, prepareDeps, {
+            issueId: id,
+            iterationId,
+            repositories,
+          });
+          void runIssueIteration(db, deps, {
+            issue: {
+              id,
+              title: issue.title,
+              pipelineSteps,
+              description: issue.description ?? '',
+              desiredResult: issue.desired_result ?? 'md',
+              jiraIssueUrl: issue.jira_issue_url,
+            },
+            iteration: {
+              id: iterationId,
+              issueId: id,
+              number: 1,
+              context: issue.description ?? '',
+              steps: pipelineSteps,
+              reviewContext: '',
+              isReviewNeed: false,
+            },
+            repositories,
+            repoWorkspaces: ws,
+            model: undefined,
+            step_models: issue.step_models ?? undefined,
+            thinking_level: issue.thinking_level ?? undefined,
+            step_thinking_levels: issue.step_thinking_levels ?? undefined,
+          }).catch((error) => console.error('run failed', error));
+        } catch (error) {
+          console.error('preparation failed, issue set to failed', error);
+          db.update(issues)
+            .set({ status: 'failed', updated_at: new Date().toISOString() })
+            .where(eq(issues.id, id))
+            .run();
+        }
+      })();
+
+      return { ok: true, iterationId };
+    },
+  );
 }
