@@ -61,6 +61,15 @@ export const originalsRootFromEnv = (env: NodeJS.ProcessEnv): string => {
 };
 
 /** Таймаут git (`killed`) → понятная ошибка; прочее отдаём как есть. */
+/** Маскирует токен в credential-helper аргументе (безопасность логов). */
+function maskCredentialArgs(args: string[]): string[] {
+  return args.map((arg) =>
+    arg.startsWith('credential.helper=')
+      ? arg.replace(/password=[^;"]+/, 'password=***')
+      : arg,
+  );
+}
+
 function describeGitError(
   error: unknown,
   timeoutMs: number,
@@ -69,7 +78,7 @@ function describeGitError(
   const detail = error as { killed?: boolean; signal?: string | null } | null;
   if (detail?.killed) {
     return new Error(
-      `git ${args.join(' ')} timed out after ${timeoutMs}ms` +
+      `git ${maskCredentialArgs(args).join(' ')} timed out after ${timeoutMs}ms` +
         (detail.signal ? ` (signal ${detail.signal})` : '') +
         ` — увеличить таймаут: GIT_TIMEOUT_MS`,
     );
@@ -529,14 +538,31 @@ export class GitCliService implements GitService {
       '-m',
       input.commitMessage,
     ]).catch(() => undefined);
-    await this.git([
+
+    // Push with token from env (GitHub/GitLab/Bitbucket) — без него git
+    // пытается читать username с терминала и падает «No such device».
+    const token =
+      process.env.GITHUB_TOKEN ||
+      process.env.GITLAB_TOKEN ||
+      process.env.BITBUCKET_TOKEN ||
+      '';
+    const pushArgs = [
       '-C',
       input.repoPath,
       'push',
       '--set-upstream',
       'origin',
       input.branchName,
-    ]);
+    ];
+    if (token) {
+      // Inline credential helper: username=x-access-token для GitHub,
+      // остальные хосты тоже принимают такой формат.
+      pushArgs.unshift(
+        '-c',
+        `credential.helper=!f() { echo "password=${token}"; echo "username=x-access-token"; }; f`,
+      );
+    }
+    await this.git(pushArgs);
     return { pushed: true, branchName: input.branchName };
   }
 }

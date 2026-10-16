@@ -1297,8 +1297,23 @@ export default function TaskDetail({
         : [...current, step],
     );
     // Сняли шаг pr — сбрасываем выбор репозиториев для MR.
+    // Включили pr и ничего не выбрано — выбираем все репозитории по умолчанию.
     if (step === 'pr') {
-      setPrRepoIds(new Set());
+      const next = new Set(selectedSteps);
+      if (next.has('pr')) {
+        // Снимаем pr
+        setPrRepoIds(new Set());
+      } else {
+        // Включаем pr — выбираем все репо если ничего не выбрано
+        setPrRepoIds((current) => {
+          if (current.size === 0 && state.status === 'ready') {
+            return new Set(
+              state.issue.repositories.map((repo) => repo.id),
+            );
+          }
+          return current;
+        });
+      }
     }
   }
 
@@ -1415,11 +1430,10 @@ export default function TaskDetail({
         Object.keys(activeStepThinkingLevels).length > 0
           ? activeStepThinkingLevels
           : undefined,
-      // ID репозиториев для MR (только если pr в шагах и репо выбраны).
-      pr_repository_ids:
-        selectedSteps.includes('pr') && prRepoIds.size > 0
-          ? [...prRepoIds]
-          : undefined,
+      // ID репозиториев для MR. Массив авторитетен: выбран шаг pr → шлём
+      // текущий выбор (возможно пустой — снимает все галочки), не выбран →
+      // пустой массив (сбрасываем create_mr, чтобы `pr` не возвращался).
+      pr_repository_ids: selectedSteps.includes('pr') ? [...prRepoIds] : [],
     };
 
     setFormError(null);

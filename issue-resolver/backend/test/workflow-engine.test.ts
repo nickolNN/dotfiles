@@ -1004,7 +1004,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
   });
 
   it('create_mr:false у всех репо → pr success, commit/push и MR НЕ вызваны', async () => {
-    const { deps, pi, git, mr } = makeDeps();
+    const { deps, pi, git, mr, store } = makeDeps();
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('pr'));
 
@@ -1018,6 +1018,19 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(git.prepares).toEqual([]);
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
+
+    // Регрессия: молчаливый no-op недопустим. Шаг остаётся success, но в
+    // событиях есть warning с причиной — пользователь видит, что MR не создан.
+    const prRun = store.runs.find((run) => run.step === 'pr');
+    const prOutput = store.outputs.find(
+      (output) => output.step_run_id === prRun?.id,
+    );
+    expect(prRun?.status).toBe('success');
+    expect(
+      prOutput?.events?.some(
+        (event) => event.type === 'notice' && event.level === 'warning',
+      ),
+    ).toBe(true);
   });
 
   it('per-repo create_mr: MR только для помеченных репозиториев', async () => {

@@ -131,7 +131,7 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 | `GET /issues/:id/result/files/content?path=<rel_path>` | — | содержимое файла как `Content-Disposition: attachment` / `404` |
 | `GET /issues/:id/result/files/archive` | — | `application/gzip` (`Content-Disposition: attachment; filename="issue-<id>.tar.gz"`) — tar.gz из того же отфильтрованного списка плюс сам артефакт результата из снапшота итерации; нет completed-итерации или нечего паковать → `404 { error: 'result not found' }` |
 | `GET /issues/:id/iterations` | — | `Iteration[]` (по `number` возр.) / `404` |
-| `POST /issues/:id/iterations` | `{ context, review_context?, is_review_need?, steps?, model? }` (JSON) **или** multipart (`payload` + `files`) | `201 Iteration`; запускает прогон в фоне; файлы итерации — в `attachments/iteration-<n>/` |
+| `POST /issues/:id/iterations` | `{ context, review_context?, is_review_need?, steps?, pr_repository_ids?, model? }` (JSON) **или** multipart (`payload` + `files`) | `201 Iteration`; запускает прогон в фоне; файлы итерации — в `attachments/iteration-<n>/` |
 | `GET /issues/:id/files` | — | `IssueFile[]` (загруженные файлы задачи; `rel_path` от корня рабочей папки, `iteration_id` для группировки) / `404` |
 | `DELETE /issues/:id` | — | `202 { ok: true }` — удаление фоновое (процессы → контейнер → рабочая папка → БД); прогресс — SSE `issue_deleting` (фазы), финал — `issue_deleted` / `404 { error }` |
 | `DELETE /files/:fileId` | — | `204`; удаляет строку и файл с диска (best-effort, guard от path traversal) / `404` |
@@ -495,7 +495,13 @@ URL (`RepoUrlInput`) живёт на экране «Репозитории» и 
   Шаг `pr` присутствует в конвейере только при `desired_result: 'pr'` (для
   остальных значений он удаляется). Для репозиториев с `create_mr: false`
   результат остаётся файлами в рабочей папке. При 0 репозиториев `pr`-шаг не
-  коммитит и не создаёт MR.
+  коммитит и не создаёт MR. `pr_repository_ids` в теле итерации задаёт
+  per-repo выбор для MR: непустой массив включает `create_mr` только у
+  перечисленных репозиториев, пустой — снимает все галочки (и `pr` из шагов),
+  отсутствие поля оставляет флаги прежними. Если `pr` в шагах, но ни один
+  репозиторий не отмечен для MR, публикация не выполняется, а в события шага
+  уходит предупреждение (`notice`/`warning`) — шаг больше не остаётся молча
+  зелёным без ветки/MR.
 - **Jira-enrichment**: если задан `jira_issue_url` без `title`, backend
   подтягивает `summary`/`description` из Jira REST; ошибка Jira деградирует до
   `title = ключ` тикета.

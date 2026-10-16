@@ -11,7 +11,7 @@ import type {
   PipelineStep,
 } from '@issue-resolver/shared';
 import { extractIssueKeyFromUrl, statusOfIssue } from '@issue-resolver/shared';
-import { and, desc, eq, max, sql } from 'drizzle-orm';
+import { and, desc, eq, max } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/client';
 import {
@@ -895,10 +895,12 @@ export async function issuesRoutes(
           bootstrap_enabled: repository.bootstrap_enabled ?? true,
         }));
 
-      // Если в запросе указаны pr_repository_ids — обновляем create_mr
+      // Если в запросе присутствует pr_repository_ids — обновляем create_mr
       // флаги в таблице репозиториев задачи ДО чтения. Так шаг pr видит
-      // актуальный per-repo выбор из UI итерации.
-      if (body.pr_repository_ids && body.pr_repository_ids.length > 0) {
+      // актуальный per-repo выбор из UI итерации. Пустой массив — тоже
+      // авторитетен (снимаем все галочки), иначе снятие выбора не долетало бы
+      // до БД и `pr` возвращался бы в шаги из старых флагов.
+      if (body.pr_repository_ids !== undefined) {
         const prIdSet = new Set(body.pr_repository_ids);
         // Сбрасываем create_mr у всех репозиториев этой задачи.
         db.update(issueRepositories)
@@ -910,7 +912,10 @@ export async function issuesRoutes(
           db.update(issueRepositories)
             .set({ create_mr: true, updated_at: new Date().toISOString() })
             .where(
-              sql`${issueRepositories.issue_id} = ${id} AND ${issueRepositories.id} = ${repoId}`,
+              and(
+                eq(issueRepositories.issue_id, id),
+                eq(issueRepositories.id, repoId),
+              ),
             )
             .run();
         }

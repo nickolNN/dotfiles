@@ -807,3 +807,42 @@ export async function deleteTag(id: string): Promise<void> {
     throw new Error(await readErrorMessage(response));
   }
 }
+
+export async function getHostname(): Promise<string> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/hostname`);
+    if (!response.ok) return '';
+    const data = (await response.json()) as { hostname?: string };
+    return data?.hostname ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export async function setHostname(hostname: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/settings/hostname`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hostname }),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+}
+
+export interface CleanupResult {
+  orphaned_workspaces: number;
+  killed_processes: number;
+  deleted_dirs: number;
+  errors: string[];
+}
+
+export async function cleanupOrphans(): Promise<CleanupResult> {
+  const response = await fetch(`${API_BASE}/admin/cleanup-orphans`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as CleanupResult;
+}
