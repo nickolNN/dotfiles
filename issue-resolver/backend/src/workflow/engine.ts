@@ -39,7 +39,12 @@ import type {
 } from '../git/service';
 import type { PiRunner } from '../pi/runner';
 import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry';
-import { detectGitHost, type MrClient } from '../pr/mr';
+import {
+  detectGitHost,
+  formatPrPublishErrors,
+  type MrClient,
+  type PrPublishError,
+} from '../pr/mr';
 import type { SseHub } from '../sse/hub';
 import {
   containerNameFor,
@@ -904,16 +909,83 @@ export async function runIteration(
       : stepRunStatusFromResult(result.exitCode, report);
     await deps.store.updateStepRun(stepRun.id, { status });
     const screenshotsDir = await screenshotsDirOf(workspaceHostDir);
+
+    // Фаза 4: успешный pr-шаг публикует результат — commit/push + MR — для
+    // тех репозиториев, где запрошен MR (per-repo create_mr). Публикуем ДО
+    // записи output-строки, чтобы ошибка публикации вошла в отчёт и события
+    // шага: иначе зелёный шаг без ветки/MR вводит пользователя в заблуждение.
+    let prPublish: PrPublishOutcome | null = null;
+    if (step === 'pr' && status === 'success' && repoWorkspaces.length > 0) {
+      try {
+        prPublish = await publishPrResult(
+          deps,
+          input,
+          repoWorkspaces,
+          report?.title || input.issue.title,
+          report?.description || report?.summary || '',
+          stepRun.id,
+        );
+      } catch (error) {
+        // publishPrResult не бросает на per-repo ошибках, но подстрахуемся:
+        // неожиданный reject тоже должен стать видимым, а не пропасть.
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('publishPrResult failed', error);
+        prPublish = { artifacts: [], errors: [{ repositoryUrl: '', message }] };
+      }
+    }
+
+    const prErrors = prPublish?.errors ?? [];
+    const prErrorMessage = formatPrPublishErrors(prErrors);
+    const outputEvents: SessionEvent[] = [
+      ...(result.events ?? []),
+      ...prErrors.map(
+        (error): SessionEvent => ({
+          type: 'notice',
+          level: 'error',
+          message: `Публикация MR/ветки не удалась — ${error.message}`,
+        }),
+      ),
+    ];
+    // `pr_error` кладём поверх отчёта шага: фронт рисует по нему баннер даже
+    // после перезагрузки (report берётся из персистентной output-строки).
+    const persistedReport: StepReport | null =
+      prErrors.length > 0
+        ? {
+            ...(report ?? { status: 'pass' as const, summary: '' }),
+            pr_error: prErrorMessage,
+          }
+        : report;
+
     await deps.store.createStepOutput({
       stepRunId: stepRun.id,
-      report: report ? JSON.stringify(report) : '',
+      report: persistedReport ? JSON.stringify(persistedReport) : '',
       ...(screenshotsDir ? { screenshotsDir } : {}),
       stdout: result.stdout,
       stderr: result.stderr,
-      events: result.events ?? [],
+      events: outputEvents,
       stats: result.stats ?? null,
     });
     deps.sse.publish(stepStatusEvent(issue.id, iteration.id, stepRun.id, status));
+
+    // Публикация провалилась — шаг реально отработал, но результат не
+    // опубликован. Красим чип в failed (персистентно) и шлём причину в SSE,
+    // чтобы пользователь сразу видел проблему. Итерация при этом остаётся
+    // completed: `status` для nextStepDecision — success, как и раньше.
+    if (prErrors.length > 0) {
+      await deps.store.updateStepRun(stepRun.id, { status: 'failed' });
+      deps.sse.publish(
+        stepStatusEvent(issue.id, iteration.id, stepRun.id, 'failed'),
+      );
+      for (const error of prErrors) {
+        deps.sse.publish(
+          stepEvent(issue.id, iteration.id, stepRun.id, {
+            type: 'notice',
+            level: 'error',
+            message: `Публикация MR/ветки не удалась — ${error.message}`,
+          }),
+        );
+      }
+    }
 
     // Успешный refine — единственный источник рекомендации о топологии
     // resolve: план для промпта и execution для развилки single/room.
@@ -924,28 +996,6 @@ export async function runIteration(
 
     if (status === 'aborted') {
       return { iterationStatus: 'cancelled', needsInput: false };
-    }
-
-    // Фаза 4: успешный pr-шаг публикует результат — commit/push + MR — для
-    // тех репозиториев, где запрошен MR (per-repo create_mr). Для остальных
-    // результат остаётся файлами в рабочей папке задачи.
-    if (step === 'pr' && status === 'success' && repoWorkspaces.length > 0) {
-      try {
-        const prTitle = report?.title || input.issue.title;
-        const prDescription = report?.description || report?.summary || '';
-        await publishPrResult(
-          deps,
-          input,
-          repoWorkspaces,
-          prTitle,
-          prDescription,
-          stepRun.id,
-        );
-      } catch (error) {
-        console.error('publishPrResult failed', error);
-        // MR creation/commit failure should NOT crash the iteration.
-        // The step was successful — just the publish step failed.
-      }
     }
 
     if (status === 'needs_input') {
@@ -1050,10 +1100,18 @@ export function featureBranchName(
   return `${prefix}-${iterationId.slice(-6)}`;
 }
 
+/** Итог публикации: созданные MR и ошибки репозиториев, где она сорвалась. */
+export interface PrPublishOutcome {
+  artifacts: MrResultArtifact[];
+  errors: PrPublishError[];
+}
+
 /**
  * Успешный pr-шаг: для каждого репозитория commit/push, затем создание MR.
- * Возвращает артефакты созданных MR (пустой массив — ничего не создано) и
- * best-effort пишет `result.json` в корень рабочей папки задачи.
+ * Возвращает созданные MR и ошибки публикации (commit/push/MR) — ошибку НЕ
+ * глотаем и НЕ роняем итерацию ей. На первой ошибке публикация прекращается
+ * (частично созданные MR сохраняются в `artifacts`).
+ * Best-effort пишет `result.json` в корень рабочей папки задачи.
  * Вызывается только при `step === 'pr' && status === 'success'`.
  */
 async function publishPrResult(
@@ -1063,7 +1121,7 @@ async function publishPrResult(
   title: string,
   description: string,
   stepRunId: string,
-): Promise<MrResultArtifact[]> {
+): Promise<PrPublishOutcome> {
   const baseBranchByUrl = new Map(
     input.repositories.map((repo) => [repo.repository_url, repo.base_branch]),
   );
@@ -1075,10 +1133,11 @@ async function publishPrResult(
   );
 
   const artifacts: MrResultArtifact[] = [];
+  const errors: PrPublishError[] = [];
 
   // Нет репозиториев — нечего коммитить/пушить и не для чего создавать MR.
   if (repoWorkspaces.length === 0) {
-    return artifacts;
+    return { artifacts, errors };
   }
 
   for (const workspace of repoWorkspaces) {
@@ -1086,52 +1145,73 @@ async function publishPrResult(
     if (!createMrByUrl.get(workspace.repoUrl)) {
       continue;
     }
-    // Публикуем в feature-ветку, а не в base (`workspace.branch`): base
-    // защищена от прямого push. `commitAndPush` делает `checkout -B`, т.е.
-    // создаёт ветку от текущего HEAD; она же — head создаваемого MR.
-    // `squashBase` сквошит все коммиты в один — MR всегда = 1 commit.
-    const baseBranch = baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch;
-    const featureBranch = featureBranchName(input.issue.title, input.iteration.id);
-    const commit = await deps.git.commitAndPush({
-      repoPath: workspace.path,
-      branchName: featureBranch,
-      commitMessage: `feat: ${input.issue.title}`,
-      squashBase: `origin/${baseBranch}`,
-    });
-    deps.sse.publish(
-      streamEvent(
-        input.issue.id,
+    // Фаза нужна для понятного сообщения об ошибке: commit/push и создание MR
+    // падают по разным причинам (push rejected vs сеть/токен/конфликт веток).
+    let phase = 'commit/push';
+    try {
+      // Публикуем в feature-ветку, а не в base (`workspace.branch`): base
+      // защищена от прямого push. `commitAndPush` делает `checkout -B`, т.е.
+      // создаёт ветку от текущего HEAD; она же — head создаваемого MR.
+      // `squashBase` сквошит все коммиты в один — MR всегда = 1 commit.
+      const baseBranch =
+        baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch;
+      const featureBranch = featureBranchName(
+        input.issue.title,
         input.iteration.id,
-        stepRunId,
-        'system',
-        `committed ${commit.branchName}`,
-      ),
-    );
+      );
+      const commit = await deps.git.commitAndPush({
+        repoPath: workspace.path,
+        branchName: featureBranch,
+        commitMessage: `feat: ${input.issue.title}`,
+        squashBase: `origin/${baseBranch}`,
+      });
+      deps.sse.publish(
+        streamEvent(
+          input.issue.id,
+          input.iteration.id,
+          stepRunId,
+          'system',
+          `committed ${commit.branchName}`,
+        ),
+      );
 
-    const mr = await deps.mr.createMr({
-      repositoryUrl: workspace.repoUrl,
-      baseBranch: baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch,
-      headBranch: featureBranch,
-      title,
-      description,
-      token: input.mrToken ?? '',
-      source: detectGitHost(workspace.repoUrl),
-    });
-    artifacts.push({
-      repositoryUrl: workspace.repoUrl,
-      mrUrl: mr.mrUrl,
-      title,
-      description,
-    });
-    deps.sse.publish(
-      streamEvent(
-        input.issue.id,
-        input.iteration.id,
-        stepRunId,
-        'mr',
-        mr.mrUrl,
-      ),
-    );
+      phase = 'MR';
+      const mr = await deps.mr.createMr({
+        repositoryUrl: workspace.repoUrl,
+        baseBranch:
+          baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch,
+        headBranch: featureBranch,
+        title,
+        description,
+        token: input.mrToken ?? '',
+        source: detectGitHost(workspace.repoUrl),
+      });
+      artifacts.push({
+        repositoryUrl: workspace.repoUrl,
+        mrUrl: mr.mrUrl,
+        title,
+        description,
+      });
+      deps.sse.publish(
+        streamEvent(
+          input.issue.id,
+          input.iteration.id,
+          stepRunId,
+          'mr',
+          mr.mrUrl,
+        ),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      errors.push({
+        repositoryUrl: workspace.repoUrl,
+        message: `${workspace.repoUrl} — ${phase}: ${message}`,
+      });
+      // Одна ошибка почти всегда означает общую проблему (токен/сеть),
+      // поэтому остальные репозитории не публикуем: частичный результат
+      // честно виден в artifacts/errors.
+      break;
+    }
   }
 
   // Best-effort: результат pr-шага как обычный артефакт для снапшота итерации.
@@ -1162,5 +1242,5 @@ async function publishPrResult(
     }
   }
 
-  return artifacts;
+  return { artifacts, errors };
 }

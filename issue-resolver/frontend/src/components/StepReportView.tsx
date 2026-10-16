@@ -200,6 +200,16 @@ export default function StepReportView({ raw }: StepReportViewProps) {
         </span>
       </div>
 
+      {report.pr_error && (
+        <div
+          role="alert"
+          data-testid="step-report-pr-error"
+          className="border border-[#FF0033] bg-[#2A0008] px-2 py-1 text-xs font-medium text-[#FF0033]"
+        >
+          ⚠ MR/ветка не созданы: {report.pr_error}
+        </div>
+      )}
+
       {report.summary.trim() !== '' && (
         <div
           data-testid="step-report-summary"

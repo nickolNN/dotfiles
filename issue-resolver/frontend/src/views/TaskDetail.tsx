@@ -257,6 +257,15 @@ function isStepRunStatus(value: string | undefined): value is StepRunStatus {
 /** Harness-файл отчёта шага — не считаем его артефактом изменений агента. */
 const HARNESS_RESULT_FILE = '.issue-step-result.json';
 
+/** Человекочитаемое имя репозитория из git URL. */
+function repoShortName(url: string): string {
+  const cleaned = url.replace(/\.git$/, '');
+  const sshMatch = /[:/]([^/]+\/[^/]+)$/.exec(cleaned);
+  if (sshMatch) return sshMatch[1];
+  const segments = cleaned.replace(/^https?:\/\//, '').split('/');
+  return segments.slice(-2).join('/');
+}
+
 /** Человекочитаемая длительность шага: `45с` / `3м 12с` / `1ч 4м`. */
 export function formatStepDuration(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return '';
@@ -484,6 +493,10 @@ export default function TaskDetail({
   const [stepModels, setStepModels] = useState<StepModels>({});
   const [stepThinkingLevels, setStepThinkingLevels] =
     useState<StepThinkingLevels>({});
+  // Репозитории, выбранные для MR в форме итерации (id → выбрано).
+  const [prRepoIds, setPrRepoIds] = useState<Set<string>>(new Set());
+  // Флаг: prRepoIds уже инициализированы из issue.repositories.create_mr.
+  const [prRepoIdsSeeded, setPrRepoIdsSeeded] = useState(false);
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -643,6 +656,17 @@ export default function TaskDetail({
           iterations: [...iterations].sort((a, b) => a.number - b.number),
         });
         setSelectedSteps(issue.pipeline_steps);
+        // Первый раз инициализируем prRepoIds из create_mr флагов репозиториев.
+        if (!prRepoIdsSeeded) {
+          setPrRepoIds(
+            new Set(
+              issue.repositories
+                .filter((repo) => repo.create_mr)
+                .map((repo) => repo.id),
+            ),
+          );
+          setPrRepoIdsSeeded(true);
+        }
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -1272,6 +1296,10 @@ export default function TaskDetail({
         ? current.filter((value) => value !== step)
         : [...current, step],
     );
+    // Сняли шаг pr — сбрасываем выбор репозиториев для MR.
+    if (step === 'pr') {
+      setPrRepoIds(new Set());
+    }
   }
 
   function updateStepModel(step: PipelineStep, value: string) {
@@ -1386,6 +1414,11 @@ export default function TaskDetail({
       step_thinking_levels:
         Object.keys(activeStepThinkingLevels).length > 0
           ? activeStepThinkingLevels
+          : undefined,
+      // ID репозиториев для MR (только если pr в шагах и репо выбраны).
+      pr_repository_ids:
+        selectedSteps.includes('pr') && prRepoIds.size > 0
+          ? [...prRepoIds]
           : undefined,
     };
 
@@ -2146,6 +2179,45 @@ export default function TaskDetail({
                 </div>
               </fieldset>
 
+              {/* Репозитории для MR: показываются только при выбранном шаге pr. */}
+              {selectedSteps.includes('pr') && prAvailable && (
+                <fieldset data-testid="pr-repositories-section">
+                  <legend className={labelClass}>
+                    Репозитории для MR
+                  </legend>
+                  <div className="space-y-2">
+                    {(state.status === 'ready'
+                      ? state.issue.repositories
+                      : []
+                    ).map((repository) => (
+                      <label
+                        key={repository.id}
+                        className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80"
+                      >
+                        <input
+                          type="checkbox"
+                          className="accent-[#00FF41]"
+                          data-testid={`pr-repo-${repository.id}`}
+                          checked={prRepoIds.has(repository.id)}
+                          onChange={() =>
+                            setPrRepoIds((current) => {
+                              const next = new Set(current);
+                              if (next.has(repository.id)) {
+                                next.delete(repository.id);
+                              } else {
+                                next.add(repository.id);
+                              }
+                              return next;
+                            })
+                          }
+                        />
+                        {repoShortName(repository.repository_url)}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              )}
+
               {formError && (
                 <p role="alert" className="text-sm font-medium text-[#FF0033]">
                   {formError}
@@ -2516,6 +2588,16 @@ export default function TaskDetail({
                                         Развернуть
                                       </button>
                                     </div>
+
+                                    {report?.pr_error && (
+                                      <p
+                                        role="alert"
+                                        data-testid="step-pr-error"
+                                        className="mt-2 border border-[#FF0033] bg-[#2A0008] px-2 py-1 text-xs font-medium text-[#FF0033]"
+                                      >
+                                        ⚠ MR/ветка не созданы: {report.pr_error}
+                                      </p>
+                                    )}
 
                                     {isActiveStatus(runStatus) ? (
                                       <>

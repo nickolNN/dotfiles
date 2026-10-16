@@ -88,6 +88,29 @@ describe('parseStepReport', () => {
     });
   });
 
+  it('keeps pr_error (ошибка публикации MR/ветки) как строку', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({
+        status: 'pass',
+        summary: 'PR готов',
+        pr_error: 'https://github.com/acme/app.git — MR: 403',
+      }),
+    );
+
+    expect(parsed?.status).toBe('pass');
+    expect(parsed?.pr_error).toBe(
+      'https://github.com/acme/app.git — MR: 403',
+    );
+  });
+
+  it('omits a non-string pr_error', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({ status: 'pass', summary: 'ok', pr_error: 42 }),
+    );
+
+    expect(parsed).not.toHaveProperty('pr_error');
+  });
+
   it('keeps scenarios and findings arrays', () => {
     const parsed = parseStepReport(
       JSON.stringify({

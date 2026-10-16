@@ -204,6 +204,8 @@ export interface CreateIterationRequest {
   thinking_level?: ThinkingLevel;
   /** Уровень размышления на конкретный шаг; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
+  /** ID репозиториев, для которых включён create_mr (из секции pr-шага). */
+  pr_repository_ids?: string[];
 }
 
 export interface StepRun {
@@ -516,6 +518,12 @@ export interface StepReport {
   title?: string;
   /** PR step only: full MR description (Markdown with sections). */
   description?: string;
+  /**
+   * PR step only: публикация результата (commit/push + MR) провалилась.
+   * Шаг `pr` как таковой отработал, но ветка/MR не созданы — фронт показывает
+   * причину, чтобы зелёный шаг не вводил пользователя в заблуждение.
+   */
+  pr_error?: string;
 }
 
 export interface StepExecutionResult {

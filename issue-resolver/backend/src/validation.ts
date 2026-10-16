@@ -96,6 +96,8 @@ export const createIterationRequestSchema = z.object({
   review_context: z.string().optional(),
   is_review_need: z.boolean().optional(),
   steps: z.array(z.enum(PIPELINE_STEPS)).optional(),
+  /** ID репозиториев, для которых включён create_mr (выбирается из секции pr-шага). */
+  pr_repository_ids: z.array(z.string()).optional(),
   model: z.string().optional(),
   step_models: stepModelsSchema.optional(),
   bootstrapper_model: z.string().optional(),

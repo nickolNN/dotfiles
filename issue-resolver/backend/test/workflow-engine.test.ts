@@ -14,6 +14,7 @@ import type {
   StepRun,
   StepRunStatus,
 } from '@issue-resolver/shared';
+import { parseStepReport } from '@issue-resolver/shared';
 import { FakeContainerController } from '../src/docker/controller';
 import { FakeGitService } from '../src/git/service';
 import { FakePiRunner } from '../src/pi/runner';
@@ -1041,23 +1042,61 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     );
   });
 
-  it('createMr падает → итерация completed, а не failed (publish не роняет прогон)', async () => {
-    const { deps, pi, git, mr } = makeDeps();
+  it('createMr падает → итерация completed, но шаг pr failed и причина видна (publish не роняет прогон)', async () => {
+    const { deps, pi, git, mr, sse, store } = makeDeps();
+    const events: SSEEvent[] = [];
+    sse.subscribe('iter-1', (event) => events.push(event));
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('pr'));
     mr.failNextWith(new Error('mr api 403'));
 
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
-    // pr-шаг был успешен — падение публикации MR не должно его отменить.
+    // pr-шаг как таковой был успешен — падение публикации MR не отменяет
+    // итерацию, но и не пропадает: шаг персистентно помечен failed.
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     // commit/push первого репо успел пройти, MR не создан (ошибка на createMr).
     expect(git.commits).toHaveLength(1);
     expect(mr.calls).toEqual([]);
+
+    const prRun = store.runs.find((run) => run.step === 'pr');
+    expect(prRun?.status).toBe('failed');
+    const prOutput = store.outputs.find(
+      (output) => output.step_run_id === prRun?.id,
+    );
+    const persisted = parseStepReport(prOutput?.report ?? '');
+    expect(persisted?.pr_error).toBeDefined();
+    expect(persisted?.pr_error).toContain('MR');
+    expect(persisted?.pr_error).toContain('mr api 403');
+    // Причина продублирована structured-событием (её рисует SessionView).
+    expect(
+      prOutput?.events?.some(
+        (event) =>
+          event.type === 'notice' &&
+          event.level === 'error' &&
+          event.message.includes('mr api 403'),
+      ),
+    ).toBe(true);
+    // Живой SSE: терминальный failed для шага + notice с причиной.
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'step_status' &&
+          event.stepRunId === prRun?.id &&
+          event.data === 'failed',
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'step_event' &&
+          event.data.includes('mr api 403'),
+      ),
+    ).toBe(true);
   });
 
-  it('commitAndPush падает → итерация completed, а не failed (publish не роняет прогон)', async () => {
-    const { deps, pi, git, mr } = makeDeps();
+  it('commitAndPush падает → итерация completed, шаг pr failed с причиной (publish не роняет прогон)', async () => {
+    const { deps, pi, git, mr, store } = makeDeps();
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('pr'));
     git.failNextWith(new Error('git push rejected'));
@@ -1068,6 +1107,45 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     // commit/push упал до записи — ни коммитов, ни MR.
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
+
+    const prRun = store.runs.find((run) => run.step === 'pr');
+    expect(prRun?.status).toBe('failed');
+    const persisted = parseStepReport(
+      store.outputs.find((output) => output.step_run_id === prRun?.id)
+        ?.report ?? '',
+    );
+    expect(persisted?.pr_error).toContain('commit/push');
+    expect(persisted?.pr_error).toContain('git push rejected');
+  });
+
+  it('неизвестный git-хост при публикации → шаг pr failed, причина «unknown git host»', async () => {
+    const { deps, pi, git, mr, store } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('pr'));
+    const repositories = [
+      {
+        repository_url: 'https://unknown.example.org/team/app.git',
+        base_branch: 'main',
+        create_mr: true,
+      },
+    ];
+
+    const result = await runIteration(
+      deps,
+      makePrInput(['resolve', 'pr'], 'dummy-token', repositories),
+    );
+
+    // commit/push дошёл до detectGitHost, MR не создан; итерация завершена.
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(git.commits).toHaveLength(1);
+    expect(mr.calls).toEqual([]);
+    const prRun = store.runs.find((run) => run.step === 'pr');
+    expect(prRun?.status).toBe('failed');
+    const persisted = parseStepReport(
+      store.outputs.find((output) => output.step_run_id === prRun?.id)
+        ?.report ?? '',
+    );
+    expect(persisted?.pr_error).toContain('unknown git host');
   });
 
   it('pr fail → failed; commitAndPush и createMr НЕ вызывались', async () => {
