@@ -1,6 +1,7 @@
 // Общий контракт Issue Resolver. Не трогать без согласования с координатором.
 
 export type TaskStatus =
+  | 'draft'
   | 'pending'
   | 'running'
   /** Идёт разовая подготовка рабочей папки: clone репозиториев + install. */
@@ -189,6 +190,12 @@ export interface CreateIssueRequest {
   thinking_level?: ThinkingLevel;
   /** Уровень размышления на конкретный шаг; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
+  /**
+   * `true` (по умолчанию) — запустить конвейер сразу после создания.
+   * `false` — сохранить задачу как черновик (статус `draft`, без
+   * подготовки рабочей папки и итерации).
+   */
+  run_immediately?: boolean;
 }
 
 export interface CreateIterationRequest {

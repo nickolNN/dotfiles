@@ -81,6 +81,7 @@ export const createIssueRequestSchema = z
     bootstrapper_model: z.string().optional(),
     thinking_level: thinkingLevelSchema.optional(),
     step_thinking_levels: stepThinkingLevelsSchema,
+    run_immediately: z.boolean().optional(),
   })
   .refine(
     (data) => Boolean(data.title?.trim()) || Boolean(data.jira_issue_url),

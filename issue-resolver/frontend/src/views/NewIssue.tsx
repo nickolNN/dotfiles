@@ -372,8 +372,8 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
         ?.writeAccess === true,
   );
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  /** Собрать payload и отправить — общая для «Запустить» и «Сохранить». */
+  async function submitIssue(runImmediately: boolean) {
     setError(null);
     setSubmitting(true);
 
@@ -421,6 +421,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
         Object.keys(activeStepThinkingLevels).length > 0
           ? activeStepThinkingLevels
           : undefined,
+      run_immediately: runImmediately,
     };
 
     try {
@@ -435,6 +436,16 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submitIssue(true);
+  }
+
+  async function handleSave(event: React.MouseEvent) {
+    event.preventDefault();
+    await submitIssue(false);
   }
 
   return (
@@ -863,13 +874,23 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
           </p>
         )}
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 md:w-auto"
-        >
-          {submitting ? 'Запускаем…' : 'Запустить'}
-        </button>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 md:w-auto"
+          >
+            {submitting ? 'Запускаем…' : 'Запустить'}
+          </button>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={handleSave}
+            className="min-h-12 w-full rounded-none border border-[#008F11] bg-[#0D0208] px-5 py-2 text-sm font-medium text-[#008F11] hover:bg-[#008F11]/20 hover:text-[#00FF41] disabled:opacity-50 md:w-auto"
+          >
+            {submitting ? 'Сохраняем…' : 'Сохранить'}
+          </button>
+        </div>
       </form>
     </div>
   );
