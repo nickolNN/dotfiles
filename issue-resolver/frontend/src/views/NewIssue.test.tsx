@@ -342,10 +342,6 @@ describe('NewIssue', () => {
     addRepoRow();
     await selectRepo('repo-1');
 
-    expect(
-      screen.getByRole('switch', { name: 'Создать merge request' }),
-    ).toHaveAttribute('aria-checked', 'false');
-
     fireEvent.change(screen.getByLabelText('Заголовок'), {
       target: { value: 'Fix login bug' },
     });
@@ -365,18 +361,25 @@ describe('NewIssue', () => {
     });
   });
 
-  it('toggle «Создать merge request» → repositories[].create_mr', async () => {
+  it('чекбокс «Репозитории для MR» → repositories[].create_mr', async () => {
     const fetchMock = stubApi({ repos: [SAVED_REPO], branches: BRANCHES });
 
     render(<NewIssue />);
     addRepoRow();
     await selectRepo('repo-1');
 
-    const toggle = screen.getByRole('switch', {
-      name: 'Создать merge request',
-    });
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    // Секция появляется только при выбранном шаге pr.
+    expect(
+      screen.queryByTestId('pr-repositories-section'),
+    ).toBeNull();
+    fireEvent.click(screen.getByLabelText('Merge Request'));
+
+    const checkbox = screen.getByTestId(
+      'pr-repo-repo-1',
+    ) as HTMLInputElement;
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
 
     fireEvent.change(screen.getByLabelText('Заголовок'), {
       target: { value: 'Fix login bug' },
@@ -391,7 +394,7 @@ describe('NewIssue', () => {
     });
   });
 
-  it('writeAccess:false → галка «Создать merge request» скрыта', async () => {
+  it('writeAccess:false → репозиторий не предлагается для MR', async () => {
     stubApi({
       repos: [savedRepo('repo-1', 'acme/app', 'main', false)],
       branches: BRANCHES,
@@ -401,16 +404,19 @@ describe('NewIssue', () => {
     addRepoRow();
     await selectRepo('repo-1');
 
+    fireEvent.click(screen.getByLabelText('Merge Request'));
+
+    expect(screen.queryByTestId('pr-repo-repo-1')).toBeNull();
     expect(
-      screen.queryByRole('switch', { name: 'Создать merge request' }),
-    ).toBeNull();
+      screen.getByText(/Нет добавленных репозиториев с правом записи/),
+    ).toBeInTheDocument();
     // Строка жива: тогл Dev-сервера на месте.
     expect(
       screen.getByRole('switch', { name: 'Dev сервер' }),
     ).toBeInTheDocument();
   });
 
-  it('writeAccess:true → галка «Создать merge request» видна', async () => {
+  it('writeAccess:true → чекбокс репозитория для MR виден', async () => {
     stubApi({
       repos: [savedRepo('repo-1', 'acme/app', 'main', true)],
       branches: BRANCHES,
@@ -420,9 +426,9 @@ describe('NewIssue', () => {
     addRepoRow();
     await selectRepo('repo-1');
 
-    expect(
-      screen.getByRole('switch', { name: 'Создать merge request' }),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Merge Request'));
+
+    expect(screen.getByTestId('pr-repo-repo-1')).toBeInTheDocument();
   });
 
   it('bootstrap по умолчанию включён → bootstrap_enabled: true', async () => {
@@ -489,11 +495,8 @@ describe('NewIssue', () => {
     await selectRepo('repo-1', 0);
     await selectRepo('repo-2', 1);
 
-    fireEvent.click(
-      within(screen.getAllByTestId('repo-row')[1]).getByRole('switch', {
-        name: 'Создать merge request',
-      }),
-    );
+    fireEvent.click(screen.getByLabelText('Merge Request'));
+    fireEvent.click(screen.getByTestId('pr-repo-repo-2'));
 
     fireEvent.change(screen.getByLabelText('Заголовок'), {
       target: { value: 'Fix login bug' },
@@ -513,6 +516,42 @@ describe('NewIssue', () => {
         repo_id: 'repo-2',
         create_mr: true,
       });
+    });
+  });
+
+  it('снятие шага pr скрывает секцию MR и сбрасывает выбор репозиториев', async () => {
+    const fetchMock = stubApi({ repos: [SAVED_REPO], branches: BRANCHES });
+
+    render(<NewIssue />);
+    addRepoRow();
+    await selectRepo('repo-1');
+
+    fireEvent.click(screen.getByLabelText('Merge Request'));
+    const checkbox = screen.getByTestId(
+      'pr-repo-repo-1',
+    ) as HTMLInputElement;
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+
+    // Сняли шаг pr — секция исчезает, выбор репозиториев сброшен.
+    fireEvent.click(screen.getByLabelText('Merge Request'));
+    expect(screen.queryByTestId('pr-repositories-section')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Merge Request'));
+    expect(
+      screen.getByTestId('pr-repo-repo-1') as HTMLInputElement,
+    ).not.toBeChecked();
+
+    fireEvent.change(screen.getByLabelText('Заголовок'), {
+      target: { value: 'Fix login bug' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    await waitFor(() => {
+      const repositories = issuePostBody(fetchMock).repositories as Array<
+        Record<string, unknown>
+      >;
+      expect(repositories[0].create_mr).toBe(false);
     });
   });
 

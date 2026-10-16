@@ -11,7 +11,7 @@ import type {
   PipelineStep,
 } from '@issue-resolver/shared';
 import { extractIssueKeyFromUrl, statusOfIssue } from '@issue-resolver/shared';
-import { and, desc, eq, max } from 'drizzle-orm';
+import { and, desc, eq, max, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/client';
 import {
@@ -894,6 +894,43 @@ export async function issuesRoutes(
           create_mr: !!repository.create_mr,
           bootstrap_enabled: repository.bootstrap_enabled ?? true,
         }));
+
+      // Если в запросе указаны pr_repository_ids — обновляем create_mr
+      // флаги в таблице репозиториев задачи ДО чтения. Так шаг pr видит
+      // актуальный per-repo выбор из UI итерации.
+      if (body.pr_repository_ids && body.pr_repository_ids.length > 0) {
+        const prIdSet = new Set(body.pr_repository_ids);
+        // Сбрасываем create_mr у всех репозиториев этой задачи.
+        db.update(issueRepositories)
+          .set({ create_mr: false, updated_at: new Date().toISOString() })
+          .where(eq(issueRepositories.issue_id, id))
+          .run();
+        // Включаем create_mr только у выбранных.
+        for (const repoId of prIdSet) {
+          db.update(issueRepositories)
+            .set({ create_mr: true, updated_at: new Date().toISOString() })
+            .where(
+              sql`${issueRepositories.issue_id} = ${id} AND ${issueRepositories.id} = ${repoId}`,
+            )
+            .run();
+        }
+        // Перечитываем репозитории после обновления create_mr.
+        repositories.length = 0;
+        const updated = db
+          .select()
+          .from(issueRepositories)
+          .where(eq(issueRepositories.issue_id, id))
+          .all();
+        for (const repo of updated) {
+          repositories.push({
+            repository_url: repo.repository_url,
+            base_branch: repo.branch_name,
+            create_mr: !!repo.create_mr,
+            bootstrap_enabled: repo.bootstrap_enabled ?? true,
+          });
+        }
+      }
+
       const createMr = repositories.some((repository) => repository.create_mr);
 
       const lastNumber =

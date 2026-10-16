@@ -301,4 +301,34 @@ describe('TaskDetail — шаги выбранной итерации', () => {
     expect(screen.queryByTestId('step-summary')).toBeNull();
     expect(screen.queryByTestId('step-session')).toBeNull();
   });
+
+  it('pr-шаг с pr_error → красный баннер «MR/ветка не созданы» с причиной', async () => {
+    stubFetch(() =>
+      Promise.resolve(
+        jsonResponse([
+          makeStepRun({
+            id: 'run-1',
+            step: 'pr',
+            status: 'failed',
+            report: JSON.stringify({
+              status: 'pass',
+              summary: 'PR-описание готово',
+              pr_error:
+                'https://github.com/acme/app.git — MR: pr failed: 403',
+            }),
+          }),
+        ]),
+      ),
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+
+    const banner = await screen.findByTestId('step-pr-error');
+    expect(banner).toHaveTextContent('MR/ветка не созданы');
+    expect(banner).toHaveTextContent('403');
+    // Шаг отработал (PASS-саммари на месте), но публикация провалилась.
+    expect(screen.getByTestId('step-summary')).toHaveTextContent(
+      'PR-описание готово',
+    );
+  });
 });

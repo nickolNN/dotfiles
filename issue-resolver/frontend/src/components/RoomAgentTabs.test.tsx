@@ -428,6 +428,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
         stageName: 'Сбор',
         status: 'finished',
         startedAt: new Date(Date.now() - 20_000).toISOString(),
+        endedAt: new Date(Date.now() - 5_000).toISOString(),
         stats: makeStats({
           model: 'Claude Sonnet 4',
           tokens: {
@@ -450,6 +451,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
         stageName: 'Сбор',
         status: 'finished',
         startedAt: new Date(Date.now() - 10_000).toISOString(),
+        endedAt: new Date(Date.now() - 2_000).toISOString(),
         stats: makeStats({
           model: 'Claude Opus 4',
           tokens: {

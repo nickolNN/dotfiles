@@ -155,6 +155,7 @@ export function parseStepReport(json: string): StepReport | null {
     ...(typeof obj.description === 'string'
       ? { description: obj.description }
       : {}),
+    ...(typeof obj.pr_error === 'string' ? { pr_error: obj.pr_error } : {}),
     ...(Array.isArray(obj.scenarios)
       ? { scenarios: obj.scenarios as StepReportScenario[] }
       : {}),

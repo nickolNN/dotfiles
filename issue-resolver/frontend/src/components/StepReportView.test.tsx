@@ -45,6 +45,24 @@ describe('StepReportView — структурированный отчёт', () 
     expect(badge.className).toContain('#FFB000');
   });
 
+  it('pr_error: баннер о несозданном MR/ветке с причиной', () => {
+    render(
+      <StepReportView
+        raw={JSON.stringify({
+          status: 'pass',
+          summary: 'PR готов',
+          pr_error: 'https://github.com/acme/app.git — commit/push: rejected',
+        })}
+      />,
+    );
+
+    const banner = screen.getByTestId('step-report-pr-error');
+    expect(banner).toHaveTextContent('MR/ветка не созданы');
+    expect(banner).toHaveTextContent('commit/push: rejected');
+    // Статус агента остаётся PASS — публикация отдельна от самого шага.
+    expect(screen.getByTestId('step-report-status')).toHaveTextContent('PASS');
+  });
+
   it('scenarios: name и status для каждого сценария (+details)', () => {
     render(
       <StepReportView

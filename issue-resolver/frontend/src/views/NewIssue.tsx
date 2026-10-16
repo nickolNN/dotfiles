@@ -30,6 +30,7 @@ const MODEL_STEPS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
   { value: 'resolve', label: 'Исполнение' },
   { value: 'review', label: 'Код-ревью' },
   { value: 'test', label: 'Тест' },
+  { value: 'pr', label: 'Merge Request' },
 ];
 
 /** Желаемый результат задачи: формат артефакта (md/html). */
@@ -61,7 +62,6 @@ interface NewIssueProps {
 interface RepoRow {
   repo_id: string;
   base_branch: string;
-  create_mr: boolean;
   /** Ставить ли зависимости (bootstrapper) в этом репозитории. */
   bootstrap_enabled: boolean;
   branches: string[];
@@ -83,6 +83,8 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [showJira, setShowJira] = useState(false);
   const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
+  // id репозиториев, для которых на шаге pr нужно создать MR.
+  const [prRepoIds, setPrRepoIds] = useState<Set<string>>(new Set());
   const [stepModels, setStepModels] = useState<StepModels>({});
   const [stepThinkingLevels, setStepThinkingLevels] =
     useState<StepThinkingLevels>({});
@@ -232,7 +234,6 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       additions.push({
         repo_id: repoId,
         base_branch: tr.repository.defaultBranch ?? '',
-        create_mr: false,
         bootstrap_enabled: tr.bootstrap_enabled,
         branches: [],
         branchesLoading: true,
@@ -275,7 +276,6 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       {
         repo_id: '',
         base_branch: '',
-        create_mr: false,
         bootstrap_enabled: true,
         branches: [],
         branchesLoading: false,
@@ -283,14 +283,16 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
     ]);
   }
 
-  function toggleRepositoryMr(index: number) {
-    setRepositories((current) =>
-      current.map((repository, i) =>
-        i === index
-          ? { ...repository, create_mr: !repository.create_mr }
-          : repository,
-      ),
-    );
+  function togglePrRepo(repoId: string) {
+    setPrRepoIds((current) => {
+      const next = new Set(current);
+      if (next.has(repoId)) {
+        next.delete(repoId);
+      } else {
+        next.add(repoId);
+      }
+      return next;
+    });
   }
 
   function toggleRepositoryBootstrap(index: number) {
@@ -316,6 +318,10 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
         ? current.filter((value) => value !== step)
         : [...current, step],
     );
+    // Сняли шаг pr — сбрасываем выбор репозиториев для MR.
+    if (step === 'pr') {
+      setPrRepoIds(new Set());
+    }
   }
 
   function updateStepModel(step: PipelineStep, value: string) {
@@ -357,6 +363,15 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   // Модель шага доступна только когда шаг отмечен (resolve отмечен всегда).
   const chosenSteps = new Set<PipelineStep>(['resolve', ...selectedSteps]);
 
+  // Репозитории с правом записи среди уже добавленных в форму —
+  // именно для них можно запросить создание MR на шаге pr.
+  const mrRepositories = repositories.filter(
+    (repository) =>
+      repository.repo_id &&
+      savedRepos.find((repo) => repo.id === repository.repo_id)
+        ?.writeAccess === true,
+  );
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -385,7 +400,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       .map((repository) => ({
         repo_id: repository.repo_id,
         base_branch: repository.base_branch,
-        create_mr: repository.create_mr,
+        create_mr: chosenSteps.has('pr') && prRepoIds.has(repository.repo_id),
         bootstrap_enabled: repository.bootstrap_enabled,
       }));
 
@@ -606,33 +621,6 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
                     </p>
                   )}
                   <div className="flex flex-wrap items-center gap-x-6 gap-y-1">
-                    {selectedRepo?.writeAccess === true && (
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={repository.create_mr === true}
-                        onClick={() => toggleRepositoryMr(index)}
-                        className="flex min-h-12 items-center gap-3 text-sm font-medium text-[#00FF41]/80"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={`relative inline-flex h-6 w-11 shrink-0 items-center border transition-colors ${
-                            repository.create_mr
-                              ? 'border-[#00FF41] bg-[#003B00]'
-                              : 'border-[#008F11] bg-[#0D0208]'
-                          }`}
-                        >
-                          <span
-                            className={`absolute h-4 w-4 transition-transform ${
-                              repository.create_mr
-                                ? 'translate-x-6 bg-[#00FF41]'
-                                : 'translate-x-1 bg-[#008F11]'
-                            }`}
-                          />
-                        </span>
-                        Создать merge request
-                      </button>
-                    )}
                     <button
                       type="button"
                       role="switch"
@@ -831,6 +819,43 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
             })}
           </div>
         </fieldset>
+
+        {selectedSteps.includes('pr') && (
+          <fieldset data-testid="pr-repositories-section">
+            <legend className="mb-2 text-sm font-medium text-[#00FF41]/80">
+              Репозитории для MR
+            </legend>
+            {mrRepositories.length === 0 ? (
+              <p className="text-xs text-[#00FF41]/50">
+                Нет добавленных репозиториев с правом записи — MR не будет
+                создан.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {mrRepositories.map((repository) => {
+                  const selectedRepo = savedRepos.find(
+                    (repo) => repo.id === repository.repo_id,
+                  );
+                  return (
+                    <label
+                      key={repository.repo_id}
+                      className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80"
+                    >
+                      <input
+                        type="checkbox"
+                        className="accent-[#00FF41]"
+                        data-testid={`pr-repo-${repository.repo_id}`}
+                        checked={prRepoIds.has(repository.repo_id)}
+                        onChange={() => togglePrRepo(repository.repo_id)}
+                      />
+                      {selectedRepo?.fullName ?? repository.repo_id}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
+        )}
 
         {error && (
           <p role="alert" className="text-sm font-medium text-[#FF0033]">

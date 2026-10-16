@@ -114,11 +114,13 @@ export function groupAgentsByStage(
         const start = startMillis(agent);
         if (start !== null) {
           firstStart = Math.min(firstStart, start);
-          const end =
+          const endMs =
             agent.status === 'running'
               ? now
-              : (endMillis(agent) ?? now);
-          lastEnd = Math.max(lastEnd, Math.max(start, end));
+              : endMillis(agent);
+          if (endMs !== null) {
+            lastEnd = Math.max(lastEnd, Math.max(start, endMs));
+          }
         }
       }
 
@@ -202,7 +204,8 @@ function endMillis(agent: RoomAgent): number | null {
 
 /**
  * Длительность агента: у running — живой `now - start`, у терминального —
- * `endedAt - startedAt` (из бэкенда), иначе `now - start`.
+ * `endedAt - startedAt` (из бэкенда). Если терминальный агент без endedAt —
+ * возвращаем null (длительность неизвестна), а НЕ now (это давало live-тик).
  */
 function agentDurationMs(
   agent: RoomAgent,
@@ -210,9 +213,9 @@ function agentDurationMs(
 ): number | null {
   const start = startMillis(agent);
   if (start === null) return null;
-  const end = agent.status === 'running'
-    ? now
-    : (endMillis(agent) ?? now);
+  if (agent.status === 'running') return Math.max(0, now - start);
+  const end = endMillis(agent);
+  if (end === null) return null;
   return Math.max(0, end - start);
 }
 
@@ -388,12 +391,16 @@ export default function RoomAgentTabs({
       const start = startMillis(agent);
       if (start !== null) {
         firstStart = Math.min(firstStart, start);
-        const end =
+        const endMs =
           agent.status === 'running'
             ? now
-            : (endMillis(agent) ?? now);
-        lastEnd = Math.max(lastEnd, Math.max(start, end));
-        if (agent.status === 'running') anyRunning = true;
+            : endMillis(agent);
+        if (endMs !== null) {
+          lastEnd = Math.max(lastEnd, Math.max(start, endMs));
+          if (agent.status === 'running') anyRunning = true;
+        } else if (agent.status === 'running') {
+          anyRunning = true;
+        }
       }
     }
     // Если все агенты завершены — фактическая длительность шага

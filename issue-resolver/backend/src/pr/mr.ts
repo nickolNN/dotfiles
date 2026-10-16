@@ -28,6 +28,18 @@ export interface MrClient {
   createMr(input: MrCreateInput): Promise<MrCreateResult>;
 }
 
+/** Ошибка публикации результата pr-шага по конкретному репозиторию. */
+export interface PrPublishError {
+  repositoryUrl: string;
+  /** Человекочитаемая причина: фаза (commit/push или MR) + текст ошибки. */
+  message: string;
+}
+
+/** Человекочитаемая сводка ошибок публикации для отчёта/UI. */
+export function formatPrPublishErrors(errors: PrPublishError[]): string {
+  return errors.map((error) => error.message).join('; ');
+}
+
 /**
  * Токены MR по хостам-источникам. Используются как fallback, когда
  * per-call `input.token` пуст: приоритет `input.token > tokens[source] > token`.

@@ -25,6 +25,8 @@
   shell
 - Pane nav: `Ctrl-a h/j/k/l`; split: `Ctrl-a "` (horizontal), `Ctrl-a %` (vertical)
 - `Ctrl-a a` sends prefix (needed in nested tmux sessions)
+- Clipboard: `set-clipboard on` + `Ms` terminal override — OSC 52 escape-последовательности
+  (копирование через `Ctrl+X` в pi) пробрасываются в системный буфер через Alacritty
 - Status bar: hand-rolled hackerman theme in `tmux/tmux.conf`
   (neon pill styling, `heading.sh` for the git branch)
 

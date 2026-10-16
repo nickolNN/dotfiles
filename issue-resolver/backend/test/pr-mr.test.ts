@@ -3,6 +3,7 @@ import {
   FakeMrClient,
   HttpMrClient,
   detectGitHost,
+  formatPrPublishErrors,
   type MrClient,
   type MrCreateInput,
 } from '../src/pr/mr';
@@ -369,6 +370,52 @@ describe('HttpMrClient', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('сетевая ошибка createMr → rejects (причина дойдёт до шага как pr_error)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new Error('ECONNREFUSED')),
+    );
+    try {
+      const client = new HttpMrClient();
+
+      await expect(
+        client.createMr(
+          input({
+            repositoryUrl: 'https://github.com/acme/app.git',
+            source: 'github',
+          }),
+        ),
+      ).rejects.toThrow('ECONNREFUSED');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('formatPrPublishErrors', () => {
+  it('пустой список ошибок → пустая строка', () => {
+    expect(formatPrPublishErrors([])).toBe('');
+  });
+
+  it('склеивает причины по репозиториям через "; "', () => {
+    const message = formatPrPublishErrors([
+      {
+        repositoryUrl: 'https://github.com/acme/app.git',
+        message:
+          'https://github.com/acme/app.git — commit/push: push rejected',
+      },
+      {
+        repositoryUrl: 'git@gitlab.example.com:team/lib.git',
+        message: 'git@gitlab.example.com:team/lib.git — MR: pr failed: 403',
+      },
+    ]);
+
+    expect(message).toBe(
+      'https://github.com/acme/app.git — commit/push: push rejected; ' +
+        'git@gitlab.example.com:team/lib.git — MR: pr failed: 403',
+    );
   });
 });
 
