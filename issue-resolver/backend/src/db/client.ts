@@ -177,6 +177,13 @@ CREATE TABLE IF NOT EXISTS step_outputs (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 export type Db = BetterSQLite3Database<typeof schema>;
@@ -340,6 +347,9 @@ function ensureStepRunColumns(sqlite: Database.Database): void {
   }
 }
 
+/* Таблица settings создаётся свежей, доводить ALTER-ами пока нечего. */
+function ensureSettingsColumns(_sqlite: Database.Database): void {}
+
 function ensureStepOutputColumns(sqlite: Database.Database): void {
   const columns = new Set(
     (sqlite.pragma('table_info(step_outputs)') as { name: string }[]).map(
@@ -380,6 +390,7 @@ export function createDb(file: string = DEFAULT_DB_PATH): Db {
   ensureStepRunColumns(sqlite);
   ensureStepOutputColumns(sqlite);
   ensureRepositoriesColumns(sqlite);
+  ensureSettingsColumns(sqlite);
 
   return drizzle(sqlite, { schema });
 }

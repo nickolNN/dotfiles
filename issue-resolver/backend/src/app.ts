@@ -19,7 +19,9 @@ import { healthRoutes } from './routes/health';
 import { issuesRoutes } from './routes/issues';
 import { iterationsRoutes } from './routes/iterations';
 import { modelsRoutes } from './routes/models';
+import { adminRoutes } from './routes/admin';
 import { reposRoutes } from './routes/repos';
+import { settingsRoutes } from './routes/settings';
 import { tagsRoutes } from './routes/tags';
 import { streamRoutes } from './routes/stream';
 import { DEFAULT_WORKSPACE_ROOT } from './workspace/paths';
@@ -121,6 +123,8 @@ export function buildApp(
       resolverFactory: repoResolverFactory,
     });
     await tagsRoutes(instance, db);
+    await settingsRoutes(instance, db);
+    await adminRoutes(instance, db, runDeps.workspaceRoot);
     await iterationsRoutes(instance, db, runDeps);
     await controlRoutes(instance, runDeps.control);
     await streamRoutes(instance, db, runDeps.sse, runDeps.control, runDeps.container);

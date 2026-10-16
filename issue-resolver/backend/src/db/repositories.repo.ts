@@ -5,7 +5,7 @@ import type {
   RunInstructionsStatus,
   SavedRepo,
 } from '@issue-resolver/shared';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { repositories } from './schema';
 
@@ -70,7 +70,10 @@ export function listRepositories(db: Db): SavedRepo[] {
   return db
     .select()
     .from(repositories)
-    .orderBy(asc(repositories.created_at), asc(repositories.id))
+    // `rowid` — стабильный тайбрейк для «порядка добавления»: `created_at`
+    // имеет миллисекундную точность, поэтому два репо в одну мс иначе
+    // сортировались бы случайным `id` (флейки в регрессии).
+    .orderBy(asc(repositories.created_at), asc(sql`rowid`))
     .all()
     .map(toSavedRepo);
 }

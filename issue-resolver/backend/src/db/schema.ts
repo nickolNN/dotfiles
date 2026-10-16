@@ -254,3 +254,11 @@ export const stepOutputs = sqliteTable('step_outputs', {
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
 });
+
+/** Настройки приложения: key-value (hostname и т.п.). */
+export const settings = sqliteTable('settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull().default(''),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});

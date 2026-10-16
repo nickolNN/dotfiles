@@ -7,14 +7,21 @@ import { formatBytes, healthColor } from './lib/containerStats';
 import { API_BASE } from './api/client';
 import NewIssue from './views/NewIssue';
 import Repositories from './views/Repositories';
+import Settings from './views/Settings';
 import Tags from './views/Tags';
 import TasksList from './views/TasksList';
 import TaskDetail from './views/TaskDetail';
 
-type View = 'new-issue' | 'tasks' | 'task-detail' | 'repositories' | 'tags';
+type View =
+  | 'new-issue'
+  | 'tasks'
+  | 'task-detail'
+  | 'repositories'
+  | 'tags'
+  | 'settings';
 
 /** Верхние табы-разделы (форма создания задачи и деталь — под табом «Задачи»). */
-type Tab = 'tasks' | 'repositories' | 'tags';
+type Tab = 'tasks' | 'repositories' | 'tags' | 'settings';
 
 interface Route {
   view: View;
@@ -42,6 +49,9 @@ function parseHash(hash: string = window.location.hash): Route {
   if (parts[0] === 'tags') {
     return { view: 'tags', issueId: null };
   }
+  if (parts[0] === 'settings') {
+    return { view: 'settings', issueId: null };
+  }
   // Пустой или неизвестный hash → главная страница со списком задач.
   return { view: 'tasks', issueId: null };
 }
@@ -52,7 +62,7 @@ const TABS: ReadonlyArray<{ tab: Tab; label: string }> = [
   { tab: 'tags', label: 'Теги' },
 ];
 
-const TAB_PATHS: Record<Tab, string> = {
+const TAB_PATHS: Record<Exclude<Tab, 'settings'>, string> = {
   tasks: '/tasks',
   repositories: '/repositories',
   tags: '/tags',
@@ -157,7 +167,6 @@ export default function App() {
   // Приходит по SSE `container_stats` из потока задачи.
   const [containerStats, setContainerStats] =
     useState<ContainerStatsPayload | null>(null);
-
   useEffect(() => {
     const onHashChange = () => setRoute(parseHash());
     window.addEventListener('hashchange', onHashChange);
@@ -198,7 +207,9 @@ export default function App() {
       ? 'repositories'
       : view === 'tags'
         ? 'tags'
-        : 'tasks';
+        : view === 'settings'
+          ? 'settings'
+          : 'tasks';
 
   function navigate(hashPath: string) {
     const target = hashPath.startsWith('#') ? hashPath : `#${hashPath}`;
@@ -226,7 +237,7 @@ export default function App() {
   function handleTabClick(tab: Tab) {
     if (tab === 'repositories') setRepoCreateSignal(0);
     if (tab === 'tags') setTagCreateSignal(0);
-    navigate(TAB_PATHS[tab]);
+    navigate(tab === 'settings' ? '/settings' : TAB_PATHS[tab]);
   }
 
   function handlePrimaryAction() {
@@ -292,6 +303,23 @@ export default function App() {
                 </button>
               );
             })}
+            <button
+              type="button"
+              title="Настройки"
+              aria-label="Настройки"
+              className={[
+                'ml-auto rounded-none border-b-2 px-2 py-2 text-sm font-medium transition-colors sm:px-3',
+                activeTab === 'settings'
+                  ? 'border-[#00FF41] text-[#00FF41]'
+                  : 'border-transparent text-[#00FF41]/50 hover:text-[#00FF41]/80',
+              ].join(' ')}
+              onClick={() => navigate('/settings')}
+            >
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
           </nav>
           <ContainerStatsBlock
             stats={containerStats}
@@ -322,6 +350,7 @@ export default function App() {
           <Repositories createSignal={repoCreateSignal} />
         )}
         {view === 'tags' && <Tags createSignal={tagCreateSignal} />}
+        {view === 'settings' && <Settings />}
         {view === 'tasks' && (
           <TasksList onOpenTask={openTask} onOpenResult={openResult} />
         )}

@@ -934,10 +934,35 @@ export async function runIteration(
       }
     }
 
+    // pr-шаг успешен, но ни один подготовленный репозиторий не отмечен для
+    // MR (create_mr = false у всех): публикация молча ничего не делает. Это
+    // законный сценарий «результат остаётся файлами», но пользователь,
+    // выбравший шаг pr, ожидает MR — поэтому шлём явное предупреждение, а не
+    // оставляем зелёный шаг без ветки/MR (репорт бага: «шаг success, MR нет»).
+    const prNoTargetNotice: SessionEvent | null =
+      step === 'pr' &&
+      status === 'success' &&
+      repoWorkspaces.length > 0 &&
+      !repoWorkspaces.some((workspace) =>
+        input.repositories.some(
+          (repo) =>
+            repo.repository_url === workspace.repoUrl &&
+            (repo.create_mr ?? false),
+        ),
+      )
+        ? {
+            type: 'notice',
+            level: 'warning',
+            message:
+              'pr-шаг: ни один репозиторий не отмечен для MR (create_mr = false у всех) — ветки и MR не создавались, результат остался файлами в рабочей папке.',
+          }
+        : null;
+
     const prErrors = prPublish?.errors ?? [];
     const prErrorMessage = formatPrPublishErrors(prErrors);
     const outputEvents: SessionEvent[] = [
       ...(result.events ?? []),
+      ...(prNoTargetNotice ? [prNoTargetNotice] : []),
       ...prErrors.map(
         (error): SessionEvent => ({
           type: 'notice',
@@ -966,6 +991,11 @@ export async function runIteration(
       stats: result.stats ?? null,
     });
     deps.sse.publish(stepStatusEvent(issue.id, iteration.id, stepRun.id, status));
+    if (prNoTargetNotice) {
+      deps.sse.publish(
+        stepEvent(issue.id, iteration.id, stepRun.id, prNoTargetNotice),
+      );
+    }
 
     // Публикация провалилась — шаг реально отработал, но результат не
     // опубликован. Красим чип в failed (персистентно) и шлём причину в SSE,

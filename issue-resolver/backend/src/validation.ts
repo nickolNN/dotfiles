@@ -134,6 +134,11 @@ export const createTagRequestSchema = z.object({
     .min(1, 'хотя бы один репозиторий обязателен'),
 });
 
+/** Схема тела PUT /issue-resolver/api/v1/settings/hostname. */
+export const updateHostnameRequestSchema = z.object({
+  hostname: z.string().max(100, 'hostname не длиннее 100 символов'),
+});
+
 /** Схема тела PUT /issue-resolver/api/v1/tags/:id. */
 export const updateTagRequestSchema = z.object({
   name: z.string().min(1).optional(),

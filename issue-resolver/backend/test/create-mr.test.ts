@@ -82,4 +82,88 @@ describe('create_mr — per-repo режим сдачи (spec-parity)', () => {
     expect(iteration.statusCode).toBe(201);
     expect(iteration.json().steps).toContain('pr');
   });
+
+  it('POST /issues/:id/iterations с pr_repository_ids выбирает только указанные репо', async () => {
+    const app = makeApp();
+
+    const created = await app.inject({
+      method: 'POST',
+      url: ROUTE_PATH,
+      payload: {
+        title: 'Выборочный MR',
+        repositories: [
+          { ...REPOSITORIES[0], create_mr: true },
+          {
+            repository_url: 'https://github.com/acme/lib.git',
+            base_branch: 'main',
+            create_mr: true,
+          },
+        ],
+      },
+    });
+    const issue = created.json();
+    const [appRepo, libRepo] = issue.repositories as Array<{ id: string }>;
+
+    const iteration = await app.inject({
+      method: 'POST',
+      url: `${ROUTE_PATH}/${issue.id}/iterations`,
+      payload: {
+        context: 'выбран только lib',
+        steps: ['resolve', 'pr'],
+        pr_repository_ids: [libRepo.id],
+      },
+    });
+
+    expect(iteration.statusCode).toBe(201);
+    expect(iteration.json().steps).toContain('pr');
+
+    const after = (
+      await app.inject({ method: 'GET', url: `${ROUTE_PATH}/${issue.id}` })
+    ).json();
+    const createMrById = Object.fromEntries(
+      (after.repositories as Array<{ id: string; create_mr: boolean }>).map(
+        (repo) => [repo.id, repo.create_mr],
+      ),
+    );
+    expect(createMrById[libRepo.id]).toBe(true);
+    expect(createMrById[appRepo.id]).toBe(false);
+  });
+
+  it('пустой pr_repository_ids снимает все create_mr и убирает pr из шагов', async () => {
+    const app = makeApp();
+
+    const created = await app.inject({
+      method: 'POST',
+      url: ROUTE_PATH,
+      payload: {
+        title: 'Снятие всех MR',
+        repositories: [{ ...REPOSITORIES[0], create_mr: true }],
+      },
+    });
+    const issue = created.json();
+    expect(issue.pipeline_steps).toContain('pr');
+
+    const iteration = await app.inject({
+      method: 'POST',
+      url: `${ROUTE_PATH}/${issue.id}/iterations`,
+      payload: {
+        context: 'без MR',
+        // Фронт при снятом шаге pr не перечисляет его в steps.
+        steps: ['resolve'],
+        pr_repository_ids: [],
+      },
+    });
+
+    expect(iteration.statusCode).toBe(201);
+    expect(iteration.json().steps).not.toContain('pr');
+
+    const after = (
+      await app.inject({ method: 'GET', url: `${ROUTE_PATH}/${issue.id}` })
+    ).json();
+    expect(
+      (after.repositories as Array<{ create_mr: boolean }>).every(
+        (repo) => repo.create_mr === false,
+      ),
+    ).toBe(true);
+  });
 });

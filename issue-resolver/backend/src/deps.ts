@@ -72,13 +72,18 @@ const DEFAULT_LOCAL_WORKSPACE_ROOT =
  * просто host-папка задачи, pi запускается локально (`pi --mode rpc`).
  */
 export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
-  if (env.ISSUE_RESOLVER_LOCAL === '1') {
-    const pi = new RpcPiRunner('resolve', 'local');
+  // Docker-режим: явный флаг ISSUE_RESOLVER_USE_REAL=1.
+  if (env.ISSUE_RESOLVER_USE_REAL === '1') {
+    const docker = new Dockerode({
+      socketPath: env.DOCKER_SOCKET || DEFAULT_DOCKER_SOCKET,
+    });
+    const pi = new RpcPiRunner();
     const bootstrapperTimeoutMs = resolveBootstrapperTimeoutMs(
       env[BOOTSTRAPPER_TIMEOUT_ENV],
     );
+
     return {
-      container: new LocalContainerController(),
+      container: new DockerodeContainerController(docker),
       git: new GitCliService(originalsRootFromEnv(env)),
       pi,
       mr: new HttpMrClient(env.MR_TOKEN || '', {
@@ -90,27 +95,22 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
       control: new InMemoryStepSessionRegistry(),
       bootstrapperFactory: bootstrapperFactoryFor(pi, bootstrapperTimeoutMs),
       bootstrapperTimeoutMs,
+      local: false,
       workspaceRoot:
         env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
         (env.ISSUE_RESOLVER_DATA_DIR
           ? join(env.ISSUE_RESOLVER_DATA_DIR, 'workspaces')
-          : DEFAULT_LOCAL_WORKSPACE_ROOT),
-      local: true,
+          : DEFAULT_WORKSPACE_ROOT),
     };
   }
 
-  if (env.ISSUE_RESOLVER_USE_REAL !== '1') return {};
-
-  const docker = new Dockerode({
-    socketPath: env.DOCKER_SOCKET || DEFAULT_DOCKER_SOCKET,
-  });
-  const pi = new RpcPiRunner();
+  // По умолчанию — локальный режим (без Docker).
+  const pi = new RpcPiRunner('resolve', 'local');
   const bootstrapperTimeoutMs = resolveBootstrapperTimeoutMs(
     env[BOOTSTRAPPER_TIMEOUT_ENV],
   );
-
   return {
-    container: new DockerodeContainerController(docker),
+    container: new LocalContainerController(),
     git: new GitCliService(originalsRootFromEnv(env)),
     pi,
     mr: new HttpMrClient(env.MR_TOKEN || '', {
@@ -122,11 +122,11 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
     control: new InMemoryStepSessionRegistry(),
     bootstrapperFactory: bootstrapperFactoryFor(pi, bootstrapperTimeoutMs),
     bootstrapperTimeoutMs,
-    local: false,
     workspaceRoot:
       env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
       (env.ISSUE_RESOLVER_DATA_DIR
         ? join(env.ISSUE_RESOLVER_DATA_DIR, 'workspaces')
-        : DEFAULT_WORKSPACE_ROOT),
+        : DEFAULT_LOCAL_WORKSPACE_ROOT),
+    local: true,
   };
 }
