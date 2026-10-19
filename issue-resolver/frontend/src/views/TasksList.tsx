@@ -1,4 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  QueryClient,
+  QueryClientContext,
+  QueryClientProvider,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   extractIssueKeyFromUrl,
   extractRepoNameFromUrl,
@@ -424,7 +438,11 @@ function IssueStats({
 
   if (state.status === 'error') return null;
 
-  const workMs = sumStepRunWorkMs(state.data.runs, now);
+  // Живой тик `useNow` сэмплирует время при монтировании, а данные о
+  // running-step-runs приходят позже (fetch → setState). Без этой поправки
+  // таймер на первом кадре мог показать время на миллисекунду меньше
+  // реального и «отмотаться» назад; берём не раньше wall-clock.
+  const workMs = sumStepRunWorkMs(state.data.runs, Math.max(now, Date.now()));
   const workTime = workMs === null ? '' : formatDuration(workMs);
 
   return (
@@ -511,8 +529,80 @@ function TrashIcon({ className }: { className?: string }) {
   );
 }
 
-export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) {
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
+export default function TasksList(props: TasksListProps) {
+  return (
+    <TasksListQueryBoundary>
+      <TasksListView {...props} />
+    </TasksListQueryBoundary>
+  );
+}
+
+/**
+ * Гарантирует наличие QueryClient. В приложении провайдер ставит `main.tsx`,
+ * но компонент (и `App`) в тестах монтируется напрямую — без провайдера любой
+ * `useQuery` бросил бы «No QueryClient set». Если провайдер уже есть — просто
+ * пробрасываем детей в общий клиент приложения; иначе создаём локальный клиент
+ * на время жизни списка, чтобы тесты не делили кэш между собой.
+ */
+function TasksListQueryBoundary({ children }: { children: ReactNode }) {
+  const existing = useContext(QueryClientContext);
+  const [fallbackClient] = useState(() =>
+    existing === undefined
+      ? new QueryClient({
+          defaultOptions: {
+            queries: {
+              staleTime: 30_000,
+              refetchOnWindowFocus: false,
+              retry: false,
+            },
+          },
+        })
+      : null,
+  );
+
+  if (existing !== undefined || fallbackClient === null) {
+    return <>{children}</>;
+  }
+  return (
+    <QueryClientProvider client={fallbackClient}>
+      {children}
+    </QueryClientProvider>
+  );
+}
+
+function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
+  const queryClient = useQueryClient();
+
+  const {
+    data: fetchedIssues,
+    isLoading: issuesLoading,
+    isError: issuesError,
+    error: issuesFetchError,
+  } = useQuery({ queryKey: ['issues'], queryFn: getIssues });
+
+  // Локальный стейт для живых SSE-мутаций (activeStep, activeModel, status):
+  // серверные данные из useQuery живут в кэше, а живой статус — здесь, поверх
+  // них.
+  const [localIssues, setLocalIssues] = useState<IssueWithActiveStep[]>([]);
+
+  useEffect(() => {
+    if (fetchedIssues) setLocalIssues(fetchedIssues);
+  }, [fetchedIssues]);
+
+  // Производный стейт из useQuery: показываем «loading»/«error»/«ready» тем же
+  // контрактом, что и раньше, чтобы рендер не менялся.
+  const state: LoadState = issuesLoading
+    ? { status: 'loading' }
+    : issuesError
+      ? {
+          status: 'error',
+          message:
+            issuesFetchError instanceof Error
+              ? issuesFetchError.message
+              : String(issuesFetchError),
+        }
+      : { status: 'ready', issues: localIssues };
+
   const [actionError, setActionError] = useState<string | null>(null);
   const [stopError, setStopError] = useState<string | null>(null);
   // id задач, которые прямо сейчас удаляются: карточка показывает
@@ -522,11 +612,6 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
   const [deletingPhases, setDeletingPhases] = useState<Record<string, string>>(
     {},
   );
-  // Сохранённые репозитории для сводки готовности; грузятся один раз на весь
-  // список (кеш в состоянии), а не по разу на карточку.
-  const [savedRepos, setSavedRepos] = useState<SavedRepo[] | null>(null);
-  const savedReposRequestedRef = useRef(false);
-  const mountedRef = useRef(true);
   // Живые SSE-подписки на потоки удаляемых задач (id → функция отписки).
   const deleteStreamsRef = useRef<Map<string, () => void>>(new Map());
   // Таймауты ожидания финала удаления (id → handle), чтобы не оставлять
@@ -545,30 +630,6 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
     state.status === 'ready' &&
       state.issues.some((issue) => issue.status === 'running'),
   );
-
-  const load = useCallback(async () => {
-    setState({ status: 'loading' });
-    try {
-      const issues = await getIssues();
-      if (mountedRef.current) setState({ status: 'ready', issues });
-    } catch (error: unknown) {
-      if (mountedRef.current) {
-        setState({
-          status: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    void load();
-
-    return () => {
-      mountedRef.current = false;
-    };
-  }, [load]);
 
   // Живой статус задач: глобальный SSE-поток шлёт `iteration_status` по всем
   // задачам — обновляем карточки в списке без перезагрузки страницы.
@@ -596,36 +657,26 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
         if (payload.status === 'running' && typeof payload.step === 'string') {
           const step = payload.step;
           const model = typeof payload.model === 'string' ? payload.model : null;
-          setState((current) =>
-            current.status === 'ready'
-              ? {
-                  ...current,
-                  issues: current.issues.map((issue) =>
-                    issue.id === issueId
-                      ? { ...issue, activeStep: step, activeModel: model }
-                      : issue,
-                  ),
-                }
-              : current,
+          setLocalIssues((current) =>
+            current.map((issue) =>
+              issue.id === issueId
+                ? { ...issue, activeStep: step, activeModel: model }
+                : issue,
+            ),
           );
           return;
         }
         if (payload.status && payload.status !== 'running') {
-          setState((current) =>
-            current.status === 'ready'
-              ? {
-                  ...current,
-                  issues: current.issues.map((issue) =>
-                    issue.id === issueId
-                      ? {
-                          ...issue,
-                          activeStep: undefined,
-                          activeModel: undefined,
-                        }
-                      : issue,
-                  ),
-                }
-              : current,
+          setLocalIssues((current) =>
+            current.map((issue) =>
+              issue.id === issueId
+                ? {
+                    ...issue,
+                    activeStep: undefined,
+                    activeModel: undefined,
+                  }
+                : issue,
+            ),
           );
         }
       },
@@ -641,15 +692,10 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
         const issueId = event.issueId;
         if (!issueId) return;
         const status = parsed.status;
-        setState((current) =>
-          current.status === 'ready'
-            ? {
-                ...current,
-                issues: current.issues.map((issue) =>
-                  issue.id === issueId ? { ...issue, status } : issue,
-                ),
-              }
-            : current,
+        setLocalIssues((current) =>
+          current.map((issue) =>
+            issue.id === issueId ? { ...issue, status } : issue,
+          ),
         );
       },
     });
@@ -677,21 +723,14 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
         issue.repositories.length > 0,
     );
 
-  useEffect(() => {
-    if (!needsRepoReadiness || savedReposRequestedRef.current) return;
-    savedReposRequestedRef.current = true;
-
-    void (async () => {
-      try {
-        const repositories = await getRepositories();
-        if (mountedRef.current && Array.isArray(repositories)) {
-          setSavedRepos(repositories);
-        }
-      } catch {
-        // Молча: без сохранённых репозиториев сводка просто не рендерится.
-      }
-    })();
-  }, [needsRepoReadiness]);
+  // Сохранённые репозитории для сводки готовности грузятся одним запросом на
+  // весь список и кэшируются react-query. Ошибка молчалива: без сохранённых
+  // репозиториев сводка просто не рендерится.
+  const { data: savedRepos = null } = useQuery({
+    queryKey: ['repositories'],
+    queryFn: getRepositories,
+    enabled: needsRepoReadiness,
+  });
 
   /** Закрывает SSE-поток удаления задачи (если он открыт). */
   const stopDeleteStream = useCallback((id: string) => {
@@ -770,14 +809,12 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
           onIssueDeleted: (payload) => {
             stopDeleteStream(payload.issueId);
             clearDeleting(payload.issueId);
-            setState((current) =>
-              current.status === 'ready'
-                ? {
-                    ...current,
-                    issues: current.issues.filter(
-                      (issue) => issue.id !== payload.issueId,
-                    ),
-                  }
+            setLocalIssues((current) =>
+              current.filter((issue) => issue.id !== payload.issueId),
+            );
+            queryClient.setQueryData<Issue[]>(['issues'], (current) =>
+              current
+                ? current.filter((issue) => issue.id !== payload.issueId)
                 : current,
             );
           },
@@ -793,7 +830,7 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
         setActionError(error instanceof Error ? error.message : String(error));
       }
     },
-    [clearDeleting, clearDeleteTimeout, stopDeleteStream],
+    [clearDeleting, clearDeleteTimeout, stopDeleteStream, queryClient],
   );
 
   const handleStopDevServers = useCallback(async (id: string) => {
@@ -802,17 +839,10 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
       await stopDevServers(id);
       // Backend обнуляет порт — не перезапрашиваем весь список ради одной
       // карточки, гасим индикатор/кнопку локально.
-      setState((current) =>
-        current.status === 'ready'
-          ? {
-              ...current,
-              issues: current.issues.map((issue) =>
-                issue.id === id
-                  ? { ...issue, dev_server_port: null }
-                  : issue,
-              ),
-            }
-          : current,
+      setLocalIssues((current) =>
+        current.map((issue) =>
+          issue.id === id ? { ...issue, dev_server_port: null } : issue,
+        ),
       );
     } catch (error: unknown) {
       setStopError(error instanceof Error ? error.message : String(error));
