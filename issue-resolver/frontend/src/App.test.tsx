@@ -9,6 +9,7 @@ import {
   within,
 } from '@testing-library/react';
 import App from './App';
+import { useUIStore } from './stores/ui';
 
 function stubEmpty() {
   vi.stubGlobal(
@@ -41,6 +42,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // Zustand store переживает тесты — сбрасываем containerStats, иначе тест
+  // мобильной строки видит статы, записанные предыдущим тестом SSE.
+  useUIStore.getState().setContainerStats(null);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.history.replaceState(null, '', '/');
