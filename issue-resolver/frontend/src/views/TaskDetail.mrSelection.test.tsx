@@ -4,6 +4,12 @@ import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 import { setMarkdownEditorValue } from '../test/markdown-editor';
 
+/** Открывает модалку новой итерации кликом по кнопке. */
+async function openIterationModal() {
+  fireEvent.click(await screen.findByTestId('open-iteration-modal'));
+  await screen.findByTestId('new-iteration-island');
+}
+
 function jsonResponse(
   body: unknown,
   init: { ok?: boolean; status?: number } = {},
@@ -94,6 +100,7 @@ describe('TaskDetail — выбор репозиториев для MR', () => {
 
     render(<TaskDetail issueId="issue-1" />);
 
+    await openIterationModal();
     // Шаг PR выбран из pipeline_steps, репозиторий A — с create_mr.
     const prCheckbox = (await screen.findByLabelText('PR')) as HTMLInputElement;
     expect(prCheckbox.checked).toBe(true);
@@ -104,6 +111,7 @@ describe('TaskDetail — выбор репозиториев для MR', () => {
     fireEvent.click(prCheckbox);
     expect(prCheckbox.checked).toBe(false);
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'без MR');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -140,6 +148,8 @@ describe('TaskDetail — выбор репозиториев для MR', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<TaskDetail issueId="issue-1" />);
+
+    await openIterationModal();
     await screen.findByLabelText('PR');
 
     // Снимаем единственный выбранный репо, шаг PR остаётся выбранным.
@@ -148,6 +158,7 @@ describe('TaskDetail — выбор репозиториев для MR', () => {
       (screen.getByTestId('pr-repo-repo-a') as HTMLInputElement).checked,
     ).toBe(false);
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'без репо');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),

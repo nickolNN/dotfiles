@@ -11,6 +11,12 @@ import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 import { getMarkdownEditorValue, setMarkdownEditorValue } from '../test/markdown-editor';
 
+/** Открывает модалку новой итерации кликом по кнопке. */
+async function openIterationModal() {
+  fireEvent.click(await screen.findByTestId('open-iteration-modal'));
+  await screen.findByTestId('new-iteration-island');
+}
+
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
     id: 'issue-1',
@@ -141,6 +147,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     // Есть running → форма предлагает черновик, а не немедленный запуск.
     expect(
       screen.getByRole('button', { name: 'Создать черновик' }),
@@ -149,6 +156,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
       screen.queryByRole('button', { name: 'Запустить новую итерацию' }),
     ).toBeNull();
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'draft plan');
     fireEvent.click(screen.getByRole('button', { name: 'Создать черновик' }));
 
@@ -231,6 +239,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'second draft');
     fireEvent.click(screen.getByRole('button', { name: 'Создать черновик' }));
 
@@ -293,7 +302,8 @@ describe('TaskDetail — draft-итерации и очередь', () => {
 
     fireEvent.click(screen.getByTestId('fetch-review'));
 
-    // Комментарии превращаются в файл-вложение.
+    // Комментарии появляются в форме. Открываем модалку чтобы увидеть.
+    await openIterationModal();
     expect(await screen.findByText('review-iteration-1.md')).toBeInTheDocument();
     // И контекст предзаполняется ссылкой на него.
     await waitFor(() =>
@@ -326,6 +336,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     expect(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
     ).toBeInTheDocument();
@@ -333,6 +344,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
       screen.queryByRole('button', { name: 'Создать черновик' }),
     ).toBeNull();
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'again');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),

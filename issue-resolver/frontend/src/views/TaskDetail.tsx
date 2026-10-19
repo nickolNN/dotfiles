@@ -668,6 +668,8 @@ function TaskDetailView({
   const [paletteIndex, setPaletteIndex] = useState(0);
   // Мягко подвести список к началу после создания новой итерации.
   const [scrollToIterations, setScrollToIterations] = useState(false);
+  // Модалка новой итерации: открывается по кнопке, закрывается по Escape/клику на фон/сабмиту.
+  const [showIterationModal, setShowIterationModal] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const iterationsRef = useRef<HTMLDivElement | null>(null);
 
@@ -1194,31 +1196,6 @@ function TaskDetailView({
     }
   }, [expandedEvents]);
 
-  // Авто-скролл внутри карточки итерации к running-воркеру.
-  // Когда статус шага меняется на running (или появляется новый running),
-  // скроллим карточку этого шага в зону видимости.
-  useEffect(() => {
-    if (stepRuns.status !== 'ready') return;
-    const runs = stepRuns.stepRuns;
-    // Найти первый running-воркер.
-    const firstRunning = runs.find((run) => {
-      const status = liveStatusByRun[run.id] ?? statusOf(run);
-      return isActiveStatus(status);
-    });
-    if (!firstRunning) return;
-
-    // Небольшая задержка — дать DOM отрендериться после изменения состояния.
-    const timer = setTimeout(() => {
-      const el = document.querySelector(
-        `[data-step-run-id="${firstRunning.id}"]`,
-      );
-      if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
-        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [stepRuns, liveStatusByRun]);
-
   // Question-события активной итерации (персист + live) в порядке появления,
   // без дублей по id. Учитываем только ещё выполняющиеся шаги: вопрос
   // завершённого прогона не должен открывать модалку даже без ответа (иначе
@@ -1263,6 +1240,32 @@ function TaskDetailView({
   );
 
 
+
+  // Авто-скролл внутри карточки итерации к running-воркеру.
+  // Когда статус шага меняется на running (или появляется новый running),
+  // скроллим карточку этого шага в зону видимости.
+  // Если есть неотвеченные вопросы — скролл не срабатывает: пользователь
+  // должен видеть вопрос, а не улетать к агенту.
+  useEffect(() => {
+    if (unansweredQuestions.length > 0) return;
+    if (stepRuns.status !== 'ready') return;
+    const runs = stepRuns.stepRuns;
+    const firstRunning = runs.find((run) => {
+      const status = liveStatusByRun[run.id] ?? statusOf(run);
+      return isActiveStatus(status);
+    });
+    if (!firstRunning) return;
+
+    const timer = setTimeout(() => {
+      const el = document.querySelector(
+        `[data-step-run-id="${firstRunning.id}"]`,
+      );
+      if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [stepRuns, liveStatusByRun, unansweredQuestions]);
 
   const iterationRunning = activeIteration?.status === 'running';
 
@@ -2321,13 +2324,41 @@ function TaskDetailView({
           )}
 
           {canStart && (
+            <>
+              <button
+                type="button"
+                data-testid="open-iteration-modal"
+                onClick={() => setShowIterationModal(true)}
+                className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] md:w-auto"
+              >
+                {hasDraftIteration ? 'Редактировать черновик' : 'Новая итерация'}
+              </button>
+
+              {showIterationModal && (
+                <div
+                  data-testid="iteration-modal-backdrop"
+                  className="fixed inset-0 z-50 flex items-start justify-center bg-[#0D0208]/90 backdrop-blur-sm overflow-y-auto p-4"
+                  onClick={(e) => { if (e.target === e.currentTarget) setShowIterationModal(false); }}
+                  onKeyDown={(e) => { if (e.key === 'Escape') setShowIterationModal(false); }}
+                >
+                  <div className="w-full max-w-3xl mx-4 my-auto">
           <section
             data-testid="new-iteration-island"
-            className="rounded-none border border-[#008F11] p-4"
+            className="rounded-none border border-[#008F11] bg-[#0D0208] p-4 shadow-[0_0_30px_rgba(0,255,65,0.2)]"
           >
-            <h3 className="glow mb-1 text-lg font-semibold text-[#00FF41]">
-              Новая итерация
-            </h3>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="glow text-lg font-semibold text-[#00FF41]">
+                Новая итерация
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowIterationModal(false)}
+                className="text-[#00FF41]/60 hover:text-[#00FF41] text-lg leading-none px-2"
+                aria-label="Закрыть"
+              >
+                ✕
+              </button>
+            </div>
             <p className="mb-4 text-sm text-[#00FF41]/60">
               Добавь новый контекст и запусти ещё одну попытку решения задачи.
             </p>
@@ -2519,6 +2550,10 @@ function TaskDetailView({
               </div>
             </form>
           </section>
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {state.status === 'ready' &&
