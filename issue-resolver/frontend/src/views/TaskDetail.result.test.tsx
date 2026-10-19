@@ -119,7 +119,7 @@ afterEach(() => {
 });
 
 describe('TaskDetail — просмотр отчёта', () => {
-  it('desired_result md → кнопки «Показать отчёт» и «Скачать»', async () => {
+  it('desired_result md → кнопка «Показать отчёт» на странице, «Скачать» — в модалке', async () => {
     stubFetch(makeIssue({ desired_result: 'md' }), () =>
       textResponse('# Итог'),
     );
@@ -130,7 +130,10 @@ describe('TaskDetail — просмотр отчёта', () => {
     expect(screen.getByTestId('open-result')).toHaveTextContent(
       'Показать отчёт',
     );
-    const download = screen.getByTestId('download-result');
+    // Кнопка «Скачать» теперь в модалке — открываем её.
+    fireEvent.click(screen.getByTestId('open-result'));
+    const modal = await screen.findByTestId('result-modal');
+    const download = within(modal).getByTestId('result-modal-download');
     expect(download).toHaveAttribute(
       'href',
       '/issue-resolver/api/v1/issues/issue-1/result/download',
@@ -138,7 +141,7 @@ describe('TaskDetail — просмотр отчёта', () => {
     expect(download).toHaveAttribute('download');
   });
 
-  it('итерация без completed → кнопки отчёта disabled', async () => {
+  it('итерация без completed → кнопка «Показать отчёт» disabled', async () => {
     stubFetch(
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
@@ -151,12 +154,9 @@ describe('TaskDetail — просмотр отчёта', () => {
 
     const open = await screen.findByTestId('open-result');
     await waitFor(() => expect(open).toBeDisabled());
-    const download = screen.getByTestId('download-result');
-    expect(download).toHaveAttribute('aria-disabled', 'true');
-    expect(download.className).toContain('cursor-not-allowed');
   });
 
-  it('пустой список итераций → кнопки отчёта disabled', async () => {
+  it('пустой список итераций → кнопка «Показать отчёт» disabled', async () => {
     stubFetch(
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
@@ -169,13 +169,9 @@ describe('TaskDetail — просмотр отчёта', () => {
 
     const open = await screen.findByTestId('open-result');
     await waitFor(() => expect(open).toBeDisabled());
-    expect(screen.getByTestId('download-result')).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    );
   });
 
-  it('iteration completed + пустой report → кнопки всё равно активны', async () => {
+  it('iteration completed + пустой report → кнопка «Показать отчёт» активна', async () => {
     stubFetch(
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
@@ -188,10 +184,6 @@ describe('TaskDetail — просмотр отчёта', () => {
 
     const open = await screen.findByTestId('open-result');
     await waitFor(() => expect(open).toBeEnabled());
-    expect(screen.getByTestId('download-result')).not.toHaveAttribute(
-      'aria-disabled',
-      'true',
-    );
   });
 
   it('md: клик открывает модалку и рендерит markdown отчёта', async () => {
@@ -268,7 +260,7 @@ describe('TaskDetail — просмотр отчёта', () => {
     expect(screen.queryByTestId('result-modal')).toBeNull();
   });
 
-  it('desired_result не задан → кнопок отчёта нет', async () => {
+  it('desired_result не задан → кнопки «Показать отчёт» нет', async () => {
     stubFetch(makeIssue(), () => textResponse('# Итог'));
 
     render(<TaskDetail issueId="issue-1" />);

@@ -249,7 +249,7 @@ describe('TaskDetail', () => {
     ).toBeInTheDocument();
   });
 
-  it('шаг Refine помечен как планирующий: подсказка про комнату агентов', async () => {
+  it('шаг Refine несёт компактный input «Макс. число параллельных агентов»', async () => {
     const issue = makeIssue();
     const iteration = makeIteration({ status: 'completed' });
     vi.stubGlobal(
@@ -266,12 +266,19 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByLabelText('Контекст итерации');
 
-    // Подсказка есть ровно у Refine (и только у него).
-    const hints = screen.getAllByTestId('refine-planner-hint');
-    expect(hints).toHaveLength(1);
-    expect(hints[0]).toHaveTextContent('Планируем');
-    expect(hints[0]).toHaveTextContent('комнатой агентов');
-    expect(hints[0]).toHaveTextContent('без Планирования');
+    // Поле живёт внутри строки шага Refine (заголовок шага «Планирование»),
+    // одной компактной строкой — отдельного блока под шагами больше нет.
+    const refineHint = screen.getAllByTestId('refine-planner-hint');
+    expect(refineHint).toHaveLength(1);
+    const input = within(refineHint[0]).getByTestId('worker-count-input');
+    expect(input).toHaveAttribute('type', 'number');
+    expect(input).toHaveAttribute('min', '0');
+    expect(input).toHaveAttribute('max', '4');
+    expect(refineHint[0]).toHaveTextContent(
+      'Макс. число параллельных агентов',
+    );
+    // Ровно один input на форме — дубля-строки больше нет.
+    expect(screen.getAllByTestId('worker-count-input')).toHaveLength(1);
   });
 
   it('тогл Reviewer убран; выбор шага Код-ревью шлёт is_review_need: true', async () => {

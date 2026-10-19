@@ -952,6 +952,15 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
                           <ParallelIcon className="h-3.5 w-3.5" />{issue.worker_count}
                         </span>
                       )}
+                      {issue.status === 'running' && issue.activeModel && (
+                        <span
+                          data-testid="active-model-badge"
+                          className="mt-1 ml-2 inline-flex items-center gap-1 text-[#00FF41]/70 text-[11px]"
+                          title={`Текущая модель: ${issue.activeModel}`}
+                        >
+                          {issue.activeModel}
+                        </span>
+                      )}
                     </div>
 
                     <div className="mt-2 border-t border-[#008F11]/20 pt-2">

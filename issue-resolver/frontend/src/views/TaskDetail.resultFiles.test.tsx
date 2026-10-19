@@ -189,8 +189,10 @@ describe('TaskDetail — порождённые файлы отчёта', () => 
     expect(screen.queryByTestId('result-files')).toBeNull();
     expect(screen.queryByTestId('result-file-download')).toBeNull();
     expect(screen.queryByTestId('artifacts-modal')).toBeNull();
-    // сама кнопка «Скачать» отчёта на месте
-    expect(screen.getByTestId('download-result')).toBeInTheDocument();
+    // сама кнопка «Скачать» теперь в модалке отчёта
+    fireEvent.click(screen.getByTestId('open-result'));
+    const modal = await screen.findByTestId('result-modal');
+    expect(within(modal).getByTestId('result-modal-download')).toBeInTheDocument();
   });
 
   it('ссылка архива ведёт на /result/files/archive с явным именем', async () => {
@@ -226,7 +228,10 @@ describe('TaskDetail — порождённые файлы отчёта', () => 
         expect(screen.getByTestId('open-result')).toBeEnabled(),
       );
 
-      expect(screen.getByTestId('download-result')).toHaveAttribute(
+      // Кнопка «Скачать» теперь в модалке.
+      fireEvent.click(screen.getByTestId('open-result'));
+      const modal = await screen.findByTestId('result-modal');
+      expect(within(modal).getByTestId('result-modal-download')).toHaveAttribute(
         'download',
         filename,
       );

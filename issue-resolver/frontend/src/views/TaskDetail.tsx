@@ -425,6 +425,9 @@ function RefreshIcon({ className }: { className?: string }) {
 const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)] transition-base';
 const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
+/** Компактное поле для инлайн-настройки в строке шага (число агентов). */
+const compactInputClass =
+  'w-16 rounded-none border border-[#008F11] bg-[#0D0208] px-2 py-0.5 text-xs text-[#00FF41] outline-none transition-base focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
 
 interface TaskDetailProps {
   issueId?: string | null;
@@ -2360,13 +2363,27 @@ export default function TaskDetail({
                                 : step.label}
                           </label>
                           {step.value === 'refine' && (
-                            <span
+                            <label
                               data-testid="refine-planner-hint"
-                              className="pl-6 text-xs text-[#00FF41]/60"
+                              className="flex items-center gap-2 pl-6 text-xs text-[#00FF41]/60"
+                              htmlFor="worker-count"
+                              title="Планируем — решает, запускать ли resolve комнатой агентов; без Планирования всегда ровно один агент. 0 — без ограничений, 1 — один агент, 2-4 — макс. N в комнате."
                             >
-                              Планируем — решает, запускать ли resolve комнатой
-                              агентов; без Планирования всегда ровно один агент.
-                            </span>
+                              Макс. число параллельных агентов
+                              <input
+                                id="worker-count"
+                                type="number"
+                                min={0}
+                                max={4}
+                                value={workerCount}
+                                onChange={(event) =>
+                                  setWorkerCount(Number(event.target.value) || 0)
+                                }
+                                disabled={!canStart}
+                                className={compactInputClass}
+                                data-testid="worker-count-input"
+                              />
+                            </label>
                           )}
                         </div>
                         {modelEnabled && (
@@ -2414,28 +2431,6 @@ export default function TaskDetail({
                   })}
                 </div>
               </fieldset>
-
-              <div>
-                <label className={labelClass} htmlFor="worker-count">
-                  Макс. число параллельных агентов
-                </label>
-                <input
-                  id="worker-count"
-                  type="number"
-                  min={0}
-                  max={4}
-                  value={workerCount}
-                  onChange={(event) =>
-                    setWorkerCount(Number(event.target.value) || 0)
-                  }
-                  disabled={!canStart}
-                  className={`${inputClass} w-24`}
-                  data-testid="worker-count-input"
-                />
-                <p className="mt-1 text-xs text-[#00FF41]/40">
-                  0 — без ограничений, 1 — один агент, 2-4 — макс. N в комнате
-                </p>
-              </div>
 
               {/* Репозитории для MR: показываются только при выбранном шаге pr. */}
               {selectedSteps.includes('pr') && prAvailable && (
@@ -3411,6 +3406,19 @@ export default function TaskDetail({
                     >
                       очистить очередь
                     </button>
+                    <button
+                      type="button"
+                      data-testid="abort-iteration-modal"
+                      disabled={aborting}
+                      onClick={() => {
+                        if (activeIterationId) {
+                          void handleAbort(activeIterationId);
+                        }
+                      }}
+                      className="min-h-8 border border-[#FF0033] bg-[#2A0008] px-2 py-0.5 text-xs text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+                    >
+                      {aborting ? 'Прерываем…' : 'Прервать'}
+                    </button>
                   </div>
                 )}
 
@@ -3511,19 +3519,6 @@ export default function TaskDetail({
                       {messageSending ? 'Отправка…' : 'Отправить'}
                     </button>
                   </form>
-                  <button
-                    type="button"
-                    data-testid="abort-iteration-modal"
-                    disabled={aborting}
-                    onClick={() => {
-                      if (activeIterationId) {
-                        void handleAbort(activeIterationId);
-                      }
-                    }}
-                    className="min-h-9 shrink-0 border border-[#FF0033] bg-[#2A0008] px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50 transition-base"
-                  >
-                    {aborting ? 'Прерываем…' : 'Прервать'}
-                  </button>
                 </div>
 
                 {commandHint !== null && (
