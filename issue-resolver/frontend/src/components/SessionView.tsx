@@ -33,6 +33,17 @@ interface SessionViewProps {
    */
   showFooter?: boolean;
   /**
+   * Скрыть info-шапку (session_info/thinking_level/queue/statuses/widgets/working).
+   * Для модалки: info рендерится отдельно в футере.
+   */
+  hideInfo?: boolean;
+  /**
+   * Показать только info (шапку + виджеты + работающий индикатор + футер
+   * статистики) без списка событий. Для закреплённой панели в футере модалки.
+   * Игнорирует emptyMessage.
+   */
+  infoOnly?: boolean;
+  /**
    * Позволяет «вернуть» текст из очереди steer/follow-up обратно в композер
    * (append, не перезапись черновика). Без коллбэка кнопки ↩ не рендерятся.
    */
@@ -46,7 +57,7 @@ interface SessionWidget {
 }
 
 /** Служебная «обвязка» сессии: шапка, очередь, статусы, виджеты, заголовок. */
-interface SessionChrome {
+interface SessionInfo {
   sessionName: string | null;
   thinkingLevel: string | null;
   queue: { steering: string[]; followUp: string[] } | null;
@@ -67,7 +78,7 @@ interface AnalyzedEvents {
   bashText: string | null;
   /** Последний `partialText` живого `thinking_update` (финального блока ещё нет). */
   liveThinking: string | null;
-  chrome: SessionChrome;
+  info: SessionInfo;
 }
 
 /**
@@ -87,6 +98,8 @@ export default function SessionView({
   stats,
   emptyMessage,
   showFooter = true,
+  hideInfo = false,
+  infoOnly = false,
   running = false,
   startedAt = null,
   onRecallQueued,
@@ -99,10 +112,10 @@ export default function SessionView({
     answersByQuestionId,
     bashText,
     liveThinking,
-    chrome,
+    info,
   } = analyzed;
 
-  useDocumentTitle(chrome.title);
+  useDocumentTitle(info.title);
 
   const now = useNow(running);
   const phase = workingPhase(visible, resultByCallId, liveThinking !== null);
@@ -114,21 +127,44 @@ export default function SessionView({
       <ThinkingBlock thinking={liveThinking} streaming />
     ) : null;
 
-  if (visible.length === 0) {
+  if (visible.length === 0 && !infoOnly) {
     return (
       <div className="session-view">
-        <SessionChromeBar chrome={chrome} onRecallQueued={onRecallQueued} />
-        <SessionWidgets widgets={chrome.widgetsAbove} placement="aboveEditor" />
+        {!hideInfo && (
+          <>
+            <SessionInfoBar info={info} onRecallQueued={onRecallQueued} />
+            <SessionWidgets widgets={info.widgetsAbove} placement="aboveEditor" />
+          </>
+        )}
         <div
           data-testid="session-view-empty"
           className="rounded-none border border-dashed border-[#008F11] p-4 text-center text-xs text-[#00FF41]/60"
         >
           {emptyMessage ?? 'Событий сессии пока нет.'}
         </div>
+        {!hideInfo && (
+          <>
+            {liveThinkingBlock}
+            {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
+            {bashText !== null && <BashBlock text={bashText} />}
+            <SessionWidgets widgets={info.widgetsBelow} placement="belowEditor" />
+            {showFooter && <SessionStatsBar events={events} stats={stats} />}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // infoOnly: только обвязка без списка событий.
+  if (infoOnly) {
+    return (
+      <div className="session-view">
+        <SessionInfoBar info={info} onRecallQueued={onRecallQueued} />
+        <SessionWidgets widgets={info.widgetsAbove} placement="aboveEditor" />
         {liveThinkingBlock}
         {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
         {bashText !== null && <BashBlock text={bashText} />}
-        <SessionWidgets widgets={chrome.widgetsBelow} placement="belowEditor" />
+        <SessionWidgets widgets={info.widgetsBelow} placement="belowEditor" />
         {showFooter && <SessionStatsBar events={events} stats={stats} />}
       </div>
     );
@@ -136,8 +172,12 @@ export default function SessionView({
 
   return (
     <div data-testid="session-view" className="session-view">
-      <SessionChromeBar chrome={chrome} onRecallQueued={onRecallQueued} />
-      <SessionWidgets widgets={chrome.widgetsAbove} placement="aboveEditor" />
+      {!hideInfo && (
+        <>
+          <SessionInfoBar info={info} onRecallQueued={onRecallQueued} />
+          <SessionWidgets widgets={info.widgetsAbove} placement="aboveEditor" />
+        </>
+      )}
       {visible.map((event, index) => (
         // События сессии — упорядоченный лог без стабильных id; индекс здесь
         // допустим, список только дополняется в конец.
@@ -151,11 +191,15 @@ export default function SessionView({
           running={running}
         />
       ))}
-      {liveThinkingBlock}
-      {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
-      {bashText !== null && <BashBlock text={bashText} />}
-      <SessionWidgets widgets={chrome.widgetsBelow} placement="belowEditor" />
-      {showFooter && <SessionStatsBar events={events} stats={stats} />}
+      {!hideInfo && (
+        <>
+          {liveThinkingBlock}
+          {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
+          {bashText !== null && <BashBlock text={bashText} />}
+          <SessionWidgets widgets={info.widgetsBelow} placement="belowEditor" />
+          {showFooter && <SessionStatsBar events={events} stats={stats} />}
+        </>
+      )}
     </div>
   );
 }
@@ -269,7 +313,7 @@ function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
     answersByQuestionId,
     bashText: bashDeltas.length > 0 ? bashDeltas.join('') : null,
     liveThinking,
-    chrome: {
+    info: {
       sessionName,
       thinkingLevel,
       queue,
@@ -761,57 +805,57 @@ function ToolResultBlock({
 }
 
 /** Шапка/очередь/статусы сессии — собирается из служебных событий. */
-function SessionChromeBar({
-  chrome,
+function SessionInfoBar({
+  info,
   onRecallQueued,
 }: {
-  chrome: SessionChrome;
+  info: SessionInfo;
   onRecallQueued?: (text: string) => void;
 }) {
-  const hasQueue = chrome.queue !== null;
+  const hasQueue = info.queue !== null;
   if (
-    chrome.sessionName === null &&
-    chrome.thinkingLevel === null &&
+    info.sessionName === null &&
+    info.thinkingLevel === null &&
     !hasQueue &&
-    chrome.statuses.length === 0
+    info.statuses.length === 0
   ) {
     return null;
   }
 
   const queuedItems: Array<{ kind: 'steer' | 'follow-up'; text: string; index: number }> = [];
-  if (chrome.queue) {
-    chrome.queue.steering.forEach((text, index) =>
+  if (info.queue) {
+    info.queue.steering.forEach((text, index) =>
       queuedItems.push({ kind: 'steer', text, index }),
     );
-    chrome.queue.followUp.forEach((text, index) =>
+    info.queue.followUp.forEach((text, index) =>
       queuedItems.push({ kind: 'follow-up', text, index }),
     );
   }
 
   return (
     <div
-      data-testid="session-chrome"
+      data-testid="session-info"
       className="flex flex-wrap items-center gap-x-3 gap-y-1 border border-[#008F11]/50 bg-[#000200] px-2 py-1 text-[10px] text-[#00FF41]/70"
     >
-      {chrome.sessionName !== null && (
-        <span data-testid="session-info" className="break-words">
-          сессия: <span className="text-[#00FF41]">{chrome.sessionName}</span>
+      {info.sessionName !== null && (
+        <span data-testid="session-name" className="break-words">
+          сессия: <span className="text-[#00FF41]">{info.sessionName}</span>
         </span>
       )}
-      {chrome.thinkingLevel !== null && (
+      {info.thinkingLevel !== null && (
         <span data-testid="session-thinking-level">
           thinking:{' '}
-          <span className="text-[#00B4FF]">{chrome.thinkingLevel}</span>
+          <span className="text-[#00B4FF]">{info.thinkingLevel}</span>
         </span>
       )}
-      {chrome.queue !== null && (
+      {info.queue !== null && (
         <span
           data-testid="session-queue"
-          title={queueTitle(chrome.queue)}
+          title={queueTitle(info.queue)}
           className="text-[#FFB000]"
         >
-          очередь: steer {chrome.queue.steering.length} · follow-up{' '}
-          {chrome.queue.followUp.length}
+          очередь: steer {info.queue.steering.length} · follow-up{' '}
+          {info.queue.followUp.length}
         </span>
       )}
       {onRecallQueued &&
@@ -827,7 +871,7 @@ function SessionChromeBar({
             ↩ {item.text}
           </button>
         ))}
-      {chrome.statuses.map((status) => (
+      {info.statuses.map((status) => (
         <span
           key={status.key}
           data-testid={`session-status-${status.key}`}
@@ -873,7 +917,10 @@ function SessionWidgets({
           className="border border-[#00B4FF]/50 bg-[#001018] px-2 py-1 text-xs text-[#00B4FF]"
         >
           {widget.lines.map((line, index) => (
-            <div key={index} className="whitespace-pre-wrap break-words">
+            <div
+              key={index}
+              className="whitespace-pre-wrap break-words font-mono leading-relaxed"
+            >
               {line}
             </div>
           ))}

@@ -422,25 +422,6 @@ function RefreshIcon({ className }: { className?: string }) {
   );
 }
 
-/** Inline-иконка ссылки (MR в шапке задачи). */
-function LinkIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.75}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11 4.93" />
-      <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19.07" />
-    </svg>
-  );
-}
-
 const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)] transition-base';
 const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
@@ -1290,19 +1271,7 @@ export default function TaskDetail({
     }
     return [...byUrl.values()];
   }, [storedMergeRequests, liveMrUrls]);
-  // pr-шаг успешен и MR был запрошен (create_mr), но ссылки нет: артефакт
-  // result.json не записался (best-effort). Плейсхолдер вместо тишины.
-  const mrMissingLink =
-    mrItems.length === 0 &&
-    state.status === 'ready' &&
-    stepRuns.status === 'ready' &&
-    state.issue.repositories.some((repository) => repository.create_mr) &&
-    stepRuns.stepRuns.some(
-      (run) =>
-        run.step === 'pr' &&
-        statusOf(run) === 'success' &&
-        !parseStepReport(run.report ?? '')?.pr_error,
-    );
+
   // Порт dev-сервера задачи (выделяет backend). Нет порта → индикатор скрыт.
   const devServerPort =
     state.status === 'ready' ? devServerPortOf(state.issue) : null;
@@ -2125,14 +2094,35 @@ export default function TaskDetail({
                           Dev: localhost:{devPort}
                         </span>
                       )}
-                      {repository.create_mr && (
-                        <span
-                          data-testid="repo-mr-badge"
-                          className="border border-[#00B4FF] px-1 py-0.5 text-[10px] text-[#00B4FF]"
-                        >
-                          MR
-                        </span>
-                      )}
+                      {repository.create_mr && (() => {
+                        const mrMatch = mrItems.find(
+                          (item) =>
+                            item.repositoryUrl ===
+                            repository.repository_url,
+                        );
+                        if (mrMatch) {
+                          return (
+                            <a
+                              data-testid="repo-mr-link"
+                              href={mrMatch.url}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              title={mrMatch.url}
+                              className="border border-[#00B4FF] px-1 py-0.5 text-[10px] text-[#00B4FF] no-underline hover:bg-[#00B4FF] hover:text-[#0D0208] transition-base"
+                            >
+                              MR
+                            </a>
+                          );
+                        }
+                        return (
+                          <span
+                            data-testid="repo-mr-badge"
+                            className="border border-[#555] px-1 py-0.5 text-[10px] text-[#555]"
+                          >
+                            MR
+                          </span>
+                        );
+                      })()}
                       {repository.bootstrap_enabled === false && (
                         <span className="text-[#FFB000]">
                           (запуск отключён)
@@ -2200,36 +2190,7 @@ export default function TaskDetail({
                 )}
               </div>
             )}
-            {mrItems.length > 0 && (
-              <div
-                data-testid="task-mr-links"
-                className="mt-3 flex flex-wrap items-center gap-2"
-              >
-                {mrItems.map((item) => (
-                  <a
-                    key={item.url}
-                    data-testid="task-mr-link"
-                    href={item.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    title={item.repositoryUrl || item.url}
-                    className="inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-none border border-[#00FF41] bg-[#003B00]/40 px-3 py-1 font-mono text-xs text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] transition-base"
-                  >
-                    <LinkIcon className="h-3.5 w-3.5 shrink-0" />
-                    <span className="shrink-0">MR:</span>
-                    <span className="truncate">{item.url}</span>
-                  </a>
-                ))}
-              </div>
-            )}
-            {mrMissingLink && (
-              <p
-                data-testid="task-mr-placeholder"
-                className="mt-3 text-xs text-[#00FF41]/60"
-              >
-                MR создан, но ссылка недоступна
-              </p>
-            )}
+
             {resultAvailable && (
               <div className="mt-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -3329,6 +3290,7 @@ export default function TaskDetail({
                       events={expandedEvents}
                       stats={expandedStepRun.stats ?? null}
                       showFooter={false}
+                      hideInfo={true}
                       running={isActiveStatus(statusOf(expandedStepRun))}
                       startedAt={expandedStepRun.created_at}
                       onRecallQueued={recallQueued}
@@ -3380,7 +3342,17 @@ export default function TaskDetail({
             </div>
 
             {isActiveStatus(statusOf(expandedStepRun)) && (
-              <div className="border-t border-[#008F11] py-4 px-2 sm:px-4">
+              <div className="border-t border-[#008F11] py-3 px-2 sm:px-4">
+                {/* Закреплённая панель: chrome сессии + статистика pi-lens над полем ввода. */}
+                <SessionView
+                  events={expandedEvents}
+                  stats={expandedStepRun.stats ?? null}
+                  showFooter={true}
+                  infoOnly={true}
+                  running={isActiveStatus(statusOf(expandedStepRun))}
+                  startedAt={expandedStepRun.created_at}
+                  onRecallQueued={recallQueued}
+                />
                 {controlSnapshot && (
                   <div
                     data-testid="live-controls"
