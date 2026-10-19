@@ -4,7 +4,8 @@ import {
   type ContainerStatsPayload,
 } from './api/sse';
 import { formatBytes, healthColor } from './lib/containerStats';
-import { API_BASE, getHostname } from './api/client';
+import { API_BASE } from './api/client';
+import { useUIStore } from './stores/ui';
 import NewIssue from './views/NewIssue';
 import Repositories from './views/Repositories';
 import Settings from './views/Settings';
@@ -167,19 +168,15 @@ export default function App() {
   // Приходит по SSE `container_stats` из потока задачи.
   const [containerStats, setContainerStats] =
     useState<ContainerStatsPayload | null>(null);
-  // Hostname инстанса задаёт заголовок вкладки. Держим его в App, а не в
-  // Settings: заголовок должен переживать перезагрузку и работать на всех
-  // страницах, а не только на «Настройках».
-  const [hostname, setHostname] = useState('');
+  // Hostname инстанса задаёт заголовок вкладки и живёт в общем UI-сторе (а не
+  // в Settings): заголовок должен переживать перезагрузку и работать на всех
+  // страницах, а не только на «Настройках». Загрузка — один раз при старте.
+  const hostname = useUIStore((state) => state.hostname);
+  const setHostname = useUIStore((state) => state.setHostname);
+  const loadHostname = useUIStore((state) => state.loadHostname);
   useEffect(() => {
-    let cancelled = false;
-    void getHostname().then((value) => {
-      if (!cancelled) setHostname(value);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void loadHostname();
+  }, [loadHostname]);
 
   useEffect(() => {
     document.title = hostname || 'Issue Resolver';
