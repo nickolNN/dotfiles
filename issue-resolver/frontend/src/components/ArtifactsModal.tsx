@@ -13,6 +13,7 @@ interface ArtifactsModalProps {
   files: WorkspaceFile[];
   open: boolean;
   onClose: () => void;
+  archiveUrl: string;
 }
 
 /** Вид предпросмотра, выведенный из mime/расширения файла. */
@@ -252,6 +253,14 @@ export default function ArtifactsModal({
       >
         <header className="flex flex-wrap items-center gap-3 border-b border-[#008F11] py-4 px-2 sm:px-4">
           <span className="text-[#00FF41]">Артефакты ({files.length})</span>
+          <a
+            data-testid="artifacts-modal-download-archive"
+            href={archiveUrl}
+            download={`issue-${issueId}.tar.gz`}
+            className="inline-flex items-center rounded-none border border-[#008F11] px-2 py-0.5 text-[11px] font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] transition-base"
+          >
+            Скачать всё (.tar.gz)
+          </a>
           <button
             type="button"
             data-testid="artifacts-modal-close"

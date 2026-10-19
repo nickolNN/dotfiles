@@ -2188,23 +2188,6 @@ export default function TaskDetail({
                   >
                     Показать отчёт
                   </button>
-                  <a
-                    data-testid="download-archive"
-                    href={resultFilesArchiveUrl(state.issue.id)}
-                    download={`issue-${state.issue.id}.tar.gz`}
-                    aria-disabled={resultReady ? undefined : true}
-                    tabIndex={resultReady ? undefined : -1}
-                    onClick={(event) => {
-                      if (!resultReady) event.preventDefault();
-                    }}
-                    className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium transition-base ${
-                      resultReady
-                        ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
-                        : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
-                    }`}
-                  >
-                    Скачать всё (.tar.gz)
-                  </a>
                   <button
                     type="button"
                     data-testid="open-artifacts"
@@ -3209,6 +3192,7 @@ export default function TaskDetail({
           files={resultFiles}
           open={artifactsOpen}
           onClose={() => setArtifactsOpen(false)}
+          archiveUrl={resultFilesArchiveUrl(state.issue.id)}
         />
       )}
 
@@ -3320,11 +3304,10 @@ export default function TaskDetail({
 
             {isActiveStatus(statusOf(expandedStepRun)) && (
               <div className="border-t border-[#008F11] py-3 px-2 sm:px-4">
-                {controlSnapshot && (
-                  <div
-                    data-testid="live-controls"
-                    className="mb-3 flex flex-wrap items-center gap-2 text-xs"
-                  >
+                <div
+                  data-testid="live-controls"
+                  className="mb-3 flex flex-wrap items-center gap-2 text-xs"
+                >
                     <label className="flex items-center gap-1 text-[#00FF41]/70">
                       модель
                       <select
