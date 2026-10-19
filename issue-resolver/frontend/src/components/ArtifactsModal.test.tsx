@@ -89,6 +89,7 @@ function renderModal(files: WorkspaceFile[], onClose = vi.fn()) {
     <ArtifactsModal
       issueId="issue-1"
       files={files}
+      archiveUrl="/fake/archive.tar.gz"
       open
       onClose={onClose}
     />,
@@ -230,6 +231,7 @@ describe('ArtifactsModal', () => {
       <ArtifactsModal
         issueId="issue-1"
         files={[HTML_FILE]}
+        archiveUrl="/fake/archive.tar.gz"
         open={false}
         onClose={vi.fn()}
       />,

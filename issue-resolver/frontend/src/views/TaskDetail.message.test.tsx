@@ -71,10 +71,13 @@ function jsonResponse(
   } as Response;
 }
 
-/** Различает GET (issue/iterations/step-runs) и POST message. */
+/** Различает GET (issue/iterations/step-runs) и POST message.
+ * `withControl`: если true — мокает /control эндпоинт (для тестов,
+ * где нужен controlSnapshot). */
 function stubFetch(
   postMessage: () => Promise<Response>,
   stepRuns: StepRunWithLog[] = [makeStepRun()],
+  withControl = false,
 ) {
   const issue = makeIssue();
   const iteration = makeIteration();
@@ -83,6 +86,14 @@ function stubFetch(
     const url = String(input);
     if (init?.method === 'POST' && url.endsWith('/message')) {
       return postMessage();
+    }
+    if (withControl && url.endsWith('/control')) {
+      return Promise.resolve(jsonResponse({
+        state: { provider: 'openai', modelId: 'gpt-4', model: 'gpt-4', thinkingLevel: 'high' },
+        models: [{ provider: 'openai', id: 'gpt-4', name: 'GPT-4' }],
+        thinkingLevels: ['low', 'medium', 'high'],
+        commands: [],
+      }));
     }
     if (url.endsWith('/step-runs')) {
       return Promise.resolve(jsonResponse(stepRuns));
@@ -160,8 +171,10 @@ describe('TaskDetail — отправка сообщения агенту', () =
   });
 
   it('модалка: «Прервать» зовёт abortIteration(activeIterationId)', async () => {
-    const fetchMock = stubFetch(() =>
-      Promise.resolve(jsonResponse({ ok: true })),
+    const fetchMock = stubFetch(
+      () => Promise.resolve(jsonResponse({ ok: true })),
+      undefined,
+      true,
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -169,6 +182,12 @@ describe('TaskDetail — отправка сообщения агенту', () =
     fireEvent.click(await screen.findByTestId('step-expand'));
 
     const modal = screen.getByTestId('step-log-modal');
+    // controlSnapshot грузится асинхронно — ждём появления кнопки
+    await waitFor(() => {
+      expect(
+        within(modal).getByTestId('abort-iteration-modal'),
+      ).toBeInTheDocument();
+    });
     fireEvent.click(within(modal).getByTestId('abort-iteration-modal'));
 
     await waitFor(() => {

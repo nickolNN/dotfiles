@@ -15,6 +15,12 @@ import {
   setMarkdownEditorValue,
 } from '../test/markdown-editor';
 
+/** Открывает модалку новой итерации кликом по кнопке. */
+async function openIterationModal() {
+  fireEvent.click(await screen.findByTestId('open-iteration-modal'));
+  await screen.findByTestId('new-iteration-island');
+}
+
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
     id: 'issue-1',
@@ -141,6 +147,7 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'new attempt');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -194,6 +201,7 @@ describe('TaskDetail', () => {
 
     render(<TaskDetail issueId="issue-1" />);
 
+    await openIterationModal();
     expect(
       await screen.findByLabelText('Контекст итерации'),
     ).toBeInTheDocument();
@@ -202,7 +210,7 @@ describe('TaskDetail', () => {
     ).toBeInTheDocument();
   });
 
-  it('canStart: running iteration → форма новой итерации скрыта', async () => {
+  it('canStart: running iteration → форма предлагает создать черновик', async () => {
     const issue = makeIssue();
     const iteration = makeIteration({ status: 'running' });
     vi.stubGlobal(
@@ -219,11 +227,15 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    expect(screen.queryByLabelText('Контекст итерации')).toBeNull();
+    // running → можно поставить в план только черновик, форму не скрываем.
+    await openIterationModal();
+    expect(screen.getByLabelText('Контекст итерации')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Создать черновик' }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Запустить новую итерацию' }),
     ).toBeNull();
-    expect(screen.queryByText('Новая итерация')).toBeNull();
   });
 
   it('canStart: нет итераций → форма новой итерации показана', async () => {
@@ -241,12 +253,13 @@ describe('TaskDetail', () => {
 
     render(<TaskDetail issueId="issue-1" />);
 
+    await openIterationModal();
     expect(
       await screen.findByLabelText('Контекст итерации'),
     ).toBeInTheDocument();
   });
 
-  it('шаг Refine помечен как планирующий: подсказка про комнату агентов', async () => {
+  it('шаг Refine несёт компактный input «Макс. число параллельных агентов»', async () => {
     const issue = makeIssue();
     const iteration = makeIteration({ status: 'completed' });
     vi.stubGlobal(
@@ -261,14 +274,22 @@ describe('TaskDetail', () => {
     );
 
     render(<TaskDetail issueId="issue-1" />);
+    await openIterationModal();
     await screen.findByLabelText('Контекст итерации');
 
-    // Подсказка есть ровно у Refine (и только у него).
-    const hints = screen.getAllByTestId('refine-planner-hint');
-    expect(hints).toHaveLength(1);
-    expect(hints[0]).toHaveTextContent('Планируем');
-    expect(hints[0]).toHaveTextContent('комнатой агентов');
-    expect(hints[0]).toHaveTextContent('без Планирования');
+    // Поле живёт внутри строки шага Refine (заголовок шага «Планирование»),
+    // одной компактной строкой — отдельного блока под шагами больше нет.
+    const refineHint = screen.getAllByTestId('refine-planner-hint');
+    expect(refineHint).toHaveLength(1);
+    const input = within(refineHint[0]).getByTestId('worker-count-input');
+    expect(input).toHaveAttribute('type', 'number');
+    expect(input).toHaveAttribute('min', '0');
+    expect(input).toHaveAttribute('max', '4');
+    expect(refineHint[0]).toHaveTextContent(
+      'Макс. число параллельных агентов',
+    );
+    // Ровно один input на форме — дубля-строки больше нет.
+    expect(screen.getAllByTestId('worker-count-input')).toHaveLength(1);
   });
 
   it('тогл Reviewer убран; выбор шага Код-ревью шлёт is_review_need: true', async () => {
@@ -301,11 +322,14 @@ describe('TaskDetail', () => {
     await screen.findByText('Итерация #1');
 
     // Дубль тогла ревью убран из формы.
+    await openIterationModal();
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByLabelText('Контекст для Reviewer')).toBeNull();
 
+    await openIterationModal();
     fireEvent.click(screen.getByLabelText('Код-ревью'));
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -353,6 +377,7 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     fireEvent.click(screen.getByLabelText('Планирование'));
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
@@ -404,16 +429,20 @@ describe('TaskDetail', () => {
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
+    await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
     // Resolve отмечен всегда → селектор виден; снятый Refine → селектора нет.
+    await openIterationModal();
     expect(screen.getByLabelText('Модель для шага Исполнение')).toBeEnabled();
     expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
 
+    await openIterationModal();
     fireEvent.click(screen.getByLabelText('Планирование'));
     fireEvent.change(screen.getByLabelText('Модель для шага Планирование'), {
       target: { value: 'm1' },
     });
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -460,9 +489,11 @@ describe('TaskDetail', () => {
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
+    await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
     // Отмечаем Код-ревью, но модель оставляем «По умолчанию».
+    await openIterationModal();
     fireEvent.click(screen.getByLabelText('Код-ревью'));
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
@@ -497,6 +528,7 @@ describe('TaskDetail', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<TaskDetail issueId="issue-1" />);
+    await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
     const levelSelect = screen.getByLabelText(
@@ -508,6 +540,7 @@ describe('TaskDetail', () => {
       within(levelSelect).getByRole('option', { name: 'По умолчанию' }),
     ).toBeInTheDocument();
 
+    await openIterationModal();
     fireEvent.change(screen.getByLabelText('Модель для шага Исполнение'), {
       target: { value: 'm1' },
     });
@@ -547,16 +580,20 @@ describe('TaskDetail', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<TaskDetail issueId="issue-1" />);
+    await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
+    await openIterationModal();
     fireEvent.click(screen.getByLabelText('Планирование'));
     fireEvent.change(screen.getByLabelText('Модель для шага Планирование'), {
       target: { value: 'm1' },
     });
+    await openIterationModal();
     fireEvent.change(
       screen.getByLabelText('Уровень размышления для шага Планирование'),
       { target: { value: 'high' } },
     );
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -592,8 +629,10 @@ describe('TaskDetail', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<TaskDetail issueId="issue-1" />);
+    await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
+    await openIterationModal();
     const modelSelect = screen.getByLabelText('Модель для шага Исполнение');
     const levelSelect = screen.getByLabelText(
       'Уровень размышления для шага Исполнение',
@@ -641,22 +680,27 @@ describe('TaskDetail', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<TaskDetail issueId="issue-1" />);
+    await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
     // Отмечаем Refine, выбираем модель и уровень, затем снимаем шаг.
+    await openIterationModal();
     fireEvent.click(screen.getByLabelText('Планирование'));
     fireEvent.change(screen.getByLabelText('Модель для шага Планирование'), {
       target: { value: 'm1' },
     });
+    await openIterationModal();
     fireEvent.change(
       screen.getByLabelText('Уровень размышления для шага Планирование'),
       { target: { value: 'high' } },
     );
+    await openIterationModal();
     fireEvent.click(screen.getByLabelText('Планирование'));
     expect(
       screen.queryByLabelText('Уровень размышления для шага Планирование'),
     ).toBeNull();
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -950,6 +994,7 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -997,12 +1042,14 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     const prCheckbox = screen.getByRole('checkbox', {
       name: 'PR (нужен репозиторий)',
     });
     expect(prCheckbox).toBeDisabled();
     expect(prCheckbox).not.toBeChecked();
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -1059,11 +1106,13 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     const prCheckbox = screen.getByRole('checkbox', { name: 'PR' });
     expect(prCheckbox).toBeEnabled();
     fireEvent.click(prCheckbox);
     expect(prCheckbox).toBeChecked();
 
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -1164,6 +1213,7 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     const form = screen.getByRole('heading', { name: 'Новая итерация' });
     // Секция итераций больше не обёрнута в отдельный остров с заголовком
     // «Итерации»; список — это <ul>, карточки — <li role="button">.
@@ -1192,6 +1242,7 @@ describe('TaskDetail', () => {
     await screen.findByText('Итерация #1');
 
     const task = screen.getByTestId('task-island');
+    await openIterationModal();
     const newIteration = screen.getByTestId('new-iteration-island');
     // Островок итераций — теперь сама карточка-<li> (у списка нет своей рамки).
     const iterations = screen
@@ -1261,6 +1312,7 @@ describe('TaskDetail', () => {
       render(<TaskDetail issueId="issue-1" />);
       await screen.findByText('Итерация #1');
 
+      await openIterationModal();
       setMarkdownEditorValue('Контекст итерации', 'ctx');
       fireEvent.click(
         screen.getByRole('button', { name: 'Запустить новую итерацию' }),
@@ -1431,9 +1483,11 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    await openIterationModal();
     fireEvent.change(screen.getByLabelText('Файлы'), {
       target: { files: [new File(['x'], 'ctx.txt', { type: 'text/plain' })] },
     });
+    await openIterationModal();
     setMarkdownEditorValue('Контекст итерации', 'ctx');
     fireEvent.click(
       screen.getByRole('button', { name: 'Запустить новую итерацию' }),

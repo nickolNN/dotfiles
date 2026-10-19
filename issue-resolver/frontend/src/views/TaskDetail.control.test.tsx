@@ -500,20 +500,6 @@ describe('TaskDetail — панель управления живой сесси
     expect(screen.getByTestId('command-hint')).toHaveTextContent('/new [текст]');
   });
 
-  it('queue recall возвращает текст в композер (append к черновику)', async () => {
-    await openRunningModal({
-      stepRun: {
-        events: [{ type: 'queue', steering: ['стоп'], followUp: [] }],
-      },
-    });
-
-    const input = await screen.findByLabelText('Сообщение');
-    fireEvent.change(input, { target: { value: 'мой черновик' } });
-    fireEvent.click(await screen.findByTestId('queue-recall-steer-0'));
-
-    expect(input).toHaveValue('мой черновик стоп');
-  });
-
   it('handled-failed builtin: показывает серверную ошибку и сохраняет черновик', async () => {
     await openRunningModal({
       promptResponder: () => ({

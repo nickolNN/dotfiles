@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import type { Issue, IssueRepository, Iteration, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 
@@ -85,7 +85,6 @@ function textResponse(
   } as Response;
 }
 
-/** Минимальный фейк EventSource (как в TaskDetail.live.test.tsx). */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -146,8 +145,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('TaskDetail — MR-ссылка в шапке задачи', () => {
-  it('result.json → ссылка на MR дублируется в шапке', async () => {
+describe('TaskDetail — MR-квадратик в строке репозитория', () => {
+  it('result.json → синий кликабельный MR в строке репо', async () => {
     stubFetch(
       JSON.stringify({
         merge_requests: [
@@ -163,49 +162,61 @@ describe('TaskDetail — MR-ссылка в шапке задачи', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const link = await screen.findByTestId('task-mr-link');
+    const link = await screen.findByTestId('repo-mr-link');
     expect(link).toHaveAttribute('href', 'https://github.com/acme/app/pull/1');
     expect(link).toHaveAttribute('target', '_blank');
-    expect(link).toHaveTextContent('MR:');
-    expect(link).toHaveTextContent('https://github.com/acme/app/pull/1');
+    expect(link).toHaveTextContent('MR');
+    // Серый квадратик не рендерится когда есть синяя ссылка.
+    expect(screen.queryByTestId('repo-mr-badge')).toBeNull();
   });
 
-  it('живое SSE-событие stream: mr → ссылка появляется без перезагрузки', async () => {
+  it('нет result.json → серый квадратик MR (ожидается)', async () => {
     stubFetch(null);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
-    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
 
-    act(() => {
-      FakeEventSource.instances[0].emit({
-        type: 'log',
-        issueId: 'issue-1',
-        iterationId: 'iter-1',
-        stepRunId: 'run-pr',
-        stream: 'mr',
-        data: 'https://github.com/acme/app/pull/2',
-        ts: '2026-10-16T00:00:00.000Z',
-      });
+    const badge = await screen.findByTestId('repo-mr-badge');
+    expect(badge).toHaveTextContent('MR');
+    expect(badge.tagName).toBe('SPAN');
+    // Серый цвет через Tailwind `#555`.
+    expect(badge.className).toContain('text-[#555]');
+    // Синей ссылки нет.
+    expect(screen.queryByTestId('repo-mr-link')).toBeNull();
+  });
+
+  it('create_mr=false → квадратик не показывается', async () => {
+    const issue = makeIssue({
+      repositories: [
+        makeRepository({
+          id: 'repo-b',
+          repository_url: 'https://github.com/acme/lib.git',
+          create_mr: false,
+        }),
+      ],
     });
-
-    const link = await screen.findByTestId('task-mr-link');
-    expect(link).toHaveAttribute('href', 'https://github.com/acme/app/pull/2');
-  });
-
-  it('pr success + create_mr, но result.json отсутствует → плейсхолдер', async () => {
-    stubFetch(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith('/result/files')) {
+          return Promise.resolve(jsonResponse([]));
+        }
+        if (url.endsWith('/iterations')) {
+          return Promise.resolve(jsonResponse([makeIteration()]));
+        }
+        return Promise.resolve(jsonResponse(issue));
+      }),
+    );
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    expect(await screen.findByTestId('task-mr-placeholder')).toHaveTextContent(
-      'MR создан, но ссылка недоступна',
-    );
-    expect(screen.queryByTestId('task-mr-link')).toBeNull();
+    expect(screen.queryByTestId('repo-mr-badge')).toBeNull();
+    expect(screen.queryByTestId('repo-mr-link')).toBeNull();
   });
 
-  it('pr_error → без ссылки и без плейсхолдера', async () => {
+  it('pr_error → серый квадратик (MR не создался)', async () => {
     const issue = makeIssue();
     const iteration = makeIteration();
     const stepRun = makePrStepRun({
@@ -238,8 +249,69 @@ describe('TaskDetail — MR-ссылка в шапке задачи', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    await screen.findByTestId('step-pr-error');
-    expect(screen.queryByTestId('task-mr-placeholder')).toBeNull();
-    expect(screen.queryByTestId('task-mr-link')).toBeNull();
+    // Серый квадратик — MR ожидался, но не создался.
+    expect(await screen.findByTestId('repo-mr-badge')).toBeInTheDocument();
+    expect(screen.queryByTestId('repo-mr-link')).toBeNull();
+  });
+
+  it('два репозитория: у одного MR создан, у другого — нет', async () => {
+    const issue = makeIssue({
+      repositories: [
+        makeRepository({
+          id: 'repo-a',
+          repository_url: 'https://github.com/acme/app.git',
+          create_mr: true,
+        }),
+        makeRepository({
+          id: 'repo-b',
+          repository_url: 'https://github.com/acme/lib.git',
+          create_mr: true,
+        }),
+      ],
+    });
+    const iteration = makeIteration();
+    const stepRun = makePrStepRun();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/result/files/content') && url.includes('result.json')) {
+          return Promise.resolve(
+            textResponse(
+              JSON.stringify({
+                merge_requests: [
+                  {
+                    repository_url: 'https://github.com/acme/app.git',
+                    url: 'https://github.com/acme/app/pull/1',
+                  },
+                ],
+              }),
+            ),
+          );
+        }
+        if (url.endsWith('/step-runs')) {
+          return Promise.resolve(jsonResponse([stepRun]));
+        }
+        if (url.endsWith('/result/files')) {
+          return Promise.resolve(jsonResponse([]));
+        }
+        if (url.endsWith('/iterations')) {
+          return Promise.resolve(jsonResponse([iteration]));
+        }
+        return Promise.resolve(jsonResponse(issue));
+      }),
+    );
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    // Одна синяя ссылка и один серый квадратик.
+    const links = await screen.findAllByTestId('repo-mr-link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', 'https://github.com/acme/app/pull/1');
+
+    const badges = screen.getAllByTestId('repo-mr-badge');
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toHaveTextContent('MR');
   });
 });

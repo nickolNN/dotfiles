@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import type { SavedRepo, Tag } from '@issue-resolver/shared';
 import {
-  createTag,
-  deleteTag,
-  getRepositories,
-  getTags,
-  updateTag,
-} from '../api/client';
+  useCreateTag,
+  useDeleteTag,
+  useSavedRepos,
+  useTags,
+  useUpdateTag,
+} from '../stores/queries';
+import QueryBoundary from '../components/QueryBoundary';
 
 const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
@@ -69,11 +70,6 @@ interface TagDraft {
   description: string;
   repositories: TagRepoDraft[];
 }
-
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; tags: Tag[] };
 
 type FormState =
   | { mode: 'create' }
@@ -295,54 +291,31 @@ function TagForm({
 }
 
 /** Страница управления тегами (CRUD + список репозиториев тега). */
-export default function Tags({ createSignal }: TagsProps) {
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
-  const [savedRepos, setSavedRepos] = useState<SavedRepo[]>([]);
-  const [savedReposLoading, setSavedReposLoading] = useState(true);
+export default function Tags(props: TagsProps) {
+  return (
+    <QueryBoundary>
+      <TagsView {...props} />
+    </QueryBoundary>
+  );
+}
+
+function TagsView({ createSignal }: TagsProps) {
+  const { data, isLoading, error, refetch } = useTags();
+  const tags = Array.isArray(data) ? data : [];
+  const { data: savedReposData, isLoading: savedReposLoading } = useSavedRepos();
+  const savedRepos = Array.isArray(savedReposData) ? savedReposData : [];
+
+  const createMutation = useCreateTag();
+  const updateMutation = useUpdateTag();
+  const deleteMutation = useDeleteTag();
+
   const [form, setForm] = useState<FormState>(null);
-  const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setState({ status: 'loading' });
-    try {
-      const tags = await getTags();
-      setState({ status: 'ready', tags: Array.isArray(tags) ? tags : [] });
-    } catch (err) {
-      setState({
-        status: 'error',
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setSavedReposLoading(true);
-    getRepositories()
-      .then((list) => {
-        if (cancelled) return;
-        setSavedRepos(Array.isArray(list) ? list : []);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSavedRepos([]);
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setSavedReposLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const saving = createMutation.isPending || updateMutation.isPending;
 
   useEffect(() => {
     if (createSignal && createSignal > 0) {
@@ -357,64 +330,37 @@ export default function Tags({ createSignal }: TagsProps) {
     setForm({ mode: 'edit', tag });
   }
 
-  function upsert(tag: Tag) {
-    setState((current) => {
-      if (current.status !== 'ready') return current;
-      const exists = current.tags.some((item) => item.id === tag.id);
-      return {
-        status: 'ready',
-        tags: exists
-          ? current.tags.map((item) => (item.id === tag.id ? tag : item))
-          : [...current.tags, tag],
-      };
-    });
-  }
-
-  async function handleSave(draft: TagDraft) {
+  function handleSave(draft: TagDraft) {
     if (!form) return;
-    setSaving(true);
     setFormError(null);
-    try {
-      const payload = {
-        name: draft.name,
-        description: draft.description || undefined,
-        repositories: draft.repositories,
-      };
-      const tag =
-        form.mode === 'edit'
-          ? await updateTag(form.tag.id, payload)
-          : await createTag(payload);
-      upsert(tag);
-      setForm(null);
-    } catch (err) {
+    const payload = {
+      name: draft.name,
+      description: draft.description || undefined,
+      repositories: draft.repositories,
+    };
+    const onSuccess = () => setForm(null);
+    const onError = (err: unknown) =>
       setFormError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
+    if (form.mode === 'edit') {
+      updateMutation.mutate(
+        { id: form.tag.id, request: payload },
+        { onSuccess, onError },
+      );
+    } else {
+      createMutation.mutate(payload, { onSuccess, onError });
     }
   }
 
-  async function handleDelete(tag: Tag) {
+  function handleDelete(tag: Tag) {
     if (!window.confirm(`Удалить тег «${tag.name}»?`)) return;
     setBusyId(tag.id);
     setNotice(null);
-    try {
-      await deleteTag(tag.id);
-      setState((current) =>
-        current.status === 'ready'
-          ? {
-              status: 'ready',
-              tags: current.tags.filter((item) => item.id !== tag.id),
-            }
-          : current,
-      );
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyId(null);
-    }
+    deleteMutation.mutate(tag.id, {
+      onError: (err) =>
+        setNotice(err instanceof Error ? err.message : String(err)),
+      onSettled: () => setBusyId(null),
+    });
   }
-
-  const tags = state.status === 'ready' ? state.tags : [];
 
   return (
     <div data-testid="tags-page" className="mx-auto max-w-4xl py-4">
@@ -443,28 +389,32 @@ export default function Tags({ createSignal }: TagsProps) {
         </div>
       )}
 
-      {state.status === 'loading' && (
+      {isLoading && (
         <p className="text-sm text-[#00FF41]/60">Загружаем теги…</p>
       )}
 
-      {state.status === 'error' && (
+      {error && !isLoading && (
         <div className="space-y-2">
           <p role="alert" className="text-sm font-medium text-[#FF0033]">
-            {state.message}
+            {error instanceof Error ? error.message : String(error)}
           </p>
-          <button type="button" className={btnSecondary} onClick={() => void load()}>
+          <button
+            type="button"
+            className={btnSecondary}
+            onClick={() => void refetch()}
+          >
             Повторить
           </button>
         </div>
       )}
 
-      {state.status === 'ready' && tags.length === 0 && (
+      {!isLoading && !error && tags.length === 0 && (
         <p data-testid="tag-list-empty" className="text-sm text-[#00FF41]/50">
           Пока нет тегов. Создайте первый.
         </p>
       )}
 
-      {state.status === 'ready' && tags.length > 0 && (
+      {!isLoading && !error && tags.length > 0 && (
         <ul className="space-y-2">
           {tags.map((tag) => {
             const busy = busyId === tag.id;

@@ -549,10 +549,35 @@ export async function repeatIteration(
   return (await response.json()) as Iteration;
 }
 
-/** Получить комментарии ревью из MR/PR и создать новую итерацию. */
-export async function fetchReviewComments(
+/** Перевести черновик в pending (в очередь на выполнение). */
+export async function queueIteration(
   iterationId: string,
 ): Promise<Iteration> {
+  const response = await fetch(
+    `${API_BASE}/iterations/${iterationId}/queue`,
+    { method: 'POST' },
+  );
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Iteration;
+}
+
+/** Комментарий ревью из MR/PR. */
+export interface ReviewCommentEntry {
+  repo: string;
+  file: string | null;
+  line: number | null;
+  body: string;
+  author: string;
+}
+
+/** Получить комментарии ревью из MR/PR. Итерация НЕ создаётся — \n    фронтенд сам решит. */
+export async function fetchReviewComments(
+  iterationId: string,
+): Promise<{ comments: ReviewCommentEntry[]; errors?: string[] }> {
   const response = await fetch(
     `${API_BASE}/iterations/${iterationId}/fetch-review-comments`,
     { method: 'POST' },
@@ -562,7 +587,10 @@ export async function fetchReviewComments(
     throw new Error(await readErrorMessage(response));
   }
 
-  return (await response.json()) as Iteration;
+  return (await response.json()) as {
+    comments: ReviewCommentEntry[];
+    errors?: string[];
+  };
 }
 
 export async function deleteIssue(id: string): Promise<void> {

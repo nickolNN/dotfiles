@@ -1,4 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
+import {
+  QueryClient,
+  QueryClientContext,
+  QueryClientProvider,
+  useQueryClient,
+} from '@tanstack/react-query';
 import type {
   CreateIterationRequest,
   Issue,
@@ -8,7 +23,6 @@ import type {
   PipelineStep,
   PromptMode,
   SessionCommand,
-  SessionControlSnapshot,
   StepModels,
   StepThinkingLevels,
   StepRunStatus,
@@ -20,7 +34,7 @@ import {
   formatDateTime,
   formatRelativeTime,
 } from '@issue-resolver/shared';
-import { canStartDraft, canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
+import { canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
 import {
   abortIteration,
   createIteration,
@@ -28,16 +42,14 @@ import {
   deleteIssueFile,
   devServerPortOf,
   fetchReviewComments,
-  getIssue,
   getIssueFiles,
   getIterations,
-  getIterationControl,
   getModels,
   getQuestionAnswers,
   getResultFiles,
   getResultMergeRequests,
-  getStepRuns,
   promptIteration,
+  queueIteration,
   repeatIteration,
   startIssue,
   resultFilesArchiveUrl,
@@ -46,6 +58,12 @@ import {
   sendUiResponse,
   stopDevServers,
 } from '../api/client';
+import {
+  useIssue,
+  useIterationControl,
+  useIterations,
+  useStepRuns,
+} from '../stores/queries';
 import type { ResultMergeRequest } from '../api/client';
 import {
   DELETE_TIMEOUT_MS,
@@ -421,37 +439,21 @@ function RefreshIcon({ className }: { className?: string }) {
   );
 }
 
-/** Inline-иконка ссылки (MR в шапке задачи). */
-function LinkIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.75}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11 4.93" />
-      <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19.07" />
-    </svg>
-  );
-}
-
 const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)] transition-base';
 const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
+/** Компактное поле для инлайн-настройки в строке шага (число агентов). */
+const compactInputClass =
+  'w-16 rounded-none border border-[#008F11] bg-[#0D0208] px-2 py-0.5 text-xs text-[#00FF41] outline-none transition-base focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
 
 interface TaskDetailProps {
   issueId?: string | null;
-  /** Открыть модалку результата сразу после загрузки (deep-link `…/result`). */
+  /** Открыть модалку отчёта сразу после загрузки (deep-link `…/result`). */
   autoOpenResult?: boolean;
 }
 
 /**
- * Имя файла результата для атрибута `download`: без него браузер при 404
+ * Имя файла отчёта для атрибута `download`: без него браузер при 404
  * (JSON-тело) сохранял бы `download.json` вместо осмысленного имени.
  */
 function resultFilenameFor(desiredResult: Issue['desired_result']): string {
@@ -499,16 +501,60 @@ function filterArtifacts(files: IssueFile[]): IssueFile[] {
   });
 }
 
-export default function TaskDetail({
+export default function TaskDetail(props: TaskDetailProps) {
+  return (
+    <TaskDetailQueryBoundary>
+      <TaskDetailView {...props} />
+    </TaskDetailQueryBoundary>
+  );
+}
+
+/**
+ * Гарантирует наличие QueryClient. В приложении провайдер ставит `main.tsx`,
+ * но компонент (и `App`) в тестах монтируется напрямую — без провайдера любой
+ * `useQuery` бросил бы «No QueryClient set». Если провайдер уже есть — просто
+ * пробрасываем детей в общий клиент приложения; иначе создаём локальный клиент
+ * на время жизни карточки, чтобы тесты не делили кэш между собой.
+ */
+function TaskDetailQueryBoundary({ children }: { children: ReactNode }) {
+  const existing = useContext(QueryClientContext);
+  const [fallbackClient] = useState(() =>
+    existing === undefined
+      ? new QueryClient({
+          defaultOptions: {
+            queries: {
+              staleTime: 30_000,
+              refetchOnWindowFocus: false,
+              retry: false,
+            },
+          },
+        })
+      : null,
+  );
+
+  if (existing !== undefined || fallbackClient === null) {
+    return <>{children}</>;
+  }
+  return (
+    <QueryClientProvider client={fallbackClient}>
+      {children}
+    </QueryClientProvider>
+  );
+}
+
+function TaskDetailView({
   issueId,
   autoOpenResult,
 }: TaskDetailProps) {
+  const queryClient = useQueryClient();
+  const issueQuery = useIssue(issueId);
+  const iterationsQuery = useIterations(issueId);
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [context, setContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [issueFiles, setIssueFiles] = useState<IssueFile[]>([]);
   // Файлы, порождённые агентом в рабочей папке последней completed-итерации
-  // (кроме самого артефакта результата).
+  // (кроме самого артефакта отчёта).
   const [resultFiles, setResultFiles] = useState<WorkspaceFile[]>([]);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
@@ -525,7 +571,6 @@ export default function TaskDetail({
   const [modelsLoading, setModelsLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [stepRuns, setStepRuns] = useState<StepRunsState>({ status: 'idle' });
   // Live-события сессии, разложенные по stepRunId: кладём их в SessionView
   // соответствующего шага, не дожидаясь следующего GET /step-runs.
   const [liveEventsByRun, setLiveEventsByRun] = useState<
@@ -547,7 +592,9 @@ export default function TaskDetail({
   const [repeatingId, setRepeatingId] = useState<string | null>(null);
   const [repeatError, setRepeatError] = useState<string | null>(null);
   const [fetchingReviewId, setFetchingReviewId] = useState<string | null>(null);
+  const [queueingId, setQueueingId] = useState<string | null>(null);
   const [fetchReviewError, setFetchReviewError] = useState<string | null>(null);
+  const [fetchReviewMessage, setFetchReviewMessage] = useState<string | null>(null);
   const [startingDraft, setStartingDraft] = useState(false);
   const [startDraftError, setStartDraftError] = useState<string | null>(null);
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
@@ -612,8 +659,6 @@ export default function TaskDetail({
   // Управление живой pi-сессией (модель/thinking/очередь/компакция). `null`,
   // пока активного шаг-сеанса нет (409) или роут ещё не ответил — тогда
   // панель управления просто не рендерится.
-  const [controlSnapshot, setControlSnapshot] =
-    useState<SessionControlSnapshot | null>(null);
   const [controlTick, setControlTick] = useState(0);
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
@@ -623,6 +668,8 @@ export default function TaskDetail({
   const [paletteIndex, setPaletteIndex] = useState(0);
   // Мягко подвести список к началу после создания новой итерации.
   const [scrollToIterations, setScrollToIterations] = useState(false);
+  // Модалка новой итерации: открывается по кнопке, закрывается по Escape/клику на фон/сабмиту.
+  const [showIterationModal, setShowIterationModal] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const iterationsRef = useRef<HTMLDivElement | null>(null);
 
@@ -674,47 +721,56 @@ export default function TaskDetail({
   const isQuestionEligibleStatus = (status: StepRunStatus) =>
     isActiveStatus(status) || status === 'needs_input';
 
+  // Сброс per-issue UI-состояния при смене задачи (как в прежнем ручном
+  // эффекте загрузки): вопрос и его ошибка не должны «протекать» на другую задачу.
   useEffect(() => {
     if (!issueId) return;
-
-    let cancelled = false;
     setState({ status: 'loading' });
     setAnsweredQuestionIds(new Set());
     setQuestionError(null);
-
-    Promise.all([getIssue(issueId), getIterations(issueId)])
-      .then(([issue, iterations]) => {
-        if (cancelled) return;
-        setState({
-          status: 'ready',
-          issue,
-          iterations: [...iterations].sort((a, b) => a.number - b.number),
-        });
-        setSelectedSteps(issue.pipeline_steps);
-        // Первый раз инициализируем prRepoIds из create_mr флагов репозиториев.
-        if (!prRepoIdsSeeded) {
-          setPrRepoIds(
-            new Set(
-              issue.repositories
-                .filter((repo) => repo.create_mr)
-                .map((repo) => repo.id),
-            ),
-          );
-          setPrRepoIdsSeeded(true);
-        }
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setState({
-          status: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
   }, [issueId]);
+
+  // Гидратация локального `state` из кэша react-query. `state` остаётся
+  // локальным, потому что SSE пишет в него живой статус задачи (см. подписку).
+  useEffect(() => {
+    if (!issueId) return;
+    const error = issueQuery.error ?? iterationsQuery.error;
+    if (issueQuery.isError || iterationsQuery.isError) {
+      setState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (!issueQuery.data || !iterationsQuery.data) return;
+    const issue = issueQuery.data;
+    setState({
+      status: 'ready',
+      issue,
+      iterations: [...iterationsQuery.data].sort((a, b) => a.number - b.number),
+    });
+    setSelectedSteps(issue.pipeline_steps);
+    // Первый раз инициализируем prRepoIds из create_mr флагов репозиториев.
+    if (!prRepoIdsSeeded) {
+      setPrRepoIds(
+        new Set(
+          issue.repositories
+            .filter((repo) => repo.create_mr)
+            .map((repo) => repo.id),
+        ),
+      );
+      setPrRepoIdsSeeded(true);
+    }
+  }, [
+    issueId,
+    issueQuery.data,
+    issueQuery.isError,
+    issueQuery.error,
+    iterationsQuery.data,
+    iterationsQuery.isError,
+    iterationsQuery.error,
+    prRepoIdsSeeded,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -746,35 +802,28 @@ export default function TaskDetail({
       ? state.iterations[state.iterations.length - 1].id
       : null);
 
+  const stepRunsQuery = useStepRuns(activeIterationId);
+
+  // Смена итерации: живой статус предыдущей больше не актуален.
   useEffect(() => {
-    if (!activeIterationId) {
-      setStepRuns({ status: 'idle' });
-      setLiveStatusByRun({});
-      return;
-    }
-
-    let cancelled = false;
-    setStepRuns({ status: 'loading' });
-    // Смена итерации: живой статус предыдущей больше не актуален.
     setLiveStatusByRun({});
+  }, [activeIterationId]);
 
-    getStepRuns(activeIterationId)
-      .then((runs) => {
-        if (cancelled) return;
-        const loadedRuns = Array.isArray(runs) ? runs : [];
-        setStepRuns({ status: 'ready', stepRuns: loadedRuns });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setStepRuns({
-          status: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
+  // `refreshTick` — сигнал SSE «перечитать прогоны» (новый шаг, терминальный
+  // статус, вопрос): инвалидируем кэш step-runs текущей итерации.
+  useEffect(() => {
+    if (refreshTick === 0 || !activeIterationId) return;
+    void queryClient.invalidateQueries({
+      queryKey: ['step-runs', activeIterationId],
+    });
+  }, [refreshTick, activeIterationId, queryClient]);
 
-    // Серверные ответы авторитетны: после reload/на другом устройстве уже
-    // отвеченные вопросы не должны всплывать повторно. Union с локальными
-    // оптимистичными id — сбой запроса деградирует в прежнее поведение.
+  // Серверные ответы авторитетны: после reload/на другом устройстве уже
+  // отвеченные вопросы не должны всплывать повторно. Union с локальными
+  // оптимистичными id — сбой запроса деградирует в прежнее поведение.
+  useEffect(() => {
+    if (!activeIterationId) return;
+    let cancelled = false;
     getQuestionAnswers(activeIterationId)
       .then((ids) => {
         if (cancelled || !Array.isArray(ids) || ids.length === 0) return;
@@ -787,11 +836,29 @@ export default function TaskDetail({
       .catch(() => {
         // best-effort: без серверных ответов модалка переспросит.
       });
-
     return () => {
       cancelled = true;
     };
   }, [activeIterationId, refreshTick]);
+
+  const stepRuns: StepRunsState = !activeIterationId
+    ? { status: 'idle' }
+    : stepRunsQuery.isLoading
+      ? { status: 'loading' }
+      : stepRunsQuery.isError
+        ? {
+            status: 'error',
+            message:
+              stepRunsQuery.error instanceof Error
+                ? stepRunsQuery.error.message
+                : String(stepRunsQuery.error),
+          }
+        : {
+            status: 'ready',
+            stepRuns: Array.isArray(stepRunsQuery.data)
+              ? stepRunsQuery.data
+              : [],
+          };
 
   // Вложения задачи. Перезагружаются вместе с refreshTick: терминальный
   // статус итерации и создание новой итерации (см. handleSubmit).
@@ -932,24 +999,13 @@ export default function TaskDetail({
           status === 'failed' ||
           status === 'cancelled'
         ) {
-          Promise.all([getIssue(issueId), getIterations(issueId)])
-            .then(([issue, iterations]) => {
-              setState((current) =>
-                current.status === 'ready'
-                  ? {
-                      ...current,
-                      issue,
-                      iterations: [...iterations].sort(
-                        (a, b) => a.number - b.number,
-                      ),
-                    }
-                  : current,
-              );
-              setRefreshTick((tick) => tick + 1);
-            })
-            .catch(() => {
-              // live-обновление не должно ронять карточку
-            });
+          // Сервер — источник истины для терминального статуса: инвалидируем
+          // issue/iterations, гидратация `state` подхватит свежие данные.
+          void queryClient.invalidateQueries({ queryKey: ['issue', issueId] });
+          void queryClient.invalidateQueries({
+            queryKey: ['iterations', issueId],
+          });
+          setRefreshTick((tick) => tick + 1);
         }
       },
       onWorkspaceProgress: (payload) => {
@@ -1099,7 +1155,7 @@ export default function TaskDetail({
   }, [jiraPreviewOpen]);
 
   // Deep-link из списка задач: `#/tasks/<id>/result` сразу открывает
-  // модалку результата после готовности задачи. `openResult` — function
+  // модалку отчёта после готовности задачи. `openResult` — function
   // declaration (hoisted), поэтому доступен здесь. Одноразово: ref гасит
   // повторные срабатывания на ре-рендерах.
   const autoOpenedResultRef = useRef(false);
@@ -1139,31 +1195,6 @@ export default function TaskDetail({
       el.scrollTop = el.scrollHeight;
     }
   }, [expandedEvents]);
-
-  // Авто-скролл внутри карточки итерации к running-воркеру.
-  // Когда статус шага меняется на running (или появляется новый running),
-  // скроллим карточку этого шага в зону видимости.
-  useEffect(() => {
-    if (stepRuns.status !== 'ready') return;
-    const runs = stepRuns.stepRuns;
-    // Найти первый running-воркер.
-    const firstRunning = runs.find((run) => {
-      const status = liveStatusByRun[run.id] ?? statusOf(run);
-      return isActiveStatus(status);
-    });
-    if (!firstRunning) return;
-
-    // Небольшая задержка — дать DOM отрендериться после изменения состояния.
-    const timer = setTimeout(() => {
-      const el = document.querySelector(
-        `[data-step-run-id="${firstRunning.id}"]`,
-      );
-      if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
-        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [stepRuns, liveStatusByRun]);
 
   // Question-события активной итерации (персист + live) в порядке появления,
   // без дублей по id. Учитываем только ещё выполняющиеся шаги: вопрос
@@ -1210,29 +1241,50 @@ export default function TaskDetail({
 
 
 
+  // Авто-скролл внутри карточки итерации к running-воркеру.
+  // Когда статус шага меняется на running (или появляется новый running),
+  // скроллим карточку этого шага в зону видимости.
+  // Если есть неотвеченные вопросы — скролл не срабатывает: пользователь
+  // должен видеть вопрос, а не улетать к агенту.
+  useEffect(() => {
+    if (unansweredQuestions.length > 0) return;
+    if (stepRuns.status !== 'ready') return;
+    const runs = stepRuns.stepRuns;
+    const firstRunning = runs.find((run) => {
+      const status = liveStatusByRun[run.id] ?? statusOf(run);
+      return isActiveStatus(status);
+    });
+    if (!firstRunning) return;
+
+    const timer = setTimeout(() => {
+      const el = document.querySelector(
+        `[data-step-run-id="${firstRunning.id}"]`,
+      );
+      if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [stepRuns, liveStatusByRun, unansweredQuestions]);
+
   const iterationRunning = activeIteration?.status === 'running';
 
-  // Опрос снимка управления, пока итерация выполняется. При 409/отсутствии
-  // живого шаг-сеанса `getIterationControl` возвращает null → панель скрыта.
-  useEffect(() => {
-    if (!activeIterationId || !iterationRunning) {
-      setControlSnapshot(null);
-      return;
-    }
+  // Опрос снимка управления (react-query, refetchInterval 4с), пока итерация
+  // выполняется. При 409/отсутствии живого шаг-сеанса `getIterationControl`
+  // отдаёт null → панель скрыта.
+  const controlQuery = useIterationControl(activeIterationId, iterationRunning);
+  const controlSnapshot = iterationRunning
+    ? (controlQuery.data ?? null)
+    : null;
 
-    let cancelled = false;
-    const load = () => {
-      void getIterationControl(activeIterationId).then((snapshot) => {
-        if (!cancelled) setControlSnapshot(snapshot);
-      });
-    };
-    load();
-    const timer = window.setInterval(load, 4000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [activeIterationId, iterationRunning, controlTick]);
+  // `controlTick` — сигнал «перечитать снапшот» после управляющей команды
+  // (promptIteration в handleMessageSubmit).
+  useEffect(() => {
+    if (controlTick === 0 || !activeIterationId) return;
+    void queryClient.invalidateQueries({
+      queryKey: ['iteration-control', activeIterationId],
+    });
+  }, [controlTick, activeIterationId, queryClient]);
 
   // `editor_text` из живой сессии префилит поле ввода (последнее событие).
   const lastEditorText = useMemo(() => {
@@ -1247,8 +1299,22 @@ export default function TaskDetail({
     if (lastEditorText !== null) setMessage(lastEditorText);
   }, [lastEditorText]);
 
-  const canStart =
+  const canStartNormal =
     state.status === 'ready' ? canStartIteration(state.iterations) : false;
+  // Можно создать черновик: есть running итерация, но нет draft/pending.
+  const hasRunningIteration =
+    state.status === 'ready'
+      ? state.iterations.some((it) => it.status === 'running')
+      : false;
+  const hasDraftIteration =
+    state.status === 'ready'
+      ? state.iterations.some((it) => it.status === 'draft')
+      : false;
+  const canStartDraftForm = hasRunningIteration && !hasDraftIteration;
+  const canStart = canStartNormal || canStartDraftForm;
+  const submitButtonLabel = hasRunningIteration
+    ? 'Создать черновик'
+    : 'Запустить новую итерацию';
   // Новые итерации показываем первыми; сам state не мутируем —
   // activeIterationId по умолчанию берёт последний (свежайший) элемент.
   const orderedIterations =
@@ -1273,23 +1339,9 @@ export default function TaskDetail({
     }
     return [...byUrl.values()];
   }, [storedMergeRequests, liveMrUrls]);
-  // pr-шаг успешен и MR был запрошен (create_mr), но ссылки нет: артефакт
-  // result.json не записался (best-effort). Плейсхолдер вместо тишины.
-  const mrMissingLink =
-    mrItems.length === 0 &&
-    state.status === 'ready' &&
-    stepRuns.status === 'ready' &&
-    state.issue.repositories.some((repository) => repository.create_mr) &&
-    stepRuns.stepRuns.some(
-      (run) =>
-        run.step === 'pr' &&
-        statusOf(run) === 'success' &&
-        !parseStepReport(run.report ?? '')?.pr_error,
-    );
-  // Порт dev-сервера задачи (выделяет backend). Нет порта → индикатор скрыт.
-  const devServerPort =
-    state.status === 'ready' ? devServerPortOf(state.issue) : null;
-  // Готов ли результат задачи: эндпоинт отдаёт результат последней
+
+
+  // Готов ли отчёт: эндпоинт отдаёт отчёт последней
   // completed-итерации, а снапшот создаётся в момент её завершения. Значит
   // готовность = есть хоть одна завершённая итерация (не важно, что лежит
   // в отчёте resolve-шага).
@@ -1318,16 +1370,17 @@ export default function TaskDetail({
             workspaceProgress?.steps ?? [],
             workspaceReady,
           ),
-          devPort: repoDevPort(
-            extractRepoNameFromUrl(repository.repository_url),
-            workspaceProgress?.steps ?? [],
-          ),
+          devPort:
+            repoDevPort(
+              extractRepoNameFromUrl(repository.repository_url),
+              workspaceProgress?.steps ?? [],
+            ) ?? devServerPortOf(state.issue) ?? undefined,
         }))
       : [];
 
   // Список порождённых файлов. Best-effort: сеть/не-2xx → пустой список,
   // чтобы шапка не падала. Перезагружается с refreshTick (терминал итерации,
-  // новая итерация) и когда результат становится готов.
+  // новая итерация) и когда отчёт становится готов.
   useEffect(() => {
     if (!issueId || !resultReady) {
       setResultFiles([]);
@@ -1667,7 +1720,70 @@ export default function TaskDetail({
     setFetchingReviewId(iteration.id);
 
     try {
-      const created = await fetchReviewComments(iteration.id);
+      const { comments, errors } = await fetchReviewComments(iteration.id);
+
+      if (comments.length === 0) {
+        // Комментариев нет — код ревью чист.
+        setFetchReviewError(null);
+        setFetchReviewMessage(
+          'Комментариев ревью нет — код чист ✨',
+        );
+        // Сообщение исчезнет через 4 секунды.
+        setTimeout(() => setFetchReviewMessage(null), 4000);
+        return;
+      }
+
+      // Формируем текст комментариев как markdown.
+      const lines: string[] = [
+        `# Review Comments`,
+        `> Fetched from MR/PR of iteration #${iteration.number}`,
+        '',
+      ];
+      for (const c of comments) {
+        const location = c.file
+          ? `${c.file}${c.line !== null ? `:${c.line}` : ''}`
+          : 'общий комментарий';
+        lines.push(
+          `- **${c.author}** [${c.repo} → ${location}]:`,
+          `  ${c.body}`,
+          '',
+        );
+      }
+      if (errors && errors.length > 0) {
+        lines.push(
+          '',
+          '⚠ Некоторые MR не удалось опросить:',
+          ...errors.map((e) => `  - ${e}`),
+        );
+      }
+      const reviewText = lines.join('\n');
+
+      // Создаём файл с комментариями и предзаполняем поле контекста.
+      const reviewFile = new File(
+        [reviewText],
+        `review-iteration-${iteration.number}.md`,
+        { type: 'text/markdown' },
+      );
+      setFiles([reviewFile]);
+      setContext(
+        `Review comments from iteration #${iteration.number}. ` +
+          `See attached file for details.`,
+      );
+    } catch (error) {
+      setFetchReviewError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setFetchingReviewId(null);
+    }
+  }
+
+  async function handleQueue(iteration: Iteration) {
+    if (!issueId) return;
+    if (iteration.status !== 'draft') return;
+    setQueueingId(iteration.id);
+    try {
+      await queueIteration(iteration.id);
       const iterations = await getIterations(issueId);
       setState((current) =>
         current.status === 'ready'
@@ -1677,14 +1793,13 @@ export default function TaskDetail({
             }
           : current,
       );
-      setSelectedIterationId(created.id);
       setRefreshTick((tick) => tick + 1);
     } catch (error) {
-      setFetchReviewError(
+      setRepeatError(
         error instanceof Error ? error.message : String(error),
       );
     } finally {
-      setFetchingReviewId(null);
+      setQueueingId(null);
     }
   }
 
@@ -2039,21 +2154,59 @@ export default function TaskDetail({
                         {REPO_PREP_LABELS[status]}
                       </span>
                       {status === 'ready' && devPort !== undefined && (
-                        <span
-                          data-testid="repo-dev-port"
-                          className="text-[#00B4FF]"
-                        >
-                          Dev: localhost:{devPort}
+                        <span className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            data-testid="repo-dev-port"
+                            title={`Скопировать порт ${devPort}`}
+                            aria-label={`Скопировать порт dev-сервера ${devPort}`}
+                            onClick={() => void copyDevServerPort(devPort)}
+                            className="text-[#00B4FF] hover:text-[#00FF41] transition-base"
+                          >
+                            Dev: localhost:{devPort}
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="repo-stop-dev"
+                            disabled={stoppingDevServers}
+                            onClick={() => void handleStopDevServers()}
+                            title="Остановить dev-серверы"
+                            aria-label="Остановить dev-серверы"
+                            className="text-[#FF0033] hover:text-[#FF5555] disabled:opacity-40 transition-base"
+                          >
+                            <StopIcon className="h-3 w-3" />
+                          </button>
                         </span>
                       )}
-                      {repository.create_mr && (
-                        <span
-                          data-testid="repo-mr-badge"
-                          className="border border-[#00B4FF] px-1 py-0.5 text-[10px] text-[#00B4FF]"
-                        >
-                          MR
-                        </span>
-                      )}
+                      {repository.create_mr && (() => {
+                        const mrMatch = mrItems.find(
+                          (item) =>
+                            item.repositoryUrl ===
+                            repository.repository_url,
+                        );
+                        if (mrMatch) {
+                          return (
+                            <a
+                              data-testid="repo-mr-link"
+                              href={mrMatch.url}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              title={mrMatch.url}
+                              className="border border-[#00B4FF] px-1 py-0.5 text-[10px] text-[#00B4FF] no-underline hover:bg-[#00B4FF] hover:text-[#0D0208] transition-base"
+                            >
+                              MR
+                            </a>
+                          );
+                        }
+                        return (
+                          <span
+                            data-testid="repo-mr-badge"
+                            className="border border-[#555] px-1 py-0.5 text-[10px] text-[#555]"
+                          >
+                            MR
+                          </span>
+                        );
+                      })()}
                       {repository.bootstrap_enabled === false && (
                         <span className="text-[#FFB000]">
                           (запуск отключён)
@@ -2076,81 +2229,18 @@ export default function TaskDetail({
                 </button>
               </div>
             )}
-            {devServerPort !== null && (
-              <div className="mt-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    data-testid="dev-server-port"
-                    title="Скопировать порт dev-сервера"
-                    aria-label={`Скопировать порт dev-сервера ${devServerPort}`}
-                    onClick={() => void copyDevServerPort(devServerPort)}
-                    className="inline-flex min-h-9 items-center gap-2 rounded-none border border-[#00FF41] bg-[#003B00]/40 px-3 py-1 font-mono text-xs text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] transition-base"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#00FF41] animate-pulse-subtle"
-                    />
-                    <span data-testid="dev-server-port-value">
-                      :{devServerPort}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="stop-dev-servers"
-                    disabled={stoppingDevServers}
-                    onClick={() => void handleStopDevServers()}
-                    className="inline-flex min-h-9 items-center gap-1.5 rounded-none border border-[#FF0033] bg-[#2B0000]/40 px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#2B0000]/40 disabled:hover:text-[#FF0033] transition-base"
-                  >
-                    <StopIcon className="h-3.5 w-3.5" />
-                    {stoppingDevServers ? 'Остановка…' : 'Остановить'}
-                  </button>
-                  {devPortCopied && (
-                    <span className="text-xs text-[#00FF41]/60">
-                      Скопировано
-                    </span>
-                  )}
-                </div>
-                {devServerError && (
-                  <p
-                    role="alert"
-                    className="mt-2 text-xs font-medium text-[#FF0033]"
-                  >
-                    Не удалось остановить dev-серверы: {devServerError}
-                  </p>
-                )}
-              </div>
+            {devPortCopied && (
+              <p className="mt-2 text-xs text-[#00FF41]/60">Скопировано</p>
             )}
-            {mrItems.length > 0 && (
-              <div
-                data-testid="task-mr-links"
-                className="mt-3 flex flex-wrap items-center gap-2"
-              >
-                {mrItems.map((item) => (
-                  <a
-                    key={item.url}
-                    data-testid="task-mr-link"
-                    href={item.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    title={item.repositoryUrl || item.url}
-                    className="inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-none border border-[#00FF41] bg-[#003B00]/40 px-3 py-1 font-mono text-xs text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] transition-base"
-                  >
-                    <LinkIcon className="h-3.5 w-3.5 shrink-0" />
-                    <span className="shrink-0">MR:</span>
-                    <span className="truncate">{item.url}</span>
-                  </a>
-                ))}
-              </div>
-            )}
-            {mrMissingLink && (
+            {devServerError && (
               <p
-                data-testid="task-mr-placeholder"
-                className="mt-3 text-xs text-[#00FF41]/60"
+                role="alert"
+                className="mt-2 text-xs font-medium text-[#FF0033]"
               >
-                MR создан, но ссылка недоступна
+                Не удалось остановить dev-серверы: {devServerError}
               </p>
             )}
+
             {resultAvailable && (
               <div className="mt-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -2161,42 +2251,8 @@ export default function TaskDetail({
                     onClick={() => void openResult()}
                     className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#003B00] disabled:hover:text-[#00FF41] transition-base"
                   >
-                    Показать результат
+                    Показать отчёт
                   </button>
-                  <a
-                    data-testid="download-result"
-                    href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
-                    download={resultFilenameFor(state.issue.desired_result)}
-                    aria-disabled={resultReady ? undefined : true}
-                    tabIndex={resultReady ? undefined : -1}
-                    onClick={(event) => {
-                      if (!resultReady) event.preventDefault();
-                    }}
-                    className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium transition-base ${
-                      resultReady
-                        ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
-                        : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
-                    }`}
-                  >
-                    Скачать
-                  </a>
-                  <a
-                    data-testid="download-archive"
-                    href={resultFilesArchiveUrl(state.issue.id)}
-                    download={`issue-${state.issue.id}.tar.gz`}
-                    aria-disabled={resultReady ? undefined : true}
-                    tabIndex={resultReady ? undefined : -1}
-                    onClick={(event) => {
-                      if (!resultReady) event.preventDefault();
-                    }}
-                    className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium transition-base ${
-                      resultReady
-                        ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
-                        : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
-                    }`}
-                  >
-                    Скачать всё (.tar.gz)
-                  </a>
                   <button
                     type="button"
                     data-testid="open-artifacts"
@@ -2268,13 +2324,41 @@ export default function TaskDetail({
           )}
 
           {canStart && (
+            <>
+              <button
+                type="button"
+                data-testid="open-iteration-modal"
+                onClick={() => setShowIterationModal(true)}
+                className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] md:w-auto"
+              >
+                {hasDraftIteration ? 'Редактировать черновик' : 'Новая итерация'}
+              </button>
+
+              {showIterationModal && (
+                <div
+                  data-testid="iteration-modal-backdrop"
+                  className="fixed inset-0 z-50 flex items-start justify-center bg-[#0D0208]/90 backdrop-blur-sm overflow-y-auto p-4"
+                  onClick={(e) => { if (e.target === e.currentTarget) setShowIterationModal(false); }}
+                  onKeyDown={(e) => { if (e.key === 'Escape') setShowIterationModal(false); }}
+                >
+                  <div className="w-full max-w-3xl mx-4 my-auto">
           <section
             data-testid="new-iteration-island"
-            className="rounded-none border border-[#008F11] p-4"
+            className="rounded-none border border-[#008F11] bg-[#0D0208] p-4 shadow-[0_0_30px_rgba(0,255,65,0.2)]"
           >
-            <h3 className="glow mb-1 text-lg font-semibold text-[#00FF41]">
-              Новая итерация
-            </h3>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="glow text-lg font-semibold text-[#00FF41]">
+                Новая итерация
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowIterationModal(false)}
+                className="text-[#00FF41]/60 hover:text-[#00FF41] text-lg leading-none px-2"
+                aria-label="Закрыть"
+              >
+                ✕
+              </button>
+            </div>
             <p className="mb-4 text-sm text-[#00FF41]/60">
               Добавь новый контекст и запусти ещё одну попытку решения задачи.
             </p>
@@ -2338,13 +2422,27 @@ export default function TaskDetail({
                                 : step.label}
                           </label>
                           {step.value === 'refine' && (
-                            <span
+                            <label
                               data-testid="refine-planner-hint"
-                              className="pl-6 text-xs text-[#00FF41]/60"
+                              className="flex items-center gap-2 pl-6 text-xs text-[#00FF41]/60"
+                              htmlFor="worker-count"
+                              title="Планируем — решает, запускать ли resolve комнатой агентов; без Планирования всегда ровно один агент. 0 — без ограничений, 1 — один агент, 2-4 — макс. N в комнате."
                             >
-                              Планируем — решает, запускать ли resolve комнатой
-                              агентов; без Планирования всегда ровно один агент.
-                            </span>
+                              Макс. число параллельных агентов
+                              <input
+                                id="worker-count"
+                                type="number"
+                                min={0}
+                                max={4}
+                                value={workerCount}
+                                onChange={(event) =>
+                                  setWorkerCount(Number(event.target.value) || 0)
+                                }
+                                disabled={!canStart}
+                                className={compactInputClass}
+                                data-testid="worker-count-input"
+                              />
+                            </label>
                           )}
                         </div>
                         {modelEnabled && (
@@ -2392,28 +2490,6 @@ export default function TaskDetail({
                   })}
                 </div>
               </fieldset>
-
-              <div>
-                <label className={labelClass} htmlFor="worker-count">
-                  Макс. число параллельных агентов
-                </label>
-                <input
-                  id="worker-count"
-                  type="number"
-                  min={0}
-                  max={4}
-                  value={workerCount}
-                  onChange={(event) =>
-                    setWorkerCount(Number(event.target.value) || 0)
-                  }
-                  disabled={!canStart}
-                  className={`${inputClass} w-24`}
-                  data-testid="worker-count-input"
-                />
-                <p className="mt-1 text-xs text-[#00FF41]/40">
-                  0 — без ограничений, 1 — один агент, 2-4 — макс. N в комнате
-                </p>
-              </div>
 
               {/* Репозитории для MR: показываются только при выбранном шаге pr. */}
               {selectedSteps.includes('pr') && prAvailable && (
@@ -2469,11 +2545,15 @@ export default function TaskDetail({
                 >
                   {submitting
                     ? 'Создание итерации…'
-                    : 'Запустить новую итерацию'}
+                    : submitButtonLabel}
                 </button>
               </div>
             </form>
           </section>
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {state.status === 'ready' &&
@@ -2577,6 +2657,15 @@ export default function TaskDetail({
                 {fetchReviewError}
               </p>
             )}
+            {fetchReviewMessage && (
+              <p
+                role="status"
+                data-testid="fetch-review-message"
+                className="mb-3 text-xs font-medium text-[#00FF41]"
+              >
+                {fetchReviewMessage}
+              </p>
+            )}
 
             {state.iterations.length === 0 ? (
               <div className="rounded-none border border-dashed border-[#008F11] p-6 text-center text-sm text-[#00FF41]/60">
@@ -2670,6 +2759,22 @@ export default function TaskDetail({
                               : '📋 Результаты ревью'}
                           </button>
                         )}
+                      {iteration.status === 'draft' && (
+                        <button
+                          type="button"
+                          data-testid="queue-iteration"
+                          disabled={queueingId === iteration.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleQueue(iteration);
+                          }}
+                          className="min-h-8 shrink-0 border border-[#00FF41] bg-[#002B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+                        >
+                          {queueingId === iteration.id
+                            ? 'В очереди…'
+                            : '▶ В очередь'}
+                        </button>
+                      )}
                     </div>
 
                     {iteration.status === 'running' && abortError && (
@@ -3074,7 +3179,24 @@ export default function TaskDetail({
             onClick={(event) => event.stopPropagation()}
           >
             <header className="flex flex-wrap items-center gap-3 border-b border-[#008F11] py-4 px-2 sm:px-4">
-              <span className="text-[#00FF41]">Результат</span>
+              <span className="text-[#00FF41]">Отчёт</span>
+              <a
+                data-testid="result-modal-download"
+                href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
+                download={resultFilenameFor(state.issue.desired_result)}
+                aria-disabled={resultReady ? undefined : true}
+                tabIndex={resultReady ? undefined : -1}
+                onClick={(event) => {
+                  if (!resultReady) event.preventDefault();
+                }}
+                className={`inline-flex items-center rounded-none border border-[#008F11] px-2 py-0.5 text-[11px] font-medium transition-base ${
+                  resultReady
+                    ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
+                    : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
+                }`}
+              >
+                Скачать
+              </a>
               <button
                 type="button"
                 data-testid="result-modal-close"
@@ -3090,23 +3212,23 @@ export default function TaskDetail({
                 <iframe
                   data-testid="result-html"
                   src={`/issue-resolver/api/v1/issues/${state.issue.id}/result`}
-                  title="Результат"
+                  title="Отчёт"
                   className="h-full w-full border border-[#008F11] bg-white"
                 />
               ) : resultLoading ? (
                 <p className="text-sm text-[#00FF41]/60">
-                  Загрузка результата…
+                  Загрузка отчёта…
                 </p>
               ) : resultError === 'missing' ? (
                 <p className="text-sm text-[#00FF41]/60">
-                  Результат ещё не создан
+                  Отчёт ещё не создан
                 </p>
               ) : resultError === 'error' ? (
                 <p
                   role="alert"
                   className="text-sm font-medium text-[#FF0033]"
                 >
-                  Не удалось загрузить результат
+                  Не удалось загрузить отчёт
                 </p>
               ) : resultText !== null ? (
                 <div data-testid="result-markdown">
@@ -3167,6 +3289,7 @@ export default function TaskDetail({
           files={resultFiles}
           open={artifactsOpen}
           onClose={() => setArtifactsOpen(false)}
+          archiveUrl={resultFilesArchiveUrl(state.issue.id)}
         />
       )}
 
@@ -3225,6 +3348,7 @@ export default function TaskDetail({
                       events={expandedEvents}
                       stats={expandedStepRun.stats ?? null}
                       showFooter={false}
+                      hideInfo={true}
                       running={isActiveStatus(statusOf(expandedStepRun))}
                       startedAt={expandedStepRun.created_at}
                       onRecallQueued={recallQueued}
@@ -3275,13 +3399,13 @@ export default function TaskDetail({
                 )}
             </div>
 
-            {isActiveStatus(statusOf(expandedStepRun)) && (
-              <div className="border-t border-[#008F11] py-4 px-2 sm:px-4">
+            {(isActiveStatus(statusOf(expandedStepRun)) || statusOf(expandedStepRun) === 'needs_input') && (
+              <div className="border-t border-[#008F11] py-3 px-2 sm:px-4">
                 {controlSnapshot && (
-                  <div
-                    data-testid="live-controls"
-                    className="mb-3 flex flex-wrap items-center gap-2 text-xs"
-                  >
+                <div
+                  data-testid="live-controls"
+                  className="mb-3 flex flex-wrap items-center gap-2 text-xs"
+                >
                     <label className="flex items-center gap-1 text-[#00FF41]/70">
                       модель
                       <select
@@ -3299,7 +3423,7 @@ export default function TaskDetail({
                             {controlState?.model ?? '—'}
                           </option>
                         )}
-                        {controlSnapshot.models.map((model) => (
+                        {controlSnapshot?.models?.map((model) => (
                           <option
                             key={modelOptionValue(model.provider, model.id)}
                             value={modelOptionValue(model.provider, model.id)}
@@ -3326,7 +3450,7 @@ export default function TaskDetail({
                         {controlState?.thinkingLevel === null && (
                           <option value="">—</option>
                         )}
-                        {controlSnapshot.thinkingLevels.map((level) => (
+                        {controlSnapshot?.thinkingLevels?.map((level) => (
                           <option key={level} value={level}>
                             {level}
                           </option>
@@ -3353,6 +3477,19 @@ export default function TaskDetail({
                       className="min-h-8 border border-[#008F11] px-2 py-0.5 text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:opacity-50 transition-base"
                     >
                       очистить очередь
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="abort-iteration-modal"
+                      disabled={aborting}
+                      onClick={() => {
+                        if (activeIterationId) {
+                          void handleAbort(activeIterationId);
+                        }
+                      }}
+                      className="min-h-8 border border-[#FF0033] bg-[#2A0008] px-2 py-0.5 text-xs text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+                    >
+                      {aborting ? 'Прерываем…' : 'Прервать'}
                     </button>
                   </div>
                 )}
@@ -3392,7 +3529,7 @@ export default function TaskDetail({
 
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <form
-                    className="flex min-w-0 flex-1 flex-wrap gap-2"
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
                     onSubmit={(event) => {
                       event.preventDefault();
                       if (activeIterationId) {
@@ -3400,26 +3537,10 @@ export default function TaskDetail({
                       }
                     }}
                   >
-                    {controlSnapshot && (
-                      <select
-                        data-testid="send-mode"
-                        aria-label="Режим отправки"
-                        className={`${inputClass} w-auto py-1`}
-                        value={sendMode}
-                        disabled={messageSending}
-                        onChange={(event) =>
-                          setSendMode(event.target.value as SendMode)
-                        }
-                      >
-                        <option value="prompt">prompt</option>
-                        <option value="steer">steer</option>
-                        <option value="followUp">follow-up</option>
-                      </select>
-                    )}
                     <input
                       type="text"
                       aria-label="Сообщение"
-                      className={`${inputClass} min-w-0 flex-1`}
+                      className={`${inputClass} min-w-0 flex-1 order-1 sm:order-3`}
                       value={message}
                       onChange={(event) => setMessage(event.target.value)}
                       onKeyDown={(event) => {
@@ -3446,27 +3567,76 @@ export default function TaskDetail({
                       placeholder="Написать этому агенту…"
                       disabled={messageSending}
                     />
+                    {controlSnapshot && (
+                      <select
+                        data-testid="send-mode"
+                        aria-label="Режим отправки"
+                        className={`${inputClass} w-auto py-1 order-2 sm:order-1`}
+                        value={sendMode}
+                        disabled={messageSending}
+                        onChange={(event) =>
+                          setSendMode(event.target.value as SendMode)
+                        }
+                      >
+                        <option value="prompt">prompt</option>
+                        <option value="steer">steer</option>
+                        <option value="followUp">follow-up</option>
+                      </select>
+                    )}
+                    {(() => {
+                      let queueEvent: SessionEvent | undefined;
+                      for (let i = expandedEvents.length - 1; i >= 0; i -= 1) {
+                        if (expandedEvents[i].type === 'queue') {
+                          queueEvent = expandedEvents[i];
+                          break;
+                        }
+                      }
+                      if (!queueEvent || queueEvent.type !== 'queue') return null;
+                      const steering: string[] = queueEvent.steering ?? [];
+                      const followUp: string[] = queueEvent.followUp ?? [];
+                      if (steering.length === 0 && followUp.length === 0) return null;
+                      return (
+                        <span
+                          data-testid="queue-recall-inline"
+                          className="order-2 sm:order-2 flex flex-wrap gap-1"
+                        >
+                          {steering.map((text: string, i: number) => (
+                            <button
+                              key={`steer-${i}`}
+                              type="button"
+                              data-testid={`queue-recall-steer-${i}`}
+                              onClick={() => recallQueued(text)}
+                              disabled={messageSending}
+                              className="min-h-7 border border-[#FFB000] px-1.5 text-[10px] text-[#FFB000] hover:bg-[#FFB000]/20 disabled:opacity-50 transition-base"
+                              title={text}
+                            >
+                              ↩steer
+                            </button>
+                          ))}
+                          {followUp.map((text: string, i: number) => (
+                            <button
+                              key={`follow-${i}`}
+                              type="button"
+                              data-testid={`queue-recall-follow-${i}`}
+                              onClick={() => recallQueued(text)}
+                              disabled={messageSending}
+                              className="min-h-7 border border-[#00B4FF] px-1.5 text-[10px] text-[#00B4FF] hover:bg-[#00B4FF]/20 disabled:opacity-50 transition-base"
+                              title={text}
+                            >
+                              ↩follow
+                            </button>
+                          ))}
+                        </span>
+                      );
+                    })()}
                     <button
                       type="submit"
                       disabled={!message.trim() || messageSending}
-                      className="min-h-9 shrink-0 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50 transition-base"
+                      className="min-h-9 shrink-0 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50 transition-base order-3 sm:order-4"
                     >
                       {messageSending ? 'Отправка…' : 'Отправить'}
                     </button>
                   </form>
-                  <button
-                    type="button"
-                    data-testid="abort-iteration-modal"
-                    disabled={aborting}
-                    onClick={() => {
-                      if (activeIterationId) {
-                        void handleAbort(activeIterationId);
-                      }
-                    }}
-                    className="min-h-9 shrink-0 border border-[#FF0033] bg-[#2A0008] px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50 transition-base"
-                  >
-                    {aborting ? 'Прерываем…' : 'Прервать'}
-                  </button>
                 </div>
 
                 {commandHint !== null && (
@@ -3594,13 +3764,20 @@ function InlineQuestion({
       data-testid="inline-question"
       className="border border-[#FFB000] bg-[#1A1000] p-3"
     >
-      <header className="mb-2 flex items-center gap-2">
+      <header className="mb-2 flex items-center justify-between">
         <span className="text-xs font-semibold text-[#FFB000]">
           Агент спрашивает
         </span>
-        <span className="text-[10px] uppercase tracking-wider text-[#FFB000]/50">
-          {question.method}
-        </span>
+        <button
+          type="button"
+          data-testid="question-close"
+          aria-label="Закрыть"
+          disabled={submitting}
+          onClick={onCancel}
+          className="text-[#FFB000]/50 hover:text-[#FFB000] disabled:opacity-50 transition-base"
+        >
+          ✕
+        </button>
       </header>
 
       <p className="break-words text-sm text-[#FFB000]">{question.title}</p>

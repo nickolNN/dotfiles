@@ -270,7 +270,7 @@ describe('SessionView — события полного pi-паритета (Pha
     render(<SessionView events={[{ type: 'thinking_level', level: 'low' }]} />);
 
     expect(
-      within(screen.getByTestId('session-chrome')).getByTestId(
+      within(screen.getByTestId('session-info')).getByTestId(
         'session-thinking-level',
       ),
     ).toBeInTheDocument();

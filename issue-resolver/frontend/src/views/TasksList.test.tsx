@@ -475,6 +475,63 @@ describe('TasksList', () => {
     );
   });
 
+  it('показывает модель рядом с параллелизмом в running-задаче', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          { ...makeIssue('1', 'Running task'), status: 'running', worker_count: 2 },
+        ],
+      }),
+    );
+
+    render(<TasksList />);
+    await screen.findByText('Running task');
+
+    // До SSE — модель ещё не известна, бейджа нет.
+    expect(screen.queryByTestId('active-model-badge')).toBeNull();
+
+    const stream = FakeEventSource.instances.find((source) =>
+      source.url.endsWith('/api/v1/stream'),
+    );
+    stream?.emit({
+      type: 'step_status',
+      issueId: '1',
+      iterationId: 'it-1',
+      stepRunId: 'run-1',
+      data: JSON.stringify({
+        status: 'running',
+        step: 'resolve',
+        model: 'deepseek-v4-pro',
+      }),
+      ts: '2026-10-13T00:00:00.000Z',
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('active-model-badge')).toHaveTextContent('deepseek-v4-pro'),
+    );
+    expect(screen.getByTestId('worker-count-badge')).toBeInTheDocument();
+  });
+
+  it('не показывает модель для completed-задачи', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          { ...makeIssue('1', 'Done task'), status: 'completed', worker_count: 2 },
+        ],
+      }),
+    );
+
+    render(<TasksList />);
+    await screen.findByText('Done task');
+
+    expect(screen.queryByTestId('active-model-badge')).toBeNull();
+    expect(screen.getByTestId('worker-count-badge')).toBeInTheDocument();
+  });
+
   it('клик по строке вызывает onOpenTask', async () => {
     vi.stubGlobal(
       'fetch',
@@ -554,7 +611,7 @@ describe('TasksList', () => {
     expect(screen.queryByTestId('issue-timer')).toBeNull();
   });
 
-  it('completed-задача с md/html-результатом рендерит «Просмотр» и навигирует по нему', async () => {
+  it('completed-задача с md/html-отчётом рендерит «Просмотр» и навигирует по нему', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -578,17 +635,17 @@ describe('TasksList', () => {
 
     const resultCell = screen.getByTestId('result-cell');
     const viewButton = within(resultCell).getByRole('button', {
-      name: 'Просмотреть результат Done task',
+      name: 'Просмотреть отчёт Done task',
     });
-    expect(viewButton).toHaveAttribute('title', 'Просмотреть результат');
+    expect(viewButton).toHaveAttribute('title', 'Просмотреть отчёт');
 
     fireEvent.click(viewButton);
     expect(onOpenResult).toHaveBeenCalledWith('1');
-    // Кнопка результата не должна открывать саму задачу (это делает row-click).
+    // Кнопка отчёта не должна открывать саму задачу (это делает row-click).
     expect(onOpenTask).not.toHaveBeenCalled();
   });
 
-  it('running-задача без результата → прочерк и без кнопки просмотра', async () => {
+  it('running-задача без отчёта → прочерк и без кнопки просмотра', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({

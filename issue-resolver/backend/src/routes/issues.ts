@@ -1,17 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { execSync } from 'node:child_process';
 import type {
   DesiredResult,
-  Issue,
-  IssueDeletingPhase,
   Iteration,
   PipelineStep,
 } from '@issue-resolver/shared';
-import { extractIssueKeyFromUrl, statusOfIssue, type TaskStatus } from '@issue-resolver/shared';
-import { and, desc, eq, max } from 'drizzle-orm';
+import { extractIssueKeyFromUrl, type TaskStatus } from '@issue-resolver/shared';
+import { and, eq, max } from 'drizzle-orm';
+import type { IssueService } from '../issues/service';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/client';
 import {
@@ -40,20 +38,12 @@ import {
   saveUpload,
   type UploadInput,
 } from '../workspace/attachments';
-import { createTarGz, type ArchiveEntry } from '../workspace/archive';
 import { releaseIssueDevPorts } from '../port-allocator';
-import {
-  listWorkspaceFiles,
-  mimeForFilename,
-  workspaceFilePathFor,
-} from '../workspace/workspace-files';
+import { mimeForFilename, workspaceFilePathFor } from '../workspace/workspace-files';
 import { readRequestPayload } from './multipart';
 import {
   containerNameFor,
   DEFAULT_WORKSPACE_ROOT,
-  iterationResultDirFor,
-  resultArtifactFor,
-  type ResultArtifact,
   workspaceHostDirFor,
 } from '../workspace/paths';
 
@@ -132,93 +122,6 @@ function toIteration(row: typeof iterations.$inferSelect): Iteration {
   };
 }
 
-/** Сборка Issue из строк БД: repositories — из issue_repositories, status — из последней итерации. */
-function toIssue(
-  db: Db,
-  row: typeof issues.$inferSelect,
-  workspaceRoot: string,
-): Issue {
-  const repositories = db
-    .select()
-    .from(issueRepositories)
-    .where(eq(issueRepositories.issue_id, row.id))
-    .all()
-    .map((repository) => ({
-      id: repository.id,
-      repository_url: repository.repository_url,
-      branch_name: repository.branch_name,
-      create_mr: !!repository.create_mr,
-      bootstrap_enabled: repository.bootstrap_enabled ?? true,
-      created_at: repository.created_at,
-      updated_at: repository.updated_at,
-    }));
-
-  const iterationRows = db
-    .select()
-    .from(iterations)
-    .where(eq(iterations.issue_id, row.id))
-    .all();
-
-  return {
-    id: row.id,
-    title: row.title,
-    description: row.description ?? '',
-    desired_result: row.desired_result ?? 'md',
-    jira_issue_url: row.jira_issue_url,
-    source: row.source ?? null,
-    dev_server_port: row.dev_server_port ?? null,
-    repositories,
-    pipeline_steps: row.pipeline_steps,
-    step_models: row.step_models ?? undefined,
-    thinking_level: row.thinking_level ?? null,
-    step_thinking_levels: row.step_thinking_levels ?? undefined,
-    status: statusOfIssue(iterationRows.map(toIteration), row.status) ?? row.status ?? 'pending',
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    workspace_missing: !existsSync(workspaceHostDirFor(workspaceRoot, row.id)),
-    worker_count: iterationRows
-      .reduce<typeof iterations.$inferSelect | null>(
-        (latest, current) =>
-          !latest || current.number > latest.number ? current : latest,
-        null,
-      )
-      ?.worker_count ?? undefined,
-  };
-}
-
-/**
- * Читает артефакт результата из указанной папки. null — файла нет (ENOENT);
- * прочие ошибки чтения пробрасываются.
- */
-async function readArtifactFrom(
-  dir: string,
-  artifact: ResultArtifact,
-): Promise<({ body: string } & ResultArtifact) | null> {
-  const path = join(dir, artifact.filename);
-  try {
-    const body = await readFile(path, 'utf8');
-    return { ...artifact, body };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
-}
-
-/** id последней завершённой итерации задачи (по номеру), иначе null. */
-function latestCompletedIterationId(db: Db, issueId: string): string | null {
-  const row = db
-    .select({ id: iterations.id })
-    .from(iterations)
-    .where(
-      and(eq(iterations.issue_id, issueId), eq(iterations.status, 'completed')),
-    )
-    .orderBy(desc(iterations.number))
-    .get();
-  return row?.id ?? null;
-}
-
 /**
  * Сохраняет загруженные файлы в папку задачи/итерации и пишет строки в БД.
  * Вызывать до `runIssueIteration`, чтобы файлы уже лежали в cwd агента.
@@ -273,9 +176,9 @@ export async function issuesRoutes(
   db: Db,
   deps: IterationRunDeps,
   jira: JiraClient,
+  service: IssueService,
 ): Promise<void> {
-  const findIssue = (id: string) =>
-    db.select().from(issues).where(eq(issues.id, id)).get();
+  const config = service.resolveConfig(deps);
 
   /** Собирает человекочитаемый Markdown из полных данных Jira. */
   function buildJiraMarkdown(full: JiraIssueFull): string {
@@ -332,26 +235,16 @@ export async function issuesRoutes(
     return parts.join('\n');
   }
 
-  app.get(ROUTE_PATH, async () => {
-    const rows = db
-      .select()
-      .from(issues)
-      .orderBy(desc(issues.created_at))
-      .all();
-
-    return rows.map((row) =>
-      toIssue(db, row, deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT),
-    );
-  });
+  app.get(ROUTE_PATH, async () => service.listIssues(db, config));
 
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id`,
     async (request, reply) => {
-      const issue = findIssue(request.params.id);
+      const issue = service.getIssue(db, config, request.params.id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
-      return toIssue(db, issue, deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT);
+      return issue;
     },
   );
 
@@ -364,7 +257,7 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/container-stats`,
     async (request, reply) => {
       const { id } = request.params;
-      if (!findIssue(id)) {
+      if (!service.getIssue(db, config, id)) {
         return reply.status(404).send({ error: 'issue not found' });
       }
 
@@ -391,12 +284,17 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/stop-dev-servers`,
     async (request, reply) => {
       const { id } = request.params;
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      const pid = issue.dev_server_pid;
+      const pid =
+        db
+          .select({ dev_server_pid: issues.dev_server_pid })
+          .from(issues)
+          .where(eq(issues.id, id))
+          .get()?.dev_server_pid ?? null;
       if (pid) {
         // Процесс запущен detached — это лидер группы, поэтому SIGTERM/SIGKILL
         // шлём группе (-pid), а при её отсутствии — самому PID.
@@ -430,7 +328,7 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/jira-preview`,
     async (request, reply) => {
       const { id } = request.params;
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
@@ -459,25 +357,12 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/result`,
     async (request, reply) => {
       const { id } = request.params;
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      const artifact = resultArtifactFor(issue.desired_result ?? 'md');
-      if (!artifact) {
-        return reply.status(404).send({ error: 'result not found' });
-      }
-      const latest = latestCompletedIterationId(db, id);
-      if (latest === null) {
-        return reply.status(404).send({ error: 'result not found' });
-      }
-      const dir = iterationResultDirFor(
-        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
-        id,
-        latest,
-      );
-      const result = await readArtifactFrom(dir, artifact);
+      const result = await service.getResultArtifact(db, config, id);
       if (!result) {
         return reply.status(404).send({ error: 'result not found' });
       }
@@ -492,25 +377,12 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/result/download`,
     async (request, reply) => {
       const { id } = request.params;
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      const artifact = resultArtifactFor(issue.desired_result ?? 'md');
-      if (!artifact) {
-        return reply.status(404).send({ error: 'result not found' });
-      }
-      const latest = latestCompletedIterationId(db, id);
-      if (latest === null) {
-        return reply.status(404).send({ error: 'result not found' });
-      }
-      const dir = iterationResultDirFor(
-        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
-        id,
-        latest,
-      );
-      const result = await readArtifactFrom(dir, artifact);
+      const result = await service.getResultArtifact(db, config, id);
       if (!result) {
         return reply.status(404).send({ error: 'result not found' });
       }
@@ -528,20 +400,16 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/result/files`,
     async (request, reply) => {
       const { id } = request.params;
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
-      if (latestCompletedIterationId(db, id) === null) {
+
+      const files = await service.getResultFiles(db, config, id);
+      if (!files) {
         return reply.status(404).send({ error: 'result not found' });
       }
-
-      const artifact = resultArtifactFor(issue.desired_result ?? 'md');
-      return listWorkspaceFiles(
-        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
-        id,
-        new Set([artifact?.filename ?? '']),
-      );
+      return files;
     },
   );
 
@@ -549,64 +417,21 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/result/files/archive`,
     async (request, reply) => {
       const { id } = request.params;
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
-      const latest = latestCompletedIterationId(db, id);
-      if (latest === null) {
+
+      let buf: Buffer | null;
+      try {
+        buf = await service.getResultArchive(db, config, id);
+      } catch {
+        return reply.status(404).send({ error: 'result not found' });
+      }
+      if (!buf) {
         return reply.status(404).send({ error: 'result not found' });
       }
 
-      const root = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
-      const artifact = resultArtifactFor(issue.desired_result ?? 'md');
-      const files = await listWorkspaceFiles(
-        root,
-        id,
-        new Set([artifact?.filename ?? '']),
-      );
-
-      const entries: ArchiveEntry[] = [];
-      for (const file of files) {
-        const abs = workspaceFilePathFor(root, id, file.rel_path);
-        if (!abs) {
-          continue;
-        }
-        try {
-          entries.push({
-            name: file.name,
-            relPath: file.rel_path,
-            body: await readFile(abs),
-          });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            continue;
-          }
-          throw error;
-        }
-      }
-
-      // Артефакт результата живёт в снапшоте `.iteration-results`, а не в
-      // рабочей папке, поэтому добавляем его отдельно.
-      if (artifact) {
-        const result = await readArtifactFrom(
-          iterationResultDirFor(root, id, latest),
-          artifact,
-        );
-        if (result) {
-          entries.push({
-            name: artifact.filename,
-            relPath: artifact.filename,
-            body: Buffer.from(result.body),
-          });
-        }
-      }
-
-      if (entries.length === 0) {
-        return reply.status(404).send({ error: 'result not found' });
-      }
-
-      const buf = await createTarGz(entries);
       return reply
         .type('application/gzip')
         .header(
@@ -624,12 +449,9 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/result/files/content`,
     async (request, reply) => {
       const { id } = request.params;
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
-      }
-      if (latestCompletedIterationId(db, id) === null) {
-        return reply.status(404).send({ error: 'result not found' });
       }
 
       // Guard: только внутри рабочей папки задачи (защита от traversal).
@@ -669,7 +491,7 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/iterations`,
     async (request, reply) => {
       const { id } = request.params;
-      if (!findIssue(id)) {
+      if (!service.getIssue(db, config, id)) {
         return reply.status(404).send({ error: 'issue not found' });
       }
 
@@ -687,7 +509,7 @@ export async function issuesRoutes(
     `${ROUTE_PATH}/:id/files`,
     async (request, reply) => {
       const { id } = request.params;
-      if (!findIssue(id)) {
+      if (!service.getIssue(db, config, id)) {
         return reply.status(404).send({ error: 'issue not found' });
       }
 
@@ -695,111 +517,17 @@ export async function issuesRoutes(
     },
   );
 
-  /** Публикует фазу фонового удаления задачи (issue-уровневое SSE-событие). */
-  const publishDeleting = (
-    id: string,
-    phase: IssueDeletingPhase,
-    message?: string,
-  ): void => {
-    deps.sse.publish({
-      type: 'issue_deleting',
-      issueId: id,
-      data: JSON.stringify(message ? { phase, message } : { phase }),
-      ts: new Date().toISOString(),
-    });
-  };
-
-  /**
-   * Фоновое удаление задачи: процессы → запись в БД → контейнер → рабочая
-   * папка. Запись из БД удаляется первой, чтобы сбой на диске не оставил
-   * «зомби»-задачу (папки нет, запись есть). Сбой БД фатален — контейнер и
-   * папку не трогаем; сбои контейнера и папки — best-effort. Прогресс идёт
-   * через SSE `issue_deleting`, завершение — `issue_deleted`.
-   */
-  async function deleteIssueInBackground(id: string): Promise<void> {
-    try {
-      // Убиваем процессы, запущенные задачей, ДО удаления рабочей папки.
-      // В локальном режиме pi-агенты работают прямо в workspace-директории;
-      // без этого шага процессы продолжают писать в удаляемую папку (грязь)
-      // или блокируют её удаление.
-      const wsPath = workspaceHostDirFor(
-        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
-        id,
-      );
-      publishDeleting(id, 'stopping_processes');
-      try {
-        // Ищем процессы по cwd (readlink /proc/*/cwd) И по cmdline (pkill -f).
-        // SIGTERM сначала — даём шанс сохранить состояние.
-        execSync(
-          `pids=$(for p in /proc/*/cwd; do [ "$(readlink "$p" 2>/dev/null)" = "${wsPath}" ] && echo "$(basename $(dirname "$p"))"; done); ` +
-          `[ -n "$pids" ] && echo "$pids" | xargs -r kill 2>/dev/null; ` +
-          `pkill -f '${wsPath}' 2>/dev/null || true`,
-          { stdio: 'ignore' },
-        );
-      } catch {
-        // Процессов может не быть — это нормально.
-      }
-      try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        execSync(
-          `pids=$(for p in /proc/*/cwd; do [ "$(readlink "$p" 2>/dev/null)" = "${wsPath}" ] && echo "$(basename $(dirname "$p"))"; done); ` +
-          `[ -n "$pids" ] && echo "$pids" | xargs -r kill -9 2>/dev/null; ` +
-          `pkill -9 -f '${wsPath}' 2>/dev/null || true`,
-          { stdio: 'ignore' },
-        );
-      } catch {
-        // pkill -9, нет процессов — ok.
-      }
-
-      // Задача удаляется — освобождаем её dev-порты в аллокаторе.
-      releaseIssueDevPorts(id);
-
-      // Сначала удаляем запись из БД: если `db.delete` упадёт после сноса
-      // папки, задача станет «зомби» (папки нет, запись есть). Сбой БД
-      // фатален — контейнер и папку не трогаем. Дети
-      // (repositories/iterations/step_runs/step_outputs) уходят каскадом.
-      publishDeleting(id, 'removing_db_record');
-      db.delete(issues).where(eq(issues.id, id)).run();
-
-      // Контейнер и рабочая папка — best-effort: запись уже удалена, их сбой
-      // не должен мешать финальному `issue_deleted`.
-      publishDeleting(id, 'removing_container');
-      try {
-        await deps.container.remove(containerNameFor(id));
-      } catch (error) {
-        console.error('remove container failed', error);
-      }
-      publishDeleting(id, 'removing_workspace');
-      try {
-        await rm(wsPath, { recursive: true, force: true });
-      } catch (error) {
-        console.error('remove workspace failed', error);
-      }
-
-      deps.sse.publish({
-        type: 'issue_deleted',
-        issueId: id,
-        data: JSON.stringify({ issueId: id }),
-        ts: new Date().toISOString(),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error('delete issue failed', error);
-      publishDeleting(id, 'error', message);
-    }
-  }
-
   app.delete<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id`,
     async (request, reply) => {
       const { id } = request.params;
-      if (!findIssue(id)) {
+      if (!service.getIssue(db, config, id)) {
         return reply.status(404).send({ error: 'issue not found' });
       }
 
       // Удаление — фоновая операция: сразу отвечаем 202, а прогресс/финал
       // уходят в SSE (`issue_deleting` → `issue_deleted`).
-      void deleteIssueInBackground(id);
+      void service.deleteIssue(db, config, id);
       return reply.code(202).send({ ok: true });
     },
   );
@@ -882,7 +610,7 @@ export async function issuesRoutes(
         return reply.status(400).send({ error: formatZodError(parsed.error) });
       }
 
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
@@ -976,6 +704,53 @@ export async function issuesRoutes(
         updated_at: now,
       };
 
+      // Принцип: только одна активная + максимум одна запланированная итерация.
+      // Проверяем ДО вставки новой итерации: иначе при отказе (409) только что
+      // созданная строка оставалась бы в БД «фантомной» итерацией.
+      const hasRunning = db
+        .select({ id: iterations.id })
+        .from(iterations)
+        .where(
+          and(
+            eq(iterations.issue_id, id),
+            eq(iterations.status, 'running'),
+          ),
+        )
+        .get();
+
+      if (hasRunning) {
+        const hasPlanned = db
+          .select({ id: iterations.id })
+          .from(iterations)
+          .where(
+            and(
+              eq(iterations.issue_id, id),
+              eq(iterations.status, 'pending'),
+            ),
+          )
+          .get();
+        if (hasPlanned) {
+          return reply.status(409).send({
+            error: 'A pending iteration already exists — wait for it to start',
+          });
+        }
+        const hasDraft = db
+          .select({ id: iterations.id })
+          .from(iterations)
+          .where(
+            and(
+              eq(iterations.issue_id, id),
+              eq(iterations.status, 'draft'),
+            ),
+          )
+          .get();
+        if (hasDraft) {
+          return reply.status(409).send({
+            error: 'A draft iteration already exists — edit or delete it first',
+          });
+        }
+      }
+
       db.insert(iterations).values(iteration).run();
 
       await saveAttachments(
@@ -999,8 +774,18 @@ export async function issuesRoutes(
         bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
         workspaceRoot: deps.workspaceRoot,
       };
-      // Подготовка + конвейер — фоновый прогон. HTTP-ответ возвращается
-      // немедленно; прогресс и статус идут через SSE.
+      if (hasRunning) {
+        // Создаём черновик.
+        db.update(iterations)
+          .set({ status: 'draft', updated_at: now })
+          .where(eq(iterations.id, iterationId))
+          .run();
+
+        return reply.status(201).send({ ...iteration, status: 'draft' });
+      }
+
+      // Нет активной итерации — создаём pending и запускаем.
+      // Подготовка + конвейер — фоновый прогон.
       void (async () => {
         try {
           const ws = await prepareIssueWorkspace(db, prepareDeps, {
@@ -1351,7 +1136,7 @@ export async function issuesRoutes(
     async (request, reply) => {
       const { id } = request.params;
 
-      const issue = findIssue(id);
+      const issue = service.getIssue(db, config, id);
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }

@@ -148,7 +148,17 @@ describe('POST /iterations/:id/repeat', () => {
         title: 'Повтор',
         pipeline_steps: ['resolve'],
       });
-      await waitFor(() => (pi.calls.length >= 1 ? true : undefined));
+      // Ждём завершения итерации #1: при активной итерации новая создалась бы
+      // как draft (см. iteration-queue.test.ts), а тесту нужен запущенный #2.
+      await waitFor(() => {
+        const first = db
+          .select()
+          .from(iterations)
+          .where(eq(iterations.issue_id, issueId))
+          .all()
+          .find((iteration) => iteration.number === 1);
+        return first && first.status === 'completed' ? true : undefined;
+      });
 
       const created = await app.inject({
         method: 'POST',
@@ -231,7 +241,16 @@ describe('POST /iterations/:id/repeat', () => {
         title: 'Вложения',
         pipeline_steps: ['resolve'],
       });
-      await waitFor(() => (pi.calls.length >= 1 ? true : undefined));
+      // Итерация #1 должна завершиться, иначе #2 создалась бы как draft.
+      await waitFor(() => {
+        const first = db
+          .select()
+          .from(iterations)
+          .where(eq(iterations.issue_id, issueId))
+          .all()
+          .find((iteration) => iteration.number === 1);
+        return first && first.status === 'completed' ? true : undefined;
+      });
 
       // Итерация #2 с вложением уровня итерации.
       const { payload, headers } = multipart(

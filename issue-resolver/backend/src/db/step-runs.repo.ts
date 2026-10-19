@@ -9,18 +9,9 @@ import {
   type StepRunStatus,
   type StepRunWithLog,
 } from '@issue-resolver/shared';
-import { asc, eq, getTableColumns, sql } from 'drizzle-orm';
+import { asc, eq, getTableColumns } from 'drizzle-orm';
 import type { Db } from './client';
 import { stepOutputs, stepRuns } from './schema';
-
-const stepRank = sql<number>`case ${stepRuns.step}
-  when 'refine' then 0
-  when 'resolve' then 1
-  when 'review' then 2
-  when 'test' then 3
-  when 'pr' then 4
-  else 99
-end`;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -163,7 +154,7 @@ export async function listStepRunsByIteration(
     .select()
     .from(stepRuns)
     .where(eq(stepRuns.iteration_id, iterationId))
-    .orderBy(stepRank, asc(stepRuns.attempt))
+    .orderBy(asc(stepRuns.created_at), asc(stepRuns.id))
     .all();
 }
 
@@ -223,7 +214,7 @@ export async function listStepRunsWithLog(
     .from(stepRuns)
     .leftJoin(stepOutputs, eq(stepRuns.id, stepOutputs.step_run_id))
     .where(eq(stepRuns.iteration_id, iterationId))
-    .orderBy(stepRank, asc(stepRuns.attempt))
+    .orderBy(asc(stepRuns.created_at), asc(stepRuns.id))
     .all();
 
   return rows.map(({ outputEvents, ...row }) => ({

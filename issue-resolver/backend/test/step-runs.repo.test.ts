@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import type {
   PipelineStep,
   SessionEvent,
@@ -92,22 +93,28 @@ describe('createStepRun', () => {
 });
 
 describe('listStepRunsByIteration', () => {
-  it('шаги в порядке конвейера, внутри шага attempt ASC', async () => {
+  it('шаги в хронологическом порядке (created_at ASC) с тайбрейком по id', async () => {
     const db = makeDb();
     const iterationId = seedIteration(db);
 
-    await createStepRun(db, { iterationId, step: 'resolve', attempt: 1, context: 'r1' });
-    await createStepRun(db, { iterationId, step: 'review', attempt: 1, context: 'v1' });
-    await createStepRun(db, { iterationId, step: 'resolve', attempt: 2, context: 'r2' });
-    await createStepRun(db, { iterationId, step: 'test', attempt: 1, context: 't1' });
+    // Insert in chronological order simulating real flow:
+    // resolve → review (failed) → resolve retry → test.
+    // Use a small delay between inserts so created_at differs.
+    const step1 = await createStepRun(db, { iterationId, step: 'resolve', attempt: 1, context: 'r1' });
+    await delay(5);
+    const step2 = await createStepRun(db, { iterationId, step: 'review', attempt: 1, context: 'v1' });
+    await delay(5);
+    const step3 = await createStepRun(db, { iterationId, step: 'resolve', attempt: 2, context: 'r2' });
+    await delay(5);
+    const step4 = await createStepRun(db, { iterationId, step: 'test', attempt: 1, context: 't1' });
 
     const list = await listStepRunsByIteration(db, iterationId);
 
-    expect(list.map((run) => `${run.step}#${run.attempt}`)).toEqual([
-      'resolve#1',
-      'resolve#2',
-      'review#1',
-      'test#1',
+    expect(list.map((run) => run.id)).toEqual([
+      step1.id,
+      step2.id,
+      step3.id,
+      step4.id,
     ]);
   });
 
@@ -457,22 +464,25 @@ describe('appendStepRunEvent', () => {
 });
 
 describe('listStepRunsWithLog', () => {
-  it('join: шаг с output → stdout/stderr/report заполнены, порядок step-first', async () => {
+  it('join: шаг с output → stdout/stderr/report заполнены, порядок хронологический', async () => {
     const db = makeDb();
     const iterationId = seedIteration(db);
 
-    const review = await createStepRun(db, {
-      iterationId,
-      step: 'review',
-      attempt: 1,
-      context: 'v',
-    });
+    // Insert order = chronological (resolve → review fail → resolve retry).
     const resolve1 = await createStepRun(db, {
       iterationId,
       step: 'resolve',
       attempt: 1,
       context: 'r1',
     });
+    await delay(2);
+    const review = await createStepRun(db, {
+      iterationId,
+      step: 'review',
+      attempt: 1,
+      context: 'v',
+    });
+    await delay(2);
     const resolve2 = await createStepRun(db, {
       iterationId,
       step: 'resolve',
@@ -496,10 +506,10 @@ describe('listStepRunsWithLog', () => {
 
     const rows = await listStepRunsWithLog(db, iterationId);
 
-    expect(rows.map((row) => `${row.step}#${row.attempt}`)).toEqual([
-      'resolve#1',
-      'resolve#2',
-      'review#1',
+    expect(rows.map((row) => row.id)).toEqual([
+      resolve1.id,
+      review.id,
+      resolve2.id,
     ]);
     expect(rows[0]).toMatchObject({
       stdout: 'resolve out',
@@ -508,18 +518,18 @@ describe('listStepRunsWithLog', () => {
       screenshots_dir: null,
     });
     expect(rows[1]).toMatchObject({
-      stdout: '',
-      stderr: '',
-      report: null,
-      screenshots_dir: null,
-    });
-    expect(rows[2]).toMatchObject({
       stdout: 'review out',
       stderr: 'review err',
       report: '{"status":"fail"}',
       screenshots_dir: '/tmp/shots',
     });
-    expect(resolve2.id).toBe(rows[1].id);
+    expect(rows[2]).toMatchObject({
+      stdout: '',
+      stderr: '',
+      report: null,
+      screenshots_dir: null,
+    });
+    expect(resolve2.id).toBe(rows[2].id);
   });
 
   it('пустая итерация → пустой массив', async () => {

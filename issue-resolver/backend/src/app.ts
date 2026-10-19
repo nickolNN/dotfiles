@@ -17,6 +17,7 @@ import { InMemoryStepSessionRegistry } from './pi/session-registry';
 import { controlRoutes } from './routes/control';
 import { healthRoutes } from './routes/health';
 import { issuesRoutes } from './routes/issues';
+import { createIssueService } from './issues/service';
 import { iterationsRoutes } from './routes/iterations';
 import { modelsRoutes } from './routes/models';
 import { adminRoutes } from './routes/admin';
@@ -117,7 +118,8 @@ export function buildApp(
   app.register(modelsRoutes);
 
   app.register(async (instance) => {
-    await issuesRoutes(instance, db, runDeps, jira);
+    const issueService = createIssueService();
+    await issuesRoutes(instance, db, runDeps, jira, issueService);
     await reposRoutes(instance, db, {
       validate: repos,
       resolverFactory: repoResolverFactory,

@@ -1,32 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
-import { cleanupOrphans, getHostname, setHostname } from '../api/client';
+import {
+  useCleanupOrphans,
+  useHostname,
+  useSetHostname,
+} from '../stores/queries';
 import type { CleanupResult } from '../api/client';
+import QueryBoundary from '../components/QueryBoundary';
 
 /** Поле ввода в теме — тот же стиль, что и в форме создания задачи (NewIssue). */
 const FIELD_CLASS =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
 
-/**
- * Страница настроек: единственное поле — hostname инстанса. Загружает текущее
- * значение из бэкенда, сохраняет по кнопке и на 2 секунды показывает «Сохранено».
- */
 function CleanupButton() {
-  const [cleaning, setCleaning] = useState(false);
+  const cleanupMutation = useCleanupOrphans();
   const [result, setResult] = useState<CleanupResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleCleanup() {
-    setCleaning(true);
+  const cleaning = cleanupMutation.isPending;
+
+  function handleCleanup() {
     setError(null);
     setResult(null);
-    try {
-      const res = await cleanupOrphans();
-      setResult(res);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка очистки');
-    } finally {
-      setCleaning(false);
-    }
+    cleanupMutation.mutate(undefined, {
+      onSuccess: (res) => setResult(res),
+      onError: (err) =>
+        setError(err instanceof Error ? err.message : 'Ошибка очистки'),
+    });
   }
 
   return (
@@ -36,7 +35,7 @@ function CleanupButton() {
         data-testid="settings-cleanup"
         disabled={cleaning}
         className="rounded-none border border-[#FF3B3B]/60 px-4 py-2 text-sm font-medium text-[#FF3B3B] transition-colors hover:bg-[#FF3B3B]/10 disabled:opacity-50"
-        onClick={() => void handleCleanup()}
+        onClick={handleCleanup}
       >
         Очистить орфанед-задачи
       </button>
@@ -63,31 +62,44 @@ function CleanupButton() {
   );
 }
 
-export default function Settings() {
-  const [hostname, setHostnameValue] = useState('');
-  const [draft, setDraft] = useState('');
-  const [saving, setSaving] = useState(false);
+interface SettingsProps {
+  /** Текущий hostname инстанса; App грузит его при старте и держит в состоянии. */
+  hostname: string;
+  /** Сообщает App новый hostname — он же обновляет заголовок вкладки. */
+  onHostnameChange: (value: string) => void;
+}
+
+/**
+ * Страница настроек: единственное поле — hostname инстанса. Значение приходит
+ * из App (оно же задаёт заголовок вкладки); сохраняем по кнопке и на 2 секунды
+ * показываем «Сохранено».
+ */
+export default function Settings(props: SettingsProps) {
+  return (
+    <QueryBoundary>
+      <SettingsView {...props} />
+    </QueryBoundary>
+  );
+}
+
+function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
+  const { data } = useHostname();
+  const currentHostname = data ?? hostname;
+  const saveMutation = useSetHostname();
+
+  const [draft, setDraft] = useState(currentHostname);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const savedTimer = useRef<number | null>(null);
 
-  // Забираем текущий hostname при открытии страницы.
-  useEffect(() => {
-    let cancelled = false;
-    void getHostname().then((value) => {
-      if (cancelled) return;
-      setHostnameValue(value);
-      setDraft(value);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const saving = saveMutation.isPending;
 
-  // Заголовок вкладки отражает hostname при загрузке и после сохранения.
+  // App подтягивает hostname асинхронно: если значение пришло уже после
+  // монтирования страницы (в т.ч. при перезагрузке сразу на /settings) —
+  // отражаем его в поле.
   useEffect(() => {
-    document.title = hostname || 'Issue Resolver';
-  }, [hostname]);
+    setDraft(currentHostname);
+  }, [currentHostname]);
 
   // Чистим таймер «Сохранено» при размонтировании.
   useEffect(
@@ -97,22 +109,20 @@ export default function Settings() {
     [],
   );
 
-  async function handleSave() {
+  function handleSave() {
     const next = draft.trim();
-    setSaving(true);
     setError(null);
-    try {
-      await setHostname(next);
-      setHostnameValue(next);
-      setDraft(next);
-      setSaved(true);
-      if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
-      savedTimer.current = window.setTimeout(() => setSaved(false), 2000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось сохранить');
-    } finally {
-      setSaving(false);
-    }
+    saveMutation.mutate(next, {
+      onSuccess: () => {
+        onHostnameChange(next);
+        setDraft(next);
+        setSaved(true);
+        if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
+        savedTimer.current = window.setTimeout(() => setSaved(false), 2000);
+      },
+      onError: (err) =>
+        setError(err instanceof Error ? err.message : 'Не удалось сохранить'),
+    });
   }
 
   return (

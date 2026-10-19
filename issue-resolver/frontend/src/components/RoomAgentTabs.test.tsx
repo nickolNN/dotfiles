@@ -290,7 +290,9 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
   it('пустой список агентов показывает заглушку и не открывает SSE', async () => {
     stubFetch([]);
 
-    render(<RoomAgentTabs iterationId="iter-1" />);
+    render(
+      <RoomAgentTabs iterationId="iter-1" maxEmptyRetries={0} />,
+    );
 
     expect(await screen.findByTestId('room-agents-empty')).toBeInTheDocument();
     expect(screen.queryByTestId('room-agents')).toBeNull();

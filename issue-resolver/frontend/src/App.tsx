@@ -5,6 +5,7 @@ import {
 } from './api/sse';
 import { formatBytes, healthColor } from './lib/containerStats';
 import { API_BASE } from './api/client';
+import { useUIStore } from './stores/ui';
 import NewIssue from './views/NewIssue';
 import Repositories from './views/Repositories';
 import Settings from './views/Settings';
@@ -163,10 +164,22 @@ export default function App() {
   const [repoCreateSignal, setRepoCreateSignal] = useState(0);
   // Растёт при клике «+» на табе «Теги» → Tags открывает форму создания.
   const [tagCreateSignal, setTagCreateSignal] = useState(0);
-  // Живая стата контейнера открытой задачи (CPU/память) для общего хедера.
-  // Приходит по SSE `container_stats` из потока задачи.
-  const [containerStats, setContainerStats] =
-    useState<ContainerStatsPayload | null>(null);
+  // Hostname и containerStats живут в общем UI-сторе Zustand (а не в
+  // локальном useState): заголовок и стата контейнера должны переживать
+  // перезагрузку страницы и работать на всех view.
+  const hostname = useUIStore((state) => state.hostname);
+  const setHostname = useUIStore((state) => state.setHostname);
+  const loadHostname = useUIStore((state) => state.loadHostname);
+  const containerStats = useUIStore((state) => state.containerStats);
+  const setContainerStats = useUIStore((state) => state.setContainerStats);
+  useEffect(() => {
+    void loadHostname();
+  }, [loadHostname]);
+
+  useEffect(() => {
+    document.title = hostname || 'Issue Resolver';
+  }, [hostname]);
+
   useEffect(() => {
     const onHashChange = () => setRoute(parseHash());
     window.addEventListener('hashchange', onHashChange);
@@ -181,11 +194,14 @@ export default function App() {
   // детали задачи. Бэкенд публикует их с `issueId: '__global__'` через общий
   // `/stream`; фильтровать по issueId не нужно — в local-режиме метрики
   // одинаковы для любого источника (читается хост-контейнер).
+  // Глобальная подписка на container_stats пишет в Zustand store, а не в
+  // локальный useState: store доступен вне React-дерева, SSE-колбэк не
+  // привязан к жизненному циклу компонента.
   useEffect(() => {
     return subscribeToGlobalStream({
       onContainerStats: (payload) => setContainerStats(payload),
     });
-  }, []);
+  }, [setContainerStats]);
 
   // Отдельный EventSource на глобальный `/container-stats-stream` управляет
   // жизненным циклом cgroup-потока: подключился клиент → бэкенд стартует
@@ -350,7 +366,9 @@ export default function App() {
           <Repositories createSignal={repoCreateSignal} />
         )}
         {view === 'tags' && <Tags createSignal={tagCreateSignal} />}
-        {view === 'settings' && <Settings />}
+        {view === 'settings' && (
+          <Settings hostname={hostname} onHostnameChange={setHostname} />
+        )}
         {view === 'tasks' && (
           <TasksList onOpenTask={openTask} onOpenResult={openResult} />
         )}

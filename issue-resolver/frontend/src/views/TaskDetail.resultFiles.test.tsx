@@ -109,8 +109,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('TaskDetail — порождённые файлы результата', () => {
-  it('готовый результат + файлы → кнопка «Артефакты (2)», клик открывает модалку со ссылками', async () => {
+describe('TaskDetail — порождённые файлы отчёта', () => {
+  it('готовый отчёт + файлы → кнопка «Артефакты (2)», клик открывает модалку со ссылками', async () => {
     const files: WorkspaceFile[] = [
       {
         name: 'index.html',
@@ -189,27 +189,34 @@ describe('TaskDetail — порождённые файлы результата'
     expect(screen.queryByTestId('result-files')).toBeNull();
     expect(screen.queryByTestId('result-file-download')).toBeNull();
     expect(screen.queryByTestId('artifacts-modal')).toBeNull();
-    // сама кнопка «Скачать» результата на месте
-    expect(screen.getByTestId('download-result')).toBeInTheDocument();
+    // сама кнопка «Скачать» теперь в модалке отчёта
+    fireEvent.click(screen.getByTestId('open-result'));
+    const modal = await screen.findByTestId('result-modal');
+    expect(within(modal).getByTestId('result-modal-download')).toBeInTheDocument();
   });
 
-  it('ссылка архива ведёт на /result/files/archive с явным именем', async () => {
-    stubFetch(makeIssue({ desired_result: 'html' }), []);
+  it('ссылка архива в модалке артефактов ведёт на /result/files/archive', async () => {
+    const files: WorkspaceFile[] = [
+      { name: 'screenshot.png', rel_path: 'screenshots/screenshot.png', size: 1024, mime_type: 'image/png' },
+    ];
+    stubFetch(makeIssue({ desired_result: 'html' }), files);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
     await waitFor(() =>
-      expect(screen.getByTestId('open-result')).toBeEnabled(),
+      expect(screen.getByTestId('open-artifacts')).toBeEnabled(),
     );
 
-    const archive = screen.getByTestId('download-archive');
+    // Открываем модалку артефактов.
+    fireEvent.click(screen.getByTestId('open-artifacts'));
+    const modal = await screen.findByTestId('artifacts-modal');
+    const archive = within(modal).getByTestId('artifacts-modal-download-archive');
     expect(archive).toHaveAttribute(
       'href',
       '/issue-resolver/api/v1/issues/issue-1/result/files/archive',
     );
     expect(archive).toHaveAttribute('download', 'issue-issue-1.tar.gz');
     expect(archive).toHaveTextContent('Скачать всё (.tar.gz)');
-    expect(archive).not.toHaveAttribute('aria-disabled');
   });
 
   it.each([
@@ -226,22 +233,24 @@ describe('TaskDetail — порождённые файлы результата'
         expect(screen.getByTestId('open-result')).toBeEnabled(),
       );
 
-      expect(screen.getByTestId('download-result')).toHaveAttribute(
+      // Кнопка «Скачать» теперь в модалке.
+      fireEvent.click(screen.getByTestId('open-result'));
+      const modal = await screen.findByTestId('result-modal');
+      expect(within(modal).getByTestId('result-modal-download')).toHaveAttribute(
         'download',
         filename,
       );
     },
   );
 
-  it('пока результат не готов — архив задизейблен и клик отбит', async () => {
+  it('пока отчёт не готов — кнопка артефактов задизейблена', async () => {
     // Итераций нет → resultReady = false.
     stubFetch(makeIssue({ desired_result: 'html' }), [], []);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const archive = screen.getByTestId('download-archive');
-    expect(archive).toHaveAttribute('aria-disabled', 'true');
-    expect(archive).toHaveAttribute('tabindex', '-1');
+    const open = screen.getByTestId('open-artifacts');
+    expect(open).toBeDisabled();
   });
 });
