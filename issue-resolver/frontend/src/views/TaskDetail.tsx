@@ -1,4 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
+import {
+  QueryClient,
+  QueryClientContext,
+  QueryClientProvider,
+  useQueryClient,
+} from '@tanstack/react-query';
 import type {
   CreateIterationRequest,
   Issue,
@@ -8,7 +23,6 @@ import type {
   PipelineStep,
   PromptMode,
   SessionCommand,
-  SessionControlSnapshot,
   StepModels,
   StepThinkingLevels,
   StepRunStatus,
@@ -28,15 +42,12 @@ import {
   deleteIssueFile,
   devServerPortOf,
   fetchReviewComments,
-  getIssue,
   getIssueFiles,
   getIterations,
-  getIterationControl,
   getModels,
   getQuestionAnswers,
   getResultFiles,
   getResultMergeRequests,
-  getStepRuns,
   promptIteration,
   queueIteration,
   repeatIteration,
@@ -47,6 +58,12 @@ import {
   sendUiResponse,
   stopDevServers,
 } from '../api/client';
+import {
+  useIssue,
+  useIterationControl,
+  useIterations,
+  useStepRuns,
+} from '../stores/queries';
 import type { ResultMergeRequest } from '../api/client';
 import {
   DELETE_TIMEOUT_MS,
@@ -484,10 +501,54 @@ function filterArtifacts(files: IssueFile[]): IssueFile[] {
   });
 }
 
-export default function TaskDetail({
+export default function TaskDetail(props: TaskDetailProps) {
+  return (
+    <TaskDetailQueryBoundary>
+      <TaskDetailView {...props} />
+    </TaskDetailQueryBoundary>
+  );
+}
+
+/**
+ * Гарантирует наличие QueryClient. В приложении провайдер ставит `main.tsx`,
+ * но компонент (и `App`) в тестах монтируется напрямую — без провайдера любой
+ * `useQuery` бросил бы «No QueryClient set». Если провайдер уже есть — просто
+ * пробрасываем детей в общий клиент приложения; иначе создаём локальный клиент
+ * на время жизни карточки, чтобы тесты не делили кэш между собой.
+ */
+function TaskDetailQueryBoundary({ children }: { children: ReactNode }) {
+  const existing = useContext(QueryClientContext);
+  const [fallbackClient] = useState(() =>
+    existing === undefined
+      ? new QueryClient({
+          defaultOptions: {
+            queries: {
+              staleTime: 30_000,
+              refetchOnWindowFocus: false,
+              retry: false,
+            },
+          },
+        })
+      : null,
+  );
+
+  if (existing !== undefined || fallbackClient === null) {
+    return <>{children}</>;
+  }
+  return (
+    <QueryClientProvider client={fallbackClient}>
+      {children}
+    </QueryClientProvider>
+  );
+}
+
+function TaskDetailView({
   issueId,
   autoOpenResult,
 }: TaskDetailProps) {
+  const queryClient = useQueryClient();
+  const issueQuery = useIssue(issueId);
+  const iterationsQuery = useIterations(issueId);
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [context, setContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -510,7 +571,6 @@ export default function TaskDetail({
   const [modelsLoading, setModelsLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [stepRuns, setStepRuns] = useState<StepRunsState>({ status: 'idle' });
   // Live-события сессии, разложенные по stepRunId: кладём их в SessionView
   // соответствующего шага, не дожидаясь следующего GET /step-runs.
   const [liveEventsByRun, setLiveEventsByRun] = useState<
@@ -599,8 +659,6 @@ export default function TaskDetail({
   // Управление живой pi-сессией (модель/thinking/очередь/компакция). `null`,
   // пока активного шаг-сеанса нет (409) или роут ещё не ответил — тогда
   // панель управления просто не рендерится.
-  const [controlSnapshot, setControlSnapshot] =
-    useState<SessionControlSnapshot | null>(null);
   const [controlTick, setControlTick] = useState(0);
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
@@ -661,47 +719,56 @@ export default function TaskDetail({
   const isQuestionEligibleStatus = (status: StepRunStatus) =>
     isActiveStatus(status) || status === 'needs_input';
 
+  // Сброс per-issue UI-состояния при смене задачи (как в прежнем ручном
+  // эффекте загрузки): вопрос и его ошибка не должны «протекать» на другую задачу.
   useEffect(() => {
     if (!issueId) return;
-
-    let cancelled = false;
     setState({ status: 'loading' });
     setAnsweredQuestionIds(new Set());
     setQuestionError(null);
-
-    Promise.all([getIssue(issueId), getIterations(issueId)])
-      .then(([issue, iterations]) => {
-        if (cancelled) return;
-        setState({
-          status: 'ready',
-          issue,
-          iterations: [...iterations].sort((a, b) => a.number - b.number),
-        });
-        setSelectedSteps(issue.pipeline_steps);
-        // Первый раз инициализируем prRepoIds из create_mr флагов репозиториев.
-        if (!prRepoIdsSeeded) {
-          setPrRepoIds(
-            new Set(
-              issue.repositories
-                .filter((repo) => repo.create_mr)
-                .map((repo) => repo.id),
-            ),
-          );
-          setPrRepoIdsSeeded(true);
-        }
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setState({
-          status: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
   }, [issueId]);
+
+  // Гидратация локального `state` из кэша react-query. `state` остаётся
+  // локальным, потому что SSE пишет в него живой статус задачи (см. подписку).
+  useEffect(() => {
+    if (!issueId) return;
+    const error = issueQuery.error ?? iterationsQuery.error;
+    if (issueQuery.isError || iterationsQuery.isError) {
+      setState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (!issueQuery.data || !iterationsQuery.data) return;
+    const issue = issueQuery.data;
+    setState({
+      status: 'ready',
+      issue,
+      iterations: [...iterationsQuery.data].sort((a, b) => a.number - b.number),
+    });
+    setSelectedSteps(issue.pipeline_steps);
+    // Первый раз инициализируем prRepoIds из create_mr флагов репозиториев.
+    if (!prRepoIdsSeeded) {
+      setPrRepoIds(
+        new Set(
+          issue.repositories
+            .filter((repo) => repo.create_mr)
+            .map((repo) => repo.id),
+        ),
+      );
+      setPrRepoIdsSeeded(true);
+    }
+  }, [
+    issueId,
+    issueQuery.data,
+    issueQuery.isError,
+    issueQuery.error,
+    iterationsQuery.data,
+    iterationsQuery.isError,
+    iterationsQuery.error,
+    prRepoIdsSeeded,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -733,35 +800,28 @@ export default function TaskDetail({
       ? state.iterations[state.iterations.length - 1].id
       : null);
 
+  const stepRunsQuery = useStepRuns(activeIterationId);
+
+  // Смена итерации: живой статус предыдущей больше не актуален.
   useEffect(() => {
-    if (!activeIterationId) {
-      setStepRuns({ status: 'idle' });
-      setLiveStatusByRun({});
-      return;
-    }
-
-    let cancelled = false;
-    setStepRuns({ status: 'loading' });
-    // Смена итерации: живой статус предыдущей больше не актуален.
     setLiveStatusByRun({});
+  }, [activeIterationId]);
 
-    getStepRuns(activeIterationId)
-      .then((runs) => {
-        if (cancelled) return;
-        const loadedRuns = Array.isArray(runs) ? runs : [];
-        setStepRuns({ status: 'ready', stepRuns: loadedRuns });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setStepRuns({
-          status: 'error',
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
+  // `refreshTick` — сигнал SSE «перечитать прогоны» (новый шаг, терминальный
+  // статус, вопрос): инвалидируем кэш step-runs текущей итерации.
+  useEffect(() => {
+    if (refreshTick === 0 || !activeIterationId) return;
+    void queryClient.invalidateQueries({
+      queryKey: ['step-runs', activeIterationId],
+    });
+  }, [refreshTick, activeIterationId, queryClient]);
 
-    // Серверные ответы авторитетны: после reload/на другом устройстве уже
-    // отвеченные вопросы не должны всплывать повторно. Union с локальными
-    // оптимистичными id — сбой запроса деградирует в прежнее поведение.
+  // Серверные ответы авторитетны: после reload/на другом устройстве уже
+  // отвеченные вопросы не должны всплывать повторно. Union с локальными
+  // оптимистичными id — сбой запроса деградирует в прежнее поведение.
+  useEffect(() => {
+    if (!activeIterationId) return;
+    let cancelled = false;
     getQuestionAnswers(activeIterationId)
       .then((ids) => {
         if (cancelled || !Array.isArray(ids) || ids.length === 0) return;
@@ -774,11 +834,29 @@ export default function TaskDetail({
       .catch(() => {
         // best-effort: без серверных ответов модалка переспросит.
       });
-
     return () => {
       cancelled = true;
     };
   }, [activeIterationId, refreshTick]);
+
+  const stepRuns: StepRunsState = !activeIterationId
+    ? { status: 'idle' }
+    : stepRunsQuery.isLoading
+      ? { status: 'loading' }
+      : stepRunsQuery.isError
+        ? {
+            status: 'error',
+            message:
+              stepRunsQuery.error instanceof Error
+                ? stepRunsQuery.error.message
+                : String(stepRunsQuery.error),
+          }
+        : {
+            status: 'ready',
+            stepRuns: Array.isArray(stepRunsQuery.data)
+              ? stepRunsQuery.data
+              : [],
+          };
 
   // Вложения задачи. Перезагружаются вместе с refreshTick: терминальный
   // статус итерации и создание новой итерации (см. handleSubmit).
@@ -919,24 +997,13 @@ export default function TaskDetail({
           status === 'failed' ||
           status === 'cancelled'
         ) {
-          Promise.all([getIssue(issueId), getIterations(issueId)])
-            .then(([issue, iterations]) => {
-              setState((current) =>
-                current.status === 'ready'
-                  ? {
-                      ...current,
-                      issue,
-                      iterations: [...iterations].sort(
-                        (a, b) => a.number - b.number,
-                      ),
-                    }
-                  : current,
-              );
-              setRefreshTick((tick) => tick + 1);
-            })
-            .catch(() => {
-              // live-обновление не должно ронять карточку
-            });
+          // Сервер — источник истины для терминального статуса: инвалидируем
+          // issue/iterations, гидратация `state` подхватит свежие данные.
+          void queryClient.invalidateQueries({ queryKey: ['issue', issueId] });
+          void queryClient.invalidateQueries({
+            queryKey: ['iterations', issueId],
+          });
+          setRefreshTick((tick) => tick + 1);
         }
       },
       onWorkspaceProgress: (payload) => {
@@ -1199,27 +1266,22 @@ export default function TaskDetail({
 
   const iterationRunning = activeIteration?.status === 'running';
 
-  // Опрос снимка управления, пока итерация выполняется. При 409/отсутствии
-  // живого шаг-сеанса `getIterationControl` возвращает null → панель скрыта.
-  useEffect(() => {
-    if (!activeIterationId || !iterationRunning) {
-      setControlSnapshot(null);
-      return;
-    }
+  // Опрос снимка управления (react-query, refetchInterval 4с), пока итерация
+  // выполняется. При 409/отсутствии живого шаг-сеанса `getIterationControl`
+  // отдаёт null → панель скрыта.
+  const controlQuery = useIterationControl(activeIterationId, iterationRunning);
+  const controlSnapshot = iterationRunning
+    ? (controlQuery.data ?? null)
+    : null;
 
-    let cancelled = false;
-    const load = () => {
-      void getIterationControl(activeIterationId).then((snapshot) => {
-        if (!cancelled) setControlSnapshot(snapshot);
-      });
-    };
-    load();
-    const timer = window.setInterval(load, 4000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [activeIterationId, iterationRunning, controlTick]);
+  // `controlTick` — сигнал «перечитать снапшот» после управляющей команды
+  // (promptIteration в handleMessageSubmit).
+  useEffect(() => {
+    if (controlTick === 0 || !activeIterationId) return;
+    void queryClient.invalidateQueries({
+      queryKey: ['iteration-control', activeIterationId],
+    });
+  }, [controlTick, activeIterationId, queryClient]);
 
   // `editor_text` из живой сессии префилит поле ввода (последнее событие).
   const lastEditorText = useMemo(() => {
