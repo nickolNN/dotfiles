@@ -26,7 +26,6 @@ import {
   createIteration,
   createIterationWithFiles,
   deleteIssueFile,
-  devServerPortOf,
   fetchReviewComments,
   getIssue,
   getIssueFiles,
@@ -1272,9 +1271,7 @@ export default function TaskDetail({
     return [...byUrl.values()];
   }, [storedMergeRequests, liveMrUrls]);
 
-  // Порт dev-сервера задачи (выделяет backend). Нет порта → индикатор скрыт.
-  const devServerPort =
-    state.status === 'ready' ? devServerPortOf(state.issue) : null;
+
   // Готов ли результат задачи: эндпоинт отдаёт результат последней
   // completed-итерации, а снапшот создаётся в момент её завершения. Значит
   // готовность = есть хоть одна завершённая итерация (не важно, что лежит
@@ -2087,11 +2084,28 @@ export default function TaskDetail({
                         {REPO_PREP_LABELS[status]}
                       </span>
                       {status === 'ready' && devPort !== undefined && (
-                        <span
-                          data-testid="repo-dev-port"
-                          className="text-[#00B4FF]"
-                        >
-                          Dev: localhost:{devPort}
+                        <span className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            data-testid="repo-dev-port"
+                            title={`Скопировать порт ${devPort}`}
+                            aria-label={`Скопировать порт dev-сервера ${devPort}`}
+                            onClick={() => void copyDevServerPort(devPort)}
+                            className="text-[#00B4FF] hover:text-[#00FF41] transition-base"
+                          >
+                            Dev: localhost:{devPort}
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="repo-stop-dev"
+                            disabled={stoppingDevServers}
+                            onClick={() => void handleStopDevServers()}
+                            title="Остановить dev-серверы"
+                            aria-label="Остановить dev-серверы"
+                            className="text-[#FF0033] hover:text-[#FF5555] disabled:opacity-40 transition-base"
+                          >
+                            <StopIcon className="h-3 w-3" />
+                          </button>
                         </span>
                       )}
                       {repository.create_mr && (() => {
@@ -2145,50 +2159,16 @@ export default function TaskDetail({
                 </button>
               </div>
             )}
-            {devServerPort !== null && (
-              <div className="mt-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    data-testid="dev-server-port"
-                    title="Скопировать порт dev-сервера"
-                    aria-label={`Скопировать порт dev-сервера ${devServerPort}`}
-                    onClick={() => void copyDevServerPort(devServerPort)}
-                    className="inline-flex min-h-9 items-center gap-2 rounded-none border border-[#00FF41] bg-[#003B00]/40 px-3 py-1 font-mono text-xs text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] transition-base"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#00FF41] animate-pulse-subtle"
-                    />
-                    <span data-testid="dev-server-port-value">
-                      :{devServerPort}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="stop-dev-servers"
-                    disabled={stoppingDevServers}
-                    onClick={() => void handleStopDevServers()}
-                    className="inline-flex min-h-9 items-center gap-1.5 rounded-none border border-[#FF0033] bg-[#2B0000]/40 px-3 py-1 text-xs font-medium text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#2B0000]/40 disabled:hover:text-[#FF0033] transition-base"
-                  >
-                    <StopIcon className="h-3.5 w-3.5" />
-                    {stoppingDevServers ? 'Остановка…' : 'Остановить'}
-                  </button>
-                  {devPortCopied && (
-                    <span className="text-xs text-[#00FF41]/60">
-                      Скопировано
-                    </span>
-                  )}
-                </div>
-                {devServerError && (
-                  <p
-                    role="alert"
-                    className="mt-2 text-xs font-medium text-[#FF0033]"
-                  >
-                    Не удалось остановить dev-серверы: {devServerError}
-                  </p>
-                )}
-              </div>
+            {devPortCopied && (
+              <p className="mt-2 text-xs text-[#00FF41]/60">Скопировано</p>
+            )}
+            {devServerError && (
+              <p
+                role="alert"
+                className="mt-2 text-xs font-medium text-[#FF0033]"
+              >
+                Не удалось остановить dev-серверы: {devServerError}
+              </p>
             )}
 
             {resultAvailable && (
@@ -3343,7 +3323,6 @@ export default function TaskDetail({
 
             {isActiveStatus(statusOf(expandedStepRun)) && (
               <div className="border-t border-[#008F11] py-3 px-2 sm:px-4">
-                {/* Закреплённая панель: chrome сессии + статистика pi-lens над полем ввода. */}
                 <SessionView
                   events={expandedEvents}
                   stats={expandedStepRun.stats ?? null}

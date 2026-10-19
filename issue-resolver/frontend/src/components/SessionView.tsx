@@ -209,7 +209,7 @@ export default function SessionView({
  * `tool_update` не создаёт карточку: его `partialText` мёржится в
  * соответствующий tool-блок по `toolCallId`.
  */
-function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
+export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
   const visible: SessionEvent[] = [];
   const partialByCallId = new Map<string, string>();
   const resultByCallId = new Map<
@@ -919,7 +919,7 @@ function SessionWidgets({
           {widget.lines.map((line, index) => (
             <div
               key={index}
-              className="whitespace-pre-wrap break-words font-mono leading-relaxed"
+              className="whitespace-pre-wrap break-words"
             >
               {line}
             </div>
