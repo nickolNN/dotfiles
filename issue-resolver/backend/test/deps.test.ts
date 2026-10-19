@@ -13,9 +13,18 @@ import {
 } from '../src/workflow/timeout';
 
 describe('buildDepsFromEnv', () => {
-  it('без ISSUE_RESOLVER_USE_REAL → {} (fakes остаются по умолчанию)', () => {
-    expect(buildDepsFromEnv({})).toEqual({});
-    expect(buildDepsFromEnv({ ISSUE_RESOLVER_USE_REAL: '0' })).toEqual({});
+  it('без ISSUE_RESOLVER_USE_REAL → локальный режим по умолчанию', () => {
+    const deps = buildDepsFromEnv({});
+    expect(deps.container).toBeInstanceOf(LocalContainerController);
+    expect(deps.pi).toBeInstanceOf(RpcPiRunner);
+    expect(deps.git).toBeInstanceOf(GitCliService);
+    expect(deps.mr).toBeInstanceOf(HttpMrClient);
+    expect(deps.control).toBeInstanceOf(InMemoryStepSessionRegistry);
+    expect(deps.local).toBe(true);
+
+    const depsZero = buildDepsFromEnv({ ISSUE_RESOLVER_USE_REAL: '0' });
+    expect(depsZero.container).toBeInstanceOf(LocalContainerController);
+    expect(depsZero.local).toBe(true);
   });
 
   it('ISSUE_RESOLVER_USE_REAL=1 → реальные адаптеры, токены/baseUrl из env', () => {

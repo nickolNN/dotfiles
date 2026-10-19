@@ -165,6 +165,8 @@ export interface IterationRunDeps {
   bootstrapperFactory?: BootstrapperFactory;
   /** Корень host-папок задач; по умолчанию `/workspaces`. */
   workspaceRoot?: string;
+  /** Токен для MR/PR API (создание и чтение комментариев). */
+  mrToken?: string;
 }
 
 export interface RunIssueIterationInput {

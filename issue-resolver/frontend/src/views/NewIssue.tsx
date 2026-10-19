@@ -83,6 +83,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   const [files, setFiles] = useState<File[]>([]);
   const [showJira, setShowJira] = useState(false);
   const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
+  const [workerCount, setWorkerCount] = useState<number>(1);
   // id репозиториев, для которых на шаге pr нужно создать MR.
   const [prRepoIds, setPrRepoIds] = useState<Set<string>>(new Set());
   const [stepModels, setStepModels] = useState<StepModels>({});
@@ -422,6 +423,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
           ? activeStepThinkingLevels
           : undefined,
       run_immediately: runImmediately,
+      worker_count: workerCount > 0 ? workerCount : undefined,
     };
 
     try {
@@ -830,6 +832,27 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
             })}
           </div>
         </fieldset>
+
+        <div>
+          <label className="mb-1 block text-sm font-medium text-[#00FF41]/80" htmlFor="new-worker-count">
+            Макс. число параллельных агентов
+          </label>
+          <input
+            id="new-worker-count"
+            type="number"
+            min={0}
+            max={4}
+            value={workerCount}
+            onChange={(event) =>
+              setWorkerCount(Number(event.target.value) || 0)
+            }
+            className={`${inputClass} w-24`}
+            data-testid="worker-count-input"
+          />
+          <p className="mt-1 text-xs text-[#00FF41]/40">
+            0 — без ограничений, 1 — один агент, 2-4 — макс. N в комнате
+          </p>
+        </div>
 
         {selectedSteps.includes('pr') && (
           <fieldset data-testid="pr-repositories-section">

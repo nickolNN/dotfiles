@@ -472,6 +472,24 @@ function StopIcon({ className }: { className?: string }) {
   );
 }
 
+/** Иконка параллельных агентов — две вертикальные полосы. */
+function ParallelIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M8 4v16" />
+      <path d="M16 4v16" />
+    </svg>
+  );
+}
+
 /** Inline-иконка мусорного ведра, без внешних зависимостей. */
 function TrashIcon({ className }: { className?: string }) {
   return (
@@ -925,6 +943,15 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
                       <span className="block truncate">
                         {repositoryNames(issue) || '—'}
                       </span>
+                      {(issue.worker_count ?? 0) > 0 && (
+                        <span
+                          data-testid="worker-count-badge"
+                          className="mt-1 inline-flex items-center gap-1 text-[#00B4FF]"
+                          title={`Макс. параллельных агентов: ${issue.worker_count}`}
+                        >
+                          <ParallelIcon className="h-3.5 w-3.5" />{issue.worker_count}
+                        </span>
+                      )}
                     </div>
 
                     <div className="mt-2 border-t border-[#008F11]/20 pt-2">

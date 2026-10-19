@@ -81,6 +81,7 @@ export const createIssueRequestSchema = z
     bootstrapper_model: z.string().optional(),
     thinking_level: thinkingLevelSchema.optional(),
     step_thinking_levels: stepThinkingLevelsSchema,
+    worker_count: z.number().int().min(0).optional(),
     run_immediately: z.boolean().optional(),
   })
   .refine(
@@ -104,6 +105,7 @@ export const createIterationRequestSchema = z.object({
   bootstrapper_model: z.string().optional(),
   thinking_level: thinkingLevelSchema.optional(),
   step_thinking_levels: stepThinkingLevelsSchema,
+  worker_count: z.number().int().min(0).optional(),
 });
 
 /** Схема тела POST /issue-resolver/api/v1/repos/validate. */

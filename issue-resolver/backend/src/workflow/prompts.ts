@@ -68,6 +68,8 @@ export interface StepPromptInput {
   devServerPort?: number | null;
   /** Цели публикации для шага `pr` (путь + base-ветка + create_mr). */
   prTargets?: PrTarget[];
+  /** Число параллельных воркеров для refine-промпта (0/undefined → 1). */
+  workerCount?: number;
 }
 
 export interface RoomPromptInput {
@@ -320,6 +322,7 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
   refine: (input) =>
     render(readPrompt('step-refine.md'), {
       MAX_EXECUTORS: String(DEFAULT_MAX_ROOM_EXECUTORS),
+      WORKER_COUNT: String(input.workerCount ?? 1),
       DOWNSTREAM_AWARENESS: refinePipelineAwareness(input.pipelineSteps).join('\n'),
     }),
 

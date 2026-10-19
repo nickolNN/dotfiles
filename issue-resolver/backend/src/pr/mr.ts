@@ -24,8 +24,30 @@ export interface MrCreateResult {
   id: string;
 }
 
+/** Комментарий ревью из PR/MR. */
+export interface MrComment {
+  /** Файл, к которому относится комментарий (или null для общих). */
+  file: string | null;
+  /** Строка в файле (или null для общих комментариев). */
+  line: number | null;
+  /** Текст комментария. */
+  body: string;
+  /** Автор комментария. */
+  author: string;
+  /** ISO-дата создания. */
+  created_at: string;
+}
+
+export interface MrFetchCommentsInput {
+  /** Полный URL MR/PR (например https://github.com/owner/repo/pull/42). */
+  mrUrl: string;
+  token: string;
+}
+
 export interface MrClient {
   createMr(input: MrCreateInput): Promise<MrCreateResult>;
+  /** Получить комментарии ревью из MR/PR. */
+  fetchComments(input: MrFetchCommentsInput): Promise<MrComment[]>;
 }
 
 /** Ошибка публикации результата pr-шага по конкретному репозиторию. */
@@ -100,9 +122,16 @@ export class FakeMrClient implements MrClient {
   readonly calls: MrCreateInput[] = [];
   private pendingError: Error | null = null;
 
+  /** Симулированные комментарии ревью; возвращаются вызовом fetchComments. */
+  reviewComments: MrComment[] = [];
+
   /** Следующий createMr отклонится этой ошибкой. */
   failNextWith(err: Error): void {
     this.pendingError = err;
+  }
+
+  async fetchComments(_input: MrFetchCommentsInput): Promise<MrComment[]> {
+    return [...this.reviewComments];
   }
 
   async createMr(input: MrCreateInput): Promise<MrCreateResult> {
@@ -179,6 +208,136 @@ export class HttpMrClient implements MrClient {
     private readonly token = '',
     private readonly tokens: MrTokens = {},
   ) {}
+
+  async fetchComments(input: MrFetchCommentsInput): Promise<MrComment[]> {
+    const source = detectGitHost(input.mrUrl);
+    const token = input.token || this.tokens[source] || this.token;
+
+    if (source === 'github') {
+      return this.fetchGitHubComments(input.mrUrl, token);
+    }
+    if (source === 'gitlab') {
+      return this.fetchGitLabComments(input.mrUrl, token);
+    }
+    // Bitbucket: comments API
+    return this.fetchBitbucketComments(input.mrUrl, token);
+  }
+
+  private async fetchGitHubComments(mrUrl: string, token: string): Promise<MrComment[]> {
+    // mrUrl: https://github.com/owner/repo/pull/NUMBER
+    const match = /github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(mrUrl);
+    if (!match) throw new Error(`cannot parse github pr url: ${mrUrl}`);
+    const [, owner, repo, number] = match;
+
+    const host = hostOf(mrUrl);
+    const apiBase = host === 'github.com'
+      ? 'https://api.github.com'
+      : `https://${host}/api/v3`;
+
+    // Собираем review comments (на дифф) + issue comments (общие).
+    const all: MrComment[] = [];
+
+    // Review comments (привязаны к файлу/строке)
+    const reviewRes = await fetch(
+      `${apiBase}/repos/${owner}/${repo}/pulls/${number}/comments`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } },
+    );
+    if (reviewRes.ok) {
+      const reviewData = (await reviewRes.json()) as Array<{
+        path?: string; line?: number; body?: string;
+        user?: { login?: string }; created_at?: string;
+      }>;
+      for (const c of reviewData) {
+        all.push({
+          file: c.path ?? null,
+          line: typeof c.line === 'number' ? c.line : null,
+          body: c.body ?? '',
+          author: c.user?.login ?? 'unknown',
+          created_at: c.created_at ?? '',
+        });
+      }
+    }
+
+    // Issue comments (общие, без привязки к файлу)
+    const issueRes = await fetch(
+      `${apiBase}/repos/${owner}/${repo}/issues/${number}/comments`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } },
+    );
+    if (issueRes.ok) {
+      const issueData = (await issueRes.json()) as Array<{
+        body?: string; user?: { login?: string }; created_at?: string;
+      }>;
+      for (const c of issueData) {
+        all.push({
+          file: null,
+          line: null,
+          body: c.body ?? '',
+          author: c.user?.login ?? 'unknown',
+          created_at: c.created_at ?? '',
+        });
+      }
+    }
+
+    return all;
+  }
+
+  private async fetchGitLabComments(mrUrl: string, token: string): Promise<MrComment[]> {
+    // mrUrl: https://gitlab.com/group/project/-/merge_requests/IID
+    // или https://gitlab.example.com/group/project/-/merge_requests/IID
+    const match = /\/([^/]+(?:\/[^/]+)*)\/-\/merge_requests\/(\d+)/.exec(mrUrl);
+    if (!match) throw new Error(`cannot parse gitlab mr url: ${mrUrl}`);
+    const [, projectPath, iid] = match;
+
+    const host = hostOf(mrUrl);
+    const res = await fetch(
+      `https://${host}/api/v4/projects/${encodeURIComponent(projectPath)}/merge_requests/${iid}/notes?sort=asc`,
+      { headers: { 'PRIVATE-TOKEN': token } },
+    );
+    if (!res.ok) throw new Error(`gitlab notes failed: ${res.status}`);
+
+    const data = (await res.json()) as Array<{
+      body?: string; author?: { name?: string }; created_at?: string;
+      position?: { new_path?: string; new_line?: number };
+      system?: boolean;
+    }>;
+
+    return data
+      .filter((c) => !c.system) // исключаем системные заметки (merge, assign, ...)
+      .map((c) => ({
+        file: c.position?.new_path ?? null,
+        line: c.position?.new_line ?? null,
+        body: c.body ?? '',
+        author: c.author?.name ?? 'unknown',
+        created_at: c.created_at ?? '',
+      }));
+  }
+
+  private async fetchBitbucketComments(mrUrl: string, token: string): Promise<MrComment[]> {
+    // mrUrl: https://host/projects/PROJECT/repos/REPO/pull-requests/ID
+    const match = /\/projects\/([^/]+)\/repos\/([^/]+)\/pull-requests\/(\d+)/.exec(mrUrl);
+    if (!match) throw new Error(`cannot parse bitbucket pr url: ${mrUrl}`);
+    const [, project, repo, id] = match;
+
+    const host = hostOf(mrUrl);
+    const res = await fetch(
+      `https://${host}/rest/api/1.0/projects/${project}/repos/${repo}/pull-requests/${id}/comments`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) throw new Error(`bitbucket comments failed: ${res.status}`);
+
+    const data = (await res.json()) as { values?: Array<{
+      text?: string; author?: { name?: string }; createdDate?: string;
+      anchor?: { path?: string; line?: number };
+    }> };
+
+    return (data.values ?? []).map((c) => ({
+      file: c.anchor?.path ?? null,
+      line: c.anchor?.line ?? null,
+      body: c.text ?? '',
+      author: c.author?.name ?? 'unknown',
+      created_at: c.createdDate ?? '',
+    }));
+  }
 
   async createMr(input: MrCreateInput): Promise<MrCreateResult> {
     const token = input.token || this.tokens[input.source] || this.token;

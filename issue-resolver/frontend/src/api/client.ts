@@ -549,6 +549,22 @@ export async function repeatIteration(
   return (await response.json()) as Iteration;
 }
 
+/** Получить комментарии ревью из MR/PR и создать новую итерацию. */
+export async function fetchReviewComments(
+  iterationId: string,
+): Promise<Iteration> {
+  const response = await fetch(
+    `${API_BASE}/iterations/${iterationId}/fetch-review-comments`,
+    { method: 'POST' },
+  );
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Iteration;
+}
+
 export async function deleteIssue(id: string): Promise<void> {
   const response = await fetch(`${API_BASE}/issues/${id}`, {
     method: 'DELETE',
@@ -664,6 +680,69 @@ export async function getResultFiles(
     throw new Error(await readErrorMessage(response));
   }
   return (await response.json()) as WorkspaceFile[];
+}
+
+/** MR из `result.json` — артефакта pr-шага (`{ merge_requests: [...] }`). */
+export interface ResultMergeRequest {
+  repository_url: string;
+  url: string;
+  title?: string;
+  message?: string;
+}
+
+/**
+ * Разбирает `result.json` в список MR. Битый JSON / иная форма → [] (шапка
+ * задачи не должна падать из-за артефакта pr-шага). Экспортировано для тестов.
+ */
+export function parseResultMergeRequests(
+  text: string,
+): ResultMergeRequest[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const list = (parsed as { merge_requests?: unknown } | null)?.merge_requests;
+  if (!Array.isArray(list)) return [];
+
+  return list.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const record = item as Record<string, unknown>;
+    const url = typeof record.url === 'string' ? record.url.trim() : '';
+    if (!url) return [];
+    return [
+      {
+        repository_url:
+          typeof record.repository_url === 'string'
+            ? record.repository_url
+            : '',
+        url,
+        ...(typeof record.title === 'string' ? { title: record.title } : {}),
+        ...(typeof record.message === 'string'
+          ? { message: record.message }
+          : {}),
+      },
+    ];
+  });
+}
+
+/**
+ * MR-ссылки из `result.json` рабочей папки задачи. Единственный источник,
+ * переживающий перезагрузку страницы (SSE-событие `stream: 'mr'` не
+ * персистится в step_outputs). Best-effort: нет файла/не-2xx/битый JSON → [].
+ */
+export async function getResultMergeRequests(
+  issueId: string,
+): Promise<ResultMergeRequest[]> {
+  try {
+    const url = resultFileContentUrl(issueId, 'result.json');
+    const response = await fetch(url);
+    if (!response.ok) return [];
+    return parseResultMergeRequests(await response.text());
+  } catch {
+    return [];
+  }
 }
 
 /**

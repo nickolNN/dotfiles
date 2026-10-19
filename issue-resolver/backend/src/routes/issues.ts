@@ -126,6 +126,7 @@ function toIteration(row: typeof iterations.$inferSelect): Iteration {
     step_models: row.step_models ?? undefined,
     thinking_level: row.thinking_level ?? null,
     step_thinking_levels: row.step_thinking_levels ?? undefined,
+    worker_count: row.worker_count ?? undefined,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -175,6 +176,13 @@ function toIssue(
     created_at: row.created_at,
     updated_at: row.updated_at,
     workspace_missing: !existsSync(workspaceHostDirFor(workspaceRoot, row.id)),
+    worker_count: iterationRows
+      .reduce<typeof iterations.$inferSelect | null>(
+        (latest, current) =>
+          !latest || current.number > latest.number ? current : latest,
+        null,
+      )
+      ?.worker_count ?? undefined,
   };
 }
 
@@ -962,6 +970,7 @@ export async function issuesRoutes(
         step_models: body.step_models,
         thinking_level: body.thinking_level ?? null,
         step_thinking_levels: body.step_thinking_levels,
+        worker_count: body.worker_count ?? undefined,
         status: 'pending',
         created_at: now,
         updated_at: now,
@@ -1222,6 +1231,7 @@ export async function issuesRoutes(
             step_models: body.step_models ?? null,
             thinking_level: body.thinking_level ?? null,
             step_thinking_levels: body.step_thinking_levels ?? null,
+            worker_count: body.worker_count ?? undefined,
             status: 'pending',
             created_at: now,
             updated_at: now,

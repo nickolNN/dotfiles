@@ -3,13 +3,14 @@ import type { StepRunStatus, TaskStatus } from '@issue-resolver/shared';
 import { MATRIX, statusColor, stepStatusColor } from './theme';
 
 const STATUSES: TaskStatus[] = [
-  'pending',
-  'running',
-  'preparing',
-  'completed',
-  'failed',
   'cancelled',
+  'completed',
+  'draft',
+  'failed',
+  'pending',
+  'preparing',
   'question',
+  'running',
 ];
 
 const STEP_STATUSES: StepRunStatus[] = [
@@ -34,7 +35,7 @@ describe('theme tokens', () => {
     expect(MATRIX.green).toBe('#00FF41');
   });
 
-  it('maps exactly the seven TaskStatus values to valid hex colors', () => {
+  it('maps exactly the eight TaskStatus values to valid hex colors', () => {
     expect(Object.keys(statusColor).sort()).toEqual([...STATUSES].sort());
 
     for (const status of STATUSES) {
@@ -49,6 +50,7 @@ describe('theme tokens', () => {
     expect(statusColor.preparing).toBe('#FFB000');
     expect(statusColor.pending).toBe('#008F11');
     expect(statusColor.cancelled).toBe('#8A8A8A');
+    expect(statusColor.draft).toBe('#8A8A8A');
     expect(statusColor.question).toBe('#FFB000');
   });
 

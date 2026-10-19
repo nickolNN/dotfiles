@@ -39,6 +39,8 @@ Write the implementation plan twice:
 Each plan entry states the change, the file or module it lands in, and how the
 executor confirms it. Order entries by dependency.
 
+Maximum parallel agents: {{WORKER_COUNT}} (0 = unrestricted — plan as many as the work needs).
+
 ### Execution topology
 
 Recommend how the execution step should run, as `execution` in
@@ -57,7 +59,8 @@ Recommend how the execution step should run, as `execution` in
 ```
 
 - `single` — one agent holds the whole task; no decomposition.
-- `room` — one coordinator (lead) plus 2..{{MAX_EXECUTORS}} workers in parallel;
+- `room` — one coordinator (lead) plus up to {{WORKER_COUNT}} workers in parallel;
+  do not exceed {{WORKER_COUNT}} workers (0 = no limit).
   `decomposition` carries exactly one sub-task per worker.
 - `stages` — 2+ ordered stages, each with 1..{{MAX_EXECUTORS}} workers
   (1-based `index`, one `decomposition` entry per worker); a final lead
@@ -70,7 +73,9 @@ time → `room`; ordered parts where each needs the previous one's result →
 The engine clamps `executors` to {{MAX_EXECUTORS}} and pads `decomposition` to
 match, so a wrong count costs nothing while a bad split costs a re-run. Split so
 that sub-tasks are file-disjoint (two agents in one file conflict) and each is
-verifiable on its own.
+verifiable on its own. Do not plan more parallel workers than {{WORKER_COUNT}} — the engine will not
+launch more than {{WORKER_COUNT}} of them (0 = no cap). If the work requires more parallelism than available, use `stages`
+to serialize the excess into a second stage.
 
 Only the coordinator (lead) makes the final pass/fail decision for the execution
 step; workers report their own sub-task.
