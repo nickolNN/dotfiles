@@ -20,7 +20,7 @@ import {
   formatDateTime,
   formatRelativeTime,
 } from '@issue-resolver/shared';
-import { canStartDraft, canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
+import { canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
 import {
   abortIteration,
   createIteration,
@@ -3302,8 +3302,9 @@ export default function TaskDetail({
                 )}
             </div>
 
-            {isActiveStatus(statusOf(expandedStepRun)) && (
+            {(isActiveStatus(statusOf(expandedStepRun)) || statusOf(expandedStepRun) === 'needs_input') && (
               <div className="border-t border-[#008F11] py-3 px-2 sm:px-4">
+                {controlSnapshot && (
                 <div
                   data-testid="live-controls"
                   className="mb-3 flex flex-wrap items-center gap-2 text-xs"
@@ -3325,7 +3326,7 @@ export default function TaskDetail({
                             {controlState?.model ?? '—'}
                           </option>
                         )}
-                        {controlSnapshot.models.map((model) => (
+                        {controlSnapshot?.models?.map((model) => (
                           <option
                             key={modelOptionValue(model.provider, model.id)}
                             value={modelOptionValue(model.provider, model.id)}
@@ -3352,7 +3353,7 @@ export default function TaskDetail({
                         {controlState?.thinkingLevel === null && (
                           <option value="">—</option>
                         )}
-                        {controlSnapshot.thinkingLevels.map((level) => (
+                        {controlSnapshot?.thinkingLevels?.map((level) => (
                           <option key={level} value={level}>
                             {level}
                           </option>

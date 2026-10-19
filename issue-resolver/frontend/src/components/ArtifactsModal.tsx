@@ -226,6 +226,7 @@ export default function ArtifactsModal({
   files,
   open,
   onClose,
+  archiveUrl,
 }: ArtifactsModalProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
