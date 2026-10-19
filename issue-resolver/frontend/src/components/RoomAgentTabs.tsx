@@ -33,6 +33,16 @@ export interface RoomAgentTabsProps {
   statusPollMs?: number;
   /** Текст пустого состояния сессии выбранного агента. */
   emptyMessage?: string;
+  /**
+   * Задержка между ретраями, когда агенты ещё не зарегистрированы (мс).
+   * По умолчанию 1000. Тесты выставляют 0 для мгновенного истощения ретраев.
+   */
+  emptyRetryMs?: number;
+  /**
+   * Число ретраев при пустом ответе на первый запрос (changedIteration).
+   * По умолчанию 5. Тесты выставляют 0, чтобы сразу показать заглушку.
+   */
+  maxEmptyRetries?: number;
 }
 
 type AgentsState =
@@ -252,6 +262,8 @@ export default function RoomAgentTabs({
   refreshKey = 0,
   statusPollMs = 3000,
   emptyMessage,
+  emptyRetryMs = 1000,
+  maxEmptyRetries = 5,
 }: RoomAgentTabsProps) {
   const [agentsState, setAgentsState] = useState<AgentsState>({
     status: 'loading',
@@ -266,12 +278,18 @@ export default function RoomAgentTabs({
   // Итерация, для которой уже загружен список: смена итерации — это сброс и
   // «Загрузка…», refreshKey/опрос — фоновое обновление без мигания.
   const loadedIterationRef = useRef<string | null>(null);
+  // Счётчик ретраев для случая, когда агенты ещё не зарегистрированы, а
+  // resolve-шаг уже стартовал (гонка между рендером RoomAgentTabs и
+  // spawn'ом pi-воркеров). Без ретраев пустой ответ немедленно покажет
+  // «Агенты комнаты не найдены» и больше не перечитает (нет hasRunningAgent).
+  const retryCountRef = useRef(0);
 
   // Список агентов: перечитывается при смене итерации и по refreshKey
   // родителя. Best-effort клиент возвращает [] вместо ошибки, но reject
   // тоже обрабатываем — компонент не должен ронять карточку.
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const changedIteration = loadedIterationRef.current !== iterationId;
     loadedIterationRef.current = iterationId;
 
@@ -280,6 +298,7 @@ export default function RoomAgentTabs({
       setSelectedId(null);
       setLiveByAgent({});
       setAgentsState({ status: 'loading' });
+      retryCountRef.current = 0;
     } else {
       // Фоновое обновление не должно мигать «Загрузка…» и терять вкладки.
       setAgentsState((current) =>
@@ -291,6 +310,23 @@ export default function RoomAgentTabs({
       .then((agents) => {
         if (cancelled) return;
         const sorted = sortAgents(Array.isArray(agents) ? agents : []);
+        // Гонка старта: resolve-шаг уже активен, но pi-воркеры ещё не
+        // заспавнились и не зарегистрировались в реестре бэкенда. Пустой
+        // ответ при первом фетче (changedIteration) ретраим до 5 раз с
+        // интервалом 1 с — за это время агенты успевают появиться.
+        if (
+          sorted.length === 0 &&
+          changedIteration &&
+          retryCountRef.current < maxEmptyRetries
+        ) {
+          retryCountRef.current += 1;
+          retryTimer = setTimeout(
+            () => setPollTick((tick) => tick + 1),
+            emptyRetryMs,
+          );
+          return;
+        }
+        retryCountRef.current = 0;
         setAgentsState({ status: 'ready', agents: sorted });
         setSelectedId((current) => pickDefaultAgentId(sorted, current));
       })
@@ -304,6 +340,7 @@ export default function RoomAgentTabs({
 
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [iterationId, refreshKey, pollTick]);
 

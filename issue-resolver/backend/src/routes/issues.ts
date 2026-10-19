@@ -976,6 +976,53 @@ export async function issuesRoutes(
         updated_at: now,
       };
 
+      // Принцип: только одна активная + максимум одна запланированная итерация.
+      // Проверяем ДО вставки новой итерации: иначе при отказе (409) только что
+      // созданная строка оставалась бы в БД «фантомной» итерацией.
+      const hasRunning = db
+        .select({ id: iterations.id })
+        .from(iterations)
+        .where(
+          and(
+            eq(iterations.issue_id, id),
+            eq(iterations.status, 'running'),
+          ),
+        )
+        .get();
+
+      if (hasRunning) {
+        const hasPlanned = db
+          .select({ id: iterations.id })
+          .from(iterations)
+          .where(
+            and(
+              eq(iterations.issue_id, id),
+              eq(iterations.status, 'pending'),
+            ),
+          )
+          .get();
+        if (hasPlanned) {
+          return reply.status(409).send({
+            error: 'A pending iteration already exists — wait for it to start',
+          });
+        }
+        const hasDraft = db
+          .select({ id: iterations.id })
+          .from(iterations)
+          .where(
+            and(
+              eq(iterations.issue_id, id),
+              eq(iterations.status, 'draft'),
+            ),
+          )
+          .get();
+        if (hasDraft) {
+          return reply.status(409).send({
+            error: 'A draft iteration already exists — edit or delete it first',
+          });
+        }
+      }
+
       db.insert(iterations).values(iteration).run();
 
       await saveAttachments(
@@ -999,8 +1046,18 @@ export async function issuesRoutes(
         bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
         workspaceRoot: deps.workspaceRoot,
       };
-      // Подготовка + конвейер — фоновый прогон. HTTP-ответ возвращается
-      // немедленно; прогресс и статус идут через SSE.
+      if (hasRunning) {
+        // Создаём черновик.
+        db.update(iterations)
+          .set({ status: 'draft', updated_at: now })
+          .where(eq(iterations.id, iterationId))
+          .run();
+
+        return reply.status(201).send({ ...iteration, status: 'draft' });
+      }
+
+      // Нет активной итерации — создаём pending и запускаем.
+      // Подготовка + конвейер — фоновый прогон.
       void (async () => {
         try {
           const ws = await prepareIssueWorkspace(db, prepareDeps, {

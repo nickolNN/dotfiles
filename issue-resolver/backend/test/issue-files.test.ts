@@ -8,8 +8,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { buildApp } from '../src/app';
 import { createDb } from '../src/db/client';
+import { iterations } from '../src/db/schema';
 import { insertMany, listByIssue, listByIteration } from '../src/db/issue-files.repo';
 import { FakePiRunner } from '../src/pi/runner';
 
@@ -178,8 +180,17 @@ describe('multipart-загрузка файлов', () => {
         title: 'Итерации',
         pipeline_steps: ['resolve'],
       });
-      // Итерация №1 завершилась (или как минимум запустилась).
-      await waitFor(() => (pi.calls.length >= 1 ? true : undefined));
+      // Итерация №1 должна завершиться: при активной итерации #2 создалась бы
+      // как draft (см. iteration-queue.test.ts) и не запустилась бы сразу.
+      await waitFor(() => {
+        const first = db
+          .select()
+          .from(iterations)
+          .where(eq(iterations.issue_id, issueId))
+          .all()
+          .find((iteration) => iteration.number === 1);
+        return first && first.status === 'completed' ? true : undefined;
+      });
 
       const { payload, headers } = multipart(
         { payload: JSON.stringify({ context: 'ещё контекст' }) },

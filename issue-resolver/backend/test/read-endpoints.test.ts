@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { ModelDescriptor } from '@issue-resolver/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
@@ -61,25 +62,27 @@ function seedIteration(db: Db): string {
 }
 
 describe('GET /iterations/:id/step-runs', () => {
-  it('200: шаги в порядке конвейера (step-first), внутри шага attempt ASC', async () => {
+  it('200: шаги в хронологическом порядке (created_at ASC)', async () => {
     const db = createDb(':memory:');
     const app = makeApp(db);
     const iterationId = seedIteration(db);
 
-    // Порядок вставки намеренно обратный canonical, чтобы поймать регрессию.
-    await createStepRun(db, {
-      iterationId,
-      step: 'review',
-      attempt: 1,
-      context: 'review ctx',
-    });
-    await createStepRun(db, {
+    // Insertion order = chronological (resolve → review fail → resolve retry).
+    const step1 = await createStepRun(db, {
       iterationId,
       step: 'resolve',
       attempt: 1,
       context: 'resolve ctx',
     });
-    await createStepRun(db, {
+    await delay(2);
+    const step2 = await createStepRun(db, {
+      iterationId,
+      step: 'review',
+      attempt: 1,
+      context: 'review ctx',
+    });
+    await delay(2);
+    const step3 = await createStepRun(db, {
       iterationId,
       step: 'resolve',
       attempt: 2,
@@ -97,13 +100,14 @@ describe('GET /iterations/:id/step-runs', () => {
       attempt: number;
       status: string;
       iteration_id: string;
+      id: string;
     }>;
     expect(runs).toHaveLength(3);
-    // step-first: resolve#1, resolve#2, затем review#1 (не attempt-first).
-    expect(runs.map((run) => `${run.step}#${run.attempt}`)).toEqual([
-      'resolve#1',
-      'resolve#2',
-      'review#1',
+    // Chronological: resolve#1 → review → resolve#2 (retry AFTER review).
+    expect(runs.map((run) => run.id)).toEqual([
+      step1.id,
+      step2.id,
+      step3.id,
     ]);
     for (const run of runs) {
       expect(run.iteration_id).toBe(iterationId);

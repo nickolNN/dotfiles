@@ -113,7 +113,7 @@ describe('POST /issues/:id/iterations', () => {
     expect(created.statusCode).toBe(201);
     const iteration = created.json();
     expect(iteration.number).toBe(2);
-    expect(iteration.status).toBe('pending');
+    expect(iteration.status).toBe('draft');
     expect(iteration.issue_id).toBe(id);
     expect(iteration.context).toBe('restart');
     expect(iteration.steps).toEqual(['refine', 'resolve']);

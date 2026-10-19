@@ -202,7 +202,7 @@ describe('TaskDetail', () => {
     ).toBeInTheDocument();
   });
 
-  it('canStart: running iteration → форма новой итерации скрыта', async () => {
+  it('canStart: running iteration → форма предлагает создать черновик', async () => {
     const issue = makeIssue();
     const iteration = makeIteration({ status: 'running' });
     vi.stubGlobal(
@@ -219,11 +219,14 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    expect(screen.queryByLabelText('Контекст итерации')).toBeNull();
+    // running → можно поставить в план только черновик, форму не скрываем.
+    expect(screen.getByLabelText('Контекст итерации')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Создать черновик' }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Запустить новую итерацию' }),
     ).toBeNull();
-    expect(screen.queryByText('Новая итерация')).toBeNull();
   });
 
   it('canStart: нет итераций → форма новой итерации показана', async () => {

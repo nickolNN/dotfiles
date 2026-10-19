@@ -38,6 +38,7 @@ import {
   getResultMergeRequests,
   getStepRuns,
   promptIteration,
+  queueIteration,
   repeatIteration,
   startIssue,
   resultFilesArchiveUrl,
@@ -547,7 +548,9 @@ export default function TaskDetail({
   const [repeatingId, setRepeatingId] = useState<string | null>(null);
   const [repeatError, setRepeatError] = useState<string | null>(null);
   const [fetchingReviewId, setFetchingReviewId] = useState<string | null>(null);
+  const [queueingId, setQueueingId] = useState<string | null>(null);
   const [fetchReviewError, setFetchReviewError] = useState<string | null>(null);
+  const [fetchReviewMessage, setFetchReviewMessage] = useState<string | null>(null);
   const [startingDraft, setStartingDraft] = useState(false);
   const [startDraftError, setStartDraftError] = useState<string | null>(null);
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
@@ -1247,8 +1250,22 @@ export default function TaskDetail({
     if (lastEditorText !== null) setMessage(lastEditorText);
   }, [lastEditorText]);
 
-  const canStart =
+  const canStartNormal =
     state.status === 'ready' ? canStartIteration(state.iterations) : false;
+  // Можно создать черновик: есть running итерация, но нет draft/pending.
+  const hasRunningIteration =
+    state.status === 'ready'
+      ? state.iterations.some((it) => it.status === 'running')
+      : false;
+  const hasDraftIteration =
+    state.status === 'ready'
+      ? state.iterations.some((it) => it.status === 'draft')
+      : false;
+  const canStartDraftForm = hasRunningIteration && !hasDraftIteration;
+  const canStart = canStartNormal || canStartDraftForm;
+  const submitButtonLabel = hasRunningIteration
+    ? 'Создать черновик'
+    : 'Запустить новую итерацию';
   // Новые итерации показываем первыми; сам state не мутируем —
   // activeIterationId по умолчанию берёт последний (свежайший) элемент.
   const orderedIterations =
@@ -1667,7 +1684,70 @@ export default function TaskDetail({
     setFetchingReviewId(iteration.id);
 
     try {
-      const created = await fetchReviewComments(iteration.id);
+      const { comments, errors } = await fetchReviewComments(iteration.id);
+
+      if (comments.length === 0) {
+        // Комментариев нет — код ревью чист.
+        setFetchReviewError(null);
+        setFetchReviewMessage(
+          'Комментариев ревью нет — код чист ✨',
+        );
+        // Сообщение исчезнет через 4 секунды.
+        setTimeout(() => setFetchReviewMessage(null), 4000);
+        return;
+      }
+
+      // Формируем текст комментариев как markdown.
+      const lines: string[] = [
+        `# Review Comments`,
+        `> Fetched from MR/PR of iteration #${iteration.number}`,
+        '',
+      ];
+      for (const c of comments) {
+        const location = c.file
+          ? `${c.file}${c.line !== null ? `:${c.line}` : ''}`
+          : 'общий комментарий';
+        lines.push(
+          `- **${c.author}** [${c.repo} → ${location}]:`,
+          `  ${c.body}`,
+          '',
+        );
+      }
+      if (errors && errors.length > 0) {
+        lines.push(
+          '',
+          '⚠ Некоторые MR не удалось опросить:',
+          ...errors.map((e) => `  - ${e}`),
+        );
+      }
+      const reviewText = lines.join('\n');
+
+      // Создаём файл с комментариями и предзаполняем поле контекста.
+      const reviewFile = new File(
+        [reviewText],
+        `review-iteration-${iteration.number}.md`,
+        { type: 'text/markdown' },
+      );
+      setFiles([reviewFile]);
+      setContext(
+        `Review comments from iteration #${iteration.number}. ` +
+          `See attached file for details.`,
+      );
+    } catch (error) {
+      setFetchReviewError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setFetchingReviewId(null);
+    }
+  }
+
+  async function handleQueue(iteration: Iteration) {
+    if (!issueId) return;
+    if (iteration.status !== 'draft') return;
+    setQueueingId(iteration.id);
+    try {
+      await queueIteration(iteration.id);
       const iterations = await getIterations(issueId);
       setState((current) =>
         current.status === 'ready'
@@ -1677,14 +1757,13 @@ export default function TaskDetail({
             }
           : current,
       );
-      setSelectedIterationId(created.id);
       setRefreshTick((tick) => tick + 1);
     } catch (error) {
-      setFetchReviewError(
+      setRepeatError(
         error instanceof Error ? error.message : String(error),
       );
     } finally {
-      setFetchingReviewId(null);
+      setQueueingId(null);
     }
   }
 
@@ -2469,7 +2548,7 @@ export default function TaskDetail({
                 >
                   {submitting
                     ? 'Создание итерации…'
-                    : 'Запустить новую итерацию'}
+                    : submitButtonLabel}
                 </button>
               </div>
             </form>
@@ -2577,6 +2656,15 @@ export default function TaskDetail({
                 {fetchReviewError}
               </p>
             )}
+            {fetchReviewMessage && (
+              <p
+                role="status"
+                data-testid="fetch-review-message"
+                className="mb-3 text-xs font-medium text-[#00FF41]"
+              >
+                {fetchReviewMessage}
+              </p>
+            )}
 
             {state.iterations.length === 0 ? (
               <div className="rounded-none border border-dashed border-[#008F11] p-6 text-center text-sm text-[#00FF41]/60">
@@ -2670,6 +2758,22 @@ export default function TaskDetail({
                               : '📋 Результаты ревью'}
                           </button>
                         )}
+                      {iteration.status === 'draft' && (
+                        <button
+                          type="button"
+                          data-testid="queue-iteration"
+                          disabled={queueingId === iteration.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleQueue(iteration);
+                          }}
+                          className="min-h-8 shrink-0 border border-[#00FF41] bg-[#002B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+                        >
+                          {queueingId === iteration.id
+                            ? 'В очереди…'
+                            : '▶ В очередь'}
+                        </button>
+                      )}
                     </div>
 
                     {iteration.status === 'running' && abortError && (

@@ -12,7 +12,7 @@ import {
   extractIssueKeyFromUrl,
   extractRepoNameFromUrl,
 } from '@issue-resolver/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
 import {
   appendFileSync,
@@ -30,7 +30,7 @@ import {
   getRepositoryByUrl,
   updateRepositoryRunInstructions,
 } from '../db/repositories.repo';
-import { issues, iterations } from '../db/schema';
+import { issueRepositories, issues, iterations } from '../db/schema';
 import {
   appendStepRunEvent,
   createStepOutput,
@@ -940,5 +940,105 @@ export async function runIssueIteration(
 
   await writeIterationReport(db, deps, input, result.iterationStatus);
 
+  // Запускаем следующую pending-итерацию для этого issue, если есть.
+  // Делаем это асинхронно, не блокируя завершение текущей.
+  void startNextPendingIteration(db, deps, input.issue.id);
+
   return result;
+}
+
+/**
+ * Запускает следующую pending-итерацию для issue, если она есть.
+ * Вызывается после завершения текущей итерации — так образуется очередь:
+ * пользователь может создать несколько итераций, пока выполняется текущая,
+ * и они будут выполняться последовательно.
+ */
+async function startNextPendingIteration(
+  db: Db,
+  deps: IterationRunDeps,
+  issueId: string,
+): Promise<void> {
+  // Находим первую (по номеру) pending-итерацию.
+  const next = db
+    .select()
+    .from(iterations)
+    .where(
+      and(eq(iterations.issue_id, issueId), eq(iterations.status, 'pending')),
+    )
+    .orderBy(asc(iterations.number))
+    .get();
+
+  if (!next) return; // Очередь пуста.
+
+  const issue = db
+    .select()
+    .from(issues)
+    .where(eq(issues.id, issueId))
+    .get();
+  if (!issue) return;
+
+  const repositories = db
+    .select()
+    .from(issueRepositories)
+    .where(eq(issueRepositories.issue_id, issueId))
+    .all()
+    .map((repository) => ({
+      repository_url: repository.repository_url,
+      base_branch: repository.branch_name,
+      create_mr: !!repository.create_mr,
+      bootstrap_enabled: repository.bootstrap_enabled ?? true,
+    }));
+
+  const prepareDeps = {
+    container: deps.container,
+    git: deps.git,
+    sse: deps.sse,
+    local: deps.local,
+    ...(deps.bootstrapperFactory
+      ? { bootstrapperFactory: deps.bootstrapperFactory }
+      : {}),
+    bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+    workspaceRoot: deps.workspaceRoot,
+  };
+
+  console.error(
+    `[queue] starting pending iteration ${next.id} (#${next.number}) for issue ${issueId}`,
+  );
+
+  void (async () => {
+    try {
+      const ws = await prepareIssueWorkspace(db, prepareDeps, {
+        issueId: issue.id,
+        iterationId: next.id,
+        repositories,
+      });
+      void runIssueIteration(db, deps, {
+        issue: {
+          id: issue.id,
+          title: issue.title,
+          pipelineSteps: issue.pipeline_steps,
+          description: issue.description ?? '',
+          desiredResult: issue.desired_result ?? 'md',
+          jiraIssueUrl: issue.jira_issue_url,
+        },
+        iteration: {
+          id: next.id,
+          issueId: issue.id,
+          number: next.number,
+          context: next.context,
+          steps: next.steps,
+          reviewContext: next.review_context ?? '',
+          isReviewNeed: !!next.is_review_need,
+        },
+        repositories,
+        repoWorkspaces: ws,
+        model: next.model ?? undefined,
+        step_models: next.step_models ?? undefined,
+        thinking_level: next.thinking_level ?? undefined,
+        step_thinking_levels: next.step_thinking_levels ?? undefined,
+      }).catch((error) => console.error('run failed', error));
+    } catch (error) {
+      console.error('preparation failed, issue set to failed', error);
+    }
+  })();
 }

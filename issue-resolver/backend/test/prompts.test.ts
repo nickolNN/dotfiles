@@ -536,7 +536,7 @@ describe('prompt hygiene — роль видит всё, что нужно им�
   it('refine: число параллельных воркеров из shared, без противоречивых «prefer»', () => {
     const text = prompt('refine');
 
-    expect(text).toContain('Number of agents available for parallel execution: 1.');
+    expect(text).toContain('Maximum parallel agents: 1');
     expect(text).toContain(`1..${DEFAULT_MAX_ROOM_EXECUTORS} workers`);
     expect(text).not.toContain('MAX 3 AGENTS PARALLEL');
     expect(text).not.toContain('Prefer `single`');
