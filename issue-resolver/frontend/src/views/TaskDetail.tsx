@@ -2189,23 +2189,6 @@ export default function TaskDetail({
                     Показать отчёт
                   </button>
                   <a
-                    data-testid="download-result"
-                    href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
-                    download={resultFilenameFor(state.issue.desired_result)}
-                    aria-disabled={resultReady ? undefined : true}
-                    tabIndex={resultReady ? undefined : -1}
-                    onClick={(event) => {
-                      if (!resultReady) event.preventDefault();
-                    }}
-                    className={`min-h-9 inline-flex items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium transition-base ${
-                      resultReady
-                        ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
-                        : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
-                    }`}
-                  >
-                    Скачать
-                  </a>
-                  <a
                     data-testid="download-archive"
                     href={resultFilesArchiveUrl(state.issue.id)}
                     download={`issue-${state.issue.id}.tar.gz`}
@@ -3116,7 +3099,24 @@ export default function TaskDetail({
             onClick={(event) => event.stopPropagation()}
           >
             <header className="flex flex-wrap items-center gap-3 border-b border-[#008F11] py-4 px-2 sm:px-4">
-              <span className="text-[#00FF41]">Результат</span>
+              <span className="text-[#00FF41]">Отчёт</span>
+              <a
+                data-testid="result-modal-download"
+                href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
+                download={resultFilenameFor(state.issue.desired_result)}
+                aria-disabled={resultReady ? undefined : true}
+                tabIndex={resultReady ? undefined : -1}
+                onClick={(event) => {
+                  if (!resultReady) event.preventDefault();
+                }}
+                className={`inline-flex items-center rounded-none border border-[#008F11] px-2 py-0.5 text-[11px] font-medium transition-base ${
+                  resultReady
+                    ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
+                    : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
+                }`}
+              >
+                Скачать
+              </a>
               <button
                 type="button"
                 data-testid="result-modal-close"
@@ -3320,15 +3320,6 @@ export default function TaskDetail({
 
             {isActiveStatus(statusOf(expandedStepRun)) && (
               <div className="border-t border-[#008F11] py-3 px-2 sm:px-4">
-                <SessionView
-                  events={expandedEvents}
-                  stats={expandedStepRun.stats ?? null}
-                  showFooter={false}
-                  infoOnly={true}
-                  running={isActiveStatus(statusOf(expandedStepRun))}
-                  startedAt={expandedStepRun.created_at}
-                  onRecallQueued={recallQueued}
-                />
                 {controlSnapshot && (
                   <div
                     data-testid="live-controls"
@@ -3468,7 +3459,7 @@ export default function TaskDetail({
                     <input
                       type="text"
                       aria-label="Сообщение"
-                      className={`${inputClass} min-w-0 flex-1 order-1 sm:order-2`}
+                      className={`${inputClass} min-w-0 flex-1 order-1 sm:order-3`}
                       value={message}
                       onChange={(event) => setMessage(event.target.value)}
                       onKeyDown={(event) => {
@@ -3511,10 +3502,56 @@ export default function TaskDetail({
                         <option value="followUp">follow-up</option>
                       </select>
                     )}
+                    {(() => {
+                      let queueEvent: SessionEvent | undefined;
+                      for (let i = expandedEvents.length - 1; i >= 0; i -= 1) {
+                        if (expandedEvents[i].type === 'queue') {
+                          queueEvent = expandedEvents[i];
+                          break;
+                        }
+                      }
+                      if (!queueEvent || queueEvent.type !== 'queue') return null;
+                      const steering: string[] = queueEvent.steering ?? [];
+                      const followUp: string[] = queueEvent.followUp ?? [];
+                      if (steering.length === 0 && followUp.length === 0) return null;
+                      return (
+                        <span
+                          data-testid="queue-recall-inline"
+                          className="order-2 sm:order-2 flex flex-wrap gap-1"
+                        >
+                          {steering.map((text: string, i: number) => (
+                            <button
+                              key={`steer-${i}`}
+                              type="button"
+                              data-testid={`queue-recall-steer-${i}`}
+                              onClick={() => recallQueued(text)}
+                              disabled={messageSending}
+                              className="min-h-7 border border-[#FFB000] px-1.5 text-[10px] text-[#FFB000] hover:bg-[#FFB000]/20 disabled:opacity-50 transition-base"
+                              title={text}
+                            >
+                              ↩steer
+                            </button>
+                          ))}
+                          {followUp.map((text: string, i: number) => (
+                            <button
+                              key={`follow-${i}`}
+                              type="button"
+                              data-testid={`queue-recall-follow-${i}`}
+                              onClick={() => recallQueued(text)}
+                              disabled={messageSending}
+                              className="min-h-7 border border-[#00B4FF] px-1.5 text-[10px] text-[#00B4FF] hover:bg-[#00B4FF]/20 disabled:opacity-50 transition-base"
+                              title={text}
+                            >
+                              ↩follow
+                            </button>
+                          ))}
+                        </span>
+                      );
+                    })()}
                     <button
                       type="submit"
                       disabled={!message.trim() || messageSending}
-                      className="min-h-9 shrink-0 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50 transition-base order-3"
+                      className="min-h-9 shrink-0 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50 transition-base order-3 sm:order-4"
                     >
                       {messageSending ? 'Отправка…' : 'Отправить'}
                     </button>

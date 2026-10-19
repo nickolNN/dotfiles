@@ -475,6 +475,63 @@ describe('TasksList', () => {
     );
   });
 
+  it('показывает модель рядом с параллелизмом в running-задаче', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          { ...makeIssue('1', 'Running task'), status: 'running', worker_count: 2 },
+        ],
+      }),
+    );
+
+    render(<TasksList />);
+    await screen.findByText('Running task');
+
+    // До SSE — модель ещё не известна, бейджа нет.
+    expect(screen.queryByTestId('active-model-badge')).toBeNull();
+
+    const stream = FakeEventSource.instances.find((source) =>
+      source.url.endsWith('/api/v1/stream'),
+    );
+    stream?.emit({
+      type: 'step_status',
+      issueId: '1',
+      iterationId: 'it-1',
+      stepRunId: 'run-1',
+      data: JSON.stringify({
+        status: 'running',
+        step: 'resolve',
+        model: 'deepseek-v4-pro',
+      }),
+      ts: '2026-10-13T00:00:00.000Z',
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('active-model-badge')).toHaveTextContent('deepseek-v4-pro'),
+    );
+    expect(screen.getByTestId('worker-count-badge')).toBeInTheDocument();
+  });
+
+  it('не показывает модель для completed-задачи', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          { ...makeIssue('1', 'Done task'), status: 'completed', worker_count: 2 },
+        ],
+      }),
+    );
+
+    render(<TasksList />);
+    await screen.findByText('Done task');
+
+    expect(screen.queryByTestId('active-model-badge')).toBeNull();
+    expect(screen.getByTestId('worker-count-badge')).toBeInTheDocument();
+  });
+
   it('клик по строке вызывает onOpenTask', async () => {
     vi.stubGlobal(
       'fetch',
