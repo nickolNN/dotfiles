@@ -27,6 +27,7 @@ import {
   createIterationWithFiles,
   deleteIssueFile,
   devServerPortOf,
+  fetchReviewComments,
   getIssue,
   getIssueFiles,
   getIterations,
@@ -34,6 +35,7 @@ import {
   getModels,
   getQuestionAnswers,
   getResultFiles,
+  getResultMergeRequests,
   getStepRuns,
   promptIteration,
   repeatIteration,
@@ -44,6 +46,7 @@ import {
   sendUiResponse,
   stopDevServers,
 } from '../api/client';
+import type { ResultMergeRequest } from '../api/client';
 import {
   DELETE_TIMEOUT_MS,
   subscribeToIssueEvents,
@@ -418,6 +421,25 @@ function RefreshIcon({ className }: { className?: string }) {
   );
 }
 
+/** Inline-иконка ссылки (MR в шапке задачи). */
+function LinkIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11 4.93" />
+      <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 19.07" />
+    </svg>
+  );
+}
+
 const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)] transition-base';
 const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
@@ -491,6 +513,7 @@ export default function TaskDetail({
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
+  const [workerCount, setWorkerCount] = useState<number>(1);
   const [stepModels, setStepModels] = useState<StepModels>({});
   const [stepThinkingLevels, setStepThinkingLevels] =
     useState<StepThinkingLevels>({});
@@ -509,6 +532,13 @@ export default function TaskDetail({
     Record<string, SessionEvent[]>
   >({});
   const [refreshTick, setRefreshTick] = useState(0);
+  // MR-ссылки в шапке задачи: `storedMergeRequests` — персистентные из
+  // `result.json` (переживают перезагрузку), `liveMrUrls` — из живых
+  // SSE-событий `stream: 'mr'` (мгновенно, но не сохранены в step_outputs).
+  const [storedMergeRequests, setStoredMergeRequests] = useState<
+    ResultMergeRequest[]
+  >([]);
+  const [liveMrUrls, setLiveMrUrls] = useState<string[]>([]);
   const [message, setMessage] = useState('');
   const [messageSending, setMessageSending] = useState(false);
   const [messageError, setMessageError] = useState<string | null>(null);
@@ -516,6 +546,8 @@ export default function TaskDetail({
   const [abortError, setAbortError] = useState<string | null>(null);
   const [repeatingId, setRepeatingId] = useState<string | null>(null);
   const [repeatError, setRepeatError] = useState<string | null>(null);
+  const [fetchingReviewId, setFetchingReviewId] = useState<string | null>(null);
+  const [fetchReviewError, setFetchReviewError] = useState<string | null>(null);
   const [startingDraft, setStartingDraft] = useState(false);
   const [startDraftError, setStartDraftError] = useState<string | null>(null);
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
@@ -807,8 +839,20 @@ export default function TaskDetail({
     setIterationErrors({});
     setDeleting(false);
     setDeleteTimeoutError(null);
+    setLiveMrUrls([]);
 
     const unsubscribe = subscribeToIssueEvents(issueId, {
+      // MR-ссылка шага pr приходит отдельным log-событием `stream: 'mr'`.
+      // Копим её в state, чтобы показать в шапке сразу после создания MR,
+      // не дожидаясь перезагрузки stepRuns/result.json.
+      onLog: (event) => {
+        if (event.stream !== 'mr') return;
+        const url = event.data.trim();
+        if (!url) return;
+        setLiveMrUrls((current) =>
+          current.includes(url) ? current : [...current, url],
+        );
+      },
       onStepEvent: (payload, raw) => {
         const stepRunId = payload.stepRunId ?? raw.stepRunId;
         if (!stepRunId) return;
@@ -1217,6 +1261,31 @@ export default function TaskDetail({
     state.status === 'ready' &&
     (state.issue.desired_result === 'md' ||
       state.issue.desired_result === 'html');
+  // MR-ссылки для шапки: персистентные из result.json + живые из SSE,
+  // дедуп по URL (событие и артефакт дублируют друг друга).
+  const mrItems = useMemo(() => {
+    const byUrl = new Map<string, { url: string; repositoryUrl: string }>();
+    for (const mr of storedMergeRequests) {
+      byUrl.set(mr.url, { url: mr.url, repositoryUrl: mr.repository_url });
+    }
+    for (const url of liveMrUrls) {
+      if (!byUrl.has(url)) byUrl.set(url, { url, repositoryUrl: '' });
+    }
+    return [...byUrl.values()];
+  }, [storedMergeRequests, liveMrUrls]);
+  // pr-шаг успешен и MR был запрошен (create_mr), но ссылки нет: артефакт
+  // result.json не записался (best-effort). Плейсхолдер вместо тишины.
+  const mrMissingLink =
+    mrItems.length === 0 &&
+    state.status === 'ready' &&
+    stepRuns.status === 'ready' &&
+    state.issue.repositories.some((repository) => repository.create_mr) &&
+    stepRuns.stepRuns.some(
+      (run) =>
+        run.step === 'pr' &&
+        statusOf(run) === 'success' &&
+        !parseStepReport(run.report ?? '')?.pr_error,
+    );
   // Порт dev-сервера задачи (выделяет backend). Нет порта → индикатор скрыт.
   const devServerPort =
     state.status === 'ready' ? devServerPortOf(state.issue) : null;
@@ -1262,6 +1331,7 @@ export default function TaskDetail({
   useEffect(() => {
     if (!issueId || !resultReady) {
       setResultFiles([]);
+      setStoredMergeRequests([]);
       return;
     }
     let cancelled = false;
@@ -1271,6 +1341,15 @@ export default function TaskDetail({
       })
       .catch(() => {
         if (!cancelled) setResultFiles([]);
+      });
+    // MR-ссылки: pr-шаг best-effort пишет `result.json` в рабочую папку — это
+    // единственный источник, который доступен после перезагрузки страницы.
+    getResultMergeRequests(issueId)
+      .then((list) => {
+        if (!cancelled) setStoredMergeRequests(list);
+      })
+      .catch(() => {
+        if (!cancelled) setStoredMergeRequests([]);
       });
     return () => {
       cancelled = true;
@@ -1437,6 +1516,7 @@ export default function TaskDetail({
       // текущий выбор (возможно пустой — снимает все галочки), не выбран →
       // пустой массив (сбрасываем create_mr, чтобы `pr` не возвращался).
       pr_repository_ids: selectedSteps.includes('pr') ? [...prRepoIds] : [],
+      worker_count: workerCount > 0 ? workerCount : undefined,
     };
 
     setFormError(null);
@@ -1460,6 +1540,7 @@ export default function TaskDetail({
       setContext('');
       setFiles([]);
       setSelectedSteps(issue?.pipeline_steps ?? []);
+      setWorkerCount(1);
       setScrollToIterations(true);
       setRefreshTick((tick) => tick + 1);
     } catch (error) {
@@ -1571,6 +1652,39 @@ export default function TaskDetail({
       setAbortError(error instanceof Error ? error.message : String(error));
     } finally {
       setAborting(false);
+    }
+  }
+
+  async function handleFetchReview(iteration: Iteration) {
+    if (!issueId) return;
+    if (isIterationActive(iteration.status)) {
+      setFetchReviewError(
+        'Нельзя получить ревью для активной итерации.',
+      );
+      return;
+    }
+    setFetchReviewError(null);
+    setFetchingReviewId(iteration.id);
+
+    try {
+      const created = await fetchReviewComments(iteration.id);
+      const iterations = await getIterations(issueId);
+      setState((current) =>
+        current.status === 'ready'
+          ? {
+              ...current,
+              iterations: [...iterations].sort((a, b) => a.number - b.number),
+            }
+          : current,
+      );
+      setSelectedIterationId(created.id);
+      setRefreshTick((tick) => tick + 1);
+    } catch (error) {
+      setFetchReviewError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setFetchingReviewId(null);
     }
   }
 
@@ -2007,6 +2121,36 @@ export default function TaskDetail({
                 )}
               </div>
             )}
+            {mrItems.length > 0 && (
+              <div
+                data-testid="task-mr-links"
+                className="mt-3 flex flex-wrap items-center gap-2"
+              >
+                {mrItems.map((item) => (
+                  <a
+                    key={item.url}
+                    data-testid="task-mr-link"
+                    href={item.url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    title={item.repositoryUrl || item.url}
+                    className="inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-none border border-[#00FF41] bg-[#003B00]/40 px-3 py-1 font-mono text-xs text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] transition-base"
+                  >
+                    <LinkIcon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="shrink-0">MR:</span>
+                    <span className="truncate">{item.url}</span>
+                  </a>
+                ))}
+              </div>
+            )}
+            {mrMissingLink && (
+              <p
+                data-testid="task-mr-placeholder"
+                className="mt-3 text-xs text-[#00FF41]/60"
+              >
+                MR создан, но ссылка недоступна
+              </p>
+            )}
             {resultAvailable && (
               <div className="mt-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -2249,6 +2393,28 @@ export default function TaskDetail({
                 </div>
               </fieldset>
 
+              <div>
+                <label className={labelClass} htmlFor="worker-count">
+                  Макс. число параллельных агентов
+                </label>
+                <input
+                  id="worker-count"
+                  type="number"
+                  min={0}
+                  max={4}
+                  value={workerCount}
+                  onChange={(event) =>
+                    setWorkerCount(Number(event.target.value) || 0)
+                  }
+                  disabled={!canStart}
+                  className={`${inputClass} w-24`}
+                  data-testid="worker-count-input"
+                />
+                <p className="mt-1 text-xs text-[#00FF41]/40">
+                  0 — без ограничений, 1 — один агент, 2-4 — макс. N в комнате
+                </p>
+              </div>
+
               {/* Репозитории для MR: показываются только при выбранном шаге pr. */}
               {selectedSteps.includes('pr') && prAvailable && (
                 <fieldset data-testid="pr-repositories-section">
@@ -2402,6 +2568,15 @@ export default function TaskDetail({
                 {repeatError}
               </p>
             )}
+            {fetchReviewError && (
+              <p
+                role="alert"
+                data-testid="fetch-review-error"
+                className="mb-3 text-xs font-medium text-[#FF0033]"
+              >
+                {fetchReviewError}
+              </p>
+            )}
 
             {state.iterations.length === 0 ? (
               <div className="rounded-none border border-dashed border-[#008F11] p-6 text-center text-sm text-[#00FF41]/60">
@@ -2473,6 +2648,28 @@ export default function TaskDetail({
                           ? 'Повторяем…'
                           : '↻ Повторить'}
                       </button>
+                      {iteration.steps.includes('pr') &&
+                        iteration.status !== 'running' &&
+                        iteration.status !== 'pending' &&
+                        iteration.status !== 'preparing' && (
+                          <button
+                            type="button"
+                            data-testid="fetch-review"
+                            disabled={
+                              fetchingReviewId === iteration.id ||
+                              isIterationActive(iteration.status)
+                            }
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleFetchReview(iteration);
+                            }}
+                            className="min-h-8 shrink-0 border border-[#00B4FF] bg-[#001018] px-3 py-1 text-xs font-medium text-[#00B4FF] hover:bg-[#00B4FF] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+                          >
+                            {fetchingReviewId === iteration.id
+                              ? 'Загружаем…'
+                              : '📋 Результаты ревью'}
+                          </button>
+                        )}
                     </div>
 
                     {iteration.status === 'running' && abortError && (

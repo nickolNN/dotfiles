@@ -720,6 +720,7 @@ export async function runIteration(
       pipelineSteps: steps,
       devServerPort: input.devServerPort ?? null,
       prTargets,
+      workerCount: iteration.worker_count ?? undefined,
     };
     const runOptions = {
       model,
@@ -1115,7 +1116,7 @@ export function featureBranchName(
   const slug = issueTitle
     .replace(/([A-Z]+-\d+):?\s*/, '')
     .toLowerCase()
-    .replace(/[^a-zа-яё0-9\s-]/g, '')
+    .replace(/[^a-z0-9\s-]/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')

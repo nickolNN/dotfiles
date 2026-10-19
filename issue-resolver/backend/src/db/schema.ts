@@ -81,6 +81,7 @@ export const iterations = sqliteTable(
     step_thinking_levels: text('step_thinking_levels', { mode: 'json' }).$type<
       StepThinkingLevels
     >(),
+    worker_count: integer('worker_count'),
     status: text('status').$type<TaskStatus>().notNull(),
     created_at: text('created_at').notNull(),
     updated_at: text('updated_at').notNull(),

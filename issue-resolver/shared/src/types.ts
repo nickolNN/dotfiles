@@ -114,6 +114,8 @@ export interface Issue {
   updated_at: string;
   /** true — issue есть в БД, но его workspace-папка удалена (осиротевшая задача). */
   workspace_missing?: boolean;
+  /** Макс. число параллельных воркеров из последней итерации (0 — без ограничений). */
+  worker_count?: number;
 }
 
 export interface Iteration {
@@ -135,6 +137,8 @@ export interface Iteration {
   thinking_level?: ThinkingLevel | null;
   /** Пер-шаговые уровни размышления; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
+  /** Макс. число параллельных воркеров (0 — без ограничений). */
+  worker_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -190,6 +194,8 @@ export interface CreateIssueRequest {
   thinking_level?: ThinkingLevel;
   /** Уровень размышления на конкретный шаг; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
+  /** Макс. число параллельных воркеров для resolve (0 — без ограничений). */
+  worker_count?: number;
   /**
    * `true` (по умолчанию) — запустить конвейер сразу после создания.
    * `false` — сохранить задачу как черновик (статус `draft`, без
@@ -211,6 +217,8 @@ export interface CreateIterationRequest {
   thinking_level?: ThinkingLevel;
   /** Уровень размышления на конкретный шаг; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
+  /** Макс. число параллельных воркеров для resolve (0 — без ограничений). */
+  worker_count?: number;
   /** ID репозиториев, для которых включён create_mr (из секции pr-шага). */
   pr_repository_ids?: string[];
 }

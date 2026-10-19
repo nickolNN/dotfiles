@@ -219,6 +219,9 @@ function ensureIterationColumns(sqlite: Database.Database): void {
   if (!columns.has('step_thinking_levels')) {
     sqlite.exec('ALTER TABLE iterations ADD COLUMN step_thinking_levels TEXT');
   }
+  if (!columns.has('worker_count')) {
+    sqlite.exec('ALTER TABLE iterations ADD COLUMN worker_count INTEGER');
+  }
 }
 
 function ensureIssueRepositoryColumns(sqlite: Database.Database): void {
