@@ -4,7 +4,7 @@ import {
   type ContainerStatsPayload,
 } from './api/sse';
 import { formatBytes, healthColor } from './lib/containerStats';
-import { API_BASE } from './api/client';
+import { API_BASE, getHostname } from './api/client';
 import NewIssue from './views/NewIssue';
 import Repositories from './views/Repositories';
 import Settings from './views/Settings';
@@ -167,6 +167,24 @@ export default function App() {
   // Приходит по SSE `container_stats` из потока задачи.
   const [containerStats, setContainerStats] =
     useState<ContainerStatsPayload | null>(null);
+  // Hostname инстанса задаёт заголовок вкладки. Держим его в App, а не в
+  // Settings: заголовок должен переживать перезагрузку и работать на всех
+  // страницах, а не только на «Настройках».
+  const [hostname, setHostname] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    void getHostname().then((value) => {
+      if (!cancelled) setHostname(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    document.title = hostname || 'Issue Resolver';
+  }, [hostname]);
+
   useEffect(() => {
     const onHashChange = () => setRoute(parseHash());
     window.addEventListener('hashchange', onHashChange);
@@ -350,7 +368,9 @@ export default function App() {
           <Repositories createSignal={repoCreateSignal} />
         )}
         {view === 'tags' && <Tags createSignal={tagCreateSignal} />}
-        {view === 'settings' && <Settings />}
+        {view === 'settings' && (
+          <Settings hostname={hostname} onHostnameChange={setHostname} />
+        )}
         {view === 'tasks' && (
           <TasksList onOpenTask={openTask} onOpenResult={openResult} />
         )}

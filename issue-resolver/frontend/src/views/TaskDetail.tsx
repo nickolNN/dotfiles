@@ -3683,13 +3683,20 @@ function InlineQuestion({
       data-testid="inline-question"
       className="border border-[#FFB000] bg-[#1A1000] p-3"
     >
-      <header className="mb-2 flex items-center gap-2">
+      <header className="mb-2 flex items-center justify-between">
         <span className="text-xs font-semibold text-[#FFB000]">
           Агент спрашивает
         </span>
-        <span className="text-[10px] uppercase tracking-wider text-[#FFB000]/50">
-          {question.method}
-        </span>
+        <button
+          type="button"
+          data-testid="question-close"
+          aria-label="Закрыть"
+          disabled={submitting}
+          onClick={onCancel}
+          className="text-[#FFB000]/50 hover:text-[#FFB000] disabled:opacity-50 transition-base"
+        >
+          ✕
+        </button>
       </header>
 
       <p className="break-words text-sm text-[#FFB000]">{question.title}</p>

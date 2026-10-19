@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { cleanupOrphans, getHostname, setHostname } from '../api/client';
+import { cleanupOrphans, setHostname } from '../api/client';
 import type { CleanupResult } from '../api/client';
 
 /** Поле ввода в теме — тот же стиль, что и в форме создания задачи (NewIssue). */
 const FIELD_CLASS =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
 
-/**
- * Страница настроек: единственное поле — hostname инстанса. Загружает текущее
- * значение из бэкенда, сохраняет по кнопке и на 2 секунды показывает «Сохранено».
- */
 function CleanupButton() {
   const [cleaning, setCleaning] = useState(false);
   const [result, setResult] = useState<CleanupResult | null>(null);
@@ -63,30 +59,33 @@ function CleanupButton() {
   );
 }
 
-export default function Settings() {
-  const [hostname, setHostnameValue] = useState('');
-  const [draft, setDraft] = useState('');
+interface SettingsProps {
+  /** Текущий hostname инстанса; App грузит его при старте и держит в состоянии. */
+  hostname: string;
+  /** Сообщает App новый hostname — он же обновляет заголовок вкладки. */
+  onHostnameChange: (value: string) => void;
+}
+
+/**
+ * Страница настроек: единственное поле — hostname инстанса. Значение приходит
+ * из App (оно же задаёт заголовок вкладки); сохраняем по кнопке и на 2 секунды
+ * показываем «Сохранено».
+ */
+export default function Settings({
+  hostname,
+  onHostnameChange,
+}: SettingsProps) {
+  const [draft, setDraft] = useState(hostname);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const savedTimer = useRef<number | null>(null);
 
-  // Забираем текущий hostname при открытии страницы.
+  // App подтягивает hostname асинхронно: если значение пришло уже после
+  // монтирования страницы (в т.ч. при перезагрузке сразу на /settings) —
+  // отражаем его в поле.
   useEffect(() => {
-    let cancelled = false;
-    void getHostname().then((value) => {
-      if (cancelled) return;
-      setHostnameValue(value);
-      setDraft(value);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Заголовок вкладки отражает hostname при загрузке и после сохранения.
-  useEffect(() => {
-    document.title = hostname || 'Issue Resolver';
+    setDraft(hostname);
   }, [hostname]);
 
   // Чистим таймер «Сохранено» при размонтировании.
@@ -103,7 +102,7 @@ export default function Settings() {
     setError(null);
     try {
       await setHostname(next);
-      setHostnameValue(next);
+      onHostnameChange(next);
       setDraft(next);
       setSaved(true);
       if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
