@@ -26,6 +26,7 @@ import {
   createIteration,
   createIterationWithFiles,
   deleteIssueFile,
+  devServerPortOf,
   fetchReviewComments,
   getIssue,
   getIssueFiles,
@@ -1301,10 +1302,11 @@ export default function TaskDetail({
             workspaceProgress?.steps ?? [],
             workspaceReady,
           ),
-          devPort: repoDevPort(
-            extractRepoNameFromUrl(repository.repository_url),
-            workspaceProgress?.steps ?? [],
-          ),
+          devPort:
+            repoDevPort(
+              extractRepoNameFromUrl(repository.repository_url),
+              workspaceProgress?.steps ?? [],
+            ) ?? devServerPortOf(state.issue) ?? undefined,
         }))
       : [];
 
@@ -3326,7 +3328,7 @@ export default function TaskDetail({
                 <SessionView
                   events={expandedEvents}
                   stats={expandedStepRun.stats ?? null}
-                  showFooter={true}
+                  showFooter={false}
                   infoOnly={true}
                   running={isActiveStatus(statusOf(expandedStepRun))}
                   startedAt={expandedStepRun.created_at}
