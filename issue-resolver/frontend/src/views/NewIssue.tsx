@@ -1,28 +1,35 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import {
+  useContext,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
+import {
+  QueryClient,
+  QueryClientContext,
+  QueryClientProvider,
+} from '@tanstack/react-query';
 import type {
   CreateIssueRequest,
   DesiredResult,
   Issue,
   ModelDescriptor,
   PipelineStep,
-  SavedRepo,
   StepModels,
   StepThinkingLevels,
-  Tag,
   ThinkingLevel,
 } from '@issue-resolver/shared';
-import {
-  createIssue,
-  createIssueWithFiles,
-  getModels,
-  getRepositories,
-  getRepositoryBranches,
-  getTags,
-} from '../api/client';
+import { getModels, getRepositoryBranches } from '../api/client';
 import FilePicker from '../components/FilePicker';
 import JiraIssueUrlInput from '../components/JiraIssueUrlInput';
 import MarkdownEditor from '../components/MarkdownEditor';
 import { thinkingLevelsFor } from '../constants/thinking-levels';
+import {
+  useCreateIssue,
+  useSavedRepos,
+  useTags,
+} from '../stores/queries';
 
 /** Шаг пайплайна: одна строка = чекбокс шага + inline-селектор его модели. */
 const MODEL_STEPS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
@@ -68,16 +75,51 @@ interface RepoRow {
   branchesLoading: boolean;
 }
 
-export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
+export default function NewIssue(props: NewIssueProps) {
+  return (
+    <NewIssueQueryBoundary>
+      <NewIssueView {...props} />
+    </NewIssueQueryBoundary>
+  );
+}
+
+/**
+ * Гарантирует наличие QueryClient. В приложении провайдер ставит `main.tsx`,
+ * но форма в тестах монтируется напрямую — без провайдера любой `useQuery`
+ * бросил бы «No QueryClient set». Если провайдер уже есть — пробрасываем
+ * детей в общий клиент приложения; иначе создаём локальный клиент на время
+ * жизни формы, чтобы тесты не делили кэш между собой.
+ */
+function NewIssueQueryBoundary({ children }: { children: ReactNode }) {
+  const existing = useContext(QueryClientContext);
+  const [fallbackClient] = useState(() =>
+    existing === undefined
+      ? new QueryClient({
+          defaultOptions: {
+            queries: {
+              staleTime: 30_000,
+              refetchOnWindowFocus: false,
+              retry: false,
+            },
+          },
+        })
+      : null,
+  );
+
+  if (existing !== undefined || fallbackClient === null) {
+    return <>{children}</>;
+  }
+  return (
+    <QueryClientProvider client={fallbackClient}>
+      {children}
+    </QueryClientProvider>
+  );
+}
+
+function NewIssueView({ onCreated, onBack }: NewIssueProps) {
   const [title, setTitle] = useState('');
   const [jiraIssueUrl, setJiraIssueUrl] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [repositories, setRepositories] = useState<RepoRow[]>([]);
-  const [savedRepos, setSavedRepos] = useState<SavedRepo[]>([]);
-  const [savedReposLoading, setSavedReposLoading] = useState(true);
-  const [savedReposError, setSavedReposError] = useState<string | null>(null);
-  const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTagId, setSelectedTagId] = useState('');
   const [additionalContext, setAdditionalContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -93,6 +135,28 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   const [desiredResult, setDesiredResult] = useState<DesiredResult>('md');
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
+
+  // Серверные данные формы: сохранённые репозитории и теги — через react-query.
+  const {
+    data: savedRepos = [],
+    isLoading: savedReposLoading,
+    error: savedReposError,
+  } = useSavedRepos();
+  const { data: tags = [] } = useTags();
+  const createMutation = useCreateIssue();
+  const submitting = createMutation.isPending;
+  const error =
+    createMutation.error instanceof Error
+      ? createMutation.error.message
+      : createMutation.error
+        ? String(createMutation.error)
+        : null;
+  const savedReposErrorText =
+    savedReposError instanceof Error
+      ? savedReposError.message
+      : savedReposError
+        ? String(savedReposError)
+        : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -118,50 +182,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
     };
   }, []);
 
-  // Сохранённые репозитории для селектора: грузим один раз при монтировании.
-  useEffect(() => {
-    let cancelled = false;
-    setSavedReposLoading(true);
-
-    getRepositories()
-      .then((list) => {
-        if (cancelled) return;
-        setSavedRepos(Array.isArray(list) ? list : []);
-        setSavedReposError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setSavedRepos([]);
-        setSavedReposError(
-          err instanceof Error ? err.message : 'Не удалось загрузить репозитории',
-        );
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setSavedReposLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Теги для быстрого добавления их репозиториев: грузим один раз.
-  useEffect(() => {
-    let cancelled = false;
-    getTags()
-      .then((list) => {
-        if (cancelled) return;
-        setTags(Array.isArray(list) ? list : []);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setTags([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Сохранённые репозитории и теги грузятся react-query хуками выше.
 
   function updateBaseBranch(index: number, value: string) {
     setRepositories((current) =>
@@ -374,10 +395,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
   );
 
   /** Собрать payload и отправить — общая для «Запустить» и «Сохранить». */
-  async function submitIssue(runImmediately: boolean) {
-    setError(null);
-    setSubmitting(true);
-
+  function submitIssue(runImmediately: boolean) {
     // В тело идут только модели выбранных шагов.
     const activeStepModels = Object.fromEntries(
       Object.entries(stepModels).filter(([step]) =>
@@ -426,28 +444,25 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
       worker_count: workerCount > 0 ? workerCount : undefined,
     };
 
-    try {
-      const issue =
-        files.length > 0
-          ? await createIssueWithFiles(payload, files)
-          : await createIssue(payload);
-      setFiles([]);
-      onCreated?.(issue);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
+    createMutation.mutate(
+      { request: payload, files },
+      {
+        onSuccess: (issue) => {
+          setFiles([]);
+          onCreated?.(issue);
+        },
+      },
+    );
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await submitIssue(true);
+    submitIssue(true);
   }
 
-  async function handleSave(event: React.MouseEvent) {
+  function handleSave(event: React.MouseEvent) {
     event.preventDefault();
-    await submitIssue(false);
+    submitIssue(false);
   }
 
   return (
@@ -534,9 +549,9 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
             </button>
           </div>
           <div className="space-y-3">
-            {savedReposError && (
+            {savedReposErrorText && (
               <p role="alert" className="text-xs font-medium text-[#FF0033]">
-                {savedReposError}
+                {savedReposErrorText}
               </p>
             )}
             {repositories.map((repository, index) => {

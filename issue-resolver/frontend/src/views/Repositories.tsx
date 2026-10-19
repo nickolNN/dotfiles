@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   extractRepoNameFromUrl,
   formatRelativeTime,
@@ -6,13 +7,15 @@ import {
   type RepoInfo,
   type SavedRepo,
 } from '@issue-resolver/shared';
+import { validateRepository } from '../api/client';
 import {
-  createRepository,
-  deleteRepository,
-  getRepositories,
-  updateRepository,
-  validateRepository,
-} from '../api/client';
+  useCreateRepository,
+  useDeleteRepository,
+  useRepositories,
+  useUpdateRepository,
+  writeRepositoryToCache,
+} from '../stores/queries';
+import QueryBoundary from '../components/QueryBoundary';
 import RepoUrlInput, {
   PLATFORM_CHIP_CLASSES,
   PLATFORM_LABELS,
@@ -247,11 +250,6 @@ function RepoFormDialog({
   );
 }
 
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; repos: SavedRepo[] };
-
 type DialogState = { mode: 'create' } | { mode: 'edit'; repo: SavedRepo };
 
 interface RepositoriesProps {
@@ -263,49 +261,33 @@ interface RepositoriesProps {
 }
 
 /** Страница управления сохранёнными репозиториями (CRUD + live-валидация). */
-export default function Repositories({ createSignal }: RepositoriesProps) {
-  const [state, setState] = useState<LoadState>({ status: 'loading' });
+export default function Repositories(props: RepositoriesProps) {
+  return (
+    <QueryBoundary>
+      <RepositoriesView {...props} />
+    </QueryBoundary>
+  );
+}
+
+function RepositoriesView({ createSignal }: RepositoriesProps) {
+  const queryClient = useQueryClient();
+  const { data, isLoading, error, refetch } = useRepositories();
+  const repos = Array.isArray(data) ? data : [];
+
+  const createMutation = useCreateRepository();
+  const updateMutation = useUpdateRepository();
+  const deleteMutation = useDeleteRepository();
+
   const [dialog, setDialog] = useState<DialogState | null>(null);
-  const [saving, setSaving] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setState({ status: 'loading' });
-    try {
-      const repos = await getRepositories();
-      setState({ status: 'ready', repos });
-    } catch (err) {
-      setState({
-        status: 'error',
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const saving = createMutation.isPending || updateMutation.isPending;
 
   useEffect(() => {
     if (createSignal && createSignal > 0) openCreate();
   }, [createSignal]);
-
-  const repos = state.status === 'ready' ? state.repos : [];
-
-  function upsert(repo: SavedRepo) {
-    setState((current) => {
-      if (current.status !== 'ready') return current;
-      const exists = current.repos.some((item) => item.id === repo.id);
-      return {
-        status: 'ready',
-        repos: exists
-          ? current.repos.map((item) => (item.id === repo.id ? repo : item))
-          : [...current.repos, repo],
-      };
-    });
-  }
 
   function openCreate() {
     setDialogError(null);
@@ -317,25 +299,26 @@ export default function Repositories({ createSignal }: RepositoriesProps) {
     setDialog({ mode: 'edit', repo });
   }
 
-  async function handleSave(url: string) {
-    setSaving(true);
+  function finishSave(repo: SavedRepo) {
+    setDialog(null);
+    setNotice(
+      repo.connectionStatus === 'ok'
+        ? null
+        : `Репозиторий ${repo.url} сохранён, но соединение не подтверждено`,
+    );
+  }
+
+  function handleSave(url: string) {
     setDialogError(null);
-    try {
-      const repo =
-        dialog?.mode === 'edit'
-          ? await updateRepository(dialog.repo.id, url)
-          : await createRepository(url);
-      upsert(repo);
-      setDialog(null);
-      setNotice(
-        repo.connectionStatus === 'ok'
-          ? null
-          : `Репозиторий ${repo.url} сохранён, но соединение не подтверждено`,
-      );
-    } catch (err) {
+    const onError = (err: unknown) =>
       setDialogError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
+    if (dialog?.mode === 'edit') {
+      updateMutation.mutate(
+        { id: dialog.repo.id, url },
+        { onSuccess: finishSave, onError },
+      );
+    } else {
+      createMutation.mutate(url, { onSuccess: finishSave, onError });
     }
   }
 
@@ -344,7 +327,7 @@ export default function Repositories({ createSignal }: RepositoriesProps) {
     setNotice(null);
     try {
       const saved = await validateRepository(repo.id);
-      upsert(saved);
+      writeRepositoryToCache(queryClient, saved);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : String(err));
     } finally {
@@ -352,25 +335,15 @@ export default function Repositories({ createSignal }: RepositoriesProps) {
     }
   }
 
-  async function handleDelete(repo: SavedRepo) {
+  function handleDelete(repo: SavedRepo) {
     if (!window.confirm(`Удалить репозиторий ${repo.url}?`)) return;
     setBusyId(repo.id);
     setNotice(null);
-    try {
-      await deleteRepository(repo.id);
-      setState((current) =>
-        current.status === 'ready'
-          ? {
-              status: 'ready',
-              repos: current.repos.filter((item) => item.id !== repo.id),
-            }
-          : current,
-      );
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyId(null);
-    }
+    deleteMutation.mutate(repo.id, {
+      onError: (err) =>
+        setNotice(err instanceof Error ? err.message : String(err)),
+      onSettled: () => setBusyId(null),
+    });
   }
 
   return (
@@ -385,28 +358,32 @@ export default function Repositories({ createSignal }: RepositoriesProps) {
         </p>
       )}
 
-      {state.status === 'loading' && (
+      {isLoading && (
         <p className="text-sm text-[#00FF41]/60">Загружаем репозитории…</p>
       )}
 
-      {state.status === 'error' && (
+      {error && !isLoading && (
         <div className="space-y-2">
           <p role="alert" className="text-sm font-medium text-[#FF0033]">
-            {state.message}
+            {error instanceof Error ? error.message : String(error)}
           </p>
-          <button type="button" className={btnSecondary} onClick={() => void load()}>
+          <button
+            type="button"
+            className={btnSecondary}
+            onClick={() => void refetch()}
+          >
             Повторить
           </button>
         </div>
       )}
 
-      {state.status === 'ready' && repos.length === 0 && (
+      {!isLoading && !error && repos.length === 0 && (
         <p data-testid="repo-list-empty" className="text-sm text-[#00FF41]/50">
           Пока нет сохранённых репозиториев. Добавьте первый.
         </p>
       )}
 
-      {state.status === 'ready' && repos.length > 0 && (
+      {!isLoading && !error && repos.length > 0 && (
         <ul className="grid grid-cols-1 gap-2">
           {repos.map((repo, index) => {
             const busy = busyId === repo.id;
