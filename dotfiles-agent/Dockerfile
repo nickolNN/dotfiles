@@ -137,6 +137,11 @@ RUN playwright install-deps chromium firefox webkit \
        echo "Playwright browser install attempt $i failed, retrying..."; sleep 5; \
        [ "$i" -lt 3 ] || { echo "FATAL: playwright install failed after 3 attempts"; exit 1; }; \
      done \
+  # playwright install создаёт .links/ с правами 755 (root-only запись) —
+  # без chmod -R последующие вызовы playwright install (в т.ч. из проектов,
+  # где агент работает под uid 1000) падают с EACCES на .links/. Рекурсивный
+  # chmod после установки чинит это для всех агентов в контейнере.
+  && chmod -R 777 "$PLAYWRIGHT_BROWSERS_PATH" \
   # Puppeteer's Chrome-for-Testing would duplicate the Playwright Chromium
   # installed just above. The puppeteer API stays available, but resolves the
   # shared system Chromium via PUPPETEER_EXECUTABLE_PATH (set with the
