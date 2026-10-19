@@ -33,7 +33,7 @@ const MODEL_STEPS: ReadonlyArray<{ value: PipelineStep; label: string }> = [
   { value: 'pr', label: 'Merge Request' },
 ];
 
-/** Желаемый результат задачи: формат артефакта (md/html). */
+/** Желаемый отчёт: формат (md/html). */
 const DESIRED_RESULTS: ReadonlyArray<{ value: DesiredResult; label: string }> = [
   { value: 'md', label: 'Markdown (.md)' },
   { value: 'html', label: 'HTML (.html)' },
@@ -668,7 +668,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
             <p className="mt-2 text-xs text-[#00FF41]/50">
               {!savedReposLoading && savedRepos.length === 0
                 ? 'Нет сохранённых репозиториев — добавьте их на странице «Репозитории»'
-                : 'Можно без репозиториев — агент запишет результаты в папку задачи'}
+                : 'Можно без репозиториев — агент запишет отчёт в папку задачи'}
             </p>
           )}
         </fieldset>
@@ -738,7 +738,7 @@ export default function NewIssue({ onCreated, onBack }: NewIssueProps) {
 
         <fieldset data-testid="desired-result">
           <legend className="mb-2 text-sm font-medium text-[#00FF41]/80">
-            Желаемый результат
+            Желаемый отчёт
           </legend>
           <div className="space-y-2">
             {DESIRED_RESULTS.map((option) => (

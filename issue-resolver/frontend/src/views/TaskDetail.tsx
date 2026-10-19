@@ -428,12 +428,12 @@ const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
 
 interface TaskDetailProps {
   issueId?: string | null;
-  /** Открыть модалку результата сразу после загрузки (deep-link `…/result`). */
+  /** Открыть модалку отчёта сразу после загрузки (deep-link `…/result`). */
   autoOpenResult?: boolean;
 }
 
 /**
- * Имя файла результата для атрибута `download`: без него браузер при 404
+ * Имя файла отчёта для атрибута `download`: без него браузер при 404
  * (JSON-тело) сохранял бы `download.json` вместо осмысленного имени.
  */
 function resultFilenameFor(desiredResult: Issue['desired_result']): string {
@@ -490,7 +490,7 @@ export default function TaskDetail({
   const [files, setFiles] = useState<File[]>([]);
   const [issueFiles, setIssueFiles] = useState<IssueFile[]>([]);
   // Файлы, порождённые агентом в рабочей папке последней completed-итерации
-  // (кроме самого артефакта результата).
+  // (кроме самого артефакта отчёта).
   const [resultFiles, setResultFiles] = useState<WorkspaceFile[]>([]);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
@@ -1083,7 +1083,7 @@ export default function TaskDetail({
   }, [jiraPreviewOpen]);
 
   // Deep-link из списка задач: `#/tasks/<id>/result` сразу открывает
-  // модалку результата после готовности задачи. `openResult` — function
+  // модалку отчёта после готовности задачи. `openResult` — function
   // declaration (hoisted), поэтому доступен здесь. Одноразово: ref гасит
   // повторные срабатывания на ре-рендерах.
   const autoOpenedResultRef = useRef(false);
@@ -1273,7 +1273,7 @@ export default function TaskDetail({
   }, [storedMergeRequests, liveMrUrls]);
 
 
-  // Готов ли результат задачи: эндпоинт отдаёт результат последней
+  // Готов ли отчёт: эндпоинт отдаёт отчёт последней
   // completed-итерации, а снапшот создаётся в момент её завершения. Значит
   // готовность = есть хоть одна завершённая итерация (не важно, что лежит
   // в отчёте resolve-шага).
@@ -1312,7 +1312,7 @@ export default function TaskDetail({
 
   // Список порождённых файлов. Best-effort: сеть/не-2xx → пустой список,
   // чтобы шапка не падала. Перезагружается с refreshTick (терминал итерации,
-  // новая итерация) и когда результат становится готов.
+  // новая итерация) и когда отчёт становится готов.
   useEffect(() => {
     if (!issueId || !resultReady) {
       setResultFiles([]);
@@ -2183,7 +2183,7 @@ export default function TaskDetail({
                     onClick={() => void openResult()}
                     className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[#003B00] disabled:hover:text-[#00FF41] transition-base"
                   >
-                    Показать результат
+                    Показать отчёт
                   </button>
                   <a
                     data-testid="download-result"
@@ -3137,23 +3137,23 @@ export default function TaskDetail({
                 <iframe
                   data-testid="result-html"
                   src={`/issue-resolver/api/v1/issues/${state.issue.id}/result`}
-                  title="Результат"
+                  title="Отчёт"
                   className="h-full w-full border border-[#008F11] bg-white"
                 />
               ) : resultLoading ? (
                 <p className="text-sm text-[#00FF41]/60">
-                  Загрузка результата…
+                  Загрузка отчёта…
                 </p>
               ) : resultError === 'missing' ? (
                 <p className="text-sm text-[#00FF41]/60">
-                  Результат ещё не создан
+                  Отчёт ещё не создан
                 </p>
               ) : resultError === 'error' ? (
                 <p
                   role="alert"
                   className="text-sm font-medium text-[#FF0033]"
                 >
-                  Не удалось загрузить результат
+                  Не удалось загрузить отчёт
                 </p>
               ) : resultText !== null ? (
                 <div data-testid="result-markdown">
@@ -3449,7 +3449,7 @@ export default function TaskDetail({
 
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <form
-                    className="flex min-w-0 flex-1 flex-wrap gap-2"
+                    className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
                     onSubmit={(event) => {
                       event.preventDefault();
                       if (activeIterationId) {
@@ -3457,26 +3457,10 @@ export default function TaskDetail({
                       }
                     }}
                   >
-                    {controlSnapshot && (
-                      <select
-                        data-testid="send-mode"
-                        aria-label="Режим отправки"
-                        className={`${inputClass} w-auto py-1`}
-                        value={sendMode}
-                        disabled={messageSending}
-                        onChange={(event) =>
-                          setSendMode(event.target.value as SendMode)
-                        }
-                      >
-                        <option value="prompt">prompt</option>
-                        <option value="steer">steer</option>
-                        <option value="followUp">follow-up</option>
-                      </select>
-                    )}
                     <input
                       type="text"
                       aria-label="Сообщение"
-                      className={`${inputClass} min-w-0 flex-1`}
+                      className={`${inputClass} min-w-0 flex-1 order-1 sm:order-2`}
                       value={message}
                       onChange={(event) => setMessage(event.target.value)}
                       onKeyDown={(event) => {
@@ -3503,10 +3487,26 @@ export default function TaskDetail({
                       placeholder="Написать этому агенту…"
                       disabled={messageSending}
                     />
+                    {controlSnapshot && (
+                      <select
+                        data-testid="send-mode"
+                        aria-label="Режим отправки"
+                        className={`${inputClass} w-auto py-1 order-2 sm:order-1`}
+                        value={sendMode}
+                        disabled={messageSending}
+                        onChange={(event) =>
+                          setSendMode(event.target.value as SendMode)
+                        }
+                      >
+                        <option value="prompt">prompt</option>
+                        <option value="steer">steer</option>
+                        <option value="followUp">follow-up</option>
+                      </select>
+                    )}
                     <button
                       type="submit"
                       disabled={!message.trim() || messageSending}
-                      className="min-h-9 shrink-0 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50 transition-base"
+                      className="min-h-9 shrink-0 rounded-none border border-[#00FF41] bg-[#003B00] px-3 py-1 text-xs font-medium text-[#00FF41] disabled:opacity-50 transition-base order-3"
                     >
                       {messageSending ? 'Отправка…' : 'Отправить'}
                     </button>

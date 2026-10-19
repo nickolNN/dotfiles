@@ -554,7 +554,7 @@ describe('TasksList', () => {
     expect(screen.queryByTestId('issue-timer')).toBeNull();
   });
 
-  it('completed-задача с md/html-результатом рендерит «Просмотр» и навигирует по нему', async () => {
+  it('completed-задача с md/html-отчётом рендерит «Просмотр» и навигирует по нему', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -578,17 +578,17 @@ describe('TasksList', () => {
 
     const resultCell = screen.getByTestId('result-cell');
     const viewButton = within(resultCell).getByRole('button', {
-      name: 'Просмотреть результат Done task',
+      name: 'Просмотреть отчёт Done task',
     });
-    expect(viewButton).toHaveAttribute('title', 'Просмотреть результат');
+    expect(viewButton).toHaveAttribute('title', 'Просмотреть отчёт');
 
     fireEvent.click(viewButton);
     expect(onOpenResult).toHaveBeenCalledWith('1');
-    // Кнопка результата не должна открывать саму задачу (это делает row-click).
+    // Кнопка отчёта не должна открывать саму задачу (это делает row-click).
     expect(onOpenTask).not.toHaveBeenCalled();
   });
 
-  it('running-задача без результата → прочерк и без кнопки просмотра', async () => {
+  it('running-задача без отчёта → прочерк и без кнопки просмотра', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({

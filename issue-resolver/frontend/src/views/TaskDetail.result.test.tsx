@@ -79,8 +79,8 @@ function textResponse(
 }
 
 /** fetch-мок: /result отдаёт resultResponse, остальное — issue/iterations/
- * step-runs. Готовность результата определяется статусом итерации (снапшот
- * создаётся на completed), поэтому тесты неготового результата передают
+ * step-runs. Готовность отчёта определяется статусом итерации (снапшот
+ * создаётся на completed), поэтому тесты неготового отчёта передают
  * свой список итераций; по умолчанию одна completed-итерация. */
 function stubFetch(
   issue: Issue,
@@ -118,8 +118,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('TaskDetail — просмотр результата', () => {
-  it('desired_result md → кнопки «Показать результат» и «Скачать»', async () => {
+describe('TaskDetail — просмотр отчёта', () => {
+  it('desired_result md → кнопки «Показать отчёт» и «Скачать»', async () => {
     stubFetch(makeIssue({ desired_result: 'md' }), () =>
       textResponse('# Итог'),
     );
@@ -128,7 +128,7 @@ describe('TaskDetail — просмотр результата', () => {
     await screen.findByText('Fix login bug');
 
     expect(screen.getByTestId('open-result')).toHaveTextContent(
-      'Показать результат',
+      'Показать отчёт',
     );
     const download = screen.getByTestId('download-result');
     expect(download).toHaveAttribute(
@@ -138,7 +138,7 @@ describe('TaskDetail — просмотр результата', () => {
     expect(download).toHaveAttribute('download');
   });
 
-  it('итерация без completed → кнопки результата disabled', async () => {
+  it('итерация без completed → кнопки отчёта disabled', async () => {
     stubFetch(
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
@@ -156,7 +156,7 @@ describe('TaskDetail — просмотр результата', () => {
     expect(download.className).toContain('cursor-not-allowed');
   });
 
-  it('пустой список итераций → кнопки результата disabled', async () => {
+  it('пустой список итераций → кнопки отчёта disabled', async () => {
     stubFetch(
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
@@ -194,7 +194,7 @@ describe('TaskDetail — просмотр результата', () => {
     );
   });
 
-  it('md: клик открывает модалку и рендерит markdown результата', async () => {
+  it('md: клик открывает модалку и рендерит markdown отчёта', async () => {
     const fetchMock = stubFetch(makeIssue({ desired_result: 'md' }), () =>
       textResponse('## Итог\nвсё хорошо'),
     );
@@ -212,7 +212,7 @@ describe('TaskDetail — просмотр результата', () => {
     ).toBe(true);
   });
 
-  it('md: 404 → «Результат ещё не создан»', async () => {
+  it('md: 404 → «Отчёт ещё не создан»', async () => {
     stubFetch(makeIssue({ desired_result: 'md' }), () =>
       textResponse('', { ok: false, status: 404 }),
     );
@@ -222,7 +222,7 @@ describe('TaskDetail — просмотр результата', () => {
     await clickOpenResult();
 
     expect(
-      await screen.findByText('Результат ещё не создан'),
+      await screen.findByText('Отчёт ещё не создан'),
     ).toBeInTheDocument();
   });
 
@@ -236,7 +236,7 @@ describe('TaskDetail — просмотр результата', () => {
     await clickOpenResult();
 
     const modal = await screen.findByTestId('result-modal');
-    const frame = within(modal).getByTitle('Результат');
+    const frame = within(modal).getByTitle('Отчёт');
     expect(frame.tagName).toBe('IFRAME');
     expect(frame).toHaveAttribute('src', RESULT_URL);
   });
@@ -249,12 +249,12 @@ describe('TaskDetail — просмотр результата', () => {
     render(<TaskDetail issueId="issue-1" autoOpenResult />);
 
     const modal = await screen.findByTestId('result-modal');
-    const frame = within(modal).getByTitle('Результат');
+    const frame = within(modal).getByTitle('Отчёт');
     expect(frame.tagName).toBe('IFRAME');
     expect(frame).toHaveAttribute('src', RESULT_URL);
   });
 
-  it('модалку результата можно закрыть', async () => {
+  it('модалку отчёта можно закрыть', async () => {
     stubFetch(makeIssue({ desired_result: 'md' }), () =>
       textResponse('# Итог'),
     );
@@ -268,7 +268,7 @@ describe('TaskDetail — просмотр результата', () => {
     expect(screen.queryByTestId('result-modal')).toBeNull();
   });
 
-  it('desired_result не задан → кнопок результата нет', async () => {
+  it('desired_result не задан → кнопок отчёта нет', async () => {
     stubFetch(makeIssue(), () => textResponse('# Итог'));
 
     render(<TaskDetail issueId="issue-1" />);

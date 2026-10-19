@@ -230,7 +230,7 @@ function RepoReadinessLine({
   );
 }
 
-/** Просматриваемый результат есть у завершённой задачи с md/html-артефактом. */
+/** Просматриваемый отчёт есть у завершённой задачи с md/html-артефактом. */
 function hasViewableResult(issue: Issue): boolean {
   return (
     issue.status === 'completed' &&
@@ -1013,8 +1013,8 @@ export default function TasksList({ onOpenTask, onOpenResult }: TasksListProps) 
                             {hasViewableResult(issue) ? (
                               <button
                                 type="button"
-                                aria-label={`Просмотреть результат ${issueKey(issue)}`}
-                                title="Просмотреть результат"
+                                aria-label={`Просмотреть отчёт ${issueKey(issue)}`}
+                                title="Просмотреть отчёт"
                                 className="rounded-none border border-[#008F11] px-2 py-1 text-xs text-[#00FF41] hover:bg-[#008F11]/20 transition-base"
                                 onClick={(event) => {
                                   event.stopPropagation();

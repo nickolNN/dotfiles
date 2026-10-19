@@ -109,8 +109,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('TaskDetail — порождённые файлы результата', () => {
-  it('готовый результат + файлы → кнопка «Артефакты (2)», клик открывает модалку со ссылками', async () => {
+describe('TaskDetail — порождённые файлы отчёта', () => {
+  it('готовый отчёт + файлы → кнопка «Артефакты (2)», клик открывает модалку со ссылками', async () => {
     const files: WorkspaceFile[] = [
       {
         name: 'index.html',
@@ -189,7 +189,7 @@ describe('TaskDetail — порождённые файлы результата'
     expect(screen.queryByTestId('result-files')).toBeNull();
     expect(screen.queryByTestId('result-file-download')).toBeNull();
     expect(screen.queryByTestId('artifacts-modal')).toBeNull();
-    // сама кнопка «Скачать» результата на месте
+    // сама кнопка «Скачать» отчёта на месте
     expect(screen.getByTestId('download-result')).toBeInTheDocument();
   });
 
@@ -233,7 +233,7 @@ describe('TaskDetail — порождённые файлы результата'
     },
   );
 
-  it('пока результат не готов — архив задизейблен и клик отбит', async () => {
+  it('пока отчёт не готов — архив задизейблен и клик отбит', async () => {
     // Итераций нет → resultReady = false.
     stubFetch(makeIssue({ desired_result: 'html' }), [], []);
 
