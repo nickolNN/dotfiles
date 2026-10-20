@@ -44,10 +44,24 @@ export interface MrFetchCommentsInput {
   token: string;
 }
 
+export interface MrFindInput {
+  repositoryUrl: string;
+  headBranch: string;
+  baseBranch: string;
+  token: string;
+  source: 'gitlab' | 'github' | 'bitbucket';
+}
+
 export interface MrClient {
   createMr(input: MrCreateInput): Promise<MrCreateResult>;
   /** Получить комментарии ревью из MR/PR. */
   fetchComments(input: MrFetchCommentsInput): Promise<MrComment[]>;
+  /**
+   * Найти открытый MR/PR по source-ветке (head). Если MR существует —
+   * возвращает его URL; если нет — null. Используется, чтобы не создавать
+   * дубликат при повторном push в ту же ветку (следующая итерация задачи).
+   */
+  findOpenMr(input: MrFindInput): Promise<MrCreateResult | null>;
 }
 
 /** Ошибка публикации результата pr-шага по конкретному репозиторию. */
@@ -132,6 +146,28 @@ export class FakeMrClient implements MrClient {
 
   async fetchComments(_input: MrFetchCommentsInput): Promise<MrComment[]> {
     return [...this.reviewComments];
+  }
+
+  /**
+   * Симулированные открытые MR; тесты заполняют этот массив до вызова
+   * `runIteration`. Каждая запись проверяется по `repositoryUrl` и
+   * `headBranch`; при совпадении возвращается её `mrUrl`.
+   */
+  openMrs: Array<{
+    repositoryUrl: string;
+    headBranch: string;
+    baseBranch: string;
+    mrUrl: string;
+  }> = [];
+
+  async findOpenMr(input: MrFindInput): Promise<MrCreateResult | null> {
+    const found = this.openMrs.find(
+      (mr) =>
+        mr.repositoryUrl === input.repositoryUrl &&
+        mr.headBranch === input.headBranch &&
+        mr.baseBranch === input.baseBranch,
+    );
+    return found ? { mrUrl: found.mrUrl, id: found.mrUrl } : null;
   }
 
   async createMr(input: MrCreateInput): Promise<MrCreateResult> {
@@ -221,6 +257,84 @@ export class HttpMrClient implements MrClient {
     }
     // Bitbucket: comments API
     return this.fetchBitbucketComments(input.mrUrl, token);
+  }
+
+  async findOpenMr(input: MrFindInput): Promise<MrCreateResult | null> {
+    const token = input.token || this.tokens[input.source] || this.token;
+
+    if (input.source === 'gitlab') {
+      return this.findGitLabOpenMr(input, token);
+    }
+    if (input.source === 'github') {
+      return this.findGitHubOpenMr(input, token);
+    }
+    return this.findBitbucketOpenMr(input, token);
+  }
+
+  private async findGitLabOpenMr(
+    input: MrFindInput,
+    token: string,
+  ): Promise<MrCreateResult | null> {
+    const path = gitlabProjectPath(input.repositoryUrl);
+    const host = hostOf(input.repositoryUrl);
+    const res = await fetch(
+      `https://${host}/api/v4/projects/${encodeURIComponent(path)}/merge_requests?source_branch=${encodeURIComponent(input.headBranch)}&target_branch=${encodeURIComponent(input.baseBranch)}&state=opened&per_page=1`,
+      { headers: { 'PRIVATE-TOKEN': token } },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as Array<{ iid: number; web_url: string }>;
+    if (data.length === 0) return null;
+    return { mrUrl: data[0].web_url, id: String(data[0].iid) };
+  }
+
+  private async findGitHubOpenMr(
+    input: MrFindInput,
+    token: string,
+  ): Promise<MrCreateResult | null> {
+    const { owner, repo } = githubOwnerRepo(input.repositoryUrl);
+    const host = hostOf(input.repositoryUrl);
+    const apiBase =
+      host === 'github.com'
+        ? 'https://api.github.com'
+        : `https://${host}/api/v3`;
+    // GitHub требует head в формате owner:branch.
+    const res = await fetch(
+      `${apiBase}/repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${input.headBranch}`)}&base=${encodeURIComponent(input.baseBranch)}&state=open&per_page=1`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+        },
+      },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as Array<{
+      number: number;
+      html_url: string;
+    }>;
+    if (data.length === 0) return null;
+    return { mrUrl: data[0].html_url, id: String(data[0].number) };
+  }
+
+  private async findBitbucketOpenMr(
+    input: MrFindInput,
+    token: string,
+  ): Promise<MrCreateResult | null> {
+    const { project, repo } = bitbucketProjectRepo(input.repositoryUrl);
+    const host = hostOf(input.repositoryUrl);
+    const res = await fetch(
+      `https://${host}/rest/api/1.0/projects/${project}/repos/${repo}/pull-requests?at=refs/heads/${encodeURIComponent(input.headBranch)}&state=OPEN`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      values?: Array<{ id: number }>;
+    };
+    if (!data.values || data.values.length === 0) return null;
+    return {
+      mrUrl: `https://${host}/projects/${project}/repos/${repo}/pull-requests/${data.values[0].id}`,
+      id: String(data.values[0].id),
+    };
   }
 
   private async fetchGitHubComments(mrUrl: string, token: string): Promise<MrComment[]> {

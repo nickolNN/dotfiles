@@ -6,6 +6,7 @@ import {
   formatPrPublishErrors,
   type MrClient,
   type MrCreateInput,
+  type MrFindInput,
 } from '../src/pr/mr';
 
 const input = (overrides: Partial<MrCreateInput> = {}): MrCreateInput => ({
@@ -446,5 +447,190 @@ describe('FakeMrClient GitHub URLs', () => {
 
     expect(result.mrUrl).toBe('https://git.company.com/acme/app/pull/mr-1');
     expect(result.id).toBe('mr-1');
+  });
+});
+
+describe('findOpenMr', () => {
+  const findInput = (overrides: Partial<MrFindInput> = {}): MrFindInput => ({
+    repositoryUrl: 'https://github.com/acme/app.git',
+    headBranch: 'feature/fix-bug-abc123',
+    baseBranch: 'main',
+    token: 'secret-token',
+    source: 'github',
+    ...overrides,
+  });
+
+  describe('FakeMrClient', () => {
+    it('openMrs пуст → null', async () => {
+      const client = new FakeMrClient();
+      const result = await client.findOpenMr(findInput());
+      expect(result).toBeNull();
+    });
+
+    it('совпадение по repositoryUrl + headBranch + baseBranch → mrUrl', async () => {
+      const client = new FakeMrClient();
+      client.openMrs = [
+        {
+          repositoryUrl: 'https://github.com/acme/app.git',
+          headBranch: 'feature/fix-bug-abc123',
+          baseBranch: 'main',
+          mrUrl: 'https://github.com/acme/app/pull/42',
+        },
+      ];
+      const result = await client.findOpenMr(findInput());
+      expect(result).toEqual({
+        mrUrl: 'https://github.com/acme/app/pull/42',
+        id: 'https://github.com/acme/app/pull/42',
+      });
+    });
+
+    it('несовпадение headBranch → null', async () => {
+      const client = new FakeMrClient();
+      client.openMrs = [
+        {
+          repositoryUrl: 'https://github.com/acme/app.git',
+          headBranch: 'feature/other-branch',
+          baseBranch: 'main',
+          mrUrl: 'https://github.com/acme/app/pull/42',
+        },
+      ];
+      const result = await client.findOpenMr(findInput());
+      expect(result).toBeNull();
+    });
+
+    it('несовпадение baseBranch → null', async () => {
+      const client = new FakeMrClient();
+      client.openMrs = [
+        {
+          repositoryUrl: 'https://github.com/acme/app.git',
+          headBranch: 'feature/fix-bug-abc123',
+          baseBranch: 'develop',
+          mrUrl: 'https://github.com/acme/app/pull/42',
+        },
+      ];
+      const result = await client.findOpenMr(findInput());
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('HttpMrClient — GitHub', () => {
+    it('находит открытый PR по head + base → возвращает URL', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          { number: 42, html_url: 'https://github.com/acme/app/pull/42' },
+        ],
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        const client = new HttpMrClient();
+        const result = await client.findOpenMr(findInput());
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        const [url] = fetchMock.mock.calls[0] as [string];
+        expect(url).toContain(
+          'head=acme%3Afeature%2Ffix-bug-abc123',
+        );
+        expect(url).toContain('base=main');
+        expect(url).toContain('state=open');
+        expect(result).toEqual({
+          mrUrl: 'https://github.com/acme/app/pull/42',
+          id: '42',
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('нет открытых PR → null', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [],
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        const client = new HttpMrClient();
+        const result = await client.findOpenMr(findInput());
+        expect(result).toBeNull();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('ошибка API → null (не роняем)', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        const client = new HttpMrClient();
+        const result = await client.findOpenMr(findInput());
+        expect(result).toBeNull();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
+  describe('HttpMrClient — GitLab', () => {
+    it('находит открытый MR → возвращает URL', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => [
+          { iid: 7, web_url: 'https://gitlab.example.com/team/lib/-/merge_requests/7' },
+        ],
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        const client = new HttpMrClient();
+        const result = await client.findOpenMr(
+          findInput({
+            repositoryUrl: 'git@gitlab.example.com:team/lib.git',
+            source: 'gitlab',
+          }),
+        );
+
+        const [url] = fetchMock.mock.calls[0] as [string];
+        expect(url).toContain('source_branch=feature%2Ffix-bug-abc123');
+        expect(url).toContain('target_branch=main');
+        expect(url).toContain('state=opened');
+        expect(result).toEqual({
+          mrUrl: 'https://gitlab.example.com/team/lib/-/merge_requests/7',
+          id: '7',
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
+  describe('HttpMrClient — Bitbucket', () => {
+    it('находит открытый PR → возвращает URL', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ values: [{ id: 99 }] }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        const client = new HttpMrClient();
+        const result = await client.findOpenMr(
+          findInput({
+            repositoryUrl: 'https://b.yadro.com/scm/kos/some-repo.git',
+            source: 'bitbucket',
+          }),
+        );
+
+        const [url] = fetchMock.mock.calls[0] as [string];
+        expect(url).toContain('at=refs/heads/feature%2Ffix-bug-abc123');
+        expect(url).toContain('state=OPEN');
+        expect(result).toEqual({
+          mrUrl: 'https://b.yadro.com/projects/kos/repos/some-repo/pull-requests/99',
+          id: '99',
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 });

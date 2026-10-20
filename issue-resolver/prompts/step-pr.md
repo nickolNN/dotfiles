@@ -3,9 +3,11 @@ Role: PR — you write the MR title and description; the backend publishes.
 ## What the backend does after you
 
 For every repository marked "create MR" it stages the whole working copy
-(`git add -A`), commits it as ONE squashed commit `feat: <task title>` on the
-branch `issue/<issueId>-<iterationId>`, pushes that branch and opens the MR
+(`git add -A`), commits it as ONE squashed commit `feat: <task title>` on a
+feature branch (`feature/<slug>-<suffix>`), pushes that branch and opens the MR
 `head = feature → base = <base branch>` with your `title` and `description`.
+If an MR already exists for that branch (from a previous iteration of the same
+task), the backend pushes the updated commit and reuses the existing MR.
 While you work nothing is committed yet: the change set lives in the working
 tree, and infrastructure files (`RUN_INSTRUCTIONS.md`, `DEV_SERVER.sh`,
 `.issue-*.json`, `plan.md`, `report.*`) are excluded from it.

@@ -27,6 +27,7 @@ import type {
   WorkflowDeps,
 } from '../src/workflow/engine';
 import { runIteration } from '../src/workflow/engine';
+import { featureBranchName } from '../src/workflow/engine';
 
 const NOW = '2026-01-01T00:00:00.000Z';
 
@@ -1182,6 +1183,62 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
+  });
+
+  it('уже есть открытый MR из той же ветки → push обновляет его, createMr НЕ вызывается', async () => {
+    const { deps, pi, git, mr, sse } = makeDeps();
+    const events: SSEEvent[] = [];
+    sse.subscribe('iter-1', (event) => events.push(event));
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('pr'));
+
+    // Имитируем существующие MR из предыдущей итерации той же задачи
+    // для обоих репозиториев.
+    const existingGhUrl = 'https://github.com/acme/app/pull/42';
+    const existingGlUrl =
+      'https://gitlab.example.com/team/lib/-/merge_requests/7';
+    const branch = featureBranchName('Fix bug', 'issue-1');
+    mr.openMrs = [
+      {
+        repositoryUrl: 'https://github.com/acme/app.git',
+        headBranch: branch,
+        baseBranch: 'main',
+        mrUrl: existingGhUrl,
+      },
+      {
+        repositoryUrl: 'git@gitlab.example.com:team/lib.git',
+        headBranch: branch,
+        baseBranch: 'develop',
+        mrUrl: existingGlUrl,
+      },
+    ];
+
+    const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // commitAndPush — да (push в ту же ветку), MR create — нет (нашли существующие).
+    expect(git.commits.length).toBeGreaterThanOrEqual(1);
+    expect(mr.calls).toHaveLength(0);
+
+    // SSE: mr-события с URL существующих MR, а не новых.
+    const mrEvents = events.filter(
+      (event) => event.type === 'log' && event.stream === 'mr',
+    );
+    expect(mrEvents).toHaveLength(2);
+    expect(mrEvents.map((event) => event.data)).toEqual([
+      existingGhUrl,
+      existingGlUrl,
+    ]);
+
+    // system-событие подтверждает, что MR уже существовал.
+    const systemEvents = events
+      .filter(
+        (event) => event.type === 'log' && event.stream === 'system',
+      )
+      .map((event) => event.data);
+    expect(
+      systemEvents.some((data) => data.includes('MR уже существует')),
+    ).toBe(true);
   });
 });
 

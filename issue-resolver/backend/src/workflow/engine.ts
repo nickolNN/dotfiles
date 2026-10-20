@@ -1127,16 +1127,18 @@ export interface MrResultArtifact {
 }
 
 /**
- * Имя feature-ветки для публикации результата итерации.
+ * Имя feature-ветки для публикации результата задачи.
  *
  * Защищённые base-ветки (`master`/`main`) отвергают прямой push
  * (pre-receive hook declined), поэтому результат всегда публикуется в
  * отдельную ветку, а MR открывается из неё в base. UUID в суффиксе
- * гарантирует уникальность между итерациями.
+ * гарантирует уникальность между задачами; в пределах одной задачи
+ * (все итерации) ветка одна и та же — новый push обновляет
+ * существующий MR, а не создаёт дубликат.
  */
 export function featureBranchName(
   issueTitle: string,
-  iterationId: string,
+  issueId: string,
 ): string {
   // Jira-ключ из заголовка (например "KOS-55424: Logout lands on login")
   const jiraMatch = /([A-Z]+-\d+)/.exec(issueTitle);
@@ -1157,8 +1159,9 @@ export function featureBranchName(
     ? `feature/${jiraKey}-${slug}`
     : `feature/${slug || 'changes'}`;
 
-  // Уникальный короткий суффикс (последние 6 символов iterationId)
-  return `${prefix}-${iterationId.slice(-6)}`;
+  // Уникальный короткий суффикс (последние 6 символов issueId) —
+  // стабилен для всех итераций одной задачи, уникален между задачами.
+  return `${prefix}-${issueId.slice(-6)}`;
 }
 
 /** Итог публикации: созданные MR и ошибки репозиториев, где она сорвалась. */
@@ -1218,7 +1221,7 @@ async function publishPrResult(
         baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch;
       const featureBranch = featureBranchName(
         input.issue.title,
-        input.iteration.id,
+        input.issue.id,
       );
       const commit = await deps.git.commitAndPush({
         repoPath: workspace.path,
@@ -1237,19 +1240,47 @@ async function publishPrResult(
       );
 
       phase = 'MR';
-      const mr = await deps.mr.createMr({
+      const source = detectGitHost(workspace.repoUrl);
+
+      // Сначала проверяем, нет ли уже открытого MR из этой ветки в base.
+      // Если есть — push его обновит, новый создавать не нужно.
+      const existing = await deps.mr.findOpenMr({
         repositoryUrl: workspace.repoUrl,
         baseBranch:
           baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch,
         headBranch: featureBranch,
-        title,
-        description,
         token: input.mrToken ?? '',
-        source: detectGitHost(workspace.repoUrl),
+        source,
       });
+
+      let mrResult: { mrUrl: string; id: string };
+      if (existing) {
+        mrResult = existing;
+        deps.sse.publish(
+          streamEvent(
+            input.issue.id,
+            input.iteration.id,
+            stepRunId,
+            'system',
+            `MR уже существует: ${existing.mrUrl} (новый push обновляет его)`,
+          ),
+        );
+      } else {
+        mrResult = await deps.mr.createMr({
+          repositoryUrl: workspace.repoUrl,
+          baseBranch:
+            baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch,
+          headBranch: featureBranch,
+          title,
+          description,
+          token: input.mrToken ?? '',
+          source,
+        });
+      }
+
       artifacts.push({
         repositoryUrl: workspace.repoUrl,
-        mrUrl: mr.mrUrl,
+        mrUrl: mrResult.mrUrl,
         title,
         description,
       });
@@ -1259,7 +1290,7 @@ async function publishPrResult(
           input.iteration.id,
           stepRunId,
           'mr',
-          mr.mrUrl,
+          mrResult.mrUrl,
         ),
       );
     } catch (error) {
