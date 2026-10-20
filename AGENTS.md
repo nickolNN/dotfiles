@@ -101,7 +101,10 @@
 Full docs: `dotfiles-agent/README.md`. Quick reference:
 
 - `dotfiles-agent/` builds the `dotfiles-agent` image (node 24, Go, neovim,
-  bun, LSPs, browsers, pi + skills); uid/gid-aligned to the host user
+  bun, LSPs, browsers, nginx, pi + skills); uid/gid-aligned to the host user.
+  `nginx` exists so a repo's micro-frontend proxy (`nginx-local/conf.d/*.conf` +
+  `docker-compose.yaml`) can run **natively** — docker-in-docker is unavailable,
+  so the agent translates compose volumes/hosts and serves with `nginx -c`
 - Aliases (via `dotfiles-agent/install-aliases.sh`): `agent-spawn`,
   `agent-attach`, `agent-fwd`, `agent-stop`
 - Containers are per-directory (`container-name.sh`); durable state is in

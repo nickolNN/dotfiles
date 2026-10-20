@@ -15,9 +15,13 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
 # tini   → PID 1 init that reaps orphaned/zombie children (MCP servers,
 #          browser helpers) which a plain `sleep infinity` PID 1 ignores.
 # git-lfs → pull/push LFS-tracked assets in cloned repos.
+# nginx  → run a repo's micro-frontend proxy config NATIVELY (no
+#          docker-in-docker). Repos ship `nginx-local/conf.d/*.conf` written
+#          for docker-compose; the devops agent rewrites the paths/hosts and
+#          serves them with `nginx -c`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
   git git-lfs curl jq build-essential python3 unzip ripgrep fd-find fzf \
-  htop luarocks tini \
+  htop luarocks tini nginx-light \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \

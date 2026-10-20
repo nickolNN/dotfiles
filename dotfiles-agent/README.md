@@ -13,6 +13,10 @@ disposable and safe to recreate on the fly.
   `golangci-lint`, `delve`, `lazygit`, …)
 - browser automation: playwright + puppeteer + system Chromium
 - `git-lfs`, for repositories that track large files
+- `nginx` (`nginx-light`) to run a repo's local proxy config **natively** —
+  micro-frontend repos ship `nginx-local/conf.d/*.conf` + `docker-compose.yaml`
+  written for a laptop, and docker-in-docker is not available here, so the agent
+  translates the compose volumes/hosts and serves them with `nginx -c`
 - the `pi` coding agent + its packages + skills (remote + repo `agent-skills/`)
 - `tini` as PID 1 (`ENTRYPOINT ["/usr/bin/tini", "--"]`) so orphaned
   MCP / chrome / esbuild children are reaped instead of accumulating as

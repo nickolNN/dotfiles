@@ -39,6 +39,7 @@ import {
   abortIteration,
   createIteration,
   createIterationWithFiles,
+  updateIteration,
   deleteIssueFile,
   devServerPortOf,
   fetchReviewComments,
@@ -1312,9 +1313,11 @@ function TaskDetailView({
       : false;
   const canStartDraftForm = hasRunningIteration && !hasDraftIteration;
   const canStart = canStartNormal || canStartDraftForm;
-  const submitButtonLabel = hasRunningIteration
-    ? 'Создать черновик'
-    : 'Запустить новую итерацию';
+  const submitButtonLabel = hasDraftIteration
+    ? 'Сохранить черновик'
+    : hasRunningIteration
+      ? 'Создать черновик'
+      : 'Запустить новую итерацию';
   // Новые итерации показываем первыми; сам state не мутируем —
   // activeIterationId по умолчанию берёт последний (свежайший) элемент.
   const orderedIterations =
@@ -1576,7 +1579,14 @@ function TaskDetailView({
     setSubmitting(true);
 
     try {
-      if (files.length > 0) {
+      if (hasDraftIteration) {
+        // Редактируем существующий черновик — обновляем только context.
+        const draft = state.status === 'ready'
+          ? state.iterations.find((it) => it.status === 'draft')
+          : undefined;
+        if (!draft) throw new Error('Черновик не найден');
+        await updateIteration(draft.id, { context });
+      } else if (files.length > 0) {
         await createIterationWithFiles(issueId, request, files);
       } else {
         await createIteration(issueId, request);
@@ -2328,7 +2338,14 @@ function TaskDetailView({
               <button
                 type="button"
                 data-testid="open-iteration-modal"
-                onClick={() => setShowIterationModal(true)}
+                onClick={() => {
+                  // Если есть черновик — подгружаем его контекст в редактор.
+                  if (hasDraftIteration && state.status === 'ready') {
+                    const draft = state.iterations.find((it) => it.status === 'draft');
+                    if (draft) setContext(draft.context ?? '');
+                  }
+                  setShowIterationModal(true);
+                }}
                 className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] md:w-auto"
               >
                 {hasDraftIteration ? 'Редактировать черновик' : 'Новая итерация'}
@@ -2348,7 +2365,7 @@ function TaskDetailView({
           >
             <div className="flex items-center justify-between mb-1">
               <h3 className="glow text-lg font-semibold text-[#00FF41]">
-                Новая итерация
+                {hasDraftIteration ? 'Редактировать черновик' : 'Новая итерация'}
               </h3>
               <button
                 type="button"
@@ -2360,7 +2377,9 @@ function TaskDetailView({
               </button>
             </div>
             <p className="mb-4 text-sm text-[#00FF41]/60">
-              Добавь новый контекст и запусти ещё одну попытку решения задачи.
+              {hasDraftIteration
+                ? 'Отредактируй контекст черновика и сохрани изменения.'
+                : 'Добавь новый контекст и запусти ещё одну попытку решения задачи.'}
             </p>
 
             <form className="space-y-4" onSubmit={handleSubmit}>

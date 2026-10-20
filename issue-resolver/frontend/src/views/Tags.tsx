@@ -68,6 +68,7 @@ interface TagRepoDraft {
 interface TagDraft {
   name: string;
   description: string;
+  run_instructions: string;
   repositories: TagRepoDraft[];
 }
 
@@ -123,6 +124,7 @@ function draftFromTag(tag: Tag): TagDraft {
   return {
     name: tag.name,
     description: tag.description ?? '',
+    run_instructions: tag.run_instructions ?? '',
     repositories: tag.repositories.map((tr) => ({
       repository_id: tr.repository_id,
       bootstrap_enabled: tr.bootstrap_enabled,
@@ -157,6 +159,7 @@ function TagForm({
 }: TagFormProps) {
   const [name, setName] = useState(initial.name);
   const [description, setDescription] = useState(initial.description);
+  const [runInstructions, setRunInstructions] = useState(initial.run_instructions);
   const [repos, setRepos] = useState<TagRepoDraft[]>(initial.repositories);
 
   function toggleRepo(repoId: string) {
@@ -180,7 +183,7 @@ function TagForm({
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim() || saving) return;
-    onSubmit({ name: name.trim(), description: description.trim(), repositories: repos });
+    onSubmit({ name: name.trim(), description: description.trim(), run_instructions: runInstructions.trim() || '', repositories: repos });
   }
 
   const selected = new Set(repos.map((repo) => repo.repository_id));
@@ -218,6 +221,22 @@ function TagForm({
           onChange={(event) => setDescription(event.target.value)}
           placeholder="Зачем нужен этот тег"
           rows={3}
+        />
+      </div>
+
+      <div>
+        <label className={labelClass} htmlFor="tag-instructions">
+          Run-инструкции (Markdown) — как запускать весь набор репозиториев
+          вместе: прокси, порты, переменные окружения
+        </label>
+        <textarea
+          id="tag-instructions"
+          data-testid="tag-run-instructions"
+          className={inputClass}
+          value={runInstructions}
+          onChange={(event) => setRunInstructions(event.target.value)}
+          placeholder="## Прокси&#10;```bash&#10;ssh -L 4300:localhost:4300 ...&#10;```&#10;&#10;## Порты&#10;- Репо A: 5100&#10;- Репо B: 5200"
+          rows={6}
         />
       </div>
 
@@ -336,6 +355,7 @@ function TagsView({ createSignal }: TagsProps) {
     const payload = {
       name: draft.name,
       description: draft.description || undefined,
+      run_instructions: draft.run_instructions || undefined,
       repositories: draft.repositories,
     };
     const onSuccess = () => setForm(null);
@@ -377,7 +397,7 @@ function TagsView({ createSignal }: TagsProps) {
       {form?.mode === 'create' && (
         <div className="mb-4">
           <TagForm
-            initial={{ name: '', description: '', repositories: [] }}
+            initial={{ name: '', description: '', run_instructions: '', repositories: [] }}
             savedRepos={savedRepos}
             savedReposLoading={savedReposLoading}
             saving={saving}
@@ -482,6 +502,15 @@ function TagsView({ createSignal }: TagsProps) {
                     className="mt-0.5 text-xs text-[#00FF41]/50"
                   >
                     {tag.description}
+                  </div>
+                )}
+
+                {tag.run_instructions && (
+                  <div
+                    data-testid="tag-instructions-label"
+                    className="mt-0.5 text-xs text-[#00FF41]/60"
+                  >
+                    инструкции: {tag.run_instructions_status === 'generated' ? '✅' : '⏳'} ({tag.run_instructions.length} симв.)
                   </div>
                 )}
 

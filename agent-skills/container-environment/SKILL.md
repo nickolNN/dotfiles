@@ -36,6 +36,13 @@ survive has to live in the workspace or the sessions/skills volumes.
   `typescript-language-server`, `bash-language-server`, `gopls`,
   `golangci-lint`, `delve`, …
 - CLI: `git`, `gh`, `git-lfs`, `jq`, `ripgrep`/`rg`, `fd`, `fzf`, `htop`, `unzip`
+- `nginx` (`nginx-light`) — run a repo's local proxy config natively.
+  Micro-frontend repos ship `nginx-local/conf.d/*.conf` + `docker-compose.yaml`
+  for a laptop; docker-in-docker does NOT work here, so translate the compose
+  volumes/hosts (`host.docker.internal` → `127.0.0.1`, image paths → real
+  `dist/`) and serve with `nginx -c <conf> -p <prefix>`. As non-root put `pid`,
+  `error_log` and every `*_temp_path` under `/tmp` and omit the `user`
+  directive.
 - browser automation: `agent-browser` (system Chromium), playwright
   (chromium/firefox/webkit), puppeteer (shares the system Chromium via
   `PUPPETEER_EXECUTABLE_PATH`)

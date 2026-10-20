@@ -61,6 +61,7 @@ function jsonResponse(
 interface StubOptions {
   iterations: () => Iteration[];
   createIteration?: (init?: RequestInit) => Promise<Response>;
+  updateIteration?: (iterationId: string, init?: RequestInit) => Promise<Response>;
   queue?: (id: string) => Promise<Response>;
   review?: (id: string) => Promise<Response>;
   issue?: Issue;
@@ -97,6 +98,13 @@ function stubFetch(options: StubOptions) {
       if (method === 'POST' && createMatch) {
         return options.createIteration
           ? options.createIteration(init)
+          : Promise.resolve(jsonResponse({}));
+      }
+
+      const updateMatch = url.match(/\/iterations\/([^/]+)$/);
+      if (method === 'PUT' && updateMatch) {
+        return options.updateIteration
+          ? options.updateIteration(updateMatch[1], init)
           : Promise.resolve(jsonResponse({}));
       }
 
@@ -220,33 +228,43 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     ).toBeNull();
   });
 
-  it('повторный draft при running+draft → ошибка сервера, список не растёт', async () => {
-    const list = [
+  it('при running+draft модалка редактирует черновик, а не создаёт новый', async () => {
+    let list = [
       makeIteration({ id: 'iter-1', number: 1, status: 'running' }),
-      makeIteration({ id: 'iter-2', number: 2, status: 'draft' }),
+      makeIteration({ id: 'iter-2', number: 2, status: 'draft', context: 'original context' }),
     ];
-    stubFetch({
+    const fetchMock = stubFetch({
       iterations: () => list,
-      createIteration: () =>
-        Promise.resolve(
+      updateIteration: (iterationId: string) => {
+        list = list.map((it) =>
+          it.id === iterationId ? { ...it, context: 'updated context' } : it,
+        );
+        return Promise.resolve(
           jsonResponse(
-            { error: 'A draft iteration already exists — edit or delete it first' },
-            { ok: false, status: 409 },
+            list.find((it) => it.id === iterationId)!,
+            { status: 200 },
           ),
-        ),
+        );
+      },
     });
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
+    // Открываем модалку — контекст черновика должен быть предзаполнен.
     await openIterationModal();
-    setMarkdownEditorValue('Контекст итерации', 'second draft');
-    fireEvent.click(screen.getByRole('button', { name: 'Создать черновик' }));
+    expect(getMarkdownEditorValue('Контекст итерации')).toBe('original context');
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'A draft iteration already exists',
+    // Меняем контекст и сохраняем.
+    setMarkdownEditorValue('Контекст итерации', 'updated context');
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
+
+    // Должен быть вызван PUT, а не POST (create).
+    const putCall = fetchMock.mock.calls.find(
+      (call: [RequestInfo | URL, RequestInit?]) => call[1]?.method === 'PUT',
     );
-    expect(screen.getAllByText(/^Итерация #/)).toHaveLength(2);
+    expect(putCall).toBeTruthy();
+    expect(String(putCall?.[0] ?? '')).toContain('/iterations/iter-2');
   });
 
   it('«Результаты ревью» без комментариев → сообщение «код чист»', async () => {

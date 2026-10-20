@@ -46,6 +46,20 @@ export interface PiBootstrapperAgentOptions {
   containerName: string;
   /** Host-путь рабочей папки задачи: отсюда читается `RUN_INSTRUCTIONS.md`. */
   hostWorkspaceDir: string;
+  /** ID задачи — комната `issue-<issueId>` для интерактивной сессии. */
+  issueId?: string;
+  /** ID итерации — адрес сессии в реестре. */
+  iterationId?: string;
+  /** stepRunId для регистрации живой сессии. */
+  stepRunId?: string;
+  /** Реестр живых сессий для steer/abort. */
+  registry?: import('../pi/session-registry').StepSessionRegistry;
+  /**
+   * Тег-инструкции проекта (Markdown): правила запуска всего набора репозиториев
+   * вместе (прокси, порты, переменные окружения). Агент читает их до начала
+   * работы и пишет `WORKSPACE_INSTRUCTIONS.md` в корень рабочей папки.
+   */
+  tagInstructions?: string | null;
   /** Модель bootstrapper-агента (по умолчанию — дефолт pi). */
   model?: string;
   thinkingLevel?: string;
@@ -58,14 +72,16 @@ export interface PiBootstrapperAgentOptions {
 }
 
 /**
- * Подставляет `{{REPO_DIR}}`/`{{REPO_NAME}}`/`{{DEV_SERVER_PORT}}` в шаблон
- * промпта bootstrapper'а. Без выделенного порта подставляется `AUTO`.
+ * Подставляет `{{REPO_DIR}}`/`{{REPO_NAME}}`/`{{DEV_SERVER_PORT}}`/
+ * `{{TAG_INSTRUCTIONS}}` в шаблон промпта bootstrapper'а.
+ * Без выделенного порта подставляется `AUTO`.
  */
 export function renderBootstrapPrompt(
   template: string,
   repoDir: string,
   repoName: string,
   devServerPort?: number,
+  tagInstructions?: string | null,
 ): string {
   return template
     .replace(/\{\{REPO_DIR\}\}/g, repoDir)
@@ -73,6 +89,12 @@ export function renderBootstrapPrompt(
     .replace(
       /\{\{DEV_SERVER_PORT\}\}/g,
       devServerPort !== undefined ? String(devServerPort) : 'AUTO',
+    )
+    .replace(
+      /\{\{TAG_INSTRUCTIONS\}\}/g,
+      tagInstructions?.trim()
+        ? `\n## Tag Instructions (workspace-level)\n\n${tagInstructions.trim()}\n`
+        : '',
     );
 }
 
@@ -82,9 +104,10 @@ export function loadBootstrapPrompt(
   repoName: string,
   devServerPort?: number,
   promptPath: string = DEFAULT_BOOTSTRAP_PROMPT_PATH,
+  tagInstructions?: string | null,
 ): string {
   const template = readFileSync(promptPath, 'utf-8');
-  return renderBootstrapPrompt(template, repoDir, repoName, devServerPort);
+  return renderBootstrapPrompt(template, repoDir, repoName, devServerPort, tagInstructions);
 }
 
 const errorMessage = (error: unknown): string =>
@@ -129,6 +152,7 @@ export class PiBootstrapperAgent implements BootstrapperAgent {
         repoName,
         devServerPort,
         this.options.promptPath,
+        this.options.tagInstructions,
       );
       const result = await this.options.pi.run(
         this.options.containerName,
@@ -138,6 +162,10 @@ export class PiBootstrapperAgent implements BootstrapperAgent {
           model: this.options.model,
           thinkingLevel: this.options.thinkingLevel,
           timeoutMs: this.options.timeoutMs,
+          issueId: this.options.issueId,
+          iterationId: this.options.iterationId,
+          stepRunId: this.options.stepRunId,
+          registry: this.options.registry,
           onStdout: this.options.onStdout,
           onStderr: this.options.onStderr,
           onEvent: this.options.onEvent,
