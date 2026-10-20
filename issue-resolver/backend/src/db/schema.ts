@@ -32,6 +32,8 @@ export const issues = sqliteTable('issues', {
   >(),
   container_name: text('container_name'),
   source: text('source'),
+  /** ID тега, из которого создана задача (null — создана вручную). */
+  tag_id: text('tag_id').references(() => tags.id, { onDelete: 'set null' }),
   /** Порт запущенного dev-сервера задачи (null — не запущен). */
   dev_server_port: integer('dev_server_port'),
   /** PID процесса dev-сервера задачи (null — не запущен). */

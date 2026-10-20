@@ -565,6 +565,24 @@ export async function queueIteration(
   return (await response.json()) as Iteration;
 }
 
+/** Обновить черновик (context). */
+export async function updateIteration(
+  iterationId: string,
+  request: { context: string },
+): Promise<Iteration> {
+  const response = await fetch(`${API_BASE}/iterations/${iterationId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Iteration;
+}
+
 /** Комментарий ревью из MR/PR. */
 export interface ReviewCommentEntry {
   repo: string;

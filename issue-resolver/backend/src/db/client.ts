@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS issues (
   step_thinking_levels TEXT,
   container_name TEXT,
   source TEXT,
+  tag_id TEXT REFERENCES tags(id) ON DELETE SET NULL,
   dev_server_port INTEGER,
   dev_server_pid INTEGER,
   status TEXT NOT NULL,
@@ -275,6 +276,9 @@ function ensureIssueColumns(sqlite: Database.Database): void {
   }
   if (!columns.has('dev_server_pid')) {
     sqlite.exec('ALTER TABLE issues ADD COLUMN dev_server_pid INTEGER');
+  }
+  if (!columns.has('tag_id')) {
+    sqlite.exec('ALTER TABLE issues ADD COLUMN tag_id TEXT REFERENCES tags(id) ON DELETE SET NULL');
   }
 }
 

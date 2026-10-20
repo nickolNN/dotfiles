@@ -43,6 +43,10 @@ pre_frontend=0
 backend_ready && pre_backend=1
 frontend_ready && pre_frontend=1
 
+# Монорепо на npm workspaces: ставим зависимости один раз с корня (идемпотентно).
+echo "  → npm install (root)…"
+(cd "$ROOT" && npm install --prefer-offline) || true
+
 # service.sh сам идемпотентен (пропускает уже слушающие порты) и печатает
 # свой дубль host-строки — глушим её, канонический вывод ниже у up.sh.
 start_out="$("$ROOT/bin/service.sh" start 2>&1)" || true

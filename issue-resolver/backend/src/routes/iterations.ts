@@ -95,6 +95,23 @@ export async function iterationsRoutes(
     },
   );
 
+  // Обновить черновик (только context).
+  app.put<{ Params: { id: string }; Body: { context: string } }>(
+    `${ROUTE_PATH}/:id`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const it = db.select().from(iterations).where(eq(iterations.id, id)).get();
+      if (!it) return reply.status(404).send({ error: 'iteration not found' });
+      if (it.status !== 'draft') return reply.status(409).send({ error: 'only draft iterations can be updated' });
+      const now = new Date().toISOString();
+      db.update(iterations)
+        .set({ context: request.body.context, updated_at: now })
+        .where(eq(iterations.id, id))
+        .run();
+      return reply.status(200).send({ ...it, context: request.body.context, updated_at: now });
+    },
+  );
+
   // Повторить итерацию: новая с теми же параметрами.
   app.post<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/repeat`,

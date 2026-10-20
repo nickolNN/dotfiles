@@ -95,6 +95,8 @@ export interface Issue {
   jira_issue_url: string | null;
   /** Источник задачи: 'jira' для Jira, null для локальной. */
   source?: string | null;
+  /** ID тега, из которого создана задача (null — создана вручную). */
+  tag_id?: string | null;
   /** Порт запущенного dev-сервера (null если не запущен). */
   dev_server_port?: number | null;
   /** Описание задачи (additional_context). */
@@ -178,6 +180,8 @@ export interface CreateIssueRequest {
   jira_issue_url?: string;
   /** Репозитории необязательны: можно создать задачу без них ([]). */
   repositories?: CreateIssueRepositoryInput[];
+  /** ID тега — связывает задачу с сохранённым набором репозиториев и его инструкциями. */
+  tag_id?: string;
   /** Желаемый результат задачи: 'html' или 'pr' (требует репозиторий). */
   desired_result?: DesiredResult;
   additional_context?: string;
@@ -827,11 +831,13 @@ export interface TagRepositoryWithRepo extends TagRepository {
 export interface CreateTagRequest {
   name: string;
   description?: string;
+  run_instructions?: string | null;
   repositories: { repository_id: string; bootstrap_enabled?: boolean }[];
 }
 
 export interface UpdateTagRequest {
   name?: string;
   description?: string;
+  run_instructions?: string | null;
   repositories?: { repository_id: string; bootstrap_enabled?: boolean }[];
 }

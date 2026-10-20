@@ -156,6 +156,11 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 | `DELETE /repositories/:id` | — | `204` / `404` |
 | `POST /repositories/:id/validate` | — | `200 SavedRepo` (перевалидирован; `connectionStatus` — итог) / `404` |
 | `GET /repositories/:id/branches` | — | `200 { branches: string[] }` (live из резолвера, не из БД) / `502 { error }` / `404` |
+| `GET /tags` | — | `Tag[]` (именованные наборы сохранённых репозиториев; каждый — с `repositories: TagRepositoryWithRepo[]`, `run_instructions`, `run_instructions_status`) |
+| `POST /tags` | `CreateTagRequest` `{ name, description?, run_instructions?, repositories: [{ repository_id, bootstrap_enabled? }] }` | `201 Tag` / `400 { error }` (`name` обязателен, ≥1 репозиторий) |
+| `GET /tags/:id` | — | `Tag` / `404 { error: 'tag not found' }` |
+| `PUT /tags/:id` | `UpdateTagRequest` `{ name?, description?, run_instructions?, repositories? }` | `200 Tag`; `repositories` заменяет список связей целиком; `run_instructions` при непустом значении переводит `run_instructions_status` в `'generated'`, при `null`/`''` — в `'unknown'` / `400` / `404` |
+| `DELETE /tags/:id` | — | `204` / `404`; связи `tag_repositories` снимаются каскадом |
 | `GET /settings/hostname` | — | `{ hostname }` (пустая строка, если не задан) |
 | `PUT /settings/hostname` | `{ hostname }` (≤ 100 символов) | `{ hostname }` / `400 { error }` |
 | `POST /admin/cleanup-orphans` | — | `{ orphaned_workspaces, killed_processes, deleted_dirs, errors }` / `500 { error: 'cannot read workspace root' }` |
@@ -182,7 +187,7 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 `get_commands` пропускается). Благодаря этому палитра показывает `/compact`,
 `/model`, `/thinking`, `/name` и т.п.
 
-`CreateIssueRequest`: `{ title?, jira_issue_url?, repositories?: [{ repository_url, base_branch, create_mr? } | { repo_id, repository_url?, base_branch?, create_mr? }], desired_result?, additional_context?, review_context?, is_review_need?, pipeline_steps?, model? }`.
+`CreateIssueRequest`: `{ title?, jira_issue_url?, repositories?: [{ repository_url, base_branch, create_mr? } | { repo_id, repository_url?, base_branch?, create_mr? }], tag_id?, desired_result?, additional_context?, review_context?, is_review_need?, pipeline_steps?, model? }`.
 `title` обязателен, если нет `jira_issue_url`. `repositories` необязателен
 (`[]`/отсутствует — валидно, min 0): задача без репозиториев запускается, а
 агент пишет файлы-результаты прямо в папку задачи. Пункт репозитория — либо
@@ -339,9 +344,9 @@ URL (`RepoUrlInput`) живёт на экране «Репозитории» и 
 папки. После clone и ДО `install`, для каждого репозитория со статусом НЕ
 `generated`, `PiBootstrapperAgent` запускает pi-агента с промптом
 `prompts/bootstrapper.md` (плейсхолдеры `{{REPO_DIR}}`/`{{REPO_NAME}}`/
-`{{DEV_SERVER_PORT}}`): агент смотрит проект, пробует поставить зависимости/
-собрать, пишет `RUN_INSTRUCTIONS.md` и `DEV_SERVER.sh` в корень репо и
-проверяет, что скрипт действительно отдаёт выделенный порт. Успех
+`{{DEV_SERVER_PORT}}`/`{{TAG_INSTRUCTIONS}}`): агент смотрит проект, пробует
+поставить зависимости/ собрать, пишет `RUN_INSTRUCTIONS.md` и `DEV_SERVER.sh` в
+корень репо и проверяет, что скрипт действительно отдаёт выделенный порт. Успех
 → `runInstructions = <Markdown>`, `runInstructionsStatus = 'generated'`; сбой
 (нет файла/ошибка/таймаут) → `'failed'`, инструкция очищается. Репозитории со
 `generated` повторно не анализируются. Если последующий `installDependencies`
@@ -349,6 +354,53 @@ URL (`RepoUrlInput`) живёт на экране «Репозитории» и 
 Оба файла — инфраструктура задачи: `prepareIssueWorkspace` дописывает их в
 локальный `.git/info/exclude` каждой рабочей копии, иначе публикация (`git add -A`
 на шаге `pr`) увезла бы их в MR. Идемпотентно и best-effort.
+
+**Инструкции тега (кросс-репо топология).** У тега есть собственное поле
+`run_instructions` — Markdown о том, как запускать ВЕСЬ набор репозиториев
+вместе: прокси, порты, общие переменные окружения. Это инструкции уровня
+workspace, а не отдельного проекта, поэтому они живут на теге. Задача хранит
+`issues.tag_id` (FK на `tags`, `ON DELETE SET NULL`), и
+`prepareIssueWorkspace` читает `tag.run_instructions` по нему, передавая их
+агенту-анализатору через `tagInstructions` → плейсхолдер
+`{{TAG_INSTRUCTIONS}}` (пустые инструкции рендерятся в пустую строку, секция не
+появляется). Тег-инструкции имеют приоритет над дефолтами промпта: именно они
+задают, проксируется ли набор на один порт или сервисы живут на разных URL.
+
+Обратная запись: агент ведёт `WORKSPACE_INSTRUCTIONS.md` в КОРНЕ рабочей папки
+задачи (не внутри репозитория) — общий файл координации, из которого следующие
+агенты узнают уже занятые порты. После успешной подготовки
+`prepareIssueWorkspace` читает этот файл и сохраняет его в
+`tags.run_instructions` (`status = 'generated'`) — так знание о том, как
+разворачивался набор, накапливается на теге и переиспользуется следующей
+задачей. При `bootstrap_enabled = false` у репозитория анализ пропускается, но
+клон остаётся: агент пишет в порт-карту `⛔ clone-only`, а его `location`-блок в
+прокси — закомментированным.
+
+**Порт-контракт.** `allocateDevPort` выдаёт ОДИН порт на задачу
+(диапазон `5100–5299`), и движок передаёт одно и то же значение каждому
+анализатору в цикле, а `DEV_SERVER.sh` система поднимает только у первого
+репозитория с `bootstrap_enabled`. Поэтому `{{DEV_SERVER_PORT}}` в промпте
+описан как ЕДИНЫЙ публичный вход workspace, а не «порт этого репо»: entry-point
+(шелл/прокси) слушает его, остальные репозитории — апстримы на собственных
+портах ВНЕ `5100–5299`, которые агент занимает и фиксирует в порт-карте
+`WORKSPACE_INSTRUCTIONS.md`. До этого закрепления анализатор сажал все
+репозитории набора на один порт и резюмировал «запускать строго по очереди»,
+что для микрофронтендов неработоспособно (шелл грузится без единого ремоута).
+
+**Микрофронтенды без docker-in-docker.** Промпт учит агента распознавать набор
+шелл+сервисы (`nginx-local/`, `docker-compose.yaml`, `servePath`/`baseHref` с
+подпутём, Module Federation/`remoteEntry.js`, runtime-ключ вида
+`remoteComponentsUrl` в `src/assets/vars.json`) и поднимать прокси НАТИВНО:
+контейнер задачи не имеет docker, поэтому `docker compose up` не вариант.
+Compose-файл транслируется по таблице (`host.docker.internal` → `127.0.0.1`,
+volume-пути `/usr/share/nginx/html/...` → реальный `dist/`, порты уже
+контейнерные), а сам конфиг сохраняется как `nginx-workspace.conf` в корне
+рабочей папки. Приведён проверенный non-root-рецепт: `pid`/`error_log`/все
+`*_temp_path` в `/tmp`, без директивы `user`, `listen` на порт > 1024, запуск
+`nginx -t|-c <conf> -p <prefix>`. Если бинаря nginx нет — фолбек на небольшой
+Node-reverse-proxy (node в образе всегда), без попыток его установить. nginx
+добавлен в `dotfiles-agent/Dockerfile` (`nginx-light`), пересборка образа делает
+его основным путём.
 Детерминированный install остаётся по манифесту, а из `RUN_INSTRUCTIONS.md`
 берётся только секция `## Run` — команда запуска dev-сервера (см. ниже).
 Остальные секции (build и т.п.) пока не исполняются (только логируются).

@@ -985,6 +985,7 @@ export async function issuesRoutes(
           step_thinking_levels: body.step_thinking_levels ?? null,
           container_name: null,
           source: jiraIssueUrl ? 'jira' : null,
+          tag_id: body.tag_id ?? null,
           status: issueStatus,
           created_at: now,
           updated_at: now,

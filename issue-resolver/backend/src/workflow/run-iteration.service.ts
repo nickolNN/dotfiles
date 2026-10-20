@@ -30,6 +30,7 @@ import {
   getRepositoryByUrl,
   updateRepositoryRunInstructions,
 } from '../db/repositories.repo';
+import { getTag, updateTagRunInstructions } from '../db/tags.repo';
 import { issueRepositories, issues, iterations } from '../db/schema';
 import {
   appendStepRunEvent,
@@ -529,6 +530,8 @@ export interface PrepareIssueWorkspaceDeps {
   bootstrapperTimeoutMs?: number;
   /** Корень host-папок задач; по умолчанию `/workspaces`. */
   workspaceRoot?: string;
+  /** Реестр живых pi-сессий для steer/abort bootstrapper'а. */
+  control?: StepSessionRegistry;
 }
 
 /**
@@ -598,6 +601,18 @@ export async function prepareIssueWorkspace(
     ? await allocateDevPort(input.issueId)
     : undefined;
 
+  // Тег-инструкции: если задача создана из тега — загружаем Markdown-инструкцию
+  // по запуску ВСЕГО набора репозиториев (прокси, порты, переменные).
+  const issueRow = db
+    .select({ tag_id: issues.tag_id })
+    .from(issues)
+    .where(eq(issues.id, input.issueId))
+    .get();
+  const tagInstructions: string | null =
+    issueRow?.tag_id
+      ? (getTag(db, issueRow.tag_id)?.run_instructions ?? null)
+      : null;
+
   // Подготовка рабочей папки: анализатор `run_instructions` подключается только
   // при явном `deps.bootstrapperFactory` (real-режим); фейковый дефолт анализа не
   // делает — юнит-тесты не тратят прогоны pi на анализ.
@@ -609,6 +624,10 @@ export async function prepareIssueWorkspace(
     bootstrapperModel: deps.bootstrapperModel,
     bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
     devServerPort,
+    issueId: input.issueId,
+    iterationId: input.iterationId,
+    control: deps.control,
+    tagInstructions,
     ...(deps.bootstrapperFactory
       ? { bootstrapper: deps.bootstrapperFactory }
       : {}),
@@ -679,6 +698,21 @@ export async function prepareIssueWorkspace(
           .run();
       } else {
         releaseIssueDevPorts(input.issueId);
+      }
+    }
+
+    // Сохраняем WORKSPACE_INSTRUCTIONS.md обратно в тег, если задача из тега
+    // и агент написал кросс-репо инструкции.
+    if (issueRow?.tag_id) {
+      const workspaceInstructionsPath = join(workspaceDir, 'WORKSPACE_INSTRUCTIONS.md');
+      if (existsSync(workspaceInstructionsPath)) {
+        const wsInstructions = readFileSync(workspaceInstructionsPath, 'utf-8');
+        if (wsInstructions.trim()) {
+          updateTagRunInstructions(db, issueRow.tag_id, {
+            instructions: wsInstructions,
+            status: 'generated',
+          });
+        }
       }
     }
 
@@ -994,6 +1028,7 @@ async function startNextPendingIteration(
     git: deps.git,
     sse: deps.sse,
     local: deps.local,
+    control: deps.control,
     ...(deps.bootstrapperFactory
       ? { bootstrapperFactory: deps.bootstrapperFactory }
       : {}),

@@ -72,6 +72,21 @@ start_frontend() {
     echo "frontend уже слушает :$FRONTEND_PORT — пропускаю."
     return 0
   fi
+
+  # Монорепо на npm workspaces: все пакеты подняты в корневой node_modules.
+  # Если фронтендовая node_modules пустая (только кеши .vite*), она блокирует
+  # walk-up-резолв Node.js до корня — удаляем её перед стартом.
+  local nm="$ROOT/frontend/node_modules"
+  if [ -d "$nm" ]; then
+    # Есть ли внутри что-то, кроме .vite/.vite-temp?
+    local has_real
+    has_real="$(find "$nm" -maxdepth 1 ! -name node_modules ! -name '.vite' ! -name '.vite-temp' -print -quit 2>/dev/null)"
+    if [ -z "$has_real" ]; then
+      echo "  (чищу пустую frontend/node_modules — блокирует hoist-резолв)"
+      rm -rf "$nm"
+    fi
+  fi
+
   cd "$ROOT/frontend" || { echo "нет $ROOT/frontend" >&2; return 1; }
   nohup npx vite --host 0.0.0.0 --port "$FRONTEND_PORT" \
     > "$FRONTEND_LOG" 2>&1 &

@@ -107,8 +107,8 @@ export function insertTag(db: Db, input: CreateTagRequest): Tag {
         id,
         name: input.name,
         description: input.description ?? null,
-        run_instructions: null,
-        run_instructions_status: 'unknown',
+        run_instructions: input.run_instructions ?? null,
+        run_instructions_status: input.run_instructions ? 'generated' : 'unknown',
         created_at: now,
         updated_at: now,
       })
@@ -150,13 +150,17 @@ export function updateTag(
     return undefined;
   }
   const now = new Date().toISOString();
-  const patch: { name?: string; description?: string | null; updated_at: string } =
+  const patch: { name?: string; description?: string | null; run_instructions?: string | null; run_instructions_status?: import('@issue-resolver/shared').RunInstructionsStatus; updated_at: string } =
     { updated_at: now };
   if (input.name !== undefined) {
     patch.name = input.name;
   }
   if (input.description !== undefined) {
     patch.description = input.description;
+  }
+  if (input.run_instructions !== undefined) {
+    patch.run_instructions = input.run_instructions;
+    patch.run_instructions_status = input.run_instructions ? 'generated' : 'unknown';
   }
   const nextRepositories = input.repositories;
 

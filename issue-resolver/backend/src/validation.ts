@@ -76,6 +76,7 @@ export const createIssueRequestSchema = z
     review_context: z.string().optional(),
     is_review_need: z.boolean().optional(),
     pipeline_steps: z.array(z.enum(PIPELINE_STEPS)).optional(),
+    tag_id: z.string().optional(),
     model: z.string().optional(),
     step_models: stepModelsSchema.optional(),
     bootstrapper_model: z.string().optional(),
@@ -127,6 +128,7 @@ export const createRepoRequestSchema = z.object({
 export const createTagRequestSchema = z.object({
   name: z.string().min(1, 'name обязателен'),
   description: z.string().optional(),
+  run_instructions: z.string().nullable().optional(),
   repositories: z
     .array(
       z.object({
@@ -146,6 +148,7 @@ export const updateHostnameRequestSchema = z.object({
 export const updateTagRequestSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
+  run_instructions: z.string().nullable().optional(),
   repositories: z
     .array(
       z.object({

@@ -235,6 +235,19 @@ export type BootstrapperFactory = (params: {
   hostWorkspaceDir: string;
   /** Путь рабочей папки, видимый агенту (container-путь или host в local). */
   containerWorkspaceDir: string;
+  /** ID задачи — создаёт комнату `issue-<issueId>` для интерактивной сессии. */
+  issueId: string;
+  /** ID итерации — адрес сессии в реестре. */
+  iterationId?: string;
+  /** stepRunId для регистрации живой сессии (фронт привязывается по нему). */
+  stepRunId?: string;
+  /** Реестр живых сессий для steer/abort. */
+  registry?: import('../pi/session-registry').StepSessionRegistry;
+  /**
+   * Тег-инструкции проекта (Markdown). Агент читает их до начала работы и
+   * пишет `WORKSPACE_INSTRUCTIONS.md` в корень рабочей папки.
+   */
+  tagInstructions?: string | null;
   /** Модель агента-анализатора (по умолчанию — дефолт pi). */
   model?: string;
   /** Таймаут анализа (мс); undefined — без потолка (фейковый дефолт/тесты). */
@@ -275,6 +288,17 @@ export interface PrepareWorkspaceDeps {
   onBootstrapStdout?: (repo: string, chunk: string) => void;
   /** Проброс stderr агента-бутстрапера в SSE: имя репозитория + порция вывода. */
   onBootstrapStderr?: (repo: string, chunk: string) => void;
+  /** ID задачи — комната `issue-<issueId>` для интерактивной сессии bootstrapper'а. */
+  issueId?: string;
+  /** ID итерации — адрес сессии в реестре. */
+  iterationId?: string;
+  /** Реестр живых сессий для steer/abort bootstrapper'а. */
+  control?: import('../pi/session-registry').StepSessionRegistry;
+  /**
+   * Тег-инструкции — Markdown-документ о том, как запускать весь набор репозиториев
+   * вместе (прокси, порты, переменные). null — инструкций нет.
+   */
+  tagInstructions?: string | null;
 }
 
 /**
@@ -425,10 +449,16 @@ export async function prepareWorkspace(
       }
       onProgress?.({ step: 'checking_instructions', repo: repoName, status: 'running' });
       onProgress?.({ step: 'bootstrapping', repo: repoName, status: 'running' });
+      const bootstrapId = `${issue.id}/bootstrap`;
       const bootstrapper = deps.bootstrapper({
         containerName: spec.containerName,
         hostWorkspaceDir: workspaceHostDir,
         containerWorkspaceDir,
+        issueId: issue.id,
+        iterationId: deps.iterationId,
+        stepRunId: bootstrapId,
+        registry: deps.control,
+        tagInstructions: deps.tagInstructions,
         model: deps.bootstrapperModel,
         timeoutMs: deps.bootstrapperTimeoutMs,
         // Репозиторий известен только в цикле — заворачиваем колбэки, чтобы
