@@ -8,6 +8,8 @@ Stage {{STAGE_INDEX}} task: {{STAGE_TASK}}
 
 {{REPOS}}
 
+{{WORKING_STATE}}
+
 {{REFINED_PLAN}}
 
 {{ATTACHMENTS}}

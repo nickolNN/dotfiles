@@ -16,7 +16,7 @@ export const SINGLE_PLAN: ExecutionPlan = {
   rationale: 'простая задача — один агент',
 };
 
-/** 2. room — N воркеров параллельно + один координатор. */
+/** 2. room — N исполнителей параллельно + один координатор. */
 export const ROOM_PLAN: ExecutionPlan = {
   mode: 'room',
   executors: 3,

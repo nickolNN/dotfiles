@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS issues (
   tag_id TEXT REFERENCES tags(id) ON DELETE SET NULL,
   dev_server_port INTEGER,
   dev_server_pid INTEGER,
+  merge_requests TEXT,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -279,6 +280,35 @@ function ensureIssueColumns(sqlite: Database.Database): void {
   }
   if (!columns.has('tag_id')) {
     sqlite.exec('ALTER TABLE issues ADD COLUMN tag_id TEXT REFERENCES tags(id) ON DELETE SET NULL');
+  }
+  // Настройки DevOps-агента и числа исполнителей: без них черновик их терял
+  // (они писались только в `iterations`, а у черновика итераций нет).
+  // Колонки назывались `bootstrapper_*` — если живая БД успела их создать
+  // до ренейма, переносим значения через RENAME COLUMN (SQLite ≥ 3.25);
+  // иначе добавляем колонку с новым именем.
+  if (!columns.has('devops_model')) {
+    if (columns.has('bootstrapper_model')) {
+      sqlite.exec(
+        'ALTER TABLE issues RENAME COLUMN bootstrapper_model TO devops_model',
+      );
+    } else {
+      sqlite.exec('ALTER TABLE issues ADD COLUMN devops_model TEXT');
+    }
+  }
+  if (!columns.has('devops_thinking_level')) {
+    if (columns.has('bootstrapper_thinking_level')) {
+      sqlite.exec(
+        'ALTER TABLE issues RENAME COLUMN bootstrapper_thinking_level TO devops_thinking_level',
+      );
+    } else {
+      sqlite.exec('ALTER TABLE issues ADD COLUMN devops_thinking_level TEXT');
+    }
+  }
+  if (!columns.has('worker_count')) {
+    sqlite.exec('ALTER TABLE issues ADD COLUMN worker_count INTEGER');
+  }
+  if (!columns.has('merge_requests')) {
+    sqlite.exec('ALTER TABLE issues ADD COLUMN merge_requests TEXT');
   }
 }
 

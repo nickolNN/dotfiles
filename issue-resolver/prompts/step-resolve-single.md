@@ -16,3 +16,5 @@ HARD-RULES:
 - Leave the change uncommitted in the working copy — the backend commits, pushes
   and opens the MR after the `pr` step.
 - Report what you verified in `scenarios` and every leftover risk in `findings`.
+- Write a narrative of what you changed as `iterations/<n>/.resolve.md` —
+  this file will be read by the report agent to compile the full task report.

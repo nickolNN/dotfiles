@@ -1,7 +1,7 @@
 /**
  * `runRoomResolve`/`runStagedResolve` должны возвращать в результате шага
  * (`result.stats` → step_outputs.stats) СУММУ телеметрии всех агентов шага:
- * воркеров, координаторов этапов и финального координатора, а не stats
+ * исполнителей, координаторов этапов и финального координатора, а не stats
  * последнего агента. `cost` суммируется только по не-null значениям.
  */
 import { describe, expect, it } from 'vitest';
@@ -96,7 +96,7 @@ const sumOf = (count: number): SessionStats => {
 };
 
 describe('runRoomResolve — stats шага = сумма всех агентов', () => {
-  it('room: 3 воркера + координатор, cost и токены суммируются', async () => {
+  it('room: 3 исполнителя + координатор, cost и токены суммируются', async () => {
     const pi = new FakePiRunner();
     for (let n = 1; n <= 4; n += 1) {
       pi.enqueue(pass(`agent-${n}`, statsWith(n)));
@@ -121,9 +121,9 @@ describe('runRoomResolve — stats шага = сумма всех агентов
 });
 
 describe('runStagedResolve — stats шага = сумма всех агентов этапов и финала', () => {
-  it('сложный stages 2→1→3: суммируются воркеры, координаторы этапов и финал', async () => {
+  it('сложный stages 2→1→3: суммируются исполнители, координаторы этапов и финал', async () => {
     const pi = new FakePiRunner();
-    // 2 воркера + координатор этапа 1, 1 агент этапа 2, 3 воркера +
+    // 2 исполнителя + координатор этапа 1, 1 агент этапа 2, 3 исполнителя +
     // координатор этапа 3, финальный lead → 9 агентов.
     for (let n = 1; n <= 9; n += 1) {
       pi.enqueue(pass(`agent-${n}`, statsWith(n)));

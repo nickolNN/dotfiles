@@ -22,6 +22,7 @@ import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import { FakeMrClient } from '../src/pr/mr';
 import { InMemorySseHub } from '../src/sse/hub';
 import type {
+  IterationTerminalOutcome,
   RunIterationInput,
   StepRunStore,
   WorkflowDeps,
@@ -306,13 +307,14 @@ describe('runIteration — один шаг', () => {
     expect(pi.calls[0].prompt).toContain('report.html');
   });
 
-  it('desiredResult не задан → resolve prompt без report.html', async () => {
+  it('desiredResult не задан → resolve prompt всё равно требует report.md и report.html', async () => {
     const { deps, pi } = makeDeps();
     pi.enqueue(pass('resolve'));
 
     await runIteration(deps, makeInput(['resolve']));
 
-    expect(pi.calls[0].prompt).not.toContain('report.html');
+    expect(pi.calls[0].prompt).toContain('report.md');
+    expect(pi.calls[0].prompt).toContain('report.html');
   });
 
   it('devServerPort → test-промпт несёт URL живого приложения', async () => {
@@ -1220,13 +1222,28 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(git.commits.length).toBeGreaterThanOrEqual(1);
     expect(mr.calls).toHaveLength(0);
 
-    // SSE: mr-события с URL существующих MR, а не новых.
+    // Текст существующего MR ОБНОВЛЯЕТСЯ: payload ветки растёт с каждой
+    // итерацией (сквош к origin/<base>), а описание с creation момента осталось
+    // бы от первой итерации.
+    expect(mr.updateCalls.map((call) => call.mrId)).toEqual([
+      existingGhUrl,
+      existingGlUrl,
+    ]);
+    expect(mr.updateCalls[0]).toMatchObject({
+      repositoryUrl: 'https://github.com/acme/app.git',
+      source: 'github',
+      title: 'Fix bug',
+      description: 'pr ok',
+    });
+
+    // SSE: mr-события с URL существующих MR + отметки об обновлении текста.
     const mrEvents = events.filter(
       (event) => event.type === 'log' && event.stream === 'mr',
     );
-    expect(mrEvents).toHaveLength(2);
     expect(mrEvents.map((event) => event.data)).toEqual([
+      `заголовок и описание MR обновлены — ${existingGhUrl}`,
       existingGhUrl,
+      `заголовок и описание MR обновлены — ${existingGlUrl}`,
       existingGlUrl,
     ]);
 
@@ -1239,6 +1256,160 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(
       systemEvents.some((data) => data.includes('MR уже существует')),
     ).toBe(true);
+  });
+
+  it('код-шаг принёс title+description → pr-агент всё равно пишет текст сам', async () => {
+    // Текст MR — работа выделенного pr-агента: он читает payload целиком
+    // (`git diff origin/<base>`, т.е. и прошлые итерации). Отчёт resolve про
+    // эти поля не решает: его текст описывает итерацию, а не MR.
+    const { deps, pi, mr } = makeDeps();
+    pi.enqueue({
+      step: 'resolve',
+      exitCode: 0,
+      report: {
+        status: 'pass',
+        summary: 'resolve ok',
+        title: 'stale per-iteration title',
+        description: 'describes only this iteration',
+      },
+      stdout: '',
+      stderr: '',
+    });
+    pi.enqueue({
+      step: 'pr',
+      exitCode: 0,
+      report: {
+        status: 'pass',
+        summary: 'pr ok',
+        title: 'KOS-1: whole task, all iterations',
+        description: '## Summary\nfull payload\n',
+      },
+      stdout: '',
+      stderr: '',
+    });
+
+    const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(pi.calls).toHaveLength(2);
+    expect(mr.calls).toHaveLength(2);
+    expect(mr.calls[0]).toMatchObject({
+      title: 'KOS-1: whole task, all iterations',
+      description: '## Summary\nfull payload\n',
+    });
+  });
+
+  it('updateMr падает → MR остаётся открытым, прогон не роняется, текст в отчёте', async () => {
+    const { deps, pi, git, mr, sse } = makeDeps();
+    const events: SSEEvent[] = [];
+    sse.subscribe('iter-1', (event) => events.push(event));
+    const branch = featureBranchName('Fix bug', 'issue-1');
+    mr.openMrs = [
+      {
+        repositoryUrl: 'https://github.com/acme/app.git',
+        headBranch: branch,
+        baseBranch: 'main',
+        mrUrl: 'https://github.com/acme/app/pull/42',
+      },
+    ];
+    mr.failNextUpdateWith(new Error('gitlab mr update failed: 403'));
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('pr'));
+
+    const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
+
+    // Сбой текста — не сбой публикации: код запушен, MR жив.
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(git.commits).toHaveLength(2);
+    expect(mr.updateCalls).toHaveLength(1);
+    // Второй репозиторий (gitlab) дошёл до создания нового MR.
+    expect(mr.calls).toHaveLength(1);
+    expect(mr.calls[0].repositoryUrl).toBe('git@gitlab.example.com:team/lib.git');
+    expect(
+      events
+        .filter((event) => event.type === 'log' && event.stream === 'mr')
+        .map((event) => event.data)
+        .some((data) => data.includes('текст обновить не удалось')),
+    ).toBe(true);
+  });
+
+  it('второй прогон pr: push в ту же ветку с squashBase → force-push, findOpenMr находит существующий MR, updateMr обновляет описание', async () => {
+    // Баг: без --force push rejected как non-fast-forward, потому что
+    // squashBase (reset --soft origin/<base>) создаёт новый коммит, не
+    // являющийся потомком существующей remote-ветки.
+    // Тест проверяет полный flow второй итерации:
+    //   1. featureBranchName стабилен между итерациями
+    //   2. commitAndPush вызывается с squashBase (сквош к origin/<base>)
+    //   3. findOpenMr находит существующий MR (openMrs заполнен)
+    //   4. createMr НЕ вызывается
+    //   5. updateMr вызывается с новым title/description
+    const { deps, pi, git, mr } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('pr'));
+
+    const branch = featureBranchName('Fix bug', 'issue-1');
+    const existingUrl = 'https://github.com/acme/app/pull/42';
+    mr.openMrs = [
+      {
+        repositoryUrl: 'https://github.com/acme/app.git',
+        headBranch: branch,
+        baseBranch: 'main',
+        mrUrl: existingUrl,
+      },
+    ];
+
+    // Один репозиторий — второй прогон, MR уже открыт.
+    const singleRepo = [
+      {
+        repository_url: 'https://github.com/acme/app.git',
+        base_branch: 'main',
+        create_mr: true,
+      },
+    ];
+    const result = await runIteration(deps, {
+      issue: { id: 'issue-1', title: 'Fix bug', pipelineSteps: ['resolve', 'pr'] },
+      iteration: {
+        id: 'iter-1',
+        issue_id: 'issue-1',
+        number: 1,
+        context: 'context text',
+        review_context: '',
+        is_review_need: false,
+        steps: ['resolve', 'pr'],
+        status: 'running',
+        created_at: NOW,
+        updated_at: NOW,
+      },
+      repositories: singleRepo,
+      preparedRepoWorkspaces: singleRepo.map((repo) => ({
+        repoUrl: repo.repository_url,
+        path: '/workspaces/issue-1/app',
+        branch: repo.base_branch,
+      })),
+      mrToken: 'dummy-token',
+    });
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+
+    // commitAndPush должен быть вызван даже при существующем MR:
+    // ветка та же, но payload мог вырасти (сквош всех итераций).
+    expect(git.commits.length).toBeGreaterThanOrEqual(1);
+    // Все вызовы commitAndPush должны идти с squashBase — это гарантирует
+    // force-push в реальном GitCliService.
+    for (const commit of git.commits) {
+      expect(commit.squashBase).toBeDefined();
+      expect(commit.squashBase).toMatch(/^origin\//);
+    }
+
+    // createMr не вызывается — MR уже открыт.
+    expect(mr.calls).toHaveLength(0);
+    // updateMr вызывается — описание обновляется до актуального.
+    expect(mr.updateCalls).toHaveLength(1);
+    expect(mr.updateCalls[0]).toMatchObject({
+      mrId: existingUrl,
+      title: 'Fix bug',
+      description: 'pr ok',
+    });
   });
 });
 
@@ -1259,7 +1430,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     stderr: '',
   });
 
-  it('refine room(2) → 2 воркера + 1 координатор; отчёт = координатора', async () => {
+  it('refine room(2) → 2 исполнителя + 1 координатор; отчёт = координатора', async () => {
     const { deps, store, pi, sse, control } = makeDeps();
     const events: SSEEvent[] = [];
     sse.subscribe('iter-1', (event) => events.push(event));
@@ -1292,7 +1463,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
       summary: 'coordinator',
     });
 
-    // Воркер-промпты: своя подзадача, peer не lead; план refine доехал.
+    // Исполнитель-промпты: своя подзадача, peer не lead; план refine доехал.
     expect(pi.calls[1].prompt).toContain('Sub-task 1 of 2: a');
     expect(pi.calls[2].prompt).toContain('Sub-task 2 of 2: b');
     expect(pi.calls[1].prompt).toContain('NOT the lead');
@@ -1310,13 +1481,13 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     expect(systemData).toContain('worker 1/2: a');
     expect(systemData).toContain('worker 2/2: b');
 
-    // Реестр отдаёт агентов комнаты в порядке воркер1, воркер2, координатор.
+    // Реестр отдаёт агентов комнаты в порядке исполнитель1, исполнитель2, координатор.
     expect(control.listAgents('iter-1')).toEqual([
       {
         id: `${resolveRunId}/worker/0`,
         role: 'worker',
         index: 1,
-        label: 'Воркер 1',
+        label: 'Исполнитель 1',
         stage: null,
         stageName: null,
         status: 'running',
@@ -1328,7 +1499,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         id: `${resolveRunId}/worker/1`,
         role: 'worker',
         index: 2,
-        label: 'Воркер 2',
+        label: 'Исполнитель 2',
         stage: null,
         stageName: null,
         status: 'running',
@@ -1370,7 +1541,61 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     });
   });
 
-  it('room + aborted воркер → координатор НЕ стартует, итерация cancelled', async () => {
+  it('worker_count = 1 гасит room-рекомендацию refine → resolve одним агентом', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(
+      refineWith({
+        mode: 'room',
+        executors: 3,
+        decomposition: ['a', 'b', 'c'],
+      }),
+    );
+    pi.enqueue(resolveWith('solo'));
+
+    const input = makeInput(['refine', 'resolve']);
+    const result = await runIteration(deps, {
+      ...input,
+      iteration: { ...input.iteration, worker_count: 1 },
+    });
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // refine + один resolve-агент: комнаты нет, потолку worker_count=1 она
+    // противоречит (planExecutionMode деградирует в single).
+    expect(pi.calls).toHaveLength(2);
+    expect(pi.calls[1].options?.stepRunId).toBe(store.runs[1].id);
+    expect(pi.calls[1].options?.agent).toBeUndefined();
+    expect(pi.calls[1].prompt).toContain('Role: implementer');
+  });
+
+  it('worker_count = 2 режет room-план refine с 4 исполнителями до двух', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(
+      refineWith({
+        mode: 'room',
+        executors: 4,
+        decomposition: ['a', 'b', 'c', 'd'],
+      }),
+    );
+    pi.enqueue(resolveWith('w1'));
+    pi.enqueue(resolveWith('w2'));
+    pi.enqueue(resolveWith('lead'));
+
+    const input = makeInput(['refine', 'resolve']);
+    await runIteration(deps, {
+      ...input,
+      iteration: { ...input.iteration, worker_count: 2 },
+    });
+
+    // refine + 2 исполнителя + координатор (а не 4 исполнителя).
+    expect(pi.calls).toHaveLength(4);
+    expect(pi.calls.map((call) => call.options?.stepRunId).slice(1)).toEqual([
+      expect.stringContaining('/worker/0'),
+      expect.stringContaining('/worker/1'),
+      expect.not.stringContaining('/worker/'),
+    ]);
+  });
+
+  it('room + aborted исполнитель → координатор НЕ стартует, итерация cancelled', async () => {
     const { deps, store, pi } = makeDeps();
     pi.enqueue(
       refineWith({
@@ -1390,7 +1615,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
     expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
-    // refine + 2 воркера = 3 вызова; координатор после abort не запускался.
+    // refine + 2 исполнителя = 3 вызова; координатор после abort не запускался.
     expect(pi.calls).toHaveLength(3);
     const resolveRunId = store.runs[1].id;
     expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRunId}/worker/0`);
@@ -1457,7 +1682,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
       `${resolveRunId}/stage/1/worker/1`,
       `${resolveRunId}/stage/1/worker/2`,
       `${resolveRunId}/stage/1/coordinator`,
-      `${resolveRunId}/stage/2/coordinator`,
+      `${resolveRunId}/stage/2/worker/1`,
       resolveRunId,
     ]);
     expect(JSON.parse(store.outputs[1].report)).toMatchObject({
@@ -1478,5 +1703,92 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(trace(store)).toEqual(['resolve#1:success']);
     expect(pi.calls).toHaveLength(1);
+  });
+});
+
+describe('runIteration — onIterationTerminal (A1–A5)', () => {
+  const collect = (deps: WorkflowDeps): IterationTerminalOutcome[] => {
+    const seen: IterationTerminalOutcome[] = [];
+    deps.onIterationTerminal = (outcome) => seen.push(outcome);
+    return seen;
+  };
+
+  it('A1: completed-итерация дёргает колбэк ровно один раз с iterationStatus=completed', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    const seen = collect(deps);
+
+    const result = await runIteration(deps, makeInput(['resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      issueId: 'issue-1',
+      issueTitle: 'Fix bug',
+      iterationNumber: 1,
+      iterationCount: 1,
+      iterationStatus: 'completed',
+    });
+  });
+
+  it('A2: resolve исчерпал self-retry → колбэк failed', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
+    pi.enqueue(fail('resolve'));
+    const seen = collect(deps);
+
+    const result = await runIteration(deps, makeInput(['resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].iterationStatus).toBe('failed');
+  });
+
+  it('A3: abort (cancelled) → колбэк вызван с iterationStatus=failed', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(aborted('review'));
+    const seen = collect(deps);
+
+    const result = await runIteration(deps, makeInput(['resolve', 'review']));
+
+    expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
+    expect(seen).toHaveLength(1);
+    // У IterationTerminalOutcome нет 'cancelled' — abort маппится на failed.
+    expect(seen[0].iterationStatus).toBe('failed');
+  });
+
+  it('A4: review→resolve retry, финал needs_input → колбэк НЕ вызывается', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(fail('review'));
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(fail('review'));
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(fail('review'));
+    const seen = collect(deps);
+
+    const result = await runIteration(deps, makeInput(['resolve', 'review']));
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: true });
+    // needs_input — не терминальное завершение: отчёт ещё рано собирать.
+    expect(seen).toHaveLength(0);
+  });
+
+  it('A5: retry→успех не дёргает колбэк дважды — ровно один completed', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(fail('review'));
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('review'));
+    const seen = collect(deps);
+
+    const result = await runIteration(deps, makeInput(['resolve', 'review']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].iterationStatus).toBe('completed');
   });
 });

@@ -310,7 +310,11 @@ describe('TaskDetail — live SSE', () => {
       configurable: true,
       value: 777,
     });
-    scroll.scrollTop = 0;
+    Object.defineProperty(scroll, 'clientHeight', {
+      configurable: true,
+      value: 300,
+    });
+    scroll.scrollTop = 477; // у дна: 777 - 477 - 300 = 0
 
     act(() => {
       FakeEventSource.instances[0].emit({
@@ -370,7 +374,11 @@ describe('TaskDetail — live SSE', () => {
       configurable: true,
       value: 777,
     });
-    scroll.scrollTop = 0;
+    Object.defineProperty(scroll, 'clientHeight', {
+      configurable: true,
+      value: 300,
+    });
+    scroll.scrollTop = 477; // у дна: 777 - 477 - 300 = 0
 
     act(() => {
       FakeEventSource.instances[0].emit({

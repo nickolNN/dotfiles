@@ -44,8 +44,8 @@ function CleanupButton() {
       )}
       {result && (
         <span className="block text-sm text-[#00FF41]">
-          Удалено папок: {result.deleted_dirs}, убито процессов:{' '}
-          {result.killed_processes}
+          Удалено папок: {result.deleted_dirs}, комнат: {result.deleted_rooms},
+          убито процессов: {result.killed_processes}
           {result.errors.length > 0 && (
             <span className="text-[#FF3B3B]">
               , ошибок: {result.errors.length}
@@ -183,8 +183,9 @@ function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
       <section className="max-w-md">
         <h2 className="mb-2 text-sm font-semibold">Обслуживание</h2>
         <p className="mb-3 text-xs text-[#00FF41]/50">
-          Находит и удаляет папки задач, удалённых из базы, и убивает
-          оставшиеся от них процессы (dev-серверы, агенты).
+          Находит и удаляет папки задач, удалённых из базы, убивает
+          оставшиеся от них процессы (dev-серверы, агенты) и убирает
+          брошенные комнаты этих задач (живые не трогает).
         </p>
         <CleanupButton />
       </section>

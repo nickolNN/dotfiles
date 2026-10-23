@@ -2,6 +2,75 @@ FROM --platform=$BUILDPLATFORM node:24-bookworm
 
 ARG TARGETARCH
 
+# ── Extra CA certificates (optional, name-agnostic) ────────────────
+# `dotfiles-agent/certs/` is a DROP FOLDER, not a file this build knows the
+# name of. On a machine inside a corporate network, put root/intermediate
+# certificates there (`*.pem` or `*.crt`, any names, any number) and rebuild.
+# The folder is gitignored and a fresh clone holds nothing but `.gitkeep`, so
+# every step here is conditional and the build must succeed with ZERO
+# certificates — that is the normal case, not an error.
+#
+# Two trust stores have to be fed, and they are independent:
+#   · OpenSSL's (`/usr/local/share/ca-certificates/*.crt` + `update-ca-certificates`)
+#     → git, curl, openssl, chromium/playwright. The rename to `.crt` is
+#     required: `update-ca-certificates` ignores files not ending in `.crt`, so
+#     a `*.pem` dropped there would be trusted by nobody, silently.
+#   · Node's own store → Node does NOT read the system bundle (it ships a
+#     compiled-in Mozilla store), so `update-ca-certificates` alone never fixes
+#     npm / yarn / pi / its MCP servers. They need `NODE_EXTRA_CA_CERTS`, which
+#     accepts ONE file holding MANY certificates.
+# The bundle is created even when empty: Node ignores an empty file silently,
+# while a MISSING one prints a warning on every start. So the baked path always
+# exists and is always safe to point at.
+#
+# Certificates only: a private key in this folder is a mistake, and the loop
+# refuses it instead of quietly baking a secret into the image. The loop also
+# rejects files with no `BEGIN CERTIFICATE` in them — `update-ca-certificates`
+# does NOT inspect content, it appends whatever a `*.crt` file holds straight
+# into the bundle, so without this filter a CSR or a stray text file would
+# become a permanent junk entry in the system trust store.
+# Two details here are load-bearing and easy to get wrong:
+#   · `-e` before every pattern — a pattern starting with `-----` is parsed by
+#     grep as an OPTION and exits 2, so `if ! grep` reads as "no certificate
+#     here" and would silently skip every file while printing `0 trusted`.
+#   · if files were provided but none passed the checks, the build FAILS —
+#     succeeding with an untrusted store would look like success.
+COPY dotfiles-agent/certs/ /tmp/agent-cas/
+RUN set -eu; \
+    bundle=/usr/local/share/ca-certificates/agent-extra-ca.pem; \
+    : > "$bundle"; \
+    found=0; seen=0; \
+    for f in /tmp/agent-cas/*; do \
+      case "$f" in *.pem|*.crt) ;; *) continue ;; esac; \
+      [ -f "$f" ] || continue; \
+      seen=$((seen + 1)); \
+      name=$(basename "$f"); \
+      if grep -qs -e "-----BEGIN .*PRIVATE KEY-----" "$f"; then \
+        echo "CA: refusing $name — private key, not a certificate" >&2; \
+        continue; \
+      fi; \
+      if ! grep -qs -e "-----BEGIN CERTIFICATE-----" "$f"; then \
+        echo "CA: skipping $name — no PEM certificate in it" >&2; \
+        continue; \
+      fi; \
+      dst="/usr/local/share/ca-certificates/${name%.*}.crt"; \
+      if [ -e "$dst" ]; then \
+        echo "CA: $dst already provided by another file — overwriting" >&2; \
+      fi; \
+      install -m 644 "$f" "$dst"; \
+      cat "$f" >> "$bundle"; \
+      found=$((found + 1)); \
+    done; \
+    if [ "$seen" -gt 0 ] && [ "$found" -eq 0 ]; then \
+      echo "CA: ERROR — $seen file(s) in dotfiles-agent/certs/, none of them usable." >&2; \
+      echo "    Each was reported above; a certificate must contain BEGIN CERTIFICATE." >&2; \
+      exit 1; \
+    fi; \
+    if [ "$found" -gt 0 ]; then update-ca-certificates; fi; \
+    rm -rf /tmp/agent-cas; \
+    echo "CA: $found extra certificate file(s) trusted (0 = standard Debian store, fine)"
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/agent-extra-ca.pem
+
 # ── Architecture mapping ───────────────────────────────────────
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
     NVIM_ARCH="arm64"; LUA_ARCH="arm64"; \
@@ -317,20 +386,34 @@ RUN git config --global protocol.version 2 \
   && set -- \
        "vercel-labs/agent-browser:skills/agent-browser" \
        "juliusbrussee/caveman:skills/caveman" \
+       "juliusbrussee/caveman:skills/ultracave" \
+       "juliusbrussee/caveman:skills/megacave" \
        "mattpocock/skills:skills/engineering/domain-modeling" \
        "mattpocock/skills:skills/engineering/code-review" \
        "mattpocock/skills:skills/engineering/wayfinder" \
        "mattpocock/skills:skills/engineering/codebase-design" \
-       "mattpocock/skills:skills/engineering/improve-codebase-architecture" \
        "mattpocock/skills:skills/engineering/tdd" \
+       # PR body shape — the original (credits: Dex Horthy / Humanlayer show-me).
+       # Our own fork of it is gone: two versions of one contract drift silently.
+       "mattpocock/skills:skills/engineering/pr" \
+       "mattpocock/skills:skills/engineering/diagnosing-bugs" \
+       "obra/superpowers:skills/verification-before-completion" \
        "mattpocock/skills:skills/engineering/retro" \
-       "mattpocock/skills:skills/productivity/handoff" \
+       # Interview-by-design-tree method; `wayfinder` calls Skill("grilling") in
+       # four places, so installing the original repairs those references and
+       # keeps upstream updates. `agent-skills/refine` is a thin adapter over it.
+       "mattpocock/skills:skills/productivity/grilling" \
        "mattpocock/skills:skills/productivity/to-questionnaire" \
        "mattpocock/skills:skills/productivity/teach" \
        "mattpocock/skills:skills/productivity/writing-for-agents" \
        "vercel-labs/agent-skills:skills/web-design-guidelines" \
        "dietrichgebert/ponytail:skills/ponytail" \
        "yonatangross/orchestkit:src/skills/glyph" \
+       # Visual craft for human-facing artifacts. Portable (no MCP, no Claude-Code
+       # frontmatter) — unlike orchestkit's `visualize-plan`, which needs
+       # memory/page-serve/notebooklm MCP servers we do not ship.
+       "anthropics/skills:skills/frontend-design" \
+       "anthropics/skills:skills/theme-factory" \
   && repos="" \
   && for entry; do \
        r="${entry%%:*}"; \
@@ -377,7 +460,10 @@ RUN jq -c '{packages: (.packages // [])}' \
 
 # ── Host config (volatile — kept LAST so edits only bust this layer) ──
 COPY --chown=agent:agent pi/ /tmp/pi-config/
-COPY --chown=agent:agent GLOBAL_AGENTS.md /tmp/pi-config/AGENTS.md
+# GLOBAL_AGENTS.md must NOT land in /tmp/pi-config: `pi/AGENTS.md` is a
+# symlink and `COPY pi/` restores it over any file we put there. Stage it
+# separately and overwrite the symlink in the finalize step below.
+COPY --chown=agent:agent GLOBAL_AGENTS.md /tmp/GLOBAL_AGENTS.md
 COPY --chown=agent:agent nvim/ /home/agent/.config/nvim/
 COPY --chown=agent:agent agent-skills/ /home/agent/.agents/skills/
 
@@ -404,6 +490,13 @@ RUN jq '.mcpServers["web-search"] = {"command": "node", "args": ["/opt/web-searc
   && jq 'walk(if type == "object" and has("url") then .url |= gsub("://(?<host>localhost|127\\.0\\.0\\.1)(?<rest>[:/])"; "://host.docker.internal\(.rest)") else . end)' \
        /tmp/mcp-in.json > /home/agent/.pi/agent/mcp.json \
   && rm -f /tmp/mcp-in.json \
+  # `pi/AGENTS.md` arrives as a symlink to ../GLOBAL_AGENTS.md — correct on
+  # the host, dangling inside the image. A dangling rules file means every
+  # agent silently runs with NO shared rules, so replace it with the real
+  # file staged above.
+  && cp --remove-destination /tmp/GLOBAL_AGENTS.md \
+       /home/agent/.pi/agent/AGENTS.md \
+  && rm -f /tmp/GLOBAL_AGENTS.md \
   # Host pi/ config may carry ~/.pi/agent/bin/{fd,rg} downloaded for the HOST
   # arch (e.g. macOS arm64 Mach-O). pi picks bin/ first by existence only,
   # so a wrong-arch binary shadows system fd/fdfind and silently breaks

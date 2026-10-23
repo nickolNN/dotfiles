@@ -88,4 +88,30 @@ export function reconcileInterruptedRuns(db: Db): void {
       `[reconcile] interrupted by restart: ${interrupted.length} step_run(s) → failed, ${interruptedIterations.length} iteration(s) → failed`,
     );
   }
+
+  // Задача завершилась (completed/failed), но в очереди есть pending-итерация:
+  // итерации создавались, пока другая задача занимала бэкенд, статус задачи
+  // не учитывает очередь. Возвращаем задачу в pending.
+  const stalePending = db
+    .select({ issueId: iterations.issue_id })
+    .from(iterations)
+    .innerJoin(issues, eq(issues.id, iterations.issue_id))
+    .where(
+      and(
+        eq(iterations.status, 'pending'),
+        inArray(issues.status, ['completed', 'failed']),
+      ),
+    )
+    .all();
+
+  if (stalePending.length > 0) {
+    const ids = [...new Set(stalePending.map((row) => row.issueId))];
+    db.update(issues)
+      .set({ status: 'pending', updated_at: now })
+      .where(inArray(issues.id, ids))
+      .run();
+    console.error(
+      `[reconcile] stale pending iteration(s) in completed/failed issue(s): ${ids.length} issue(s) → pending`,
+    );
+  }
 }

@@ -2,7 +2,7 @@
  * Общие helpers для edge-case e2e-тестов (`tests/edge-cases/*`).
  *
  * Edge-case-сценарии (пустое состояние, два одновременных issue,
- * переподключение SSE, bootstrap-прогресс по двум репозиториям) должны быть
+ * переподключение SSE, devops-прогресс по двум репозиториям) должны быть
  * детерминированными, поэтому API и SSE перехватываются Playwright'ом поверх
  * мок-стека (`playwright.config.ts` → `backend/test/e2e-server.ts`). Реальные
  * Docker/git/pi/сеть не используются; `tests/flow.spec.ts` идёт через
@@ -116,8 +116,7 @@ export interface FakeSseEvent {
     | 'step_status'
     | 'step_event'
     | 'iteration_status'
-    | 'workspace_progress'
-    | 'bootstrap_log';
+    | 'workspace_progress';
   issueId: string;
   iterationId?: string;
   stepRunId?: string;
@@ -482,6 +481,30 @@ export class FakeApi {
         await this.json(route, []);
         return true;
       }
+      if (issue && tail === 'report' && !tail2 && method === 'POST') {
+        // Фикстура кодирует АКТУАЛЬНЫЙ контракт отчёта:
+        // MD — `## Answer` первым, `## Execution details` последним; MR-ссылка
+        // в Answer. HTML — самодостаточный (инлайн <style>/<script>), один
+        // свёрнутый <details> внизу, внешние ссылки разрешены, загрузка
+        // внешних ресурсов — нет.
+        const reportContent = `# Task: ${issue.title}\n\n**Status:** completed\n**Iterations:** ${this.iterations.get(id)?.length ?? 0}\n\n## Answer\n\nMock answer — the task is done. MR: https://gitlab.example.com/team/project/-/merge_requests/1\n\n### Verification\n\nAll mock checks pass.\n\n## Execution details\n\n### Iteration timeline\n\nMock execution details.`;
+        const htmlContent = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${issue.title}</title><style>body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;max-width:900px;margin:2rem auto;padding:1rem;line-height:1.6}h1{color:#58a6ff}summary{cursor:pointer}</style></head><body><h1>${issue.title}</h1><h2>Answer</h2><p>Mock report — iteration completed.</p><p>MR: <a href="https://gitlab.example.com/team/project/-/merge_requests/1" target="_blank" rel="noopener">!1</a></p><details><summary>How the task was executed</summary><p>Mock execution details.</p></details><script>document.addEventListener('beforeprint',()=>document.querySelectorAll('details').forEach(d=>d.open=true));</script></body></html>`;
+        this.resultMd.set(id, reportContent);
+        this.resultHtml.set(id, htmlContent);
+        this.pushSse(id, {
+          type: 'step_status',
+          stepRunId: `${id}/report`,
+          data: JSON.stringify({ status: 'success' }),
+        });
+        await this.json(route, { ok: true, reportRunId: `${id}/report` }, 202);
+        return true;
+      }
+      if (issue && tail === 'report' && tail2 === 'status' && method === 'GET') {
+        const hasReport = this.resultMd.has(id) || this.resultHtml.has(id);
+        const lastRunAt = hasReport ? now() : undefined;
+        await this.json(route, { status: hasReport ? 'success' : 'idle', lastRunAt });
+        return true;
+      }
     }
 
     if (head === 'iterations' && id) {
@@ -603,15 +626,18 @@ export function wsProgress(
   };
 }
 
-/** Кадр SSE `bootstrap_log` (живой stdout/stderr бутстрапера по репо). */
-export function bsLog(
-  repo: string,
+/** Кадр SSE `log` (живой stdout/stderr агента: шаги, DevOps, Report).
+ * `stepRunId` у issue-уровневых сессий — `{issueId}/devops` | `{issueId}/report`. */
+export function logChunk(
+  stepRunId: string,
   text: string,
-  kind: 'stdout' | 'stderr' = 'stdout',
+  stream: 'stdout' | 'stderr' = 'stdout',
 ): Omit<FakeSseEvent, 'issueId' | 'ts'> {
   return {
-    type: 'bootstrap_log',
-    data: JSON.stringify({ repo, text, kind }),
+    type: 'log',
+    stepRunId,
+    stream,
+    data: text,
   };
 }
 

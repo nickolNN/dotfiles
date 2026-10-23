@@ -275,7 +275,7 @@ describe('GET /iterations/:id/agents', () => {
       id: `${iterationId}/worker/0`,
       role: 'worker',
       index: 1,
-      label: 'Воркер 1',
+      label: 'Исполнитель 1',
     });
     control.register(iterationId, iterationId, noopControl, {
       id: iterationId,
@@ -283,7 +283,7 @@ describe('GET /iterations/:id/agents', () => {
       index: null,
       label: 'Координатор',
     });
-    // Телеметрия воркера: usage-токены + последний stats-событие (контекст/model).
+    // Телеметрия исполнителя: usage-токены + последний stats-событие (контекст/model).
     control.recordEvent(`${iterationId}/worker/0`, {
       type: 'usage',
       usage: { input: 12, output: 3, cacheRead: 0, cacheWrite: 0, total: 15 },
@@ -317,7 +317,7 @@ describe('GET /iterations/:id/agents', () => {
         id: `${iterationId}/worker/0`,
         role: 'worker',
         index: 1,
-        label: 'Воркер 1',
+        label: 'Исполнитель 1',
         stage: null,
         stageName: null,
         status: 'running',

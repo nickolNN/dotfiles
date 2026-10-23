@@ -37,28 +37,37 @@ export function resolveAgentTimeoutMs(
   return Math.max(parsed, MIN_RESOLVE_AGENT_TIMEOUT_MS);
 }
 
-/** Env-переменная таймаута агента-анализатора рабочей папки (мс). */
-export const BOOTSTRAPPER_TIMEOUT_ENV =
-  'ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS';
-
-/** Дефолтный таймаут bootstrapper'а — те же 180 минут, что и у resolve-агента. */
-export const DEFAULT_BOOTSTRAPPER_TIMEOUT_MS = DEFAULT_RESOLVE_AGENT_TIMEOUT_MS;
+/** Env-переменная таймаута DevOps-агента рабочей папки (мс). */
+export const DEVOPS_TIMEOUT_ENV =
+  'ISSUE_RESOLVER_DEVOPS_TIMEOUT_MS';
 
 /**
- * Таймаут агента-анализатора `run_instructions` (мс): env
- * `ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS`, но не меньше 60с. Пустое/невалидное
- * значение → дефолт 90 минут.
+ * Устаревшее (legacy) имя env-переменной — фолбэк для окружений, настроенных
+ * до переименования. Читается только если новая `DEVOPS_TIMEOUT_ENV` не задана.
+ */
+export const LEGACY_DEVOPS_TIMEOUT_ENV =
+  'ISSUE_RESOLVER_BOOTSTRAPPER_TIMEOUT_MS';
+
+/** Дефолтный таймаут DevOps-агента — те же 180 минут, что и у resolve-агента. */
+export const DEFAULT_DEVOPS_TIMEOUT_MS = DEFAULT_RESOLVE_AGENT_TIMEOUT_MS;
+
+/**
+ * Таймаут DevOps-агента `run_instructions` (мс): env
+ * `ISSUE_RESOLVER_DEVOPS_TIMEOUT_MS`, при отсутствии — устаревшее имя
+ * `LEGACY_DEVOPS_TIMEOUT_ENV`; но не меньше 60с.
+ * Пустое/невалидное значение → дефолт 90 минут.
  *
  * Без него разовая подготовка — единственный этап без потолка: зависший `pi`
  * блокирует `prepareIssueWorkspace` навсегда, итерация остаётся `pending`, а
  * задача — `preparing` (`runIssueIteration` так и не вызывается).
  */
-export function resolveBootstrapperTimeoutMs(
-  raw: string | undefined = process.env[BOOTSTRAPPER_TIMEOUT_ENV],
+export function resolveDevOpsTimeoutMs(
+  raw: string | undefined = process.env[DEVOPS_TIMEOUT_ENV] ??
+    process.env[LEGACY_DEVOPS_TIMEOUT_ENV],
 ): number {
   const parsed = Number(raw);
   if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
-    return DEFAULT_BOOTSTRAPPER_TIMEOUT_MS;
+    return DEFAULT_DEVOPS_TIMEOUT_MS;
   }
   return Math.max(parsed, MIN_RESOLVE_AGENT_TIMEOUT_MS);
 }

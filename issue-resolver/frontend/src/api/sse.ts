@@ -155,42 +155,6 @@ export function parseIssueDeletedPayload(
   return { issueId: raw.issueId, ts: raw.ts };
 }
 
-/** Полезная нагрузка `bootstrap_log`: живой stdout/stderr агента-бутстрапера. */
-export type BootstrapLogPayload = {
-  /** Репозиторий, чей бутстрап пишет лог (`owner/repo`). */
-  repo: string;
-  /** Очередная порция вывода (может быть частью строки). */
-  text: string;
-  kind: 'stdout' | 'stderr';
-};
-
-/**
- * Разбирает `data` события `bootstrap_log`. Бэкенд кладёт туда
- * `JSON.stringify({ repo, text, kind })`; битый JSON или отсутствие
- * `repo`/`text` → null (событие игнорируем). Неизвестный `kind` → `stdout`.
- */
-export function parseBootstrapLogPayload(
-  data: string,
-): BootstrapLogPayload | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(data);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.repo !== 'string' || typeof record.text !== 'string') {
-    return null;
-  }
-  return {
-    repo: record.repo,
-    text: record.text,
-    kind: record.kind === 'stderr' ? 'stderr' : 'stdout',
-  };
-}
-
 /** Все типы `SessionEvent` из shared-union (дискриминант `type`). */
 const SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'text',
@@ -278,7 +242,6 @@ export type SseCallbacks = {
   onIterationStatus?(e: SSEEvent): void;
   onStepEvent?(payload: StepEventPayload, raw: SSEEvent): void;
   onWorkspaceProgress?(payload: WorkspaceProgressPayload, raw: SSEEvent): void;
-  onBootstrapLog?(payload: BootstrapLogPayload, raw: SSEEvent): void;
   onIssueDeleting?(payload: IssueDeletingPayload, raw: SSEEvent): void;
   onIssueDeleted?(payload: IssueDeletedPayload, raw: SSEEvent): void;
   onContainerStats?(payload: ContainerStatsPayload, raw: SSEEvent): void;
@@ -299,7 +262,6 @@ const SSE_ENVELOPE_TYPES = new Set([
   'step_event',
   'iteration_status',
   'workspace_progress',
-  'bootstrap_log',
   'issue_deleting',
   'issue_deleted',
   'container_stats',
@@ -429,11 +391,6 @@ function dispatchSseEvent(parsed: SSEEvent, cb: SseCallbacks): void {
       if (payload) cb.onWorkspaceProgress?.(payload, parsed);
       break;
     }
-    case 'bootstrap_log': {
-      const payload = parseBootstrapLogPayload(parsed.data);
-      if (payload) cb.onBootstrapLog?.(payload, parsed);
-      break;
-    }
     case 'issue_deleting': {
       const payload = parseIssueDeletingPayload(parsed);
       if (payload) cb.onIssueDeleting?.(payload, parsed);
@@ -511,7 +468,7 @@ export function subscribeToGlobalStream(cb: SseCallbacks): () => void {
 
 /**
  * Подписка на поток событий КОНКРЕТНОГО агента комнаты
- * (`GET /iterations/:id/agents/stream?agentId=`). `agentId` воркера содержит
+ * (`GET /iterations/:id/agents/stream?agentId=`). `agentId` исполнителя содержит
  * `/` (`<stepRunId>/worker/<i>`) — кодируем его через `encodeURIComponent`.
  *
  * Возвращает функцию отписки; без `EventSource` (SSR) — no-op.

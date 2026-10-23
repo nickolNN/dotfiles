@@ -972,8 +972,11 @@ export class RpcPiRunner implements PiRunner {
       };
 
       // Абонент управления: реестр адресует steer/abort в живую сессию.
-      if (registry && stepRunId && iterationId) {
-        registry.register(stepRunId, iterationId, {
+      // iterationId опционален: issue-уровневые прогоны (отчёт) не привязаны
+      // к итерации — реестр группирует их под их же stepRunId, и control-роут
+      // `/iterations/:id/...` находит сессию по этому адресу.
+      if (registry && stepRunId) {
+        registry.register(stepRunId, iterationId ?? stepRunId, {
           steer: (text) => writeCommand({ type: 'steer', message: text }),
           abort: () => {
             committedAbort = true;

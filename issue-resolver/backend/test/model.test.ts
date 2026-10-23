@@ -165,8 +165,13 @@ describe('model — runIssueIteration → pi.run', () => {
     );
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    expect(pi.calls).toHaveLength(1);
-    expect(pi.calls[0].options?.model).toBe('M');
+    // Post-iteration report-агент добавляет свой pi.run (fire-and-forget):
+    // считаем только вызовы шагов пайплайна.
+    const stepCalls = pi.calls.filter(
+      (call) => call.options?.iterationId !== undefined,
+    );
+    expect(stepCalls).toHaveLength(1);
+    expect(stepCalls[0].options?.model).toBe('M');
   });
 });
 
@@ -317,9 +322,10 @@ describe('step_models — runIssueIteration → pi.run', () => {
     );
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    expect(pi.calls.map((call) => call.options?.model)).toEqual([
-      'fallback',
-      'review-only',
-    ]);
+    expect(
+      pi.calls
+        .filter((call) => call.options?.iterationId !== undefined)
+        .map((call) => call.options?.model),
+    ).toEqual(['fallback', 'review-only']);
   });
 });

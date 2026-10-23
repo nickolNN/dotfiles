@@ -50,3 +50,7 @@ as many times as needed until all scenarios pass. Do not soften the verdict
 to avoid another cycle.
 
 Format the result in `.issue-step-result.json` (shape in the output contract below).
+
+Also write your scenarios and findings as a narrative in
+`iterations/<n>/.test.md` — this file will be read by the report agent to
+compile the full task report.

@@ -4,27 +4,32 @@
 
 - CLI errors: run `-h`/`--help` first; investigate before
   brute-forcing.
-- Markdown: keep all lines under 80 chars; rules in
-  `~/.config/.markdownlint.json`; check with `markdownlint-cli2`.
+- Line length: follow the project's linter/formatter rules for
+  code. Markdown files have NO line-length constraint — don't
+  waste time reflowing paragraphs. Write naturally.
 
 ## Tools & execution
 
-- Grep/Glob/Read directly when known — i.e. you can name the
-  file, symbol, or pattern. semantic_search for conceptual
-  queries; @explore for multi-step discovery; @general for
-  multi-step implementation — sufficient context, clear scoped
-  prompt.
-- Subagents run in parallel; sequential only when one depends on
-  another's output.
+- `bash` (rg/grep/find) plus `read` directly when the target is
+  known — you can name the file, symbol, or pattern. pi-lens:
+  `symbol_search` for identifier-ish queries, `project_report` /
+  `module_report` to orient before you know the file,
+  `read_symbol` / `read_enclosing` for one body instead of the
+  whole file.
+- Parallel work = room agents: `room_list_agents` to find an idle
+  peer, `room_send_message` to dispatch. One writer per file;
+  disjoint file sets per task. Sequential only when one depends
+  on another's output.
 - Local calls: batch freely (group related lookups into one call
   when supported); internet calls strictly sequential (below).
 
 ## Internet & browser tools
 
 - Scope: live external sites (webfetch, browser automation,
-  search/fetch MCPs). Local MCPs/offline sources exempt. Prefer
-  dedicated MCPs over browser automation; fall back after one
-  failure, never retry a broken MCP in a loop.
+  search/fetch MCPs). Local MCPs/offline sources exempt.
+  Precedence: dedicated MCP tools first, `agent-browser` as the
+  fallback (it is not the default). Fall back after one failure,
+  never retry a broken MCP in a loop.
 - Anti-bot pacing: one internet call per message; randomized 2–8s
   wait between calls (`sleep <N>` via Bash, random N 2–8); never
   idle — batch the sleep with local work (process fetched
@@ -44,10 +49,58 @@
   authoritative; skill docs describe workflows, not schemas —
   verify claims against source.
 - No speculative files: check schema/format first, then write;
-  validate after writing config files (`kilo config check` or
-  similar). Scope: config/schema files (code: "Verify once").
+  validate after writing with what exists here — `jq`, `node -e`,
+  `python3 -c "import json…"`. The agent image has no `kilo`.
+  Scope: config/schema files (code: "Verify once").
 - Invalid file: fix in place after finding the correct schema;
   delete only when certain it's wrong AND replacement is ready.
+
+## Style skills vs artifacts
+
+Chat style and artifact style are separate. Never let a chat
+skill rewrite a deliverable:
+
+- `caveman` (and its `ultracave` / `megacave` variants) and
+  `ponytail` govern **code and chat replies only**.
+  They never apply to artifacts an agent produces — reports, MR
+  descriptions, plans, per-step narratives, specs. Those keep
+  full sentences, headings, and evidence regardless of how terse
+  the chat is.
+- `glyph` belongs to the **human-facing report** (the `report`
+  agent). Its portable core — verdict first, one render per
+  answer, anything with a shape gets a diagram, icon always
+  paired with a word, legend of meanings — governs both report
+  files. Only the medium differs: the same diagram is monospace
+  ASCII or a table in `report.md`, inline `<svg>` in
+  `report.html`. Agent-facing artifacts (narratives, plans,
+  handoffs to peers) get plain structured markdown: no glyph.
+- When brevity skills and `clean-code` disagree about the code,
+  `clean-code` wins: it is the preferred code doctrine here.
+- `frontend-design` and `theme-factory` inform the visual craft
+  of a human-facing artifact (report, MR body). The artifact's
+  own contract outranks them: self-contained, no external fonts
+  or resources, no libraries.
+- The same override applies to **every** installed skill, not
+  just the craft ones — including example files a skill links to.
+  The pattern to distrust: a scaffold that says `Tailwind via CDN`
+  (`<script src="https://cdn.tailwindcss.com">`) and imports a
+  diagram library from `jsdelivr` (mermaid). One such skill used
+  to ship exactly that; it is out of the build now, but the shape
+  repeats. Those examples are written for a
+  throwaway local page that may assume a network; our artifacts
+  must render from `file://` and survive being emailed. So for
+  our deliverables: no CDN `<script src>`, no `@import`, no web
+  fonts, no diagram libraries (mermaid, d3, chart.js) — inline
+  CSS, inline `<svg>`, inline vanilla JS only. A skill's example
+  is never authority over an artifact's contract.
+- Method skills are called by name, not imitated: `refine` and
+  `wayfinder` delegate the interview to the `grilling` skill.
+- **Never name the model or provider in an artifact** — report,
+  per-step narrative, plan, spec, MR body. No `model:` line, no
+  `provider/model-id`, no «this run used …». Provenance in a
+  report means which step and which iteration produced the
+  claim, not which model. Model visibility belongs to the UI
+  and to SSE `step_status`, never to the deliverable.
 
 ## Context & token efficiency
 

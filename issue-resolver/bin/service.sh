@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Issue Resolver — локальный подъём/остановка веб-сервиса (backend + frontend).
+# Issue Resolver — локальный up/down веб-сервиса (backend + frontend).
 #
 #   ./bin/service.sh start      # поднять backend (:8080) + vite (:5173)
 #   ./bin/service.sh stop       # погасить оба процесса
@@ -45,7 +45,8 @@ export_run_env() {
 # слушающий сокет = state 0A (LISTEN) и local_port == искомому.
 is_port_open() {
   local port="$1"
-  local hex; hex="$(printf '%04X' "$port" 2>/dev/null)"
+  local hex
+  hex="$(printf '%04X' "$port" 2>/dev/null)"
   awk -v h="$hex" '
     { split($2, a, ":"); if ($4 == "0A" && a[2] == h) found = 1 }
     END { exit !found }
@@ -57,13 +58,16 @@ start_backend() {
     echo "backend уже слушает :$BACKEND_PORT — пропускаю."
     return 0
   fi
-  cd "$ROOT/backend" || { echo "нет $ROOT/backend" >&2; return 1; }
+  cd "$ROOT/backend" || {
+    echo "нет $ROOT/backend" >&2
+    return 1
+  }
 
   # NOTE: эмпирически стабильно работает `nohup npm run start &` (не setsid):
   # better-sqlite3 (Node 24) падает на exit-time assert при setsid.
   export_run_env
-  PORT="$BACKEND_PORT" nohup npm run start > "$BACKEND_LOG" 2>&1 &
-  echo $! > "$BACKEND_PID"
+  PORT="$BACKEND_PORT" nohup npm run start >"$BACKEND_LOG" 2>&1 &
+  echo $! >"$BACKEND_PID"
   echo "backend  → :$BACKEND_PORT (pid $(cat "$BACKEND_PID")) [$MODE]"
 }
 
@@ -87,17 +91,21 @@ start_frontend() {
     fi
   fi
 
-  cd "$ROOT/frontend" || { echo "нет $ROOT/frontend" >&2; return 1; }
+  cd "$ROOT/frontend" || {
+    echo "нет $ROOT/frontend" >&2
+    return 1
+  }
   nohup npx vite --host 0.0.0.0 --port "$FRONTEND_PORT" \
-    > "$FRONTEND_LOG" 2>&1 &
-  echo $! > "$FRONTEND_PID"
+    >"$FRONTEND_LOG" 2>&1 &
+  echo $! >"$FRONTEND_PID"
   echo "frontend → :$FRONTEND_PORT (pid $(cat "$FRONTEND_PID"))"
 }
 
 kill_by_pid() {
   local pidfile="$1"
   if [ -f "$pidfile" ]; then
-    local pid; pid="$(cat "$pidfile" 2>/dev/null || true)"
+    local pid
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
     if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
     fi
@@ -124,12 +132,23 @@ status() {
 }
 
 case "${1:-}" in
-  start)   start_backend; start_frontend
-           echo
-           echo "Извне контейнера (на хосте): agent-fwd up ${FRONTEND_PORT}:${FRONTEND_PORT}"
-           echo "логи: $BACKEND_LOG, $FRONTEND_LOG" ;;
-  stop)    stop ;;
-  restart) stop; sleep 1; start_backend; start_frontend ;;
-  status)  status ;;
-  *)       echo "usage: $0 {start|stop|restart|status}" >&2; exit 2 ;;
+start)
+  start_backend
+  start_frontend
+  echo
+  echo "Извне контейнера (на хосте): agent-fwd up ${FRONTEND_PORT}:${FRONTEND_PORT}"
+  echo "логи: $BACKEND_LOG, $FRONTEND_LOG"
+  ;;
+stop) stop ;;
+restart)
+  stop
+  sleep 1
+  start_backend
+  start_frontend
+  ;;
+status) status ;;
+*)
+  echo "usage: $0 {start|stop|restart|status}" >&2
+  exit 2
+  ;;
 esac

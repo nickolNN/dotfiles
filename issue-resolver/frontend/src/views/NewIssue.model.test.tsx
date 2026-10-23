@@ -117,20 +117,22 @@ describe('NewIssue — селектор модели (per-step)', () => {
 
     render(<NewIssue />);
 
-    // Всегда отмечен только resolve → один селектор модели + один селектор
-    // thinking level (у каждого своя опция «По умолчанию»).
-    expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(1);
-    expect(screen.getAllByRole('option', { name: 'm2' })).toHaveLength(1);
-    expect(screen.getAllByRole('option', { name: 'По умолчанию' })).toHaveLength(2);
+    // Всегда отмечен только resolve (селектор модели + thinking level) плюс
+    // пара report-агента (модель + thinking) — у каждого селекта своя
+    // «По умолчанию».
+    expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(2);
+    expect(screen.getAllByRole('option', { name: 'm2' })).toHaveLength(2);
+    expect(screen.getAllByRole('option', { name: 'По умолчанию' })).toHaveLength(4);
     expect(screen.getByLabelText('Модель для шага Исполнение')).toBeInTheDocument();
     expect(
       screen.getByLabelText('Уровень размышления для шага Исполнение'),
     ).toBeInTheDocument();
+    expect(screen.getByTestId('report-model-input')).toBeInTheDocument();
 
     // Отмечаем ещё два шага — появляются их селекторы.
     fireEvent.click(screen.getByLabelText('Планирование'));
     fireEvent.click(screen.getByLabelText('Код-ревью'));
-    expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(3);
+    expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(4);
   });
 
   it('выбор модели для resolve попадает в POST body.step_models.resolve', async () => {
@@ -149,6 +151,26 @@ describe('NewIssue — селектор модели (per-step)', () => {
       const body = postBody(fetchMock);
       expect(body.step_models).toEqual({ resolve: 'm1' });
       expect(body.model).toBeUndefined();
+    });
+  });
+
+  it('выбор модели для report попадает в POST body.step_models.report', async () => {
+    const fetchMock = stubFetch();
+
+    render(<NewIssue />);
+    await screen.findAllByRole('option', { name: 'Model One' });
+
+    // report не отмечается как шаг пайплайна, но его селектор модели виден
+    // всегда и сохраняется в step_models.
+    fireEvent.change(screen.getByTestId('report-model-input'), {
+      target: { value: 'm2' },
+    });
+    await fillRequired();
+    fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+    await waitFor(() => {
+      const body = postBody(fetchMock);
+      expect(body.step_models).toEqual({ report: 'm2' });
     });
   });
 

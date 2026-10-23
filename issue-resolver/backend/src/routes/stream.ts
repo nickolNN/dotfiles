@@ -400,7 +400,7 @@ export async function streamRoutes(
   );
 
   // Поток событий ОДНОГО агента комнаты (`?agentId=<RoomAgent.id>`), чтобы
-  // открыть сессию воркера отдельно. Контроль (steer/abort) остаётся
+  // открыть сессию исполнителя отдельно. Контроль (steer/abort) остаётся
   // broadcast на всю комнату — здесь только чтение.
   app.get<{
     Params: { id: string };

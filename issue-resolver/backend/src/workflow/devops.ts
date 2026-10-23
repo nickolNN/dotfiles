@@ -2,22 +2,22 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { SessionEvent } from '@issue-resolver/shared';
+import type { SessionEvent, ThinkingLevel } from '@issue-resolver/shared';
 import type { PiRunner } from '../pi/runner';
 
-/** Cwd-agnostic path to <repo>/prompts/bootstrapper.md, resolved from this module. */
-export const DEFAULT_BOOTSTRAP_PROMPT_PATH = join(
+/** Cwd-agnostic path to <repo>/prompts/devops.md, resolved from this module. */
+export const DEFAULT_DEVOPS_PROMPT_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '..', '..', '..',
   'prompts',
-  'bootstrapper.md',
+  'devops.md',
 );
 
-/** Имя Markdown-файла с инструкцией по запуску, который пишет bootstrapper. */
+/** Имя Markdown-файла с инструкцией по запуску, который пишет DevOps-агент. */
 export const RUN_INSTRUCTIONS_FILE = 'RUN_INSTRUCTIONS.md';
 
-/** Итог bootstrapper'a: инструкция по запуску либо причина сбоя. */
-export interface BootstrapResult {
+/** Итог DevOps-агента: инструкция по запуску либо причина сбоя. */
+export interface DevOpsResult {
   success: boolean;
   /** Markdown-инструкция при `success`, иначе null. */
   instructions: string | null;
@@ -25,22 +25,22 @@ export interface BootstrapResult {
 }
 
 /**
- * Bootstrapper: смотрит склонированный проект, пытается поставить зависимости
+ * DevOps: смотрит склонированный проект, пытается поставить зависимости
  * и вернуть Markdown-инструкцию по запуску. `workspaceDir` — рабочая папка
  * задачи, видимая агенту (container-путь в docker-режиме, host-путь в local).
  */
-export interface BootstrapperAgent {
-  bootstrap(
+export interface DevOpsAgent {
+  runDevOps(
     workspaceDir: string,
     repoUrl: string,
     repoName: string,
     /** Порт dev-сервера, выделенный задаче; попадает в промпт как `{{DEV_SERVER_PORT}}`. */
     devServerPort?: number,
-  ): Promise<BootstrapResult>;
+  ): Promise<DevOpsResult>;
 }
 
-/** Опции `PiBootstrapperAgent`; `pi` уже инжектится в `runIssueIteration`. */
-export interface PiBootstrapperAgentOptions {
+/** Опции `PiDevOpsAgent`; `pi` уже инжектится в `runIssueIteration`. */
+export interface PiDevOpsAgentOptions {
   pi: PiRunner;
   /** Имя контейнера задачи (в local-режиме не используется как docker-цель). */
   containerName: string;
@@ -60,11 +60,18 @@ export interface PiBootstrapperAgentOptions {
    * работы и пишет `WORKSPACE_INSTRUCTIONS.md` в корень рабочей папки.
    */
   tagInstructions?: string | null;
-  /** Модель bootstrapper-агента (по умолчанию — дефолт pi). */
+  /** Имена всех репозиториев в workspace (через запятую). */
+  reposNames?: string | null;
+  /** Имена репозиториев, отмеченных для запуска dev-сервера (через запятую). */
+  reposRequireDevServer?: string | null;
+  /** Per-репозиторий инструкции по запуску (Markdown-секция с ###). */
+  reposInstructions?: string | null;
+  /** Модель DevOps-агента (по умолчанию — дефолт pi). */
   model?: string;
-  thinkingLevel?: string;
+  /** Уровень размышления pi (`--thinking`); попадает в аргументы запуска pi. */
+  thinkingLevel?: ThinkingLevel;
   timeoutMs?: number;
-  /** Путь к MD-шаблону промпта; по умолчанию корневой `prompts/bootstrapper.md`. */
+  /** Путь к MD-шаблону промпта; по умолчанию корневой `prompts/devops.md`. */
   promptPath?: string;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
@@ -73,16 +80,27 @@ export interface PiBootstrapperAgentOptions {
 
 /**
  * Подставляет `{{REPO_DIR}}`/`{{REPO_NAME}}`/`{{DEV_SERVER_PORT}}`/
- * `{{TAG_INSTRUCTIONS}}` в шаблон промпта bootstrapper'а.
+ * `{{TAG_INSTRUCTIONS}}`/`{{REPOS_NAMES}}`/`{{REPOS_REQUIRE_DEV_SERVER}}`/
+ * `{{REPOS_INSTRUCTIONS}}` в шаблон промпта DevOps-агента.
  * Без выделенного порта подставляется `AUTO`.
  */
-export function renderBootstrapPrompt(
+export function renderDevOpsPrompt(
   template: string,
   repoDir: string,
   repoName: string,
   devServerPort?: number,
   tagInstructions?: string | null,
+  reposNames?: string | null,
+  reposRequireDevServer?: string | null,
+  reposInstructions?: string | null,
 ): string {
+  const buildReposInstructions = (
+    raw: string | null | undefined,
+  ): string => {
+    if (!raw?.trim()) return '';
+    return `\n## Repository Instructions (per-repo)\n\n${raw.trim()}\n`;
+  };
+
   return template
     .replace(/\{\{REPO_DIR\}\}/g, repoDir)
     .replace(/\{\{REPO_NAME\}\}/g, repoName)
@@ -95,19 +113,40 @@ export function renderBootstrapPrompt(
       tagInstructions?.trim()
         ? `\n## Tag Instructions (workspace-level)\n\n${tagInstructions.trim()}\n`
         : '',
+    )
+    .replace(/\{\{REPOS_NAMES\}\}/g, reposNames ?? '')
+    .replace(
+      /\{\{REPOS_REQUIRE_DEV_SERVER\}\}/g,
+      reposRequireDevServer ?? '',
+    )
+    .replace(
+      /\{\{REPOS_INSTRUCTIONS\}\}/g,
+      buildReposInstructions(reposInstructions),
     );
 }
 
-/** Читает MD-шаблон промпта bootstrapper'а и рендерит его плейсхолдеры. */
-export function loadBootstrapPrompt(
+/** Читает MD-шаблон промпта DevOps-агента и рендерит его плейсхолдеры. */
+export function loadDevOpsPrompt(
   repoDir: string,
   repoName: string,
   devServerPort?: number,
-  promptPath: string = DEFAULT_BOOTSTRAP_PROMPT_PATH,
+  promptPath: string = DEFAULT_DEVOPS_PROMPT_PATH,
   tagInstructions?: string | null,
+  reposNames?: string | null,
+  reposRequireDevServer?: string | null,
+  reposInstructions?: string | null,
 ): string {
   const template = readFileSync(promptPath, 'utf-8');
-  return renderBootstrapPrompt(template, repoDir, repoName, devServerPort, tagInstructions);
+  return renderDevOpsPrompt(
+    template,
+    repoDir,
+    repoName,
+    devServerPort,
+    tagInstructions,
+    reposNames,
+    reposRequireDevServer,
+    reposInstructions,
+  );
 }
 
 const errorMessage = (error: unknown): string =>
@@ -125,19 +164,19 @@ async function readRunInstructions(path: string): Promise<string | null> {
 }
 
 /**
- * Боевой bootstrapper поверх `PiRunner`: пишет содержимое в контейнере, читает
+ * Боевой devops поверх `PiRunner`: пишет содержимое в контейнере, читает
  * результат с host-диска. Любая ошибка (spawn/timeout/нет файла) — это
  * `{ success: false }`, а не reject: сбой не должен ронять подготовку.
  */
-export class PiBootstrapperAgent implements BootstrapperAgent {
-  constructor(private readonly options: PiBootstrapperAgentOptions) {}
+export class PiDevOpsAgent implements DevOpsAgent {
+  constructor(private readonly options: PiDevOpsAgentOptions) {}
 
-  async bootstrap(
+  async runDevOps(
     workspaceDir: string,
     _repoUrl: string,
     repoName: string,
     devServerPort?: number,
-  ): Promise<BootstrapResult> {
+  ): Promise<DevOpsResult> {
     const repoDir = posix.join(workspaceDir, repoName);
     const hostInstructionsPath = join(
       this.options.hostWorkspaceDir,
@@ -147,12 +186,15 @@ export class PiBootstrapperAgent implements BootstrapperAgent {
 
     let stderr = '';
     try {
-      const prompt = loadBootstrapPrompt(
+      const prompt = loadDevOpsPrompt(
         repoDir,
         repoName,
         devServerPort,
         this.options.promptPath,
         this.options.tagInstructions,
+        this.options.reposNames,
+        this.options.reposRequireDevServer,
+        this.options.reposInstructions,
       );
       const result = await this.options.pi.run(
         this.options.containerName,
@@ -183,7 +225,7 @@ export class PiBootstrapperAgent implements BootstrapperAgent {
         error:
           stderr ||
           (result.exitCode !== 0
-            ? `bootstrap exited with code ${result.exitCode}`
+            ? `devops exited with code ${result.exitCode}`
             : `${RUN_INSTRUCTIONS_FILE} not found or empty`),
       };
     } catch (error) {

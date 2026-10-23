@@ -12,6 +12,11 @@ Usage: attach.sh [-p HOST:GUEST]... [--network-host] [--build] [--no-install] [F
   --build     Force rebuild the image even if it exists.
   --no-install  Skip auto dependency install when package.json detected.
   CMD         Command to run (default: bash). Use "pi" for pi agent.
+
+  Env: AGENT_DOCKER_ARGS="…"  raw extra `docker run` arguments, applied when
+       the container is created (--dns, --add-host, -e HTTP_PROXY=…,
+       --cap-add/--device). Changing it recreates the container, like -p does.
+       Word-split: an argument must not contain spaces.
 EOF
   exit 1
 }
@@ -117,6 +122,38 @@ network_match() {
   fi
 }
 
+# ── AGENT_DOCKER_ARGS: host-specific escape hatch ────────────────
+# Extra `docker run` flags can only take effect when the container is CREATED,
+# so a change must recreate it — same rule as ports and network mode. Docker
+# cannot be asked "which flags did you start with", therefore the value is
+# hashed into a label at create time and the hash is compared on every launch.
+# No flags are validated here: this is deliberately the un-shaped hole for
+# options the script does not know about (corporate DNS, proxy env, a tun
+# device for an in-container VPN client).
+# The hash is empty when the variable is unset, which is also what `docker
+# inspect` reports for a container created without the label — so existing
+# containers are NOT recreated just because this feature was added.
+docker_args_hash() {
+  local raw
+  raw="$(printf '%s' "${AGENT_DOCKER_ARGS:-}" | tr -s '[:space:]' ' ')"
+  raw="${raw# }"; raw="${raw% }"
+  [ -z "$raw" ] && return 0
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$raw" | shasum -a 256 | cut -d' ' -f1
+  else
+    printf '%s' "$raw" | sha256sum | cut -d' ' -f1
+  fi
+}
+
+current_docker_args_hash() {
+  docker inspect -f '{{ index .Config.Labels "agent.docker-args-hash" }}' \
+    "$1" 2>/dev/null | tr -d '[:space:]' || true
+}
+
+docker_args_match() {
+  [ "$(current_docker_args_hash "${CONTAINER}")" = "$(docker_args_hash)" ]
+}
+
 # ── Build image if needed ────────────────────────────────────────
 if [ "${FORCE_BUILD}" = true ] || ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
   echo "→ Building ${IMAGE} image..."
@@ -136,6 +173,11 @@ elif [ ${#USER_PORTS[@]} -gt 0 ] && ! ports_match; then
 elif ! network_match; then
   cur_net="$(current_network "${CONTAINER}")"
   echo "→ Network mode changed (${cur_net} → host) — recreating ${CONTAINER}..."
+  docker rm -f "${CONTAINER}" >/dev/null
+  NEED_CREATE=true
+elif ! docker_args_match; then
+  echo "→ AGENT_DOCKER_ARGS changed (${AGENT_DOCKER_ARGS:-<unset>}) — recreating ${CONTAINER}..."
+  echo "   ⚠ Any agent running in this container is killed by the recreate."
   docker rm -f "${CONTAINER}" >/dev/null
   NEED_CREATE=true
 fi
@@ -185,10 +227,19 @@ if [ "${NEED_CREATE}" = true ]; then
     NET_ARGS+=(--network host)
   fi
 
+  # Word-split on purpose: `-e HTTP_PROXY=http://host.docker.internal:3128`
+  # becomes two argv entries, which is exactly how docker wants it.
+  EXTRA_ARGS=()
+  for a in ${AGENT_DOCKER_ARGS:-}; do EXTRA_ARGS+=("$a"); done
+  # Record what was applied so the next launch can tell unchanged from
+  # "the host changed its mind". An empty value is fine and means "nothing".
+  NET_ARGS+=(--label "agent.docker-args-hash=$(docker_args_hash)")
+
   docker run -d --name "${CONTAINER}" \
     --init \
     ${PORT_ARGS[@]+"${PORT_ARGS[@]}"} \
     ${NET_ARGS[@]+"${NET_ARGS[@]}"} \
+    ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
     "${MOUNTS[@]}" \
     --entrypoint sleep \
     "${IMAGE}" \
@@ -242,6 +293,12 @@ if [ -d "${SKILLS_DIR}" ]; then
   docker exec "${CONTAINER}" mkdir -p /home/agent/.agents/skills
   docker cp "${SKILLS_DIR}/." "${CONTAINER}:/home/agent/.agents/skills/"
 fi
+
+# Remote skills are baked at build time and the repo overlay cannot add them,
+# so a skill that entered the Dockerfile list after the last image build is
+# missing here in silence. Make it a warning (never a failure) — pipeline step
+# prompts inject those files and an empty injection is invisible otherwise.
+"${SCRIPT_DIR}/check-remote-skills.sh" "${CONTAINER}" || true
 
 # ── Auto dependency install ────────────────────────────────────
 # Prefer bun (in-image, ~5-10× faster than npm); fall back to npm.

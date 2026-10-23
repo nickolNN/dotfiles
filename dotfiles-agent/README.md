@@ -32,6 +32,7 @@ See the `Dockerfile` for the full list and the reasoning behind each layer.
 | `build.sh` | build the image for the host arch (`--no-cache` supported) |
 | `attach.sh` | interactive shell — or any command — in the folder's container |
 | `spawn-pi-agent.sh` | `pi` in folder's room; `--room`/`PI_AGENT_ROOM` |
+| `check-remote-skills.sh` | warn when the image lacks remote skills the Dockerfile declares (run by spawn/attach; never fails) |
 | `container-name.sh` | per-directory container naming (per-folder isolation) |
 | `port-forward.sh` | ad-hoc host→container port forwarding (no restart) |
 | `stop-all.sh` | stop/remove every `dotfiles-agent` container (incl. forwards) |
@@ -46,6 +47,10 @@ and fails fast if they're missing:
 
 - `pi/models.json` — models + API keys; the image is unusable without it
 - `pi/mcp.json` — MCP server definitions the image rewrites at build time
+
+Optional and legitimately absent: `dotfiles-agent/certs/` — drop your
+corporate CA certificates there to have the image trust internal HTTPS; see
+[Reaching the corporate network](#reaching-the-corporate-network-vpn-internal-cas).
 
 ## Quick start
 
@@ -147,6 +152,81 @@ Notes:
 - the in-container dev server must listen on `0.0.0.0` (not `127.0.0.1`) for
   host access to reach it
 
+## Reaching the corporate network (VPN, internal CAs)
+
+**VPN routes already work.** Docker Desktop NATs container traffic through the
+macOS host, and the host owns the VPN routes and its DNS, so a container on the
+default bridge resolves and connects to internal addresses (verified: an
+internal `10.x` host and a `172.31.x` host both accept TCP from the container,
+including `:22`). `--network-host` does **not** add anything here: it moves the
+container into the Linux VM's namespace, not macOS's, so no `utun` interface
+appears — while still making `-p` unusable. Reach for it only for port-scanning
+style needs, never as a VPN fix.
+
+**What actually fails is certificate trust**, and it fails in two separate
+stores that do not know about each other:
+
+| Store | Readers | How it gets your CA |
+| ----- | ------- | ----------------- |
+| OpenSSL (`/etc/ssl/certs/ca-certificates.crt`) | `git`, `curl`, `openssl`, chromium/Playwright | `*.crt` in `/usr/local/share/ca-certificates/` + `update-ca-certificates` |
+| **Node's built-in Mozilla bundle** | `node`, `npm`, `yarn`, pi and its MCP servers | **only** `NODE_EXTRA_CA_CERTS` — `update-ca-certificates` does not touch it |
+
+That second row is why `yarn install` against an internal registry dies with
+`SELF_SIGNED_CERT_IN_CHAIN` on a machine where `curl` to the same URL succeeds.
+
+### Adding your CA: the `certs/` drop folder
+
+Drop any root/intermediate certificates into `dotfiles-agent/certs/` — **any
+file names**, `*.pem` or `*.crt`, several files allowed — then run `build.sh`.
+The image build:
+
+- installs each certificate into the OpenSSL store (renamed to `*.crt`, which
+  the Debian hook requires — it ignores other extensions silently)
+- concatenates them into one bundle for Node and points
+  `NODE_EXTRA_CA_CERTS` at it
+
+The folder is gitignored (only `.gitkeep` is tracked) and is **legitimately
+empty on a machine with no corporate CA**: the build step is fully conditional,
+prints `CA: 0 extra certificate file(s) trusted`, and succeeds — that is the
+normal case, not a failure. `build.sh` also `mkdir -p`s the folder so the
+`COPY` cannot fail, and refuses to build if a **private key** was dropped in
+there (certificates only).
+
+Verify after a rebuild:
+
+```sh
+agent-attach -- bash -lc '\
+  echo "bundle: $(grep -c "BEGIN CERTIFICATE" "$NODE_EXTRA_CA_CERTS") cert(s)"; \
+  openssl s_client -connect <internal-host>:443 -servername <internal-host> \
+    </dev/null 2>/dev/null | grep "Verify return code"; \
+  node -e "require(\"https\").get(\"https://<internal-host>/\",r=>console.log(\"node OK\",r.statusCode)).on(\"error\",e=>console.log(\"node FAIL\",e.code))"'
+```
+
+All three must pass: a `Verify return code: 0` with a failing `node FAIL` means
+only one of the two stores got the certificate.
+
+### `AGENT_DOCKER_ARGS` — per-machine flags without a rebuild
+
+`attach.sh` and `spawn-pi-agent.sh` pass this variable straight to `docker run`
+when they **create** a container. Changing it recreates the container (the
+value is stored as a label and diffed on each launch, like ports and network
+mode), which kills any agent running inside — so set it before spawning, not
+while work is in flight. Arguments are word-split, so none may contain spaces.
+
+| Situation | Flags |
+| --------- | ----- |
+| Internal name does not resolve in the container but does on the host (VPN split-DNS the VM never learns) | `AGENT_DOCKER_ARGS="--dns <corp-dns-ip>"` |
+| One known host, no DNS at all | `--add-host <name>:<ip>` |
+| Host reaches the network through an HTTP(S) proxy (`scutil --proxy`) rather than a tunnel | `-e HTTPS_PROXY=http://host.docker.internal:<port>` (the proxy must not bind `127.0.0.1` only) |
+| Access requires the VPN client itself (client certificate / device posture) | `--cap-add NET_ADMIN --device /dev/net/tun` plus an in-container client — the image has neither by default |
+
+### Do not disable verification instead
+
+`NODE_TLS_REJECT_UNAUTHORIZED=0`, npm `strict-ssl false`, `git config
+http.sslVerify false` and `curl -k` all turn off checking **every** connection
+the tool makes, silently, for the whole container. They also hide the real
+problem, which is almost always a missing certificate. Add the certificate.
+
 ## Workspace isolation
 
 By default the container mounts the host folder read-write, which means
@@ -242,16 +322,25 @@ the next launch with **no rebuild**. To also bake it into the image for fresh
 `docker run` / `docker compose` containers, run `build.sh` (or
 `agent-attach --build`).
 
+The reverse asymmetry is the dangerous one: a skill **added to the Dockerfile
+list** cannot reach a container from the current image at all — the launch
+overlay only ships `agent-skills/`. Anything that injects such a skill into a
+prompt (the issue-resolver `pr` step injects `~/.agents/skills/pr/SKILL.md`)
+then injects an **empty string** and the agent works with no doctrine, loudly
+silent. `agent-spawn` / `agent-attach` therefore run
+`check-remote-skills.sh` after the overlay: it re-reads the same
+`set -- "repo:subpath"` list the build consumes, checks each name inside the
+container and prints a `WARNING` with the missing names plus a pointer to
+`build.sh`. It never fails the launch — a partial image should be loud, not
+fatal.
+
 ### Repo skills (`agent-skills/`)
 
 | Skill | Purpose |
 | ----- | ------- |
 | `container-environment` | What this container is; what to suggest about the runtime |
 | `coordinator` | Coordinator role in a hand-assembled room — dispatch, verify, integrate (не для шагов issue-resolver: там роль выдаёт движок) |
-| `geo-bypass` | Geo-restricted / TLS-blocked network access recipes |
-| `handoff` | Pi-adapted handoff doc (overrides the cloned remote copy) |
-| `pr` | Generate an MR/PR description from a feature diff |
-| `refine` | Grilling-интервью + план для шага `refine` в issue-resolver (на него ссылается `issue-resolver/prompts/step-refine.md`) |
+| `refine` | Тонкий адаптер над remote-скиллом `grilling` (метод — там) плюс план для шага `refine` в issue-resolver (на него ссылается `issue-resolver/prompts/step-refine.md`) |
 
 ### Remote skills (cloned at build time)
 
@@ -263,14 +352,20 @@ the next launch with **no rebuild**. To also bake it into the image for fresh
 | `code-review` | mattpocock/skills | Standards + spec review, in parallel |
 | `codebase-design` | mattpocock/skills | Deep-module design vocabulary |
 | `domain-modeling` | mattpocock/skills | GLOSSARY.md + ADR workflow |
-| `glyph` | yonatangross/orchestkit | ASCII-art answers |
-| `handoff` | mattpocock/skills | Compact a session into a handoff doc |
-| `improve-codebase-architecture` | mattpocock/skills | Scan for deepening opportunities |
+| `diagnosing-bugs` | mattpocock/skills | Reproduce-first loop for hard bugs and perf regressions |
+| `verification-before-completion` | obra/superpowers | “done” means the command ran and passed |
+| `frontend-design` | anthropics/skills | Distinctive visual design for human-facing artifacts |
+| `glyph` | yonatangross/orchestkit | ASCII-art answers (verdict first, one render per answer) |
+| `grilling` | mattpocock/skills | Design-tree interview; `wayfinder` calls it, `refine` adapts it |
+| `megacave` | juliusbrussee/caveman | `/caveman wenyan` register — user-typed only |
 | `ponytail` | dietrichgebert/ponytail | Lazy-senior minimal-change mode |
+| `pr` | mattpocock/skills | MR/PR body shape (`Summary`/`Evidence`/`Merge Danger`); injected into the issue-resolver `pr` step — our own fork was deleted |
 | `retro` | mattpocock/skills | Session retrospective |
 | `tdd` | mattpocock/skills | Test-driven development |
 | `teach` | mattpocock/skills | Teach a concept inside the workspace |
+| `theme-factory` | anthropics/skills | Theme palettes for HTML/doc artifacts (no external fonts) |
 | `to-questionnaire` | mattpocock/skills | Turn a decision into a questionnaire |
+| `ultracave` | juliusbrussee/caveman | `/caveman ultra` compression — user-typed only |
 | `wayfinder` | mattpocock/skills | Plan huge work as decision tickets |
 | `web-design-guidelines` | vercel-labs/agent-skills | Web Interface Guidelines review |
 | `writing-for-agents` | mattpocock/skills | Writing docs for agents (was `writing-great-skills`) |
@@ -281,12 +376,28 @@ Shipped inside the `pi-lens` npm package (not in `~/.agents/skills`):
 `pi-lens-ast-grep`, `pi-lens-lsp-navigation`,
 `pi-lens-write-ast-grep-rule`, `pi-lens-write-tree-sitter-rule`.
 
-The image bakes 21 unique skill directories into
-`/home/agent/.agents/skills` (17 remote + 5 repo, where the repo `handoff`
-overrides the cloned one of the same name) plus the 4 pi-lens built-ins.
-Remote skills whose source path vanished upstream (e.g. the
-`writing-great-skills` → `writing-for-agents` rename) now fail the build
-instead of being dropped silently.
+Don't trust any skill count written in prose — recount it. Remote skills the
+build bakes (the names come from the same block the build loop reads, and the
+mapping matches it: a `.` subpath means the repository's own basename):
+
+```sh
+sed -n '/skills-clone/,/&& repos=/p' dotfiles-agent/Dockerfile \
+  | grep -oE '"[^"]+:[^"]+"' | tr -d '"' \
+  | awk -F: '{n = ($2 == "." ? $1 : $2); sub(".*/", "", n); print n}' \
+  | sort -u
+echo clean-code            # curl'd raw, not cloned, so it is not in the list
+ls ../agent-skills         # repo skills, overlaid on every launch
+docker exec <container> ls /home/agent/.agents/skills   # what actually exists
+```
+
+A grep over the whole Dockerfile is wrong: it also matches quoted `a:b` strings
+in error messages and tarball URLs (54 "names" instead of the real set).
+Deleting a repo skill does **not** remove it from containers that already have
+it — the launch overlay adds, it never prunes; prune by hand and drop the
+source from the Dockerfile. Remote skills whose source path vanished upstream
+(e.g. the `writing-great-skills` → `writing-for-agents` rename) now fail the
+build instead of being dropped silently, and skills added to that list after
+the last build are reported by `check-remote-skills.sh` on every launch.
 
 ## Known issues & maintenance
 

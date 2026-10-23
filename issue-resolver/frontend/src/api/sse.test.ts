@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SSEEvent, SessionEvent } from '@issue-resolver/shared';
-import { parseAgentEventPayload, parseBootstrapLogPayload, parseIssueDeletedPayload, parseIssueDeletingPayload, parseStepEventPayload, parseWorkspaceProgressPayload } from './sse';
+import { parseAgentEventPayload, parseIssueDeletedPayload, parseIssueDeletingPayload, parseStepEventPayload, parseWorkspaceProgressPayload } from './sse';
 
 /** Оборачивает сессионное событие в конверт `step_event` как это делает бэкенд. */
 function envelope(event: unknown): string {
@@ -87,11 +87,11 @@ describe('parseStepEventPayload — распознавание SessionEvent', ()
       JSON.stringify({
         stepRunId: 'run-1',
         agentId: 'run-1/worker/0',
-        event: { type: 'text', text: 'воркер' },
+        event: { type: 'text', text: 'исполнитель' },
       }),
     );
     expect(result?.agentId).toBe('run-1/worker/0');
-    expect(result?.event).toEqual({ type: 'text', text: 'воркер' });
+    expect(result?.event).toEqual({ type: 'text', text: 'исполнитель' });
   });
 
   it('больше не теряет служебные типы (question_answered/compaction/notice)', () => {
@@ -173,32 +173,6 @@ describe('parseWorkspaceProgressPayload — шаг подготовки рабо
     expect(parseWorkspaceProgressPayload('не json')).toBeNull();
     expect(parseWorkspaceProgressPayload(JSON.stringify({ status: 'done' }))).toBeNull();
     expect(parseWorkspaceProgressPayload(JSON.stringify({ step: 'ready' }))).toBeNull();
-  });
-});
-
-describe('parseBootstrapLogPayload — живой лог бутстрапера', () => {
-  it('разбирает repo/text/kind', () => {
-    expect(
-      parseBootstrapLogPayload(
-        JSON.stringify({ repo: 'owner/repo', text: 'npm ci\n', kind: 'stdout' }),
-      ),
-    ).toEqual({ repo: 'owner/repo', text: 'npm ci\n', kind: 'stdout' });
-    expect(
-      parseBootstrapLogPayload(
-        JSON.stringify({ repo: 'owner/repo', text: 'boom', kind: 'stderr' }),
-      ),
-    ).toEqual({ repo: 'owner/repo', text: 'boom', kind: 'stderr' });
-  });
-
-  it('неизвестный kind → stdout; битый JSON/без repo|text → null', () => {
-    expect(
-      parseBootstrapLogPayload(
-        JSON.stringify({ repo: 'a/b', text: 'x', kind: 'weird' }),
-      )?.kind,
-    ).toBe('stdout');
-    expect(parseBootstrapLogPayload('не json')).toBeNull();
-    expect(parseBootstrapLogPayload(JSON.stringify({ repo: 'a/b' }))).toBeNull();
-    expect(parseBootstrapLogPayload(JSON.stringify({ text: 'x' }))).toBeNull();
   });
 });
 

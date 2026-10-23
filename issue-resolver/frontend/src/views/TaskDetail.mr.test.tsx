@@ -103,21 +103,14 @@ class FakeEventSource {
   }
 }
 
-/** fetch-мок: `result.json` задаётся тестом, `/result/files` — пустой список. */
-function stubFetch(resultJson: string | null) {
-  const issue = makeIssue();
+/** fetch-мок: merge_requests задаются тестом в данных задачи. */
+function stubFetch(mergeRequests: Issue['merge_requests']) {
+  const issue = makeIssue(mergeRequests ? { merge_requests: mergeRequests } : {});
   const iteration = makeIteration();
   const stepRun = makePrStepRun();
 
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes('/result/files/content')) {
-      return Promise.resolve(
-        resultJson === null
-          ? textResponse('', { ok: false, status: 404 })
-          : textResponse(resultJson),
-      );
-    }
     if (url.endsWith('/step-runs')) {
       return Promise.resolve(jsonResponse([stepRun]));
     }
@@ -147,17 +140,13 @@ afterEach(() => {
 
 describe('TaskDetail — MR-квадратик в строке репозитория', () => {
   it('result.json → синий кликабельный MR в строке репо', async () => {
-    stubFetch(
-      JSON.stringify({
-        merge_requests: [
-          {
-            repository_url: 'https://github.com/acme/app.git',
-            url: 'https://github.com/acme/app/pull/1',
-            title: 'feat: fix login',
-          },
-        ],
-      }),
-    );
+    stubFetch([
+      {
+        repository_url: 'https://github.com/acme/app.git',
+        url: 'https://github.com/acme/app/pull/1',
+        title: 'feat: fix login',
+      },
+    ]);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
@@ -267,6 +256,12 @@ describe('TaskDetail — MR-квадратик в строке репозито�
           repository_url: 'https://github.com/acme/lib.git',
           create_mr: true,
         }),
+      ],
+      merge_requests: [
+        {
+          repository_url: 'https://github.com/acme/app.git',
+          url: 'https://github.com/acme/app/pull/1',
+        },
       ],
     });
     const iteration = makeIteration();

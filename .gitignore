@@ -29,7 +29,11 @@ pi/models-store.json
 pi/trust.json
 pi/*.sh
 pi/web-search-cache/
-dotfiles-agent/certs/
+# Хостовые CA-сертификаты: содержимое игнорируется, но ПУСТАЯ папка обязана
+# оставаться в репо — на ней держится `COPY dotfiles-agent/certs/` в образ.
+dotfiles-agent/certs/*
+!dotfiles-agent/certs/.gitkeep
+!dotfiles-agent/certs/README.md
 node_modules/
 .vitest/
 

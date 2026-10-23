@@ -139,13 +139,13 @@ describe('TaskDetail — сводка репозиториев в шапке', (
         status: 'done',
       });
       source.workspaceProgress({
-        step: 'bootstrapping',
+        step: 'devops',
         repo: 'Hello-World',
         status: 'running',
       });
     });
     await waitFor(() =>
-      expect(row).toHaveAttribute('data-status', 'bootstrapping'),
+      expect(row).toHaveAttribute('data-status', 'devops'),
     );
 
     act(() => {
@@ -225,7 +225,7 @@ describe('TaskDetail — сводка репозиториев в шапке', (
     const row = await renderAndGetRow();
 
     FakeEventSource.instances[0].workspaceProgress({
-      step: 'bootstrapping',
+      step: 'devops',
       repo: 'Hello-World',
       status: 'done',
       message: 'пропущен',

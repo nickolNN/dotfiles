@@ -336,6 +336,8 @@ describe('getResultArtifact', () => {
       body: '# Result\n',
       contentType: 'text/markdown',
       filename: 'report.md',
+      source: 'iteration-snapshot',
+      mtime: expect.any(String),
     });
   });
 
@@ -353,7 +355,28 @@ describe('getResultArtifact', () => {
       body: '<h1>done</h1>',
       contentType: 'text/html',
       filename: 'report.html',
+      source: 'iteration-snapshot',
+      mtime: expect.any(String),
     });
+  });
+
+  it('корень имеет приоритет над снапшотом → source=root', async () => {
+    const db = newDb();
+    const root = makeRoot();
+    const { config } = makeConfig(root);
+    const id = seedIssue(db, { desired_result: 'html' });
+    const iterationId = seedIteration(db, id, { status: 'completed' });
+    // Устаревший отчёт в снапшоте последней итерации…
+    const iterDir = iterationResultDirFor(root, id, iterationId);
+    mkdirSync(iterDir, { recursive: true });
+    writeFileSync(join(iterDir, 'report.html'), '<h1>OLD</h1>');
+    // …и свежий в корне рабочей папки.
+    mkdirSync(join(root, id), { recursive: true });
+    writeFileSync(join(root, id, 'report.html'), '<h1>NEW</h1>');
+
+    const result = await service.getResultArtifact(db, config, id);
+
+    expect(result).toMatchObject({ body: '<h1>NEW</h1>', source: 'root' });
   });
 });
 

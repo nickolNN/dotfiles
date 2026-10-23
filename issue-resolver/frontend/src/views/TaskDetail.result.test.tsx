@@ -186,9 +186,9 @@ describe('TaskDetail — просмотр отчёта', () => {
     await waitFor(() => expect(open).toBeEnabled());
   });
 
-  it('md: клик открывает модалку и рендерит markdown отчёта', async () => {
-    const fetchMock = stubFetch(makeIssue({ desired_result: 'md' }), () =>
-      textResponse('## Итог\nвсё хорошо'),
+  it('клик открывает модалку с iframe (всегда HTML)', async () => {
+    stubFetch(makeIssue(), () =>
+      textResponse('<html>отчёт</html>'),
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -196,26 +196,9 @@ describe('TaskDetail — просмотр отчёта', () => {
     await clickOpenResult();
 
     const modal = await screen.findByTestId('result-modal');
-    const markdown = await within(modal).findByTestId('result-markdown');
-    expect(markdown).toHaveTextContent('Итог');
-    expect(markdown).toHaveTextContent('всё хорошо');
-    expect(
-      fetchMock.mock.calls.some(([input]) => String(input).endsWith('/result')),
-    ).toBe(true);
-  });
-
-  it('md: 404 → «Отчёт ещё не создан»', async () => {
-    stubFetch(makeIssue({ desired_result: 'md' }), () =>
-      textResponse('', { ok: false, status: 404 }),
-    );
-
-    render(<TaskDetail issueId="issue-1" />);
-    await screen.findByText('Fix login bug');
-    await clickOpenResult();
-
-    expect(
-      await screen.findByText('Отчёт ещё не создан'),
-    ).toBeInTheDocument();
+    const frame = within(modal).getByTitle('Отчёт');
+    expect(frame.tagName).toBe('IFRAME');
+    expect(frame).toHaveAttribute('src', RESULT_URL);
   });
 
   it('desired_result html → iframe с правильным src', async () => {
@@ -260,7 +243,7 @@ describe('TaskDetail — просмотр отчёта', () => {
     expect(screen.queryByTestId('result-modal')).toBeNull();
   });
 
-  it('desired_result не задан → кнопки «Показать отчёт» нет', async () => {
+  it('desired_result не задан → кнопка «Показать отчёт» всё равно есть', async () => {
     stubFetch(makeIssue(), () => textResponse('# Итог'));
 
     render(<TaskDetail issueId="issue-1" />);
@@ -268,7 +251,6 @@ describe('TaskDetail — просмотр отчёта', () => {
       expect(screen.getByText('Fix login bug')).toBeInTheDocument(),
     );
 
-    expect(screen.queryByTestId('open-result')).toBeNull();
-    expect(screen.queryByTestId('download-result')).toBeNull();
+    expect(screen.getByTestId('open-result')).toBeInTheDocument();
   });
 });

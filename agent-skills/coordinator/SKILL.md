@@ -1,6 +1,7 @@
 ---
 name: coordinator
-description: Coordinator role in a hand-assembled agent room — dispatch
+description: >
+  Coordinator role in a hand-assembled agent room — dispatch
   non-overlapping work to peer agents, verify it, integrate it. Not for
   issue-resolver pipeline steps, where the engine assigns the role and the step
   prompt is the whole contract.

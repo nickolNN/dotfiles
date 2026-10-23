@@ -79,7 +79,7 @@ export function parseSessionStats(
 }
 
 /**
- * Суммирует статистику нескольких pi-агентов шага (воркеры + координаторы
+ * Суммирует статистику нескольких pi-агентов шага (исполнители + координаторы
  * room/stages) в один агрегат для `step_outputs.stats`. Модель/сессия
  * (`model`, `sessionId`, `avgTokensPerSecond`) и `contextUsage` у суммы не
  * задаются — это свойства конкретного агента, а не шага. `cost` суммируется
@@ -156,6 +156,25 @@ export function parseStepReport(json: string): StepReport | null {
       ? { description: obj.description }
       : {}),
     ...(typeof obj.pr_error === 'string' ? { pr_error: obj.pr_error } : {}),
+    ...(Array.isArray(obj.merge_requests)
+      ? {
+          merge_requests: (obj.merge_requests as unknown[])
+            .filter(
+              (item): item is Record<string, unknown> =>
+                typeof item === 'object' && item !== null,
+            )
+            .map((item) => ({
+              repository_url:
+                typeof item.repository_url === 'string'
+                  ? item.repository_url
+                  : '',
+              title: typeof item.title === 'string' ? item.title : '',
+              description:
+                typeof item.description === 'string' ? item.description : '',
+            }))
+            .filter((entry) => entry.repository_url && entry.title),
+        }
+      : {}),
     ...(Array.isArray(obj.scenarios)
       ? { scenarios: obj.scenarios as StepReportScenario[] }
       : {}),

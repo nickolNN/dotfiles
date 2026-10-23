@@ -38,6 +38,21 @@ export const issues = sqliteTable('issues', {
   dev_server_port: integer('dev_server_port'),
   /** PID процесса dev-сервера задачи (null — не запущен). */
   dev_server_pid: integer('dev_server_pid'),
+  /**
+   * Модель DevOps-агента. Хранится на задаче, иначе черновик терял её:
+   * `/start` не получает тела запроса и обязан читать сохранённые значения.
+   */
+  devops_model: text('devops_model'),
+  /** Thinking effort DevOps-агента — настраивается так же, как у шагов. */
+  devops_thinking_level: text('devops_thinking_level').$type<
+    ThinkingLevel
+  >(),
+  /** Макс. число параллельных исполнителей (null — наследовать/без ограничения). */
+  worker_count: integer('worker_count'),
+  /** MR/PR задачи: JSON-массив MergeRequestEntry (накапливается от итерации к итерации). */
+  merge_requests: text('merge_requests', { mode: 'json' }).$type<
+    import('@issue-resolver/shared').MergeRequestEntry[]
+  >(),
   status: text('status').$type<TaskStatus>().notNull(),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),

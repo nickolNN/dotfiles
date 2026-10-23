@@ -6,8 +6,9 @@ import type {
   DesiredResult,
   Iteration,
   PipelineStep,
+  ThinkingLevel,
 } from '@issue-resolver/shared';
-import { extractIssueKeyFromUrl, type TaskStatus } from '@issue-resolver/shared';
+import { extractIssueKeyFromUrl, extractRepoNameFromUrl, type TaskStatus } from '@issue-resolver/shared';
 import { and, eq, max } from 'drizzle-orm';
 import type { IssueService } from '../issues/service';
 import type { FastifyInstance } from 'fastify';
@@ -26,13 +27,22 @@ import {
   createIssueRequestSchema,
   createIterationRequestSchema,
   formatZodError,
+  updateIssueRequestSchema,
   validateJiraUrlSchema,
 } from '../validation';
 import type { IterationRunDeps } from '../workflow/run-iteration.service';
 import {
+  isReportRunActive,
+  lastReportFailed,
   prepareIssueWorkspace,
+  refreshLatestResultSnapshot,
+  reportWarningsFor,
+  reportModelFor,
+  observedModelFor,
   runIssueIteration,
+  runReportAgent,
 } from '../workflow/run-iteration.service';
+import { buildStepPrompt } from '../workflow/prompts';
 import {
   attachmentsFilePathFor,
   saveUpload,
@@ -50,6 +60,25 @@ import {
 const API_PATH = '/issue-resolver/api/v1';
 const ROUTE_PATH = `${API_PATH}/issues`;
 const DEFAULT_STEPS: readonly PipelineStep[] = ['refine', 'resolve'];
+
+/**
+ * Заголовок `x-artifact-warning` для артефактных ответов: пусто, если по
+ * отчёту задачи нет предупреждений (напр. утечка id модели). Пустой заголовок
+ * не ставим, чтобы не шуметь.
+ */
+function artifactWarningHeaders(
+  issueId: string,
+  workspaceRoot?: string,
+): Record<string, string> {
+  const hostDir = workspaceHostDirFor(
+    workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+    issueId,
+  );
+  const warnings = reportWarningsFor(issueId, hostDir);
+  return warnings.length > 0
+    ? { 'x-artifact-warning': warnings.join('; ') }
+    : {};
+}
 
 /**
  * Эффективные шаги задачи: 'resolve' всегда присутствует; при createMr —
@@ -362,6 +391,9 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
+      // Идёт report-прогон или корень пуст: `getResultArtifact` сам решает по
+      // состоянию и вернёт прошлый HTML из снапшота с пометкой `x-artifact-source`.
+      // Немаркированного прошлого отчёта не отдаём —(в).
       const result = await service.getResultArtifact(db, config, id);
       if (!result) {
         return reply.status(404).send({ error: 'result not found' });
@@ -369,6 +401,9 @@ export async function issuesRoutes(
       return reply
         .type(result.contentType)
         .header('Content-Disposition', 'inline')
+        .header('x-artifact-source', result.source)
+        .header('x-artifact-mtime', result.mtime)
+        .headers(artifactWarningHeaders(id, deps.workspaceRoot))
         .send(result.body);
     },
   );
@@ -392,6 +427,59 @@ export async function issuesRoutes(
           'Content-Disposition',
           `attachment; filename="${result.filename}"`,
         )
+        .header('x-artifact-source', result.source)
+        .header('x-artifact-mtime', result.mtime)
+        .headers(artifactWarningHeaders(id, deps.workspaceRoot))
+        .send(result.body);
+    },
+  );
+
+  // MD-артефакт (report.md) — для скачивания агентами.
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/result/md`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const issue = service.getIssue(db, config, id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+
+      const result = await service.getMdArtifact(db, config, id);
+      if (!result) {
+        return reply.status(404).send({ error: 'result not found' });
+      }
+      return reply
+        .type(result.contentType)
+        .header('Content-Disposition', 'inline')
+        .header('x-artifact-source', result.source)
+        .header('x-artifact-mtime', result.mtime)
+        .headers(artifactWarningHeaders(id, deps.workspaceRoot))
+        .send(result.body);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/result/md/download`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const issue = service.getIssue(db, config, id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+
+      const result = await service.getMdArtifact(db, config, id);
+      if (!result) {
+        return reply.status(404).send({ error: 'result not found' });
+      }
+      return reply
+        .type(result.contentType)
+        .header(
+          'Content-Disposition',
+          `attachment; filename="${result.filename}"`,
+        )
+        .header('x-artifact-source', result.source)
+        .header('x-artifact-mtime', result.mtime)
+        .headers(artifactWarningHeaders(id, deps.workspaceRoot))
         .send(result.body);
     },
   );
@@ -486,6 +574,127 @@ export async function issuesRoutes(
         .send(body);
     },
   );
+
+  // ── Report routes ────────────────────────────────────────────────
+
+  // POST /issues/:id/report — force-run report agent
+  app.post<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/report`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const issue = service.getIssue(db, config, id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+
+      const reportRunId = `${id}/report`;
+      const wsRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
+      const hostDir = workspaceHostDirFor(wsRoot, id);
+      const containerName = containerNameFor(id);
+
+      const repoWorkspaces = (issue.repositories ?? []).map((repo) => {
+        const repoName = extractRepoNameFromUrl(repo.repository_url);
+        return `/${repoName}`;
+      });
+
+      const iterationRows = db
+        .select({ number: iterations.number })
+        .from(iterations)
+        .where(eq(iterations.issue_id, id))
+        .all();
+      const iterationCount = iterationRows.length > 0
+        ? Math.max(...iterationRows.map((r) => r.number))
+        : 0;
+
+      try {
+        const prompt = buildStepPrompt({
+          step: 'report',
+          issueTitle: issue.title,
+          description: issue.description ?? '',
+          jiraText: null,
+          context: `Task completed. Iterations: ${iterationCount}.`,
+          feedback: null,
+          repoPaths: repoWorkspaces,
+          iterationCount,
+        });
+
+        // Архивация прошлых артефактов живёт внутри `runReportAgent` — одна
+        // точка для post-iteration и этого роута.
+        void runReportAgent(deps, {
+          issueId: id,
+          containerName,
+          hostDir,
+          prompt,
+          // Модель отчёта: query-param ручного запуска переопределяет
+          // step_models.report → модель последней завершённой итерации.
+          model: (request.query as Record<string, string>).model || reportModelFor(db, id),
+          thinkingLevel: (request.query as Record<string, string>).thinking as ThinkingLevel | undefined,
+          // Атрибуция: ручной запуск + Origin запроса видны в серверном логе.
+          trigger: 'manual',
+          origin: request.headers.origin ?? null,
+        }).then(() =>
+          // Отчёт дописан — обновляем снапшот, который читает GET /result.
+          refreshLatestResultSnapshot(db, deps.workspaceRoot, id).catch(
+            (error) => console.error('refresh report snapshot failed', error),
+          ),
+        );
+
+        return reply.code(202).send({ ok: true, reportRunId });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return reply.status(500).send({ error: message });
+      }
+    },
+  );
+
+  // GET /issues/:id/report/status
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/report/status`,
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!service.getIssue(db, config, id)) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+
+      // Активный прогон → `running`, а не `idle` по пустому корню: корень
+      // заархивирован на время работы агента, и UI должен видеть «генерируется».
+      if (isReportRunActive(id)) {
+        return { status: 'running' };
+      }
+
+      const wsRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
+      const hostDir = workspaceHostDirFor(wsRoot, id);
+      const reportMdPath = join(hostDir, 'report.md');
+
+      let reportExists = false;
+      let lastRunAt: string | undefined;
+      try {
+        const { stat } = await import('node:fs/promises');
+        const reportStat = await stat(reportMdPath);
+        reportExists = true;
+        lastRunAt = reportStat.mtime.toISOString().replace(/\.\d{3}Z$/, 'Z');
+      } catch {
+        reportExists = false;
+      }
+
+      let status: 'success' | 'failed' | 'idle' = 'idle';
+      if (reportExists) status = 'success';
+      else if (lastReportFailed(id)) status = 'failed';
+
+      const warnings = reportWarningsFor(id, hostDir);
+      const observedModel = observedModelFor(id);
+      return {
+        status,
+        ...(lastRunAt ? { lastRunAt } : {}),
+        // Наблюдённая (а не запрошенная) модель — additive; после рестарта
+        // отсутствует, и UI рисует «нет телеметрии», а не пустое значение.
+        ...(observedModel ? { observedModel } : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
+    },
+  );
+
+  // ── Iterations ───────────────────────────────────────────────────
 
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/iterations`,
@@ -767,11 +976,12 @@ export async function issuesRoutes(
         git: deps.git,
         sse: deps.sse,
         local: deps.local,
-        ...(deps.bootstrapperFactory
-          ? { bootstrapperFactory: deps.bootstrapperFactory }
+        ...(deps.devopsFactory
+          ? { devopsFactory: deps.devopsFactory }
           : {}),
-        bootstrapperModel: body.bootstrapper_model,
-        bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+        devopsModel: body.devops_model,
+        devopsThinkingLevel: body.devops_thinking_level,
+        devopsTimeoutMs: deps.devopsTimeoutMs,
         workspaceRoot: deps.workspaceRoot,
       };
       if (hasRunning) {
@@ -810,6 +1020,7 @@ export async function issuesRoutes(
               steps: iteration.steps,
               reviewContext: iteration.review_context,
               isReviewNeed: iteration.is_review_need,
+              worker_count: iteration.worker_count ?? undefined,
             },
             repositories,
             repoWorkspaces: ws,
@@ -983,6 +1194,10 @@ export async function issuesRoutes(
           step_models: body.step_models ?? null,
           thinking_level: body.thinking_level ?? null,
           step_thinking_levels: body.step_thinking_levels ?? null,
+          devops_model: body.devops_model ?? null,
+          devops_thinking_level:
+            body.devops_thinking_level ?? null,
+          worker_count: body.worker_count ?? undefined,
           container_name: null,
           source: jiraIssueUrl ? 'jira' : null,
           tag_id: body.tag_id ?? null,
@@ -1035,11 +1250,12 @@ export async function issuesRoutes(
         git: deps.git,
         sse: deps.sse,
         local: deps.local,
-        ...(deps.bootstrapperFactory
-          ? { bootstrapperFactory: deps.bootstrapperFactory }
+        ...(deps.devopsFactory
+          ? { devopsFactory: deps.devopsFactory }
           : {}),
-        bootstrapperModel: body.bootstrapper_model,
-        bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+        devopsModel: body.devops_model,
+        devopsThinkingLevel: body.devops_thinking_level,
+        devopsTimeoutMs: deps.devopsTimeoutMs,
         workspaceRoot: deps.workspaceRoot,
       };
       // Подготовка + конвейер — фоновый прогон. HTTP-ответ возвращается
@@ -1099,6 +1315,7 @@ export async function issuesRoutes(
               steps: pipelineSteps,
               reviewContext,
               isReviewNeed,
+              worker_count: body.worker_count ?? undefined,
             },
             repositories,
             repoWorkspaces: ws,
@@ -1212,11 +1429,13 @@ export async function issuesRoutes(
         git: deps.git,
         sse: deps.sse,
         local: deps.local,
-        ...(deps.bootstrapperFactory
-          ? { bootstrapperFactory: deps.bootstrapperFactory }
+        ...(deps.devopsFactory
+          ? { devopsFactory: deps.devopsFactory }
           : {}),
-        bootstrapperModel: undefined,
-        bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+        devopsModel: issue.devops_model ?? undefined,
+        devopsThinkingLevel:
+          issue.devops_thinking_level ?? undefined,
+        devopsTimeoutMs: deps.devopsTimeoutMs,
         workspaceRoot: deps.workspaceRoot,
       };
 
@@ -1244,6 +1463,7 @@ export async function issuesRoutes(
               steps: pipelineSteps,
               reviewContext: '',
               isReviewNeed: false,
+              worker_count: issue.worker_count ?? undefined,
             },
             repositories,
             repoWorkspaces: ws,
@@ -1262,6 +1482,134 @@ export async function issuesRoutes(
       })();
 
       return { ok: true, iterationId };
+    },
+  );
+
+  // PUT /issues/:id — редактирование черновика.
+  app.put<{
+    Params: { id: string };
+    Body: Record<string, unknown>;
+  }>(
+    `${ROUTE_PATH}/:id`,
+    async (request, reply) => {
+      const { id } = request.params;
+
+      const issue = service.getIssue(db, config, id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+      if (issue.status !== 'draft') {
+        return reply
+          .status(409)
+          .send({ error: 'only draft issues can be edited' });
+      }
+
+      // Проверяем, что итераций нет (черновик не запускался).
+      const existingIteration = db
+        .select({ id: iterations.id })
+        .from(iterations)
+        .where(eq(iterations.issue_id, id))
+        .get();
+      if (existingIteration) {
+        return reply
+          .status(409)
+          .send({ error: 'issue already has iterations — not a draft' });
+      }
+
+      const parsed = updateIssueRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: formatZodError(parsed.error) });
+      }
+
+      const body = parsed.data;
+      const now = new Date().toISOString();
+
+      db.transaction((tx) => {
+        // Обновляем поля задачи — только те, что переданы.
+        const setData: Record<string, unknown> = { updated_at: now };
+        if (body.title !== undefined) setData.title = body.title;
+        if (body.description !== undefined) setData.description = body.description;
+        if (body.desired_result !== undefined)
+          setData.desired_result = body.desired_result;
+        if (body.jira_issue_url !== undefined)
+          setData.jira_issue_url = body.jira_issue_url;
+        if (body.pipeline_steps !== undefined)
+          setData.pipeline_steps = body.pipeline_steps;
+        if (body.step_models !== undefined)
+          setData.step_models = body.step_models;
+        if (body.thinking_level !== undefined)
+          setData.thinking_level = body.thinking_level;
+        if (body.step_thinking_levels !== undefined)
+          setData.step_thinking_levels = body.step_thinking_levels;
+        if (body.tag_id !== undefined) setData.tag_id = body.tag_id;
+        if (body.devops_model !== undefined)
+          setData.devops_model = body.devops_model;
+        if (body.devops_thinking_level !== undefined)
+          setData.devops_thinking_level =
+            body.devops_thinking_level;
+        if (body.worker_count !== undefined)
+          setData.worker_count = body.worker_count;
+
+        tx.update(issues)
+          .set(setData)
+          .where(eq(issues.id, id))
+          .run();
+
+        // Репозитории: если переданы — заменяем весь список.
+        if (body.repositories !== undefined) {
+          tx.delete(issueRepositories)
+            .where(eq(issueRepositories.issue_id, id))
+            .run();
+
+          const repoRows = body.repositories.map((repo) => {
+            // Поддерживаем и явный URL, и repo_id.
+            const repoId =
+              'repo_id' in repo ? repo.repo_id : undefined;
+            let repositoryUrl: string | undefined =
+              'repository_url' in repo
+                ? repo.repository_url
+                : undefined;
+            let baseBranch: string | undefined =
+              'base_branch' in repo ? repo.base_branch : undefined;
+
+            if (repoId) {
+              const saved = getRepository(db, repoId);
+              if (!saved)
+                throw new Error(
+                  `Repository not found: ${repoId}`,
+                );
+              repositoryUrl = saved.cloneUrl ?? saved.url;
+              baseBranch =
+                baseBranch ?? saved.defaultBranch ?? undefined;
+            }
+
+            if (!repositoryUrl || !baseBranch) {
+              throw new Error(
+                `repository_url и base_branch обязательны для репозитория`,
+              );
+            }
+
+            return {
+              id: randomUUID(),
+              issue_id: id,
+              repository_url: repositoryUrl,
+              branch_name: baseBranch,
+              create_mr: repo.create_mr ?? false,
+              bootstrap_enabled: repo.bootstrap_enabled ?? true,
+              created_at: now,
+              updated_at: now,
+            };
+          });
+
+          if (repoRows.length > 0) {
+            tx.insert(issueRepositories).values(repoRows).run();
+          }
+        }
+      });
+
+      // Возвращаем обновлённую задачу.
+      const updated = service.getIssue(db, config, id);
+      return reply.status(200).send(updated);
     },
   );
 }

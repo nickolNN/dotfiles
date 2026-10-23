@@ -4,7 +4,7 @@
  *
  * Тест документирует ФАКТИЧЕСКОЕ поведение `runRoomResolve`/`runStagedResolve`
  * (backend/src/workflow/room.ts) точным порядком pi-вызовов и печатает
- * человекочитаемый трейс (∥ — воркеры одной параллельной фазы, `---` — смена
+ * человекочитаемый трейс (∥ — исполнители одной параллельной фазы, `---` — смена
  * этапа/секции). Трейс нужен для отчёта, ассерты на него не опираются.
  */
 import { describe, expect, it } from 'vitest';
@@ -70,7 +70,7 @@ function sectionOf(id: string, finalId: string): string {
 
 /**
  * Печатает и возвращает читаемый трейс порядка запуска агентов:
- * воркеры одной параллельной фазы помечаются `∥`, смена секции — `---`.
+ * исполнители одной параллельной фазы помечаются `∥`, смена секции — `---`.
  */
 function traceTopology(
   title: string,
@@ -88,7 +88,7 @@ function traceTopology(
     };
   });
 
-  // Воркер параллелен, если рядом с ним в той же секции есть другой воркер.
+  // Исполнитель параллелен, если рядом с ним в той же секции есть другой исполнитель.
   const parallel = entries.map((entry, i) => {
     if (!entry.worker) return false;
     const sameWorkerRun = (other?: (typeof entries)[number]): boolean =>
@@ -124,7 +124,7 @@ describe('топологии исполнения resolve — демо-прим�
     expect(planExecutionMode(COMPLEX_STAGES_PLAN)).toBe('stages');
   });
 
-  it('room: 3 воркера ∥, затем один координатор (id = stepRunId)', async () => {
+  it('room: 3 исполнителя ∥, затем один координатор (id = stepRunId)', async () => {
     const pi = new FakePiRunner();
     const control = new InMemoryStepSessionRegistry();
     pi.enqueue(pass('w-backend'));
@@ -140,7 +140,7 @@ describe('топологии исполнения resolve — демо-прим�
 
     traceTopology('room — параллельно', pi, 'run-1');
 
-    // 3 воркера (0-based id в room-режиме) → 1 координатор.
+    // 3 исполнителя (0-based id в room-режиме) → 1 координатор.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
       'run-1/worker/0',
       'run-1/worker/1',
@@ -148,9 +148,9 @@ describe('топологии исполнения resolve — демо-прим�
       'run-1',
     ]);
     expect(pi.calls.slice(0, 3).map((c) => c.options?.agent?.label)).toEqual([
-      'Воркер 1',
-      'Воркер 2',
-      'Воркер 3',
+      'Исполнитель 1',
+      'Исполнитель 2',
+      'Исполнитель 3',
     ]);
     expect(pi.calls[3].options?.agent).toMatchObject({
       id: 'run-1',
@@ -177,17 +177,17 @@ describe('топологии исполнения resolve — демо-прим�
 
     traceTopology('stages 3×1 — последовательно', pi, 'run-1');
 
-    // executors=1 → один агент-этап на этап (никаких /worker/), затем финал.
+    // executors=1 → один исполнитель этапа (`/stage/<i>/worker/1`), затем финал.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
-      'run-1/stage/1/coordinator',
-      'run-1/stage/2/coordinator',
-      'run-1/stage/3/coordinator',
+      'run-1/stage/1/worker/1',
+      'run-1/stage/2/worker/1',
+      'run-1/stage/3/worker/1',
       'run-1',
     ]);
     expect(pi.calls.map((c) => c.options?.agent?.label)).toEqual([
-      'Этап 1 · Координатор',
-      'Этап 2 · Координатор',
-      'Этап 3 · Координатор',
+      'Этап 1 · Исполнитель 1',
+      'Этап 2 · Исполнитель 1',
+      'Этап 3 · Исполнитель 1',
       'Координатор',
     ]);
     expect(result.report?.summary).toBe('seq-final');
@@ -195,13 +195,13 @@ describe('топологии исполнения resolve — демо-прим�
 
   it('stages-сложный 2→1→3: параллель, последовательность, параллель, финал', async () => {
     const pi = new FakePiRunner();
-    // этап 1: 2 воркера ∥ + координатор
+    // этап 1: 2 исполнителя ∥ + координатор
     pi.enqueue(pass('s1-be'));
     pi.enqueue(pass('s1-fe'));
     pi.enqueue(pass('s1-coord'));
-    // этап 2: 1 агент
+    // этап 2: 1 исполнитель
     pi.enqueue(pass('s2'));
-    // этап 3: 3 воркера ∥ + координатор
+    // этап 3: 3 исполнителя ∥ + координатор
     pi.enqueue(pass('s3-tests'));
     pi.enqueue(pass('s3-docs'));
     pi.enqueue(pass('s3-review'));
@@ -217,13 +217,13 @@ describe('топологии исполнения resolve — демо-прим�
 
     traceTopology('stages-сложный 2→1→3', pi, 'run-1');
 
-    // Строгий порядок: этап1 (воркеры ∥ → координатор) → этап2 (1 агент) →
-    // этап3 (воркеры ∥ → координатор) → финальный lead.
+    // Строгий порядок: этап1 (исполнители ∥ → координатор) → этап2 (1 исполнитель) →
+    // этап3 (исполнители ∥ → координатор) → финальный lead.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
       'run-1/stage/1/worker/1',
       'run-1/stage/1/worker/2',
       'run-1/stage/1/coordinator',
-      'run-1/stage/2/coordinator',
+      'run-1/stage/2/worker/1',
       'run-1/stage/3/worker/1',
       'run-1/stage/3/worker/2',
       'run-1/stage/3/worker/3',

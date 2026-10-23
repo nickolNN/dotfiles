@@ -61,10 +61,10 @@ describe('repoPrepStatus', () => {
     ).toBe('cloned');
   });
 
-  it('бутстрап и установка', () => {
+  it('DevOps и установка', () => {
     expect(
-      repoPrepStatus('Hello-World', true, [step('bootstrapping', 'running')]),
-    ).toBe('bootstrapping');
+      repoPrepStatus('Hello-World', true, [step('devops', 'running')]),
+    ).toBe('devops');
     expect(repoPrepStatus('Hello-World', true, [step('installing', 'done')])).toBe(
       'installed',
     );
@@ -81,7 +81,7 @@ describe('repoPrepStatus', () => {
       repoPrepStatus(
         'Hello-World',
         false,
-        [step('bootstrapping', 'done', 'пропущен'), step('installing', 'done', 'пропущен')],
+        [step('devops', 'done', 'пропущен'), step('installing', 'done', 'пропущен')],
       ),
     ).toBe('skipped');
     expect(repoPrepStatus('Hello-World', false, [], true)).toBe('skipped');

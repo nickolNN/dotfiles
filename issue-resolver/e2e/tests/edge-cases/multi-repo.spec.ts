@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import {
   FakeApi,
-  bsLog,
+  logChunk,
   createRepo,
   getLatestIssueId,
   wsProgress,
@@ -9,14 +9,15 @@ import {
 
 /**
  * Задача с двумя репозиториями: и форма (оба уходят с bootstrap_enabled),
- * и панель подготовки (обе подписи репо), и bootstrap-лог (repo-поле).
+ * и панель подготовки (обе подписи репо), и живой devops-вывод.
  *
- * SSE отдаём скриптом: реальный bootstrap гоняет pi-анализатор на каждый
- * репозиторий (минуты), а контракт «событие → подпись/лог по repo» здесь
- * проверяется детерминированно.
+ * SSE отдаём скриптом: реальный DevOps-агент гоняет pi-анализатор на каждый
+ * репозиторий (минуты), а контракт «событие → подпись/лог» здесь
+ * проверяется детерминированно. Вывод обоих репо идёт одним stepRunId
+ * `{issueId}/devops` — это единая issue-уровневая сессия.
  */
 test.describe('edge: подготовка двух репозиториев', () => {
-  test('прогресс и bootstrap-лог раздельно по каждому репо', async ({
+  test('прогресс по каждому репо и общий devops-вывод', async ({
     page,
   }) => {
     const api = new FakeApi();
@@ -54,13 +55,13 @@ test.describe('edge: подготовка двух репозиториев', ()
       wsProgress('cloning', 'running', 'acme/one'),
       wsProgress('cloning', 'done', 'acme/one'),
       wsProgress('cloning', 'done', 'acme/two'),
-      wsProgress('bootstrapping', 'running', 'acme/one'),
+      wsProgress('devops', 'running', 'acme/one'),
       wsProgress('installing', 'running', 'acme/one'),
-      wsProgress('bootstrapping', 'running', 'acme/two'),
+      wsProgress('devops', 'running', 'acme/two'),
       wsProgress('installing', 'running', 'acme/two'),
-      bsLog('acme/one', 'deps installed for one\n'),
-      bsLog('acme/two', 'deps installed for two\n'),
-      bsLog('acme/two', 'npm warn two\n', 'stderr'),
+      logChunk(`${issueId}/devops`, 'deps installed for one\n'),
+      logChunk(`${issueId}/devops`, 'deps installed for two\n'),
+      logChunk(`${issueId}/devops`, 'npm warn two\n', 'stderr'),
     ]);
 
     const progress = page.getByTestId('workspace-progress');
@@ -70,10 +71,10 @@ test.describe('edge: подготовка двух репозиториев', ()
     await expect(progress.getByText('Клонирование acme/one')).toBeVisible();
     await expect(progress.getByText('Клонирование acme/two')).toBeVisible();
 
-    // bootstrapping и installing отработали по обоим репо
+    // devops и installing отработали по обоим репо
     await expect(
       progress.locator(
-        '[data-testid="workspace-step"][data-step="bootstrapping"]',
+        '[data-testid="workspace-step"][data-step="devops"]',
       ),
     ).toHaveCount(2);
     await expect(
@@ -81,8 +82,8 @@ test.describe('edge: подготовка двух репозиториев', ()
         '[data-testid="workspace-step"][data-step="installing"]',
       ),
     ).toHaveCount(2);
-    await expect(progress.getByText('Bootstrapping acme/one')).toBeVisible();
-    await expect(progress.getByText('Bootstrapping acme/two')).toBeVisible();
+    await expect(progress.getByText('DevOps acme/one')).toBeVisible();
+    await expect(progress.getByText('DevOps acme/two')).toBeVisible();
     await expect(
       progress.getByText('Установка зависимостей acme/one'),
     ).toBeVisible();
@@ -90,22 +91,12 @@ test.describe('edge: подготовка двух репозиториев', ()
       progress.getByText('Установка зависимостей acme/two'),
     ).toBeVisible();
 
-    // bootstrap_log: у каждого блока свой repo
-    await expect(page.getByTestId('bootstrap-log-repo')).toHaveCount(2);
-    await expect(
-      page.locator(
-        '[data-testid="bootstrap-log-repo"][data-repo="acme/one"]',
-      ),
-    ).toContainText('deps installed for one');
-    await expect(
-      page.locator(
-        '[data-testid="bootstrap-log-repo"][data-repo="acme/two"]',
-      ),
-    ).toContainText('deps installed for two');
-    await expect(
-      page.locator(
-        '[data-testid="bootstrap-log-repo"][data-repo="acme/two"] [data-kind="stderr"]',
-      ),
-    ).toContainText('npm warn two');
+    // Живой devops-вывод: одна issue-уровневая сессия (`{issueId}/devops`),
+    // без разбивки на блоки по repo — SessionView копит все чанки подряд.
+    const session = page.getByTestId('devops-session');
+    await expect(session).toBeVisible();
+    await expect(session).toContainText('deps installed for one');
+    await expect(session).toContainText('deps installed for two');
+    await expect(session).toContainText('npm warn two');
   });
 });

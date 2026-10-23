@@ -2,7 +2,10 @@ import type {
   DesiredResult,
   Iteration,
   PipelineStep,
+  SSEEvent,
+  SessionEvent,
   StepModels,
+  StepRunStatus,
   StepRunWithLog,
   StepThinkingLevels,
   TaskStatus,
@@ -11,14 +14,17 @@ import type {
 import {
   extractIssueKeyFromUrl,
   extractRepoNameFromUrl,
+  stepRunStatusFromResult,
 } from '@issue-resolver/shared';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
@@ -46,25 +52,27 @@ import type { StepSessionRegistry } from '../pi/session-registry';
 import type { MrClient } from '../pr/mr';
 import type { SseHub } from '../sse/hub';
 import type {
-  BootstrapperFactory,
+  DevOpsFactory,
   RunInstructionsPort,
   RunIterationResult,
   StepRunStore,
 } from '../workflow/engine';
 import { prepareWorkspace, runIteration } from '../workflow/engine';
+import type { IterationTerminalOutcome } from '../workflow/engine';
 import type { WorkspaceProgress } from '../workflow/engine';
+import { buildStepPrompt } from '../workflow/prompts';
 import {
+  ALL_RESULT_ARTIFACTS,
   DEFAULT_WORKSPACE_ROOT,
   iterationResultDirFor,
-  resultArtifactFor,
   workspaceContainerDirFor,
   workspaceHostDirFor,
 } from '../workspace/paths';
 
-/** Имя скрипта dev-сервера, который создаёт bootstrapper в корне репозитория. */
+/** Имя скрипта dev-сервера, который создаёт devops в корне репозитория. */
 const DEV_SERVER_SCRIPT = 'DEV_SERVER.sh';
 
-/** Инфраструктурные файлы задачи в корне репозитория (пишет bootstrapper). */
+/** Инфраструктурные файлы задачи в корне репозитория (пишет DevOps-агент). */
 const INFRA_FILES = ['RUN_INSTRUCTIONS.md', DEV_SERVER_SCRIPT];
 
 /**
@@ -94,7 +102,7 @@ function excludeInfraFiles(workspaceDir: string, repoName: string): void {
 
 /**
  * Поднимает `DEV_SERVER.sh` репозитория в фоне (detached, без stdio). Скрипт
- * создаёт bootstrapper и уже содержит выделенный порт. Нет файла/сбой spawn →
+ * создаёт devops и уже содержит выделенный порт. Нет файла/сбой spawn →
  * null (подготовка из-за этого не падает).
  */
 function startRepoDevServer(
@@ -157,13 +165,15 @@ export interface IterationRunDeps {
   /** Локальный режим без Docker. */
   local?: boolean;
   /** Model для агента-анализатора (подготовка рабочей папки). */
-  bootstrapperModel?: string;
+  devopsModel?: string;
+  /** Уровень размышления pi (`--thinking`) для агента-анализатора. */
+  devopsThinkingLevel?: ThinkingLevel;
   /**
    * Таймаут одного прогона агента-анализатора (мс). Не задан — дефолт pi/раннера.
    */
-  bootstrapperTimeoutMs?: number;
+  devopsTimeoutMs?: number;
   /** Переопределение фабрики анализатора (тесты/особый wiring). */
-  bootstrapperFactory?: BootstrapperFactory;
+  devopsFactory?: DevOpsFactory;
   /** Корень host-папок задач; по умолчанию `/workspaces`. */
   workspaceRoot?: string;
   /** Токен для MR/PR API (создание и чтение комментариев). */
@@ -189,6 +199,8 @@ export interface RunIssueIterationInput {
     steps: PipelineStep[];
     reviewContext?: string;
     isReviewNeed?: boolean;
+    /** Макс. параллельных исполнителей resolve (0 — без ограничений). */
+    worker_count?: number;
   };
   repositories: {
     repository_url: string;
@@ -198,7 +210,7 @@ export interface RunIssueIterationInput {
     /** false — репозиторий клонируется, но install/анализ запуска пропускаются. */
     bootstrap_enabled?: boolean;
   }[];
-  /** Готовые репо-воркспейсы (пути + ветки) после clone/bootstrap/install. */
+  /** Готовые репо-воркспейсы (пути + ветки) после clone/devops/install. */
   repoWorkspaces: GitPrepareResult['repoWorkspaces'];
   /** Общая модель-фолбек для всех шагов (обратная совместимость). */
   model?: string;
@@ -290,19 +302,15 @@ function parseResolveReport(raw: string | null): PreviousResolveSummary | null {
 }
 
 /**
- * Документ результата итерации из host-папки задачи: report.md (md) или
- * report.html (html). Отсутствие/ошибка чтения — null.
+ * Документ результата итерации из host-папки задачи. Для контекста агента
+ * всегда используется report.md. Отсутствие/ошибка чтения — null.
  */
 async function readResultDocument(
   workspaceRoot: string,
   issueId: string,
-  desiredResult: DesiredResult | undefined,
+  _desiredResult?: DesiredResult,
 ): Promise<string | null> {
-  if (desiredResult !== 'md' && desiredResult !== 'html') {
-    return null;
-  }
-  const filename = desiredResult === 'md' ? 'report.md' : 'report.html';
-  const path = join(workspaceHostDirFor(workspaceRoot, issueId), filename);
+  const path = join(workspaceHostDirFor(workspaceRoot, issueId), 'report.md');
   try {
     return await readFile(path, 'utf8');
   } catch {
@@ -311,8 +319,8 @@ async function readResultDocument(
 }
 
 /**
- * Снапшот результата успешно завершённой итерации: копирует артефакт
- * (report.md/html или result.json) в
+ * Снапшот результата успешно завершённой итерации: копирует ВСЕ артефакты
+ * (report.md и report.html, если они есть) в
  * `<workspaceRoot>/<issueId>/.iteration-results/<iterationId>`.
  * Best-effort: нет исходного файла — нет снапшота, без падения.
  */
@@ -320,23 +328,51 @@ async function snapshotIterationResult(
   workspaceRoot: string,
   issueId: string,
   iterationId: string,
-  desiredResult: DesiredResult | undefined,
 ): Promise<void> {
-  const artifact = resultArtifactFor(desiredResult);
-  if (!artifact) {
-    return;
-  }
-  const source = join(
-    workspaceHostDirFor(workspaceRoot, issueId),
-    artifact.filename,
-  );
   const targetDir = iterationResultDirFor(workspaceRoot, issueId, iterationId);
-  try {
-    await mkdir(targetDir, { recursive: true });
-    await copyFile(source, join(targetDir, artifact.filename));
-  } catch {
-    // best-effort снапшот: отсутствие/ошибка копирования не роняет итерацию.
+  for (const artifact of ALL_RESULT_ARTIFACTS) {
+    const source = join(
+      workspaceHostDirFor(workspaceRoot, issueId),
+      artifact.filename,
+    );
+    try {
+      await mkdir(targetDir, { recursive: true });
+      await copyFile(source, join(targetDir, artifact.filename));
+    } catch {
+      // best-effort снапшот: нет файла/папки → пропускаем, итерацию не роняем.
+    }
   }
+}
+
+/**
+ * Переснимает снапшот последней завершённой итерации (`GET /result` читает
+ * именно его). Нужен после report-агента: движок снимает снапшот сразу по
+ * завершении итерации, а report пишет `report.md`/`report.html` fire-and-forget
+ * и дописывает их позже — без переснятия `/result` отдавал бы устаревший
+ * (или отсутствующий) HTML-отчёт, из-за чего модалка отчёта открывалась пустой.
+ */
+export async function refreshLatestResultSnapshot(
+  db: Db,
+  workspaceRoot: string | undefined,
+  issueId: string,
+): Promise<void> {
+  const latest = db
+    .select({ id: iterations.id })
+    .from(iterations)
+    .where(
+      and(
+        eq(iterations.issue_id, issueId),
+        eq(iterations.status, 'completed'),
+      ),
+    )
+    .orderBy(desc(iterations.number))
+    .get();
+  if (!latest) return;
+  await snapshotIterationResult(
+    workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+    issueId,
+    latest.id,
+  );
 }
 
 /**
@@ -438,14 +474,9 @@ async function writeIterationReport(
   }
 }
 
-/** Пометка о документе результата, когда desired_result не задан. */
-function documentPlaceholder(
-  desiredResult: DesiredResult | undefined,
-): string {
-  if (desiredResult === 'md' || desiredResult === 'html') {
-    return '(result document not found)';
-  }
-  return '(no result document for this desired result)';
+/** Пометка о документе результата, когда файл не найден. */
+function documentPlaceholder(): string {
+  return '(result document not found)';
 }
 
 /** Композиция блока previousOutcome для промпта (см. prompts.buildStepPrompt). */
@@ -453,14 +484,13 @@ function composePreviousOutcome(
   previousNumber: number,
   report: PreviousResolveSummary | null,
   document: string | null,
-  desiredResult: DesiredResult | undefined,
 ): string {
   const status = report?.status ?? 'unknown';
   const summary = report?.summary.trim() || '(no summary)';
   const documentNote =
     document !== null
       ? document.slice(0, MAX_PREVIOUS_OUTCOME_CHARS)
-      : documentPlaceholder(desiredResult);
+      : documentPlaceholder();
 
   return [
     `Previous iteration #${previousNumber} (status ${status}): ${summary}.`,
@@ -504,14 +534,12 @@ async function buildPreviousOutcome(
   const document = await readResultDocument(
     deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
     input.issue.id,
-    input.issue.desiredResult,
   );
 
   return composePreviousOutcome(
     currentNumber - 1,
     report,
     document,
-    input.issue.desiredResult,
   );
 }
 
@@ -523,14 +551,16 @@ export interface PrepareIssueWorkspaceDeps {
   /** Локальный режим без Docker. */
   local?: boolean;
   /** Переопределение фабрики анализатора (тесты/особый wiring). */
-  bootstrapperFactory?: BootstrapperFactory;
+  devopsFactory?: DevOpsFactory;
   /** Модель агента-анализатора (разовая подготовка рабочей папки). */
-  bootstrapperModel?: string;
+  devopsModel?: string;
+  /** Уровень размышления pi (`--thinking`) для агента-анализатора. */
+  devopsThinkingLevel?: ThinkingLevel;
   /** Таймаут анализа (мс); без него зависший `pi` держит задачу в `preparing`. */
-  bootstrapperTimeoutMs?: number;
+  devopsTimeoutMs?: number;
   /** Корень host-папок задач; по умолчанию `/workspaces`. */
   workspaceRoot?: string;
-  /** Реестр живых pi-сессий для steer/abort bootstrapper'а. */
+  /** Реестр живых pi-сессий для steer/abort DevOps-агента. */
   control?: StepSessionRegistry;
 }
 
@@ -590,11 +620,11 @@ export async function prepareIssueWorkspace(
     }));
   }
 
-  // Управляемый dev-сервер: порт выделяем заранее, чтобы bootstrapper вписал
+  // Управляемый dev-сервер: порт выделяем заранее, чтобы devops вписал
   // его в DEV_SERVER.sh. Сервер поднимаем для первого репозитория с
   // `bootstrap_enabled` (по умолчанию true) и только в real-режиме, когда
   // анализатор действительно создаст скрипт (без фабрики — legacy-путь).
-  const devRepo = deps.bootstrapperFactory
+  const devRepo = deps.devopsFactory
     ? repos.find((repo) => repo.bootstrap_enabled !== false)
     : undefined;
   const devServerPort = devRepo
@@ -603,53 +633,88 @@ export async function prepareIssueWorkspace(
 
   // Тег-инструкции: если задача создана из тега — загружаем Markdown-инструкцию
   // по запуску ВСЕГО набора репозиториев (прокси, порты, переменные).
+  // Оттуда же берём имена репозиториев, флаги dev-сервера и per-репо инструкции.
   const issueRow = db
     .select({ tag_id: issues.tag_id })
     .from(issues)
     .where(eq(issues.id, input.issueId))
     .get();
-  const tagInstructions: string | null =
-    issueRow?.tag_id
-      ? (getTag(db, issueRow.tag_id)?.run_instructions ?? null)
-      : null;
+  const tag = issueRow?.tag_id ? getTag(db, issueRow.tag_id) : undefined;
+  const tagInstructions: string | null = tag?.run_instructions ?? null;
+
+  const reposNames =
+    tag
+      ? tag.repositories
+          .map((tr) => extractRepoNameFromUrl(tr.repository.url))
+          .join(', ')
+      : input.repositories
+          .map((r) => extractRepoNameFromUrl(r.repository_url))
+          .join(', ');
+
+  const reposRequireDevServer =
+    tag
+      ? tag.repositories
+          .filter((tr) => tr.bootstrap_enabled)
+          .map((tr) => extractRepoNameFromUrl(tr.repository.url))
+          .join(', ')
+      : input.repositories
+          .filter((r) => r.bootstrap_enabled !== false)
+          .map((r) => extractRepoNameFromUrl(r.repository_url))
+          .join(', ');
+
+  const reposInstructions = tag
+    ? tag.repositories
+        .map((tr) => {
+          const name = extractRepoNameFromUrl(tr.repository.url);
+          const instr = tr.repository.runInstructions?.trim();
+          return `### ${name}\n${instr || '(no instructions)'}`;
+        })
+        .join('\n\n')
+    : null;
 
   // Подготовка рабочей папки: анализатор `run_instructions` подключается только
-  // при явном `deps.bootstrapperFactory` (real-режим); фейковый дефолт анализа не
+  // при явном `deps.devopsFactory` (real-режим); фейковый дефолт анализа не
   // делает — юнит-тесты не тратят прогоны pi на анализ.
   const prepareDeps = {
     container: deps.container,
     git: deps.git,
     workspaceRoot: deps.workspaceRoot,
     local: deps.local,
-    bootstrapperModel: deps.bootstrapperModel,
-    bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+    devopsModel: deps.devopsModel,
+    devopsThinkingLevel: deps.devopsThinkingLevel,
+    devopsTimeoutMs: deps.devopsTimeoutMs,
     devServerPort,
     issueId: input.issueId,
     iterationId: input.iterationId,
     control: deps.control,
     tagInstructions,
-    ...(deps.bootstrapperFactory
-      ? { bootstrapper: deps.bootstrapperFactory }
+    reposNames: reposNames || null,
+    reposRequireDevServer: reposRequireDevServer || null,
+    reposInstructions,
+    ...(deps.devopsFactory
+      ? { devops: deps.devopsFactory }
       : {}),
     runInstructions: dbRunInstructionsStore(db),
-    // Живой вывод агента-анализатора уходит отдельным типом `bootstrap_log`,
-    // чтобы фронт отличал его от логов шагов и привязывал к репозиторию.
-    onBootstrapStdout: (repo: string, chunk: string): void =>
+    // Живой вывод агента-анализатора уходит через обычные `log` события
+    // с stepRunId = '{issueId}/devops', чтобы фронт показывал их в SessionView.
+    onDevOpsStdout: (_repo: string, chunk: string): void =>
       deps.sse.publish({
-        type: 'bootstrap_log',
+        type: 'log',
         issueId: input.issueId,
         iterationId: input.iterationId,
+        stepRunId: `${input.issueId}/devops`,
         stream: 'stdout',
-        data: JSON.stringify({ repo, text: chunk, kind: 'stdout' }),
+        data: chunk,
         ts: new Date().toISOString(),
       }),
-    onBootstrapStderr: (repo: string, chunk: string): void =>
+    onDevOpsStderr: (_repo: string, chunk: string): void =>
       deps.sse.publish({
-        type: 'bootstrap_log',
+        type: 'log',
         issueId: input.issueId,
         iterationId: input.iterationId,
+        stepRunId: `${input.issueId}/devops`,
         stream: 'stderr',
-        data: JSON.stringify({ repo, text: chunk, kind: 'stderr' }),
+        data: chunk,
         ts: new Date().toISOString(),
       }),
   };
@@ -680,12 +745,12 @@ export async function prepareIssueWorkspace(
       publishWorkspaceProgress,
     );
 
-    // Инфраструктурные файлы bootstrapper'а не должны попадать в MR.
+    // Инфраструктурные файлы DevOps-агента не должны попадать в MR.
     repos.forEach((repo) =>
       excludeInfraFiles(workspaceDir, extractRepoNameFromUrl(repo.repository_url)),
     );
 
-    // Управляемый dev-сервер: bootstrapper создал DEV_SERVER.sh с выделенным
+    // Управляемый dev-сервер: devops создал DEV_SERVER.sh с выделенным
     // портом — поднимаем его и запоминаем PID. Нет скрипта (анализ пропущен
     // или упал) — порт освобождаем.
     if (devServerPort !== undefined && devRepo) {
@@ -749,6 +814,574 @@ export async function prepareIssueWorkspace(
 }
 
 /**
+ * Читает result.json из корня рабочей папки задачи и upsert-ит MR/PR-ссылки
+ * в колонку issues.merge_requests. Best-effort: нет файла / битый JSON = noop.
+ */
+async function upsertMergeRequestsFromResultJson(
+  db: Db,
+  workspaceRoot: string,
+  issueId: string,
+): Promise<void> {
+  const resultPath = join(
+    workspaceHostDirFor(workspaceRoot, issueId),
+    'result.json',
+  );
+  let text: string;
+  try {
+    text = readFileSync(resultPath, 'utf8');
+  } catch {
+    return; // no result.json yet — nothing to upsert
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return; // broken JSON — skip
+  }
+  const list = (parsed as { merge_requests?: unknown } | null)?.merge_requests;
+  if (!Array.isArray(list) || list.length === 0) return;
+
+  interface MrEntry {
+    repository_url: string;
+    url: string;
+    title?: string;
+    message?: string;
+  }
+  const newMrs: MrEntry[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const mr = item as Record<string, unknown>;
+    const url = typeof mr.url === 'string' ? mr.url.trim() : '';
+    if (!url) continue;
+    newMrs.push({
+      repository_url: typeof mr.repository_url === 'string' ? mr.repository_url : '',
+      url,
+      ...(typeof mr.title === 'string' ? { title: mr.title } : {}),
+      ...(typeof mr.message === 'string' ? { message: mr.message } : {}),
+    });
+  }
+  if (newMrs.length === 0) return;
+
+  // Upsert: сливаем с уже хранящимися, дедуплицируем по url.
+  const currentRow = db
+    .select({ merge_requests: issues.merge_requests })
+    .from(issues)
+    .where(eq(issues.id, issueId))
+    .get();
+  const existing: MrEntry[] = currentRow?.merge_requests ?? [];
+  const byUrl = new Map<string, MrEntry>();
+  for (const mr of existing) byUrl.set(mr.url ?? '', mr);
+  for (const mr of newMrs) byUrl.set(mr.url ?? '', mr);
+
+  db.update(issues)
+    .set({ merge_requests: [...byUrl.values()], updated_at: new Date().toISOString() })
+    .where(eq(issues.id, issueId))
+    .run();
+}
+
+/** Артефакты отчёта, которые report-агент пишет в корень рабочей папки. */
+const REPORT_ARTIFACTS = ['report.md', 'report.html'] as const;
+
+export interface ReportArchiveResult {
+  /** Куда перемещены прошлые артефакты; `null` — архивировать было нечего. */
+  dir: string | null;
+  /** Имена перемещённых файлов. */
+  files: string[];
+}
+
+/**
+ * Архивирует текущие `report.md`/`report.html` в
+ * `<workspace>/<issueId>/reports/<ISO-ts-Z>/` перед новым прогоном
+ * report-агента: агент не должен «дописывать» прошлый отчёт — в корне его
+ * больше нет, поэтому файлы пишутся заново. История при этом сохраняется.
+ *
+ * Пустой результат (нечего архивировать) — не ошибка. Сбой fs пробрасывается:
+ * вызывающий сам решает, запускать ли агента (в корне мог остаться старый
+ * отчёт) и как сообщить причину.
+ */
+export function archiveReportArtifacts(
+  workspaceRoot: string | undefined,
+  issueId: string,
+): ReportArchiveResult {
+  const wsRoot = workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
+  const issueDir = workspaceHostDirFor(wsRoot, issueId);
+  const files = REPORT_ARTIFACTS.filter((name) =>
+    existsSync(join(issueDir, name)),
+  );
+  if (files.length === 0) return { dir: null, files: [] };
+
+  const stamp = new Date().toISOString();
+  let dir = join(issueDir, 'reports', stamp);
+  // Два прогона в одну миллисекунду — редкий, но реальный случай.
+  for (let n = 1; existsSync(dir); n += 1) {
+    dir = join(issueDir, 'reports', `${stamp}-${n}`);
+  }
+  mkdirSync(dir, { recursive: true });
+  for (const name of files) {
+    renameSync(join(issueDir, name), join(dir, name));
+  }
+  return { dir, files };
+}
+
+/** Строка для лога: пути артефактов отчёта и их размеры (или `absent`). */
+function describeReportArtifacts(issueDir: string): string {
+  return REPORT_ARTIFACTS.map((name) => {
+    const path = join(issueDir, name);
+    try {
+      return `${path} (${statSync(path).size}B)`;
+    } catch {
+      return `${path} (absent)`;
+    }
+  }).join(', ');
+}
+
+/**
+ * Узкие паттерны «похоже на id модели/провайдера» — НЕ зависят от `input.model`.
+ * Нужны, чтобы поймать id ЧУЖОЙ модели, перекочевавший из прошлого отчёта
+ * (якорение): точный слой знает только модель текущего прогона. Намеренно
+ * узкие — голые имена из списка засчитываются только рядом с разделителем
+ * (`/`, `` ` ``, `:`), а `model:` — только как поле с id-подобным значением,
+ * иначе легальный текст («signal store model», «модель данных», «model view»)
+ * даёт ложняк.
+ */
+const MODEL_ID_PATTERNS: RegExp[] = [
+  /provider\d*\//i,
+  /\*\*Model:\*\*/i,
+  /\bmodel:\s*`?[a-z0-9._-]+\/[a-z0-9._-]+/i,
+  /(?<=[`/:])(?:deepseek|claude|gpt|qwen|llama)[-.\w]*/i,
+  /\b(?:deepseek|claude|gpt|qwen|llama)[-.\w]*(?=[`/:])/i,
+];
+
+/**
+ * Механический детект утечки id модели/провайдера в артефакты отчёта.
+ * Два слоя: (1) точный id текущего прогона (и его хвост после `/`, если он
+ * достаточно длинный, чтобы не ловить «auto»); (2) узкий паттерн-поиск,
+ * независимый от модели прогона — ловит чужой id из прочитанного прошлого
+ * отчёта. На файл — максимум один warning (точный слой приоритетнее).
+ * Возвращает список строк-предупреждений: `model id leaked into <file>`
+ * (текущая модель) / `model-like id leaked into <file>` (похоже на модель).
+ */
+function detectModelLeak(issueDir: string, model?: string): string[] {
+  const needles = new Set<string>();
+  if (model) {
+    needles.add(model);
+    const bare = model.includes('/')
+      ? model.slice(model.lastIndexOf('/') + 1)
+      : '';
+    if (bare.length >= 6) needles.add(bare);
+  }
+
+  const warnings: string[] = [];
+  for (const name of REPORT_ARTIFACTS) {
+    let text: string;
+    try {
+      text = readFileSync(join(issueDir, name), 'utf8');
+    } catch {
+      continue;
+    }
+    const exact = [...needles].find((needle) => text.includes(needle));
+    if (exact) {
+      warnings.push(`model id leaked into ${name}`);
+      continue;
+    }
+    if (MODEL_ID_PATTERNS.some((pattern) => pattern.test(text))) {
+      warnings.push(`model-like id leaked into ${name}`);
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Предыдущий отчёт: `reports/**` или `.iteration-results/**` с хвостом ровно
+ * `report.md`/`report.html`. Легальные источники из тех же папок
+ * (`report-<n>.md`, `.<step>.md`) под шаблон не попадают.
+ */
+const PREVIOUS_REPORT_PATH =
+  /(?:[^\s"'`\\]*\/)?(?:reports|\.iteration-results)\/[^\s"'`\\]+\/report\.(?:md|html)/;
+
+/**
+ * Якорение на прошлом отчёте: путь из `tool_use`-события (`read` и
+ * `bash cat/head/sed/…` — аргументы целиком), первый найденный на прогон.
+ * Это ВИДИМОСТЬ, не запрет: агент мог законно перечитать старый отчёт.
+ */
+function anchoredPreviousReportPath(event: SessionEvent): string | null {
+  if (event.type !== 'tool_use') return null;
+  const match = PREVIOUS_REPORT_PATH.exec(JSON.stringify(event.args ?? ''));
+  return match ? match[0] : null;
+}
+
+/** Минимальный набор deps для issue-уровневого прогона report-агента. */
+export type ReportRunDeps = Pick<
+  IterationRunDeps,
+  'pi' | 'sse' | 'control' | 'workspaceRoot'
+>;
+
+/**
+ * Задачи, для которых прямо сейчас идёт report-прогон. Пока флаг есть, корень
+ * задачи заархивирован, поэтому `/report/status` отдаёт `running`, а UI
+ * показывает живой SessionView вместо «✓ Сгенерирован». `/result` при этом НЕ
+ * 404: он отдаёт прошлый HTML из `.iteration-results/<latest>/` с пометкой
+ * `x-artifact-source: iteration-snapshot` — предыдущую версию полезнее показать
+ * под честной подписью, чем пустоту. Флаг живёт только в этом процессе
+ * (in-process only): рестарт backend его обнуляет, так что прогон, оборванный
+ * рестартом, не остаётся «вечно активным».
+ */
+const activeReportRuns = new Set<string>();
+
+/**
+ * Исход последнего report-прогона (process-local): нужен `/report/status`,
+ * чтобы отличить `failed` (агент упал, корень пуст) от `idle` (прогона не было).
+ * Кросс-рестарт сбрасывается в `idle` — статус не персистится.
+ */
+const lastReportOutcome = new Map<string, 'failed'>();
+
+export function isReportRunActive(issueId: string): boolean {
+  return activeReportRuns.has(issueId);
+}
+
+/** `failed`, если последний прогон упал и с тех пор не было успешного. */
+export function lastReportFailed(issueId: string): boolean {
+  return lastReportOutcome.get(issueId) === 'failed';
+}
+
+/**
+ * Предупреждения о содержимом последнего отчёта: утечка id модели/провайдера
+ * в `report.md`/`report.html`. Слой 1 (точный id прогона) хранится здесь —
+ * process-local, гаснет на рестарте. Слой 2 читается из файлов на лету
+ * (`reportWarningsFor`), поэтому переживает рестарт. Отдаются в `/report/status`
+ * (поле `warnings`) и заголовком `x-artifact-warning` на артефактных роутах,
+ * чтобы UI показал бейдж. Сам файл агента не переписываем: prevention —
+ * промпт, detection — сервер, visibility — UI.
+ */
+const reportWarnings = new Map<string, string[]>();
+
+/**
+ * Модель, которую pi-сессия отчёта реально назвала (`stats.model`) — не та,
+ * что запрошена: при пустом `step_models.report` модель выбирает сам pi.
+ * Process-local: после рестарта отсутствует, и UI обязан показать «нет
+ * телеметрии», а не подставлять запрошенную/дефолтную догадку.
+ */
+const observedReportModel = new Map<string, string>();
+
+/** Наблюдённая модель последнего прогона отчёта (или undefined). */
+export function observedModelFor(issueId: string): string | undefined {
+  return observedReportModel.get(issueId);
+}
+
+export function reportWarningsFor(issueId: string, hostDir?: string): string[] {
+  // Слой 1 (точный id) — process-local; слой 2 — производная от файлов,
+  // переживает рестарт. Иглой точного слоя служит НАБЛЮДЁННАЯ модель
+  // (post-hoc, если сессия её назвала) — тогда ловится реальный id, а не
+  // запрошенный по догадке. Оба слоя дают максимум один warning на файл
+  // (слой 1 приоритетнее), поэтому производные записи по уже помеченному
+  // файлу отбрасываем.
+  const live = reportWarnings.get(issueId) ?? [];
+  if (!hostDir) return live;
+  const flagged = new Set(live.map((warning) => warningFile(warning)));
+  const derived = detectModelLeak(
+    hostDir,
+    observedReportModel.get(issueId),
+  ).filter((warning) => !flagged.has(warningFile(warning)));
+  return [...live, ...derived];
+}
+
+/** Имя файла из строки-предупреждения (`… leaked into <file>`). */
+function warningFile(warning: string): string | null {
+  const match = /leaked into (.+)$/.exec(warning);
+  return match ? match[1] : null;
+}
+
+/**
+ * Единая effective-модель report-прогона для ОБОИХ входов — терминальной
+ * итерации и ручного `POST /report`: `step_models.report` задачи, иначе
+ * модель итерации (`iterations.model`). В движковом пути передаётся та
+ * итерация, что терминалилась (значение совпадает с прежним `input.model`);
+ * ручной путь догоняется и берёт последнюю завершённую итерацию. Иначе
+ * «🔄 Обновить» собирал бы отчёт на системном дефолте pi, а терминальный —
+ * на модели итерации: два артефакта с одним именем и разной provenance,
+ * и ни один лог бы этого не сказал (в SSE у обоих было `model: null`).
+ */
+export function reportModelFor(
+  db: Db,
+  issueId: string,
+  iterationId?: string,
+): string | undefined {
+  const issue = db
+    .select({ step_models: issues.step_models })
+    .from(issues)
+    .where(eq(issues.id, issueId))
+    .get();
+  const explicit = issue?.step_models?.report;
+  if (explicit) return explicit;
+
+  const iteration = iterationId
+    ? db
+        .select({ model: iterations.model })
+        .from(iterations)
+        .where(eq(iterations.id, iterationId))
+        .get()
+    : db
+        .select({ model: iterations.model })
+        .from(iterations)
+        .where(
+          and(
+            eq(iterations.issue_id, issueId),
+            eq(iterations.status, 'completed'),
+          ),
+        )
+        .orderBy(desc(iterations.number))
+        .get();
+  return iteration?.model ?? undefined;
+}
+
+/**
+ * Уровень мышления для report-агента. Приоритет:
+ * `step_thinking_levels.report` задачи, иначе `thinking_level` итерации.
+ * Аналог reportModelFor — отдельная функция для thinking.
+ */
+export function reportThinkingLevelFor(
+  db: Db,
+  issueId: string,
+): ThinkingLevel | undefined {
+  const issue = db
+    .select({ step_thinking_levels: issues.step_thinking_levels })
+    .from(issues)
+    .where(eq(issues.id, issueId))
+    .get();
+  return issue?.step_thinking_levels?.report;
+}
+
+export interface RunReportAgentInput {
+  issueId: string;
+  containerName: string;
+  hostDir: string;
+  prompt: string;
+  model?: string;
+  thinkingLevel?: ThinkingLevel;
+  /** Кто запустил прогон: терминальная итерация или ручной POST /report. */
+  trigger?: 'post-iteration' | 'manual';
+  /** Для ручного запуска — Origin HTTP-запроса (атрибуция в логе). */
+  origin?: string | null;
+}
+
+/**
+ * `step_status` для issue-уровневого report-прогона: та же форма, что у шагов
+ * пайплайна (running — JSON `{status, step, model}`, терминал — строка
+ * статуса), но без `iterationId` — отчёт живёт на уровне задачи.
+ */
+function reportStepStatusEvent(
+  issueId: string,
+  reportRunId: string,
+  status: StepRunStatus | 'running',
+  model?: string,
+): SSEEvent {
+  return {
+    type: 'step_status',
+    issueId,
+    stepRunId: reportRunId,
+    data:
+      status === 'running'
+        ? JSON.stringify({ status, step: 'report', model: model ?? null })
+        : status,
+    ts: new Date().toISOString(),
+  };
+}
+
+/**
+ * Запускает report-агента с единым SSE-контрактом: `step_status` running →
+ * терминальный success/failed по stepRunId `{issueId}/report` плюс live
+ * log/step_event. Ошибки агента не пробрасываются: они публикуются как
+ * `failed` и пишутся в серверный лог, чтобы fire-and-forget прогон не тонул
+ * молча. Старт/итог/длительность видны в `/tmp/ir-backend.log`.
+ */
+export async function runReportAgent(
+  deps: ReportRunDeps,
+  input: RunReportAgentInput,
+): Promise<void> {
+  const reportRunId = `${input.issueId}/report`;
+
+  // Архивация — ОДНА точка на оба входа (post-iteration и ручной POST):
+  // агент не должен «дописывать» прошлый отчёт, в корне его больше нет.
+  // Сбой → терминальный `failed` + лог, агента НЕ спавним (старый файл
+  // остаётся в корне — это видимое, но честное состояние).
+  let archive: ReportArchiveResult;
+  try {
+    archive = archiveReportArtifacts(deps.workspaceRoot, input.issueId);
+  } catch (error) {
+    console.error('report artifacts archive failed', {
+      issueId: input.issueId,
+      error,
+    });
+    lastReportOutcome.set(input.issueId, 'failed');
+    deps.sse.publish(
+      reportStepStatusEvent(input.issueId, reportRunId, 'failed'),
+    );
+    return;
+  }
+
+  const startedAt = Date.now();
+  console.log(
+    `report agent started: issue=${input.issueId} trigger=${input.trigger ?? 'unknown'}${input.origin ? ` origin=${input.origin}` : ''} archived=${archive.dir ?? 'none'} files=[${archive.files.join(', ')}] at=${new Date(startedAt).toISOString()}`,
+  );
+  deps.sse.publish(
+    reportStepStatusEvent(input.issueId, reportRunId, 'running', input.model),
+  );
+  activeReportRuns.add(input.issueId);
+
+  let status: StepRunStatus = 'failed';
+  let failure: unknown;
+  let observedModel: string | undefined;
+  let anchoredPath: string | null = null;
+  try {
+    const result = await deps.pi.run(input.containerName, input.prompt, {
+      // Report пишет в host-папку задачи: контейнер итерации к этому моменту
+      // уже не нужен, а артефакты должны осесть в переживающей папке.
+      cwd: input.hostDir,
+      model: input.model,
+      thinkingLevel: input.thinkingLevel,
+      stepRunId: reportRunId,
+      issueId: input.issueId,
+      registry: deps.control,
+      onStdout: (chunk: string) =>
+        deps.sse.publish({
+          type: 'log',
+          issueId: input.issueId,
+          stepRunId: reportRunId,
+          stream: 'stdout',
+          data: chunk,
+          ts: new Date().toISOString(),
+        }),
+      onStderr: (chunk: string) =>
+        deps.sse.publish({
+          type: 'log',
+          issueId: input.issueId,
+          stepRunId: reportRunId,
+          stream: 'stderr',
+          data: chunk,
+          ts: new Date().toISOString(),
+        }),
+      // Структурированные события сессии (thinking/tool_use/…) — в SSE
+      // обычным step_event, чтобы SessionView отчёта показывал не только
+      // сырой stdout.
+      onEvent: (event) => {
+        // Видимость якорения: агент читает ПРОШЛЫЙ отчёт (архив/снапшот).
+        // Только сигнал, не блокировка; максимум один путь на прогон.
+        if (anchoredPath === null) {
+          anchoredPath = anchoredPreviousReportPath(event);
+        }
+        deps.sse.publish({
+          type: 'step_event',
+          issueId: input.issueId,
+          stepRunId: reportRunId,
+          stream: 'system',
+          data: JSON.stringify({ stepRunId: reportRunId, event }),
+          ts: new Date().toISOString(),
+        });
+      },
+    });
+    // Что сессия назвала фактически — единственная честная игла для детекта.
+    observedModel = result.stats?.model ?? undefined;
+    const derived = result.aborted
+      ? 'failed'
+      : stepRunStatusFromResult(result.exitCode, result.report);
+    // Для отчёта осмысленны только success/failed (`needs_input`/`skipped`
+    // у него не бывает): всё, кроме явного успеха, — падение прогона.
+    status = derived === 'success' ? 'success' : 'failed';
+    if (status === 'failed') failure = `exit status: ${derived}`;
+  } catch (error) {
+    failure = error;
+    status = 'failed';
+  } finally {
+    // Снятие флага — строго в `finally`: любой throw выше (в т.ч. из
+    // `sse.publish`) не имеет права оставить «вечный активный» прогон, иначе
+    // `/report/status` навсегда `running`, а UI крутит «⏳» навсегда.
+    activeReportRuns.delete(input.issueId);
+    if (observedModel) observedReportModel.set(input.issueId, observedModel);
+    else observedReportModel.delete(input.issueId);
+    if (status === 'success') {
+      lastReportOutcome.delete(input.issueId);
+      // Игла — наблюдённая модель (если сессия её назвала), иначе запрошенная.
+      const warnings = [
+        ...detectModelLeak(input.hostDir, observedModel ?? input.model),
+        // Якорение — своя строка (отдельно от модели), но тег warn'а общий,
+        // чтобы грепалось вместе с моделью. Сигнал из tool_use, не из файла:
+        // process-local, после рестарта с диска не пересчитывается.
+        ...(anchoredPath
+          ? [`anchored on previous report: ${anchoredPath}`]
+          : []),
+      ];
+      if (warnings.length > 0) {
+        reportWarnings.set(input.issueId, warnings);
+        console.warn('model id leaked into report artifacts', {
+          issueId: input.issueId,
+          warnings,
+        });
+      } else {
+        reportWarnings.delete(input.issueId);
+      }
+    } else {
+      lastReportOutcome.set(input.issueId, 'failed');
+    }
+  }
+
+  deps.sse.publish(reportStepStatusEvent(input.issueId, reportRunId, status));
+  const durationMs = Date.now() - startedAt;
+  if (status === 'success') {
+    console.log(
+      `report agent finished: issue=${input.issueId} trigger=${input.trigger ?? 'unknown'} durationMs=${durationMs} artifacts: ${describeReportArtifacts(input.hostDir)}`,
+    );
+  } else {
+    console.error('report agent failed', {
+      issueId: input.issueId,
+      durationMs,
+      error: failure,
+    });
+  }
+}
+
+/**
+ * Создаёт и запускает report-агента для сборки `report.md` и `report.html`
+ * по итогам завершённых итераций. Fire-and-forget: ошибки не роняют итерацию.
+ */
+async function spawnReportAgent(
+  db: Db,
+  deps: IterationRunDeps,
+  outcome: IterationTerminalOutcome,
+): Promise<void> {
+  const wsRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
+  const hostDir = workspaceHostDirFor(wsRoot, outcome.issueId);
+
+  const prompt = buildStepPrompt({
+    step: 'report',
+    issueTitle: outcome.issueTitle,
+    description: '',
+    jiraText: null,
+    context: `Iteration #${outcome.iterationNumber} completed with status: ${outcome.iterationStatus}.`,
+    feedback: null,
+    repoPaths: outcome.repoPaths,
+    iterationCount: outcome.iterationCount,
+  });
+
+  await runReportAgent(deps, {
+    issueId: outcome.issueId,
+    containerName: outcome.containerName,
+    hostDir,
+    prompt,
+    model: reportModelFor(db, outcome.issueId, outcome.iterationId),
+    thinkingLevel:
+      reportThinkingLevelFor(db, outcome.issueId) ??
+      outcome.thinkingLevel,
+    trigger: 'post-iteration',
+  });
+  try {
+    // Отчёт дописан — обновляем снапшот, который читает GET /result.
+    await refreshLatestResultSnapshot(db, deps.workspaceRoot, outcome.issueId);
+  } catch (error) {
+    console.error('refresh report snapshot failed', error);
+  }
+}
+
+/**
  * Гоняет движок конвейера и доводит результат до БД: статусы итерации/задачи
  * плюс событие iteration_status в SSE.
  */
@@ -767,6 +1400,7 @@ export async function runIssueIteration(
     review_context: input.iteration.reviewContext ?? '',
     is_review_need: input.iteration.isReviewNeed ?? false,
     steps: input.iteration.steps,
+    worker_count: input.iteration.worker_count,
     status: 'running',
     created_at: now,
     updated_at: now,
@@ -859,6 +1493,10 @@ export async function runIssueIteration(
       .get()?.port ?? null;
 
   let result: RunIterationResult;
+  // Терминальный итог для report-агента: движок зовёт колбэк из середины
+  // прогона, но спавнить агента надо ПОСЛЕ снапшота итерации (см. ниже) —
+  // иначе архивация корня лишает снапшот предыдущего отчёта.
+  let reportOutcome: IterationTerminalOutcome | null = null;
   try {
     result = await runIteration(
       {
@@ -890,6 +1528,11 @@ export async function runIssueIteration(
             }),
             ts: at,
           });
+        },
+        // Post-iteration report agent: spawn on terminal completion/failure.
+        // Не спавним здесь — запоминаем итог и запускаем после снапшота.
+        onIterationTerminal: (outcome) => {
+          reportOutcome = outcome;
         },
       },
       {
@@ -936,6 +1579,13 @@ export async function runIssueIteration(
       ts: failedAt,
     });
     await writeIterationReport(db, deps, input, 'failed');
+    // Best-effort: даже при сбое итерации, result.json мог остаться от
+    // предыдущей — поднимаем MR-ссылки в данные задачи.
+    void upsertMergeRequestsFromResultJson(
+      db,
+      deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+      input.issue.id,
+    ).catch((error) => console.error('upsertMergeRequests failed', error));
     return { iterationStatus: 'failed', needsInput: false };
   }
 
@@ -946,8 +1596,14 @@ export async function runIssueIteration(
       deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
       input.issue.id,
       input.iteration.id,
-      input.issue.desiredResult,
     );
+  }
+
+  // Report-агент запускаем после снапшота: его архивация `report.*` из корня
+  // не должна обеднять снапшот итерации. Архив сохраняет историю, а новый
+  // отчёт потом перезапишет снапшот через refreshLatestResultSnapshot.
+  if (reportOutcome) {
+    void spawnReportAgent(db, deps, reportOutcome);
   }
 
   const finishedAt = new Date().toISOString();
@@ -955,10 +1611,33 @@ export async function runIssueIteration(
     .set({ status: result.iterationStatus, updated_at: finishedAt })
     .where(eq(iterations.id, input.iteration.id))
     .run();
+
+  // Если в очереди есть pending-итерация, задача остаётся pending, а не
+  // переходит в completed/failed — иначе startNextPendingIteration ниже
+  // не сможет её подхватить (issue.completed запрещает новые итерации).
+  const hasNextPending = db
+    .select({ id: iterations.id })
+    .from(iterations)
+    .where(
+      and(
+        eq(iterations.issue_id, input.issue.id),
+        eq(iterations.status, 'pending'),
+      ),
+    )
+    .get();
+
+  const issueStatus = hasNextPending ? 'pending' : result.iterationStatus;
   db.update(issues)
-    .set({ status: result.iterationStatus, updated_at: finishedAt })
+    .set({ status: issueStatus, updated_at: finishedAt })
     .where(eq(issues.id, input.issue.id))
     .run();
+
+  // Best-effort: записать MR-ссылки из result.json в БД задачи
+  void upsertMergeRequestsFromResultJson(
+    db,
+    deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+    input.issue.id,
+  ).catch((error) => console.error('upsertMergeRequests failed', error));
 
   deps.sse.publish({
     type: 'iteration_status',
@@ -976,7 +1655,12 @@ export async function runIssueIteration(
 
   // Запускаем следующую pending-итерацию для этого issue, если есть.
   // Делаем это асинхронно, не блокируя завершение текущей.
-  void startNextPendingIteration(db, deps, input.issue.id);
+  void startNextPendingIteration(db, deps, input.issue.id).catch((error) =>
+    console.error(
+      `[queue] startNextPendingIteration failed for issue ${input.issue.id}`,
+      error,
+    ),
+  );
 
   return result;
 }
@@ -1029,10 +1713,12 @@ async function startNextPendingIteration(
     sse: deps.sse,
     local: deps.local,
     control: deps.control,
-    ...(deps.bootstrapperFactory
-      ? { bootstrapperFactory: deps.bootstrapperFactory }
+    ...(deps.devopsFactory
+      ? { devopsFactory: deps.devopsFactory }
       : {}),
-    bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs,
+    devopsModel: deps.devopsModel,
+    devopsThinkingLevel: deps.devopsThinkingLevel,
+    devopsTimeoutMs: deps.devopsTimeoutMs,
     workspaceRoot: deps.workspaceRoot,
   };
 
@@ -1064,6 +1750,7 @@ async function startNextPendingIteration(
           steps: next.steps,
           reviewContext: next.review_context ?? '',
           isReviewNeed: !!next.is_review_need,
+          worker_count: next.worker_count ?? undefined,
         },
         repositories,
         repoWorkspaces: ws,

@@ -121,7 +121,7 @@ describe('TaskDetail — прогресс подготовки воркспей�
     emitProgress('creating_dirs', 'done');
     emitProgress('cloning', 'done', { repo: 'owner/repo' });
     emitProgress('checking_instructions', 'done', { repo: 'owner/repo' });
-    emitProgress('bootstrapping', 'running', { repo: 'owner/repo' });
+    emitProgress('devops', 'running', { repo: 'owner/repo' });
     emitProgress('installing', 'running');
 
     const panel = await screen.findByTestId('workspace-progress');
@@ -132,7 +132,7 @@ describe('TaskDetail — прогресс подготовки воркспей�
       within(panel).getByText('Проверка инструкции запуска owner/repo'),
     ).toBeInTheDocument();
     expect(
-      within(panel).getByText('Bootstrapping owner/repo'),
+      within(panel).getByText('DevOps owner/repo'),
     ).toBeInTheDocument();
     expect(
       within(panel).getByText('Установка зависимостей'),
@@ -173,67 +173,57 @@ describe('TaskDetail — прогресс подготовки воркспей�
     expect(stepOf('installing')).toHaveTextContent('install failed');
   });
 
-  it('bootstrap_log → живой лог по репозиториям с накоплением и stderr', async () => {
+  it('log DevOps → SessionView с накоплением stdout/stderr', async () => {
     stubFetch();
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    emitProgress('bootstrapping', 'running', { repo: 'owner/repo' });
-    const emitLog = (repo: string, text: string, kind: string) => {
+    emitProgress('devops', 'running', { repo: 'owner/repo' });
+    const emitLog = (text: string, stream: 'stdout' | 'stderr' = 'stdout') => {
       act(() => {
         FakeEventSource.instances[0].emit({
-          type: 'bootstrap_log',
+          type: 'log',
           issueId: 'issue-1',
           iterationId: 'iter-1',
-          data: JSON.stringify({ repo, text, kind }),
+          stepRunId: 'issue-1/devops',
+          stream,
+          data: text,
           ts: '2026-10-09T00:00:00.000Z',
         });
       });
     };
-    emitLog('owner/repo', '> npm ci\n', 'stdout');
-    emitLog('owner/repo', 'added 42 packages\n', 'stdout');
-    emitLog('owner/repo', 'npm warn deprecated\n', 'stderr');
-    emitLog('other/lib', 'go mod download\n', 'stdout');
+    emitLog('> npm ci\n');
+    emitLog('added 42 packages\n');
+    emitLog('npm warn deprecated\n', 'stderr');
 
-    const log = await screen.findByTestId('bootstrap-log');
-    const repos = within(log).getAllByTestId('bootstrap-log-repo');
-    expect(repos).toHaveLength(2);
-    const first = repos.find(
-      (node) => node.getAttribute('data-repo') === 'owner/repo',
-    );
-    expect(first).toBeDefined();
-    // Порции одного репозитория копятся в порядке прихода.
-    expect(first).toHaveTextContent('> npm ci');
-    expect(first).toHaveTextContent('added 42 packages');
-    const stderrChunk = within(first!).getByText('npm warn deprecated');
-    expect(stderrChunk).toHaveAttribute('data-kind', 'stderr');
-    expect(stderrChunk).toHaveStyle({ color: '#FF0033' });
-    expect(within(log).getByText('go mod download')).toBeInTheDocument();
+    // Синтетический stepRunId `{issueId}/devops` — сессия над панелью
+    // подготовки; чанки stdout/stderr копятся как text-события.
+    const session = await screen.findByTestId('devops-session');
+    expect(session).toHaveTextContent('npm ci');
+    expect(session).toHaveTextContent('added 42 packages');
+    expect(session).toHaveTextContent('npm warn deprecated');
   });
 
-  it('bootstrap_log очищается при старте новой подготовки', async () => {
+  it('log с чужим stepRunId не попадает в DevOps-сессию', async () => {
     stubFetch();
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    emitProgress('bootstrapping', 'running', { repo: 'owner/repo' });
+    emitProgress('devops', 'running', { repo: 'owner/repo' });
     act(() => {
       FakeEventSource.instances[0].emit({
-        type: 'bootstrap_log',
+        type: 'log',
         issueId: 'issue-1',
         iterationId: 'iter-1',
-        data: JSON.stringify({
-          repo: 'owner/repo',
-          text: 'old log',
-          kind: 'stdout',
-        }),
+        stepRunId: 'run-1',
+        stream: 'stdout',
+        data: 'step output',
         ts: '2026-10-09T00:00:00.000Z',
       });
     });
-    expect(await screen.findByText('old log')).toBeInTheDocument();
 
-    emitProgress('creating_dirs', 'running');
-    expect(screen.queryByTestId('bootstrap-log')).toBeNull();
+    const panel = await screen.findByTestId('workspace-progress');
+    expect(within(panel).queryByTestId('devops-session')).toBeNull();
   });
 
   it('iteration_status failed с error → красный баннер', async () => {

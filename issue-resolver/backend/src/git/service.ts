@@ -226,6 +226,14 @@ export interface GitService {
   installDependencies(repoPaths: string[]): Promise<void>;
   commitAndPush(input: GitCommitInput): Promise<GitCommitResult>;
   /**
+   * Компактный снимок рабочей копии для промпта агента (см. `RepoChangeDigest`):
+   * какие файлы изменены и сколько в них строк. Движок считает его перед каждым
+   * шагом, чтобы агент не тратил ходы на `git status`/`git diff --stat` ради
+   * первоначальной ориентации. Read-only; сбой git — пустой дайджест, а не
+   * ошибка шага.
+   */
+  changeDigest(repoPaths: string[]): Promise<RepoChangeDigest[]>;
+  /**
    * Поднимает dev-сервер репозитория в фоне и по выводу пытается определить
    * его порт. Сбой — не ошибка подготовки: возвращает `{ port: null, message }`.
    */
@@ -233,6 +241,25 @@ export interface GitService {
     repoPath: string,
     instructions: string | null,
   ): Promise<DevServerStartResult>;
+}
+
+/** Дайджест состояния одной рабочей копии для промпта агента. */
+export interface RepoChangeDigest {
+  /** Путь рабочей копии (он же и идентификатор репозитория в промпте). */
+  repoPath: string;
+  /**
+   * Относительные пути затронутых файлов (`git status --porcelain`): полный
+   * список того, что менял предыдущий шаг, включая untracked.
+   */
+  changedFiles: string[];
+  /**
+   * Итоговая строка `git diff --stat` (`N files changed, X insertions(+),
+   * Y deletions(-)`) — масштаб изменений без дублирования списка файлов.
+   * Пустая, когда diff нет (только untracked).
+   */
+  diffSummary: string;
+  /** Сколько файлов скрыто потолком дайджеста (0 — ничего не обрезано). */
+  omittedFiles: number;
 }
 
 const repoName = (repoUrl: string): string => {
@@ -257,6 +284,12 @@ export const gitCachePath = (
 const rmIndexLock = async (repoPath: string): Promise<void> => {
   await rm(path.join(repoPath, '.git', 'index.lock'), { force: true });
 };
+
+/**
+ * Потолок числа файлов в дайджесте состояния: сверх него в промпт идут только
+ * счётчики, а агент добирает `git status` сам (он видит `omittedFiles`).
+ */
+const CHANGE_DIGEST_MAX_FILES = 120;
 
 /**
  * In-memory-реализация для тестов: не делает реальных git-вызовов, но помнит
@@ -313,6 +346,40 @@ export class FakeGitService implements GitService {
     this.throwIfPending();
     this.commits.push(input);
     return { pushed: true, branchName: input.branchName };
+  }
+
+  /**
+   * Дайджест рабочей копии: тесты задают его полем `changeDigests` (по одному
+   * на репозиторий в порядке `repoPaths`) и видят сами вызовы в `digestCalls`.
+   * `failNextWith` его НЕ ломает: дайджест — read-only best-effort-хелпер, а
+   * «следующая операция» в смысле этого фейка означает prepare/commit-push.
+   * Отдельный путь отказа — `failDigestWith`.
+   */
+  changeDigests: RepoChangeDigest[] = [];
+  readonly digestCalls: string[][] = [];
+  private digestError: Error | null = null;
+
+  /** Следующий `changeDigest` отклонится этой ошибкой (путь best-effort). */
+  failDigestWith(err: Error): void {
+    this.digestError = err;
+  }
+
+  async changeDigest(repoPaths: string[]): Promise<RepoChangeDigest[]> {
+    this.digestCalls.push([...repoPaths]);
+    if (this.digestError) {
+      const error = this.digestError;
+      this.digestError = null;
+      throw error;
+    }
+    return repoPaths.map(
+      (repoPath, index) =>
+        this.changeDigests[index] ?? {
+          repoPath,
+          changedFiles: [],
+          diffSummary: '',
+          omittedFiles: 0,
+        },
+    );
   }
 
   private throwIfPending(): void {
@@ -522,6 +589,61 @@ export class GitCliService implements GitService {
     });
   }
 
+  /**
+   * Снимок рабочей копии для промпта: имена изменённых файлов + `--stat`.
+   * Read-only и best-effort: любой сбой git даёт пустой дайджест — ориентация
+   * в задаче не стоит упавшего шага. Потолок `CHANGE_DIGEST_MAX_FILES` держит
+   * промпт в разумных пределах на моллах файлов (см. `omittedFiles`).
+   */
+  async changeDigest(repoPaths: string[]): Promise<RepoChangeDigest[]> {
+    return Promise.all(
+      repoPaths.map(async (repoPath) => {
+        const digest: RepoChangeDigest = {
+          repoPath,
+          changedFiles: [],
+          diffSummary: '',
+          omittedFiles: 0,
+        };
+        let status: string;
+        try {
+          status = await this.git([
+            '-C',
+            repoPath,
+            'status',
+            '--porcelain=v1',
+            '-uall',
+          ]);
+        } catch {
+          return digest;
+        }
+        const entries = status
+          .split('\n')
+          .map((line) => line.trimEnd())
+          .filter((line) => line.length > 0);
+        digest.omittedFiles = Math.max(
+          0,
+          entries.length - CHANGE_DIGEST_MAX_FILES,
+        );
+        // Из porcelain берём только путь: флаг состояния агенту не нужен,
+        // а ` -> ` у переименованных файлов оставляем целиком.
+        digest.changedFiles = entries
+          .slice(0, CHANGE_DIGEST_MAX_FILES)
+          .map((line) => line.slice(3));
+        try {
+          const stat = await this.git(['-C', repoPath, 'diff', '--stat', '--no-color']);
+          const lines = stat
+            .split('\n')
+            .map((line) => line.trimEnd())
+            .filter((line) => line.length > 0);
+          digest.diffSummary = lines[lines.length - 1] ?? '';
+        } catch {
+          // Нет diff (только untracked) — остаётся пустым.
+        }
+        return digest;
+      }),
+    );
+  }
+
   async commitAndPush(input: GitCommitInput): Promise<GitCommitResult> {
     await rmIndexLock(input.repoPath);
     await this.git(['-C', input.repoPath, 'checkout', '-B', input.branchName]);
@@ -554,6 +676,12 @@ export class GitCliService implements GitService {
       'origin',
       input.branchName,
     ];
+    if (input.squashBase) {
+      // Сквош до origin/<base> создаёт новый коммит, не являющийся потомком
+      // существующей remote-ветки. Без --force push будет rejected как
+      // non-fast-forward (см. тест-кейс «повторный push в ту же feature-ветку»).
+      pushArgs.push('--force');
+    }
     if (token) {
       // Inline credential helper: username=x-access-token для GitHub,
       // остальные хосты тоже принимают такой формат.

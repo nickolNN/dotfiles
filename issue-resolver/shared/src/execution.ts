@@ -107,21 +107,51 @@ function executorCount(executors: number | undefined): number {
 }
 
 /**
+ * Потолок параллельности из `worker_count` задачи/итерации.
+ *
+ * `worker_count` — единственная ручка пользователя на параллельность, поэтому
+ * она обязана доходить до движка, а не только до текста промпта refine:
+ * 0/undefined/отрицательное/невалидное («без ограничений») → системный потолок
+ * `DEFAULT_MAX_ROOM_EXECUTORS`, иначе — значение, зажатое сверху тем же
+ * потолком. Минимум 1: room-топология дополнительно требует >= 2 (иначе
+ * `planExecutionMode` деградирует в `single`).
+ */
+export function maxExecutorsFor(
+  workerCount: number | null | undefined,
+): number {
+  if (
+    typeof workerCount !== 'number' ||
+    !Number.isInteger(workerCount) ||
+    workerCount <= 0
+  ) {
+    return DEFAULT_MAX_ROOM_EXECUTORS;
+  }
+  return Math.min(workerCount, DEFAULT_MAX_ROOM_EXECUTORS);
+}
+
+/**
  * Детерминированное решение о топологии исполнения resolve:
- * - `room` — только при явном `mode: room` и валидном числе исполнителей >= 2;
+ * - `room` — только при явном `mode: room`, валидном числе исполнителей >= 2 и
+ *   потолке `max` >= 2 (иначе параллельности нет — один агент);
  * - `stages` — только при `mode: stages` и 2+ валидных этапах (после
  *   нормализации, см. planExecutionStages);
  * - во всех остальных случаях (нет рекомендации, битая, `single`) — один агент.
  * Это точка, где «модель предлагает, движок распоряжается».
+ *
+ * `max` — потолок исполнителей из `worker_count` (см. `maxExecutorsFor`);
+ * дефолт — системные `DEFAULT_MAX_ROOM_EXECUTORS`.
  */
 export function planExecutionMode(
   execution: ExecutionPlan | null | undefined,
+  max: number = DEFAULT_MAX_ROOM_EXECUTORS,
 ): 'single' | 'room' | 'stages' {
   if (execution?.mode === 'room') {
-    return executorCount(execution.executors) >= 2 ? 'room' : 'single';
+    return executorCount(execution.executors) >= 2 && max >= 2
+      ? 'room'
+      : 'single';
   }
   if (execution?.mode === 'stages') {
-    return planExecutionStages(execution).length >= 2 ? 'stages' : 'single';
+    return planExecutionStages(execution, max).length >= 2 ? 'stages' : 'single';
   }
   return 'single';
 }
@@ -134,7 +164,7 @@ export function clampExecutors(
   return Math.min(Math.max(2, executorCount(execution.executors)), max);
 }
 
-/** Нормализованный этап staged-плана: готов к запуску воркеров/координатора. */
+/** Нормализованный этап staged-плана: готов к запуску исполнителей/координатора. */
 export interface NormalizedStage {
   /** 1-based порядок исполнения (перенумерован подряд 1..N). */
   index: number;
@@ -142,7 +172,7 @@ export interface NormalizedStage {
   name: string;
   /** Задача этапа; фолбек — `Stage ${index}`. */
   task: string;
-  /** Число параллельных воркеров этапа, зажатое в [1..max]. */
+  /** Число параллельных исполнителей этапа, зажатое в [1..max]. */
   executors: number;
   /** Ровно `executors` подзадач; добор — `Sub-task N`. */
   decomposition: string[];
