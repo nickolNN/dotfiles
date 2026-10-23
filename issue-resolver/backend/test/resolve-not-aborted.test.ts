@@ -86,9 +86,9 @@ function expectSuccessfulResolve(result: StepExecutionResult): void {
 }
 
 describe('resolve не становится aborted, когда все агенты вернули pass', () => {
-  it('room: все воркеры и координатор pass → результат pass/success, не aborted', async () => {
+  it('room: все исполнители и координатор pass → результат pass/success, не aborted', async () => {
     const pi = new FakePiRunner();
-    // ROOM_PLAN: executors=3 → 3 воркера ∥ + 1 координатор.
+    // ROOM_PLAN: executors=3 → 3 исполнителя ∥ + 1 координатор.
     for (const summary of ['w1', 'w2', 'w3', 'coord']) {
       pi.enqueue(pass(summary));
     }
@@ -96,7 +96,7 @@ describe('resolve не становится aborted, когда все аген�
     const result = await runRoomResolve(pi, input(ROOM_PLAN), options());
 
     expectSuccessfulResolve(result);
-    // Итог шага — отчёт финального координатора (не воркера).
+    // Итог шага — отчёт финального координатора (не исполнителя).
     expect(result.report?.summary).toBe('coord');
     // Координатор действительно запускался последним.
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
@@ -123,7 +123,7 @@ describe('resolve не становится aborted, когда все аген�
     expect(result.report?.summary).toBe('final');
   });
 
-  it('stages-сложный 2→1→3: все воркеры и координаторы pass → финал pass/success, не aborted', async () => {
+  it('stages-сложный 2→1→3: все исполнители и координаторы pass → финал pass/success, не aborted', async () => {
     const pi = new FakePiRunner();
     for (const summary of [
       's1-be',

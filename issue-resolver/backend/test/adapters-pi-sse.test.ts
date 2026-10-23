@@ -163,6 +163,22 @@ describe('FakePiRunner', () => {
       { kind: 'abort', stepRunId: 'run-1' },
     ]);
   });
+
+  it('registry+stepRunId без iterationId → адресуется по своему stepRunId (report)', async () => {
+    const runner = new FakePiRunner();
+    const registry = new InMemoryStepSessionRegistry();
+
+    // Issue-уровневый отчёт: итерации нет, адрес = синтетический stepRunId.
+    await runner.run('c', 'p', { registry, stepRunId: 'issue-1/report' });
+
+    expect(registry.hasByIteration('issue-1/report')).toBe(true);
+    expect(
+      registry.promptByIteration('issue-1/report', 'допиши вывод'),
+    ).not.toBeNull();
+    expect(runner.controlCalls).toEqual([
+      { kind: 'prompt', stepRunId: 'issue-1/report', text: 'допиши вывод' },
+    ]);
+  });
 });
 
 describe('RpcPiRunner', () => {

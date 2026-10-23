@@ -123,8 +123,10 @@ export class FakePiRunner implements PiRunner {
     for (const event of result.events) opts.onEvent?.(event);
 
     const { registry, stepRunId, iterationId } = opts;
-    if (registry && stepRunId && iterationId) {
-      registry.register(stepRunId, iterationId, {
+    // Как и в RpcPiRunner: прогоны без итерации (отчёт) группируются под их
+    // собственным stepRunId — control-роут находит их по тому же адресу.
+    if (registry && stepRunId) {
+      registry.register(stepRunId, iterationId ?? stepRunId, {
         steer: (text) =>
           this.controlCalls.push({ kind: 'steer', stepRunId, text }),
         abort: () => this.controlCalls.push({ kind: 'abort', stepRunId }),

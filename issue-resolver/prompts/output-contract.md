@@ -27,3 +27,18 @@ this file the step counts as incomplete.
 Publishing is the backend's job: after the pipeline succeeds it commits the
 working copy, pushes a feature branch and opens the MR. Your deliverable is the
 files in the working folder plus this JSON — leave the working copy uncommitted.
+
+## Artifact style
+
+Artifacts that other agents read stay plain: `.issue-step-result.json`,
+`iterations/<n>/.<step>.md`, and `plan.md` are machine-readable Markdown or
+JSON. `glyph` is never used there, and `caveman` (and its `ultracave` /
+`megacave` variants) / `ponytail` (chat/code brevity) do not apply to them.
+Never compress a step report to a telegraphic style — a review finding that
+lost its reproduction condition is useless to the next step.
+
+**No model or provider name in an artifact.** No `provider/model-id`, no
+`model:` line, no "this run ran on …" — in `.issue-step-result.json`,
+`iterations/<n>/.<step>.md`, `plan.md`, the MR text, or any report.
+Provenance is the step and iteration a fact came from; the model is UI/SSE
+metadata, not a file's content.

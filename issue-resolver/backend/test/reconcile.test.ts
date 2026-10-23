@@ -15,7 +15,7 @@ function newId(): string {
 
 function insertIssue(
   db: Db,
-  status: 'running' | 'preparing' | 'completed' | 'question',
+  status: 'running' | 'preparing' | 'completed' | 'question' | 'failed',
 ): string {
   const id = newId();
   db.insert(issues)
@@ -232,5 +232,48 @@ describe('reconcileInterruptedRuns', () => {
     expect(
       db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
     ).toBe('failed');
+  });
+
+  it('completed-задача с pending-итерацией → pending (очередь не пуста)', () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db, 'completed');
+    insertIteration(db, issueId, 'pending');
+
+    reconcileInterruptedRuns(db);
+
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('pending');
+    // Итерация остаётся pending.
+    const iteration = db
+      .select()
+      .from(iterations)
+      .where(eq(iterations.issue_id, issueId))
+      .get();
+    expect(iteration?.status).toBe('pending');
+  });
+
+  it('failed-задача с pending-итерацией → pending', () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db, 'failed');
+    insertIteration(db, issueId, 'pending');
+
+    reconcileInterruptedRuns(db);
+
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('pending');
+  });
+
+  it('completed-задача без pending-итераций не трогается', () => {
+    const db = createDb(':memory:');
+    const issueId = insertIssue(db, 'completed');
+    insertIteration(db, issueId, 'completed');
+
+    reconcileInterruptedRuns(db);
+
+    expect(
+      db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
+    ).toBe('completed');
   });
 });

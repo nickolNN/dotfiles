@@ -76,6 +76,8 @@ interface SseEnvelope {
   type: string;
   issueId: string;
   iterationId?: string;
+  stepRunId?: string;
+  stream?: string;
   data: string;
   ts: string;
 }
@@ -406,7 +408,7 @@ test.describe('backend API', () => {
     expect(gone.status()).toBe(404);
   });
 
-  test('SSE: workspace_progress, bootstrap_log и iteration_status', async ({
+  test('SSE: workspace_progress, log DevOps и iteration_status', async ({
     request,
   }) => {
     const repo = await createRepo(request);
@@ -421,23 +423,30 @@ test.describe('backend API', () => {
       20_000,
       (acc) =>
         hasType(acc, 'workspace_progress') &&
-        hasType(acc, 'bootstrap_log') &&
+        acc.some(
+          (event) =>
+            event.type === 'log' &&
+            event.stepRunId === `${issue.id}/devops`,
+        ) &&
         hasType(acc, 'iteration_status'),
     );
 
     expect(hasType(events, 'workspace_progress')).toBe(true);
     expect(hasType(events, 'iteration_status')).toBe(true);
 
-    const logs = events.filter((event) => event.type === 'bootstrap_log');
+    // DevOps-вывод идёт обычными `log`-событиями с синтетическим stepRunId
+    // `{issueId}/devops`, stream = stdout/stderr (старого `devops_log` нет).
+    const logs = events.filter(
+      (event) =>
+        event.type === 'log' && event.stepRunId === `${issue.id}/devops`,
+    );
     expect(logs.length).toBeGreaterThan(0);
-    const payload = JSON.parse(logs[0].data) as {
-      repo: string;
-      text: string;
-      kind: string;
-    };
-    expect(payload.repo).toBe(repo.name);
-    expect(['stdout', 'stderr']).toContain(payload.kind);
-    expect(payload.text.length).toBeGreaterThan(0);
+    expect(logs.some((event) => event.stream === 'stdout')).toBe(true);
+    for (const event of logs) {
+      expect(['stdout', 'stderr']).toContain(event.stream);
+      expect(event.data.length).toBeGreaterThan(0);
+    }
+    expect(events.some((event) => event.type === 'devops_log')).toBe(false);
   });
 
   test('повтор итерации создаёт вторую', async ({ request }) => {

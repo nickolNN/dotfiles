@@ -8,7 +8,7 @@
  */
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   DesiredResult,
@@ -26,10 +26,12 @@ import { releaseIssueDevPorts } from '../port-allocator';
 import type { SseHub } from '../sse/hub';
 import { createTarGz, type ArchiveEntry } from '../workspace/archive';
 import {
+  ALL_RESULT_ARTIFACTS,
   containerNameFor,
   DEFAULT_WORKSPACE_ROOT,
+  HTML_ARTIFACT,
   iterationResultDirFor,
-  resultArtifactFor,
+  MD_ARTIFACT,
   type ResultArtifact,
   workspaceHostDirFor,
 } from '../workspace/paths';
@@ -56,6 +58,14 @@ export interface ResultArtifactResponse {
   body: string;
   contentType: string;
   filename: string;
+  /**
+   * Откуда взят артефакт: `root` — свежий `report.*` в корне, `iteration-snapshot`
+   * — устаревший отчёт из `.iteration-results/<latest>/` (пока идёт новый прогон
+   * или агент упал). Роут отдаёт это заголовком `x-artifact-source`.
+   */
+  source: 'root' | 'iteration-snapshot';
+  /** ISO-mtime исходного файла — заголовок `x-artifact-mtime`. */
+  mtime: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +88,13 @@ export interface IssueService {
   ): Issue | null;
 
   getResultArtifact(
+    db: Db,
+    config: IssueServiceConfig,
+    id: string,
+  ): Promise<ResultArtifactResponse | null>;
+
+  /** MD-артефакт (report.md) для скачивания агентами. */
+  getMdArtifact(
     db: Db,
     config: IssueServiceConfig,
     id: string,
@@ -165,6 +182,8 @@ function toIssue(
     step_models: row.step_models ?? undefined,
     thinking_level: row.thinking_level ?? null,
     step_thinking_levels: row.step_thinking_levels ?? undefined,
+    devops_model: row.devops_model ?? null,
+    devops_thinking_level: row.devops_thinking_level ?? null,
     status:
       statusOfIssue(iterationRows.map(toIteration), row.status) ??
       row.status ??
@@ -172,29 +191,53 @@ function toIssue(
     created_at: row.created_at,
     updated_at: row.updated_at,
     workspace_missing: !existsSync(workspaceHostDirFor(workspaceRoot, row.id)),
+    // Сохранённое на задаче значение приоритетно; фолбек — последняя итерация.
     worker_count:
+      row.worker_count ??
       iterationRows.reduce<typeof iterations.$inferSelect | null>(
         (latest, current) =>
           !latest || current.number > latest.number ? current : latest,
         null,
-      )?.worker_count ?? undefined,
+      )?.worker_count ??
+      undefined,
+    merge_requests: row.merge_requests ?? null,
   };
 }
 
 async function readArtifactFrom(
   dir: string,
   artifact: ResultArtifact,
-): Promise<({ body: string } & ResultArtifact) | null> {
+): Promise<({ body: string; mtime: string } & ResultArtifact) | null> {
   const path = join(dir, artifact.filename);
   try {
+    const fileStat = await stat(path);
     const body = await readFile(path, 'utf8');
-    return { ...artifact, body };
+    // ISO-Z без миллисекунд: заголовок парсит фронт, а мс здесь ничего не решают.
+    return {
+      ...artifact,
+      body,
+      mtime: fileStat.mtime.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return null;
     }
     throw error;
   }
+}
+
+/** Готовый ответ артефакта с пометкой источника (для заголовков роута). */
+function artifactResponse(
+  read: { body: string; mtime: string } & ResultArtifact,
+  source: ResultArtifactResponse['source'],
+): ResultArtifactResponse {
+  return {
+    body: read.body,
+    contentType: read.contentType,
+    filename: read.filename,
+    source,
+    mtime: read.mtime,
+  };
 }
 
 function latestCompletedIterationId(db: Db, issueId: string): string | null {
@@ -328,26 +371,61 @@ export function createIssueService(): IssueService {
       const row = getIssueRow(db, id);
       if (!row) return null;
 
-      const desiredResult: DesiredResult = (row.desired_result ?? 'md') as DesiredResult;
-      const artifact = resultArtifactFor(desiredResult);
-      if (!artifact) return null;
+      const latest = latestCompletedIterationId(db, id);
 
+      // 1. Корень воркспейса: report-агент пишет report.html/report.md сюда.
+      const wsDir = workspaceHostDirFor(config.workspaceRoot, id);
+      const rootHtml = await readArtifactFrom(wsDir, HTML_ARTIFACT);
+      if (rootHtml) {
+        return artifactResponse(rootHtml, 'root');
+      }
+
+      // 2. Старый путь: .iteration-results/<latest>/ (артефакты resolve-шага).
+      if (!latest) return null;
+      const iterDir = iterationResultDirFor(config.workspaceRoot, id, latest);
+
+      const htmlResult = await readArtifactFrom(iterDir, HTML_ARTIFACT);
+      if (htmlResult) {
+        return artifactResponse(htmlResult, 'iteration-snapshot');
+      }
+
+      // MD-фолбек: корень, затем iteration-results.
+      const desiredResult: DesiredResult | undefined =
+        (row.desired_result as DesiredResult) ?? undefined;
+      if (desiredResult === 'md' || desiredResult === undefined) {
+        const rootMd = await readArtifactFrom(wsDir, MD_ARTIFACT);
+        if (rootMd) {
+          return artifactResponse(rootMd, 'root');
+        }
+        const mdResult = await readArtifactFrom(iterDir, MD_ARTIFACT);
+        if (mdResult) {
+          return artifactResponse(mdResult, 'iteration-snapshot');
+        }
+      }
+
+      return null;
+    },
+
+    async getMdArtifact(db, config, id) {
+      const row = getIssueRow(db, id);
+      if (!row) return null;
+
+      const wsDir = workspaceHostDirFor(config.workspaceRoot, id);
+
+      // Корень воркспейса (report-агент пишет сюда).
+      const rootMd = await readArtifactFrom(wsDir, MD_ARTIFACT);
+      if (rootMd) {
+        return artifactResponse(rootMd, 'root');
+      }
+
+      // Старый путь: .iteration-results/
       const latest = latestCompletedIterationId(db, id);
       if (!latest) return null;
-
-      const dir = iterationResultDirFor(
-        config.workspaceRoot,
-        id,
-        latest,
-      );
-      const result = await readArtifactFrom(dir, artifact);
+      const iterDir = iterationResultDirFor(config.workspaceRoot, id, latest);
+      const result = await readArtifactFrom(iterDir, MD_ARTIFACT);
       if (!result) return null;
 
-      return {
-        body: result.body,
-        contentType: result.contentType,
-        filename: result.filename,
-      };
+      return artifactResponse(result, 'iteration-snapshot');
     },
 
     async getResultFiles(db, config, id) {
@@ -356,14 +434,12 @@ export function createIssueService(): IssueService {
 
       if (!latestCompletedIterationId(db, id)) return null;
 
-      const desiredResult: DesiredResult = (row.desired_result ?? 'md') as DesiredResult;
-      const artifact = resultArtifactFor(desiredResult);
-
-      return listWorkspaceFiles(
-        config.workspaceRoot,
-        id,
-        new Set([artifact?.filename ?? '']),
+      // Исключаем оба артефакта из списка файлов.
+      const exclude = new Set(
+        ALL_RESULT_ARTIFACTS.map((a) => a.filename),
       );
+
+      return listWorkspaceFiles(config.workspaceRoot, id, exclude);
     },
 
     async getResultArchive(db, config, id) {
@@ -377,12 +453,10 @@ export function createIssueService(): IssueService {
         throw new Error('result not found');
       }
 
-      const desiredResult: DesiredResult = (row.desired_result ?? 'md') as DesiredResult;
-      const artifact = resultArtifactFor(desiredResult);
       const files = await listWorkspaceFiles(
         config.workspaceRoot,
         id,
-        new Set([artifact?.filename ?? '']),
+        new Set(ALL_RESULT_ARTIFACTS.map((a) => a.filename)),
       );
 
       const entries: ArchiveEntry[] = [];
@@ -401,11 +475,14 @@ export function createIssueService(): IssueService {
         }
       }
 
-      if (artifact) {
-        const result = await readArtifactFrom(
-          iterationResultDirFor(config.workspaceRoot, id, latest),
-          artifact,
-        );
+      // Включаем все артефакты из снапшота (HTML + MD).
+      const snapshotDir = iterationResultDirFor(
+        config.workspaceRoot,
+        id,
+        latest,
+      );
+      for (const artifact of ALL_RESULT_ARTIFACTS) {
+        const result = await readArtifactFrom(snapshotDir, artifact);
         if (result) {
           entries.push({
             name: artifact.filename,

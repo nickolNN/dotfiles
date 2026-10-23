@@ -10,10 +10,10 @@
  *
  * Топологии и число pi-вызовов resolve:
  *   1. single            — 1 агент
- *   2. room              — 3 воркера ∥ + 1 координатор
+ *   2. room              — 3 исполнителя ∥ + 1 координатор
  *   3. stages 3×1        — 3 агента-этапа по одному + 1 финальный lead
- *   4. stages-микс 2→1→3 — (2 воркера ∥ + координатор) → (1 агент) →
- *                          (3 воркера ∥ + координатор) → финальный lead
+ *   4. stages-микс 2→1→3 — (2 исполнителя ∥ + координатор) → (1 агент) →
+ *                          (3 исполнителя ∥ + координатор) → финальный lead
  */
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -45,7 +45,7 @@ import {
 const NOW = '2026-06-01T00:00:00.000Z';
 const STEPS: PipelineStep[] = ['refine', 'resolve'];
 
-/** resolve-результат «прошло» для одного pi-агента (воркер/координатор/lead). */
+/** resolve-результат «прошло» для одного pi-агента (исполнитель/координатор/lead). */
 const passResolve = (summary = 'resolve ok'): StepExecutionResult => ({
   step: 'resolve',
   exitCode: 0,
@@ -130,16 +130,20 @@ interface AgentDescriptor {
 }
 
 function resolveAgents(pi: FakePiRunner): AgentDescriptor[] {
-  // calls[0] — refine (без агента), дальше — агенты resolve.
-  return pi.calls.slice(1).map((call) => {
-    const agent = call.options?.agent;
-    return {
-      role: agent?.role,
-      stage: agent?.stage ?? null,
-      index: agent?.index,
-      label: agent?.label,
-    };
-  });
+  // calls[0] — refine (без агента), дальше — агенты resolve. Post-iteration
+  // report-агент (нет iterationId) в топологию не входит.
+  return pi.calls
+    .filter((call) => call.options?.iterationId !== undefined)
+    .slice(1)
+    .map((call) => {
+      const agent = call.options?.agent;
+      return {
+        role: agent?.role,
+        stage: agent?.stage ?? null,
+        index: agent?.index,
+        label: agent?.label,
+      };
+    });
 }
 
 describe('pipeline E2E — 4 топологии resolve (refine → resolve)', () => {
@@ -235,8 +239,11 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     // resolve НИКОГДА не aborted — иначе итерация была бы `cancelled`.
     expect(resolveRun?.status).not.toBe('aborted');
 
-    // Ровно refine + агенты топологии; ни одного лишнего pi-вызова.
-    expect(pi.calls).toHaveLength(expectedPiCalls);
+    // Ровно refine + агенты топологии; ни одного лишнего pi-вызова. Post-iteration
+    // report-агент идёт после конвейера и в счёт шагов не входит (нет iterationId).
+    expect(
+      pi.calls.filter((call) => call.options?.iterationId !== undefined),
+    ).toHaveLength(expectedPiCalls);
 
     // Последнее iteration_status в SSE — completed, не cancelled.
     const last = events
@@ -260,7 +267,7 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     ]);
   });
 
-  it('room: refine → 3 воркера ∥ + 1 координатор', async () => {
+  it('room: refine → 3 исполнителя ∥ + 1 координатор', async () => {
     const plan: ExecutionPlan = {
       mode: 'room',
       executors: 3,
@@ -271,9 +278,9 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
 
     expectCompleted(db, seeded, result, 5, pi, events);
     expect(resolveAgents(pi)).toEqual([
-      { role: 'worker', stage: null, index: 1, label: 'Воркер 1' },
-      { role: 'worker', stage: null, index: 2, label: 'Воркер 2' },
-      { role: 'worker', stage: null, index: 3, label: 'Воркер 3' },
+      { role: 'worker', stage: null, index: 1, label: 'Исполнитель 1' },
+      { role: 'worker', stage: null, index: 2, label: 'Исполнитель 2' },
+      { role: 'worker', stage: null, index: 3, label: 'Исполнитель 3' },
       { role: 'coordinator', stage: null, index: null, label: 'Координатор' },
     ]);
 
@@ -283,14 +290,14 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
       .where(eq(stepRuns.iteration_id, seeded.iterationId))
       .all()
       .find((run) => run.step === 'resolve');
-    // Воркеры нумеруются 0-based в id, координатор = stepRunId шага.
+    // Исполнители нумеруются 0-based в id, координатор = stepRunId шага.
     expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRun?.id}/worker/0`);
     expect(pi.calls[2].options?.stepRunId).toBe(`${resolveRun?.id}/worker/1`);
     expect(pi.calls[3].options?.stepRunId).toBe(`${resolveRun?.id}/worker/2`);
     expect(pi.calls[4].options?.stepRunId).toBe(resolveRun?.id);
   });
 
-  it('stages 3×1: refine → 3 агента-этапа последовательно + финальный lead', async () => {
+  it('stages 3×1: refine → 3 исполнителя-этапа последовательно + финальный lead', async () => {
     const plan: ExecutionPlan = {
       mode: 'stages',
       stages: [
@@ -304,9 +311,9 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
 
     expectCompleted(db, seeded, result, 5, pi, events);
     expect(resolveAgents(pi)).toEqual([
-      { role: 'coordinator', stage: 1, index: null, label: 'Этап 1 · Координатор' },
-      { role: 'coordinator', stage: 2, index: null, label: 'Этап 2 · Координатор' },
-      { role: 'coordinator', stage: 3, index: null, label: 'Этап 3 · Координатор' },
+      { role: 'worker', stage: 1, index: 1, label: 'Этап 1 · Исполнитель 1' },
+      { role: 'worker', stage: 2, index: 1, label: 'Этап 2 · Исполнитель 1' },
+      { role: 'worker', stage: 3, index: 1, label: 'Этап 3 · Исполнитель 1' },
       { role: 'coordinator', stage: null, index: null, label: 'Координатор' },
     ]);
 
@@ -316,11 +323,15 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
       .where(eq(stepRuns.iteration_id, seeded.iterationId))
       .all()
       .find((run) => run.step === 'resolve');
-    expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
+    expect(
+      pi.calls
+        .filter((call) => call.options?.iterationId !== undefined)
+        .map((call) => call.options?.stepRunId),
+    ).toEqual([
       pi.calls[0].options?.stepRunId, // refine
-      `${resolveRun?.id}/stage/1/coordinator`,
-      `${resolveRun?.id}/stage/2/coordinator`,
-      `${resolveRun?.id}/stage/3/coordinator`,
+      `${resolveRun?.id}/stage/1/worker/1`,
+      `${resolveRun?.id}/stage/2/worker/1`,
+      `${resolveRun?.id}/stage/3/worker/1`,
       resolveRun?.id,
     ]);
   });
@@ -347,17 +358,17 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     };
     const { db, pi, events, seeded, result } = await runTopology(plan, 9);
 
-    // refine + 2 воркера + coord этапа1 + агент этапа2 + 3 воркера +
+    // refine + 2 исполнителя + coord этапа1 + исполнитель этапа2 + 3 исполнителя +
     // coord этапа3 + финальный lead = 10 pi-вызовов (9 агентов resolve).
     expectCompleted(db, seeded, result, 10, pi, events);
     expect(resolveAgents(pi)).toEqual([
-      { role: 'worker', stage: 1, index: 1, label: 'Этап 1 · Воркер 1' },
-      { role: 'worker', stage: 1, index: 2, label: 'Этап 1 · Воркер 2' },
+      { role: 'worker', stage: 1, index: 1, label: 'Этап 1 · Исполнитель 1' },
+      { role: 'worker', stage: 1, index: 2, label: 'Этап 1 · Исполнитель 2' },
       { role: 'coordinator', stage: 1, index: null, label: 'Этап 1 · Координатор' },
-      { role: 'coordinator', stage: 2, index: null, label: 'Этап 2 · Координатор' },
-      { role: 'worker', stage: 3, index: 1, label: 'Этап 3 · Воркер 1' },
-      { role: 'worker', stage: 3, index: 2, label: 'Этап 3 · Воркер 2' },
-      { role: 'worker', stage: 3, index: 3, label: 'Этап 3 · Воркер 3' },
+      { role: 'worker', stage: 2, index: 1, label: 'Этап 2 · Исполнитель 1' },
+      { role: 'worker', stage: 3, index: 1, label: 'Этап 3 · Исполнитель 1' },
+      { role: 'worker', stage: 3, index: 2, label: 'Этап 3 · Исполнитель 2' },
+      { role: 'worker', stage: 3, index: 3, label: 'Этап 3 · Исполнитель 3' },
       { role: 'coordinator', stage: 3, index: null, label: 'Этап 3 · Координатор' },
       { role: 'coordinator', stage: null, index: null, label: 'Координатор' },
     ]);
@@ -368,12 +379,16 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
       .where(eq(stepRuns.iteration_id, seeded.iterationId))
       .all()
       .find((run) => run.step === 'resolve');
-    expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
+    expect(
+      pi.calls
+        .filter((call) => call.options?.iterationId !== undefined)
+        .map((call) => call.options?.stepRunId),
+    ).toEqual([
       pi.calls[0].options?.stepRunId, // refine
       `${resolveRun?.id}/stage/1/worker/1`,
       `${resolveRun?.id}/stage/1/worker/2`,
       `${resolveRun?.id}/stage/1/coordinator`,
-      `${resolveRun?.id}/stage/2/coordinator`,
+      `${resolveRun?.id}/stage/2/worker/1`,
       `${resolveRun?.id}/stage/3/worker/1`,
       `${resolveRun?.id}/stage/3/worker/2`,
       `${resolveRun?.id}/stage/3/worker/3`,

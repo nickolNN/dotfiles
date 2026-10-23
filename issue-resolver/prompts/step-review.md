@@ -33,3 +33,6 @@ tests and browsers belong to the `test` step — stay fast.
 - `blocked` — you cannot review it (no change set, code inaccessible).
 
 Format the result in `.issue-step-result.json` (shape in the output contract below).
+
+Also write your findings as a narrative in `iterations/<n>/.review.md` —
+this file will be read by the report agent to compile the full task report.

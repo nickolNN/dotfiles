@@ -8,11 +8,12 @@ import { HttpJiraClient } from './jira/client';
 import { RpcPiRunner } from './pi/rpc-runner';
 import { InMemoryStepSessionRegistry } from './pi/session-registry';
 import { HttpMrClient } from './pr/mr';
-import { PiBootstrapperAgent } from './workflow/bootstrapper';
-import type { BootstrapperFactory } from './workflow/engine';
+import { PiDevOpsAgent } from './workflow/devops';
+import type { DevOpsFactory } from './workflow/engine';
 import {
-  BOOTSTRAPPER_TIMEOUT_ENV,
-  resolveBootstrapperTimeoutMs,
+  DEVOPS_TIMEOUT_ENV,
+  LEGACY_DEVOPS_TIMEOUT_ENV,
+  resolveDevOpsTimeoutMs,
 } from './workflow/timeout';
 import { DEFAULT_WORKSPACE_ROOT } from './workspace/paths';
 
@@ -24,23 +25,41 @@ const DEFAULT_DOCKER_SOCKET = '/var/run/docker.sock';
  * (создаётся в `runIssueIteration`). Без неё анализ не запускается (фейковый
  * дефолт/тесты).
  */
-function bootstrapperFactoryFor(
+export function devOpsFactoryFor(
   pi: RpcPiRunner,
   defaultTimeoutMs: number,
-): BootstrapperFactory {
+): DevOpsFactory {
   return ({
     containerName,
     hostWorkspaceDir,
+    issueId,
+    iterationId,
+    stepRunId,
+    registry,
+    tagInstructions,
+    reposNames,
+    reposRequireDevServer,
+    reposInstructions,
     model,
+    thinkingLevel,
     timeoutMs,
     onStdout,
     onStderr,
   }) =>
-    new PiBootstrapperAgent({
+    new PiDevOpsAgent({
       pi,
       containerName,
       hostWorkspaceDir,
+      issueId,
+      iterationId,
+      stepRunId,
+      registry,
+      tagInstructions,
+      reposNames,
+      reposRequireDevServer,
+      reposInstructions,
       model,
+      thinkingLevel,
       timeoutMs: timeoutMs ?? defaultTimeoutMs,
       onStdout,
       onStderr,
@@ -78,8 +97,8 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
       socketPath: env.DOCKER_SOCKET || DEFAULT_DOCKER_SOCKET,
     });
     const pi = new RpcPiRunner();
-    const bootstrapperTimeoutMs = resolveBootstrapperTimeoutMs(
-      env[BOOTSTRAPPER_TIMEOUT_ENV],
+    const devopsTimeoutMs = resolveDevOpsTimeoutMs(
+      env[DEVOPS_TIMEOUT_ENV] ?? env[LEGACY_DEVOPS_TIMEOUT_ENV],
     );
 
     return {
@@ -93,8 +112,8 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
       }),
       jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
       control: new InMemoryStepSessionRegistry(),
-      bootstrapperFactory: bootstrapperFactoryFor(pi, bootstrapperTimeoutMs),
-      bootstrapperTimeoutMs,
+      devopsFactory: devOpsFactoryFor(pi, devopsTimeoutMs),
+      devopsTimeoutMs,
       local: false,
       workspaceRoot:
         env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
@@ -106,8 +125,8 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
 
   // По умолчанию — локальный режим (без Docker).
   const pi = new RpcPiRunner('resolve', 'local');
-  const bootstrapperTimeoutMs = resolveBootstrapperTimeoutMs(
-    env[BOOTSTRAPPER_TIMEOUT_ENV],
+  const devopsTimeoutMs = resolveDevOpsTimeoutMs(
+    env[DEVOPS_TIMEOUT_ENV] ?? env[LEGACY_DEVOPS_TIMEOUT_ENV],
   );
   return {
     container: new LocalContainerController(),
@@ -120,8 +139,8 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
     }),
     jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
     control: new InMemoryStepSessionRegistry(),
-    bootstrapperFactory: bootstrapperFactoryFor(pi, bootstrapperTimeoutMs),
-    bootstrapperTimeoutMs,
+    devopsFactory: devOpsFactoryFor(pi, devopsTimeoutMs),
+    devopsTimeoutMs,
     workspaceRoot:
       env.ISSUE_RESOLVER_WORKSPACE_ROOT ||
       (env.ISSUE_RESOLVER_DATA_DIR

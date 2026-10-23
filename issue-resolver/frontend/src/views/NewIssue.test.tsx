@@ -574,20 +574,17 @@ describe('NewIssue', () => {
     ).toEqual(['develop', 'release']);
   });
 
-  it('desired_result по умолчанию — md, без PR-опции', () => {
+  it('форма не содержит выбора desired_result (всегда оба артефакта)', () => {
     stubApi();
 
     render(<NewIssue />);
 
-    expect(screen.getByTestId('desired-result-md')).toBeChecked();
-    expect(screen.getByTestId('desired-result-html')).not.toBeChecked();
-    expect(screen.queryByTestId('desired-result-pr')).toBeNull();
-
-    expect(screen.queryByRole('checkbox', { name: /^PR/ })).toBeNull();
-    expect(screen.queryByLabelText('Модель для шага PR')).toBeNull();
+    expect(screen.queryByTestId('desired-result-md')).toBeNull();
+    expect(screen.queryByTestId('desired-result-html')).toBeNull();
+    expect(screen.queryByText('Желаемый отчёт')).toBeNull();
   });
 
-  it('submit шлёт desired_result: md по умолчанию', async () => {
+  it('submit не шлёт desired_result (бэкенд сам решает)', async () => {
     const fetchMock = stubApi();
 
     render(<NewIssue />);
@@ -599,7 +596,7 @@ describe('NewIssue', () => {
 
     await waitFor(() => {
       const body = issuePostBody(fetchMock);
-      expect(body.desired_result).toBe('md');
+      expect(body.desired_result).toBeUndefined();
       expect(body.pipeline_steps).toEqual(['resolve']);
     });
   });

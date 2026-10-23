@@ -8,8 +8,15 @@ export const PIPELINE_STEPS = [
   'pr',
 ] as const;
 
-/** Частичная карта «шаг → id модели»: ключи строго из PIPELINE_STEPS. */
-const stepModelsSchema = z.record(z.enum(PIPELINE_STEPS), z.string());
+/**
+ * Ключи карты пер-шаговых моделей: шаги пайплайна + `report`.
+ * `report` — не шаг пайплайна (запускается пост-итерационно движком и
+ * роутом force-run), но его модель хранится в той же карте `step_models`.
+ */
+const STEP_MODEL_KEYS = [...PIPELINE_STEPS, 'report'] as const;
+
+/** Частичная карта «шаг → id модели»: ключи из PIPELINE_STEPS + `report`. */
+const stepModelsSchema = z.record(z.enum(STEP_MODEL_KEYS), z.string());
 
 /** Уровень размышления pi: словарь CLI-флага `--thinking`. */
 const thinkingLevelSchema = z.enum([
@@ -22,9 +29,16 @@ const thinkingLevelSchema = z.enum([
   'max',
 ]);
 
-/** Частичная карта «шаг → уровень размышления»; ключи из PIPELINE_STEPS. */
+/**
+ * Ключи карты пер-шаговых уровней мышления: шаги пайплайна + `report`.
+ * `report` — не шаг пайплайна, но его thinking хранится в той же карте
+ * `step_thinking_levels` (как и модель в `step_models` через STEP_MODEL_KEYS).
+ */
+const STEP_THINKING_KEYS = [...PIPELINE_STEPS, 'report'] as const;
+
+/** Частичная карта «шаг → уровень размышления»; ключи из PIPELINE_STEPS + `report`. */
 const stepThinkingLevelsSchema = z
-  .record(z.enum(PIPELINE_STEPS), thinkingLevelSchema)
+  .record(z.enum(STEP_THINKING_KEYS), thinkingLevelSchema)
   .optional();
 
 const repoLocationSchema = z
@@ -79,7 +93,8 @@ export const createIssueRequestSchema = z
     tag_id: z.string().optional(),
     model: z.string().optional(),
     step_models: stepModelsSchema.optional(),
-    bootstrapper_model: z.string().optional(),
+    devops_model: z.string().optional(),
+    devops_thinking_level: thinkingLevelSchema.optional(),
     thinking_level: thinkingLevelSchema.optional(),
     step_thinking_levels: stepThinkingLevelsSchema,
     worker_count: z.number().int().min(0).optional(),
@@ -103,7 +118,8 @@ export const createIterationRequestSchema = z.object({
   pr_repository_ids: z.array(z.string()).optional(),
   model: z.string().optional(),
   step_models: stepModelsSchema.optional(),
-  bootstrapper_model: z.string().optional(),
+  devops_model: z.string().optional(),
+  devops_thinking_level: thinkingLevelSchema.optional(),
   thinking_level: thinkingLevelSchema.optional(),
   step_thinking_levels: stepThinkingLevelsSchema,
   worker_count: z.number().int().min(0).optional(),
@@ -153,6 +169,33 @@ export const updateTagRequestSchema = z.object({
     .array(
       z.object({
         repository_id: z.string().uuid(),
+        bootstrap_enabled: z.boolean().optional().default(true),
+      }),
+    )
+    .optional(),
+});
+
+/** Схема тела PUT /issue-resolver/api/v1/issues/:id — редактирование черновика. */
+export const updateIssueRequestSchema = z.object({
+  title: z.string().optional(),
+  jira_issue_url: z.string().url().optional().nullable(),
+  description: z.string().optional(),
+  desired_result: z.enum(['md', 'html']).optional(),
+  pipeline_steps: z.array(z.enum(PIPELINE_STEPS)).optional(),
+  step_models: stepModelsSchema.optional(),
+  thinking_level: thinkingLevelSchema.optional().nullable(),
+  step_thinking_levels: stepThinkingLevelsSchema,
+  devops_model: z.string().optional().nullable(),
+  devops_thinking_level: thinkingLevelSchema.optional().nullable(),
+  worker_count: z.number().int().min(0).optional().nullable(),
+  tag_id: z.string().optional().nullable(),
+  repositories: z
+    .array(
+      z.object({
+        repo_id: z.string().uuid().optional(),
+        repository_url: repoLocationSchema.optional(),
+        base_branch: z.string().min(1).optional(),
+        create_mr: z.boolean().optional(),
         bootstrap_enabled: z.boolean().optional().default(true),
       }),
     )

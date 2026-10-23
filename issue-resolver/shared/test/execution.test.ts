@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clampExecutors,
   DEFAULT_MAX_ROOM_EXECUTORS,
+  maxExecutorsFor,
   parseExecutionPlan,
   planExecutionMode,
   planExecutionStages,
@@ -71,6 +72,47 @@ describe('planExecutionMode', () => {
     expect(planExecutionMode({ mode: 'room' })).toBe('single');
     expect(planExecutionMode({ mode: 'room', executors: 1 })).toBe('single');
     expect(planExecutionMode({ mode: 'room', executors: 0 })).toBe('single');
+  });
+});
+
+describe('maxExecutorsFor — worker_count как потолок движка', () => {
+  it('0/undefined/null/невалидное («без ограничений») → системный потолок', () => {
+    expect(maxExecutorsFor(undefined)).toBe(DEFAULT_MAX_ROOM_EXECUTORS);
+    expect(maxExecutorsFor(null)).toBe(DEFAULT_MAX_ROOM_EXECUTORS);
+    expect(maxExecutorsFor(0)).toBe(DEFAULT_MAX_ROOM_EXECUTORS);
+    expect(maxExecutorsFor(-3)).toBe(DEFAULT_MAX_ROOM_EXECUTORS);
+    expect(maxExecutorsFor(2.5)).toBe(DEFAULT_MAX_ROOM_EXECUTORS);
+  });
+
+  it('положительное целое → оно же, но не выше системного потолка', () => {
+    expect(maxExecutorsFor(1)).toBe(1);
+    expect(maxExecutorsFor(3)).toBe(3);
+    expect(maxExecutorsFor(10)).toBe(DEFAULT_MAX_ROOM_EXECUTORS);
+  });
+});
+
+describe('planExecutionMode — потолок из worker_count', () => {
+  it('room с потолком < 2 деградирует в single (параллельности нет)', () => {
+    const plan: ExecutionPlan = { mode: 'room', executors: 2 };
+    expect(planExecutionMode(plan, maxExecutorsFor(1))).toBe('single');
+    expect(planExecutionMode(plan, maxExecutorsFor(2))).toBe('room');
+  });
+
+  it('stages живёт и с потолком 1, но режет исполнителей этапа', () => {
+    const plan: ExecutionPlan = {
+      mode: 'stages',
+      stages: [
+        { index: 1, executors: 4 },
+        { index: 2, executors: 4 },
+      ],
+    };
+    expect(planExecutionMode(plan, maxExecutorsFor(1))).toBe('stages');
+    expect(
+      planExecutionStages(plan, maxExecutorsFor(1)).map((s) => s.executors),
+    ).toEqual([1, 1]);
+    expect(
+      planExecutionStages(plan, maxExecutorsFor(2)).map((s) => s.executors),
+    ).toEqual([2, 2]);
   });
 });
 

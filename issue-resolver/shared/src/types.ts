@@ -12,7 +12,7 @@ export type TaskStatus =
   /** Агент задал пользователю вопрос и ждёт ответа. */
   | 'question';
 
-export type PipelineStep = 'refine' | 'resolve' | 'review' | 'test' | 'pr';
+export type PipelineStep = 'refine' | 'resolve' | 'review' | 'test' | 'pr' | 'report';
 
 /**
  * Желаемый результат задачи: 'md' — Markdown-документ (`report.md`); 'html' —
@@ -111,13 +111,34 @@ export interface Issue {
   thinking_level?: ThinkingLevel | null;
   /** Пер-шаговые уровни размышления; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
+  /** Модель DevOps-агента, выбранная при создании. */
+  devops_model?: string | null;
+  /** Thinking effort DevOps-агента — настраивается так же, как у шагов. */
+  devops_thinking_level?: ThinkingLevel | null;
   status: TaskStatus;
   created_at: string;
   updated_at: string;
   /** true — issue есть в БД, но его workspace-папка удалена (осиротевшая задача). */
   workspace_missing?: boolean;
-  /** Макс. число параллельных воркеров из последней итерации (0 — без ограничений). */
+  /**
+   * Макс. число параллельных исполнителей: сохранённое значение задачи,
+   * а если его нет — значение из последней итерации (0 — без ограничений).
+   */
   worker_count?: number;
+/**
+ * MR/PR, созданные для задачи (накапливаются от итерации к итерации).
+ * Одна ветка на задачу ⇒ список растёт только при смене feature-ветки.
+ * null — ещё не было pr-шага; [] — шаг был, но MR не созданы (ошибки).
+ */
+  merge_requests?: MergeRequestEntry[] | null;
+}
+
+/** Одна запись MR/PR в данных задачи. */
+export interface MergeRequestEntry {
+  repository_url: string;
+  url: string;
+  title?: string;
+  message?: string;
 }
 
 export interface Iteration {
@@ -139,7 +160,7 @@ export interface Iteration {
   thinking_level?: ThinkingLevel | null;
   /** Пер-шаговые уровни размышления; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
-  /** Макс. число параллельных воркеров (0 — без ограничений). */
+  /** Макс. число параллельных исполнителей (0 — без ограничений). */
   worker_count?: number;
   created_at: string;
   updated_at: string;
@@ -192,13 +213,15 @@ export interface CreateIssueRequest {
   model?: string;
   /** Модель на конкретный шаг; имеет приоритет над `model`. */
   step_models?: StepModels;
-  /** Модель агента-анализатора (разовая подготовка рабочей папки). */
-  bootstrapper_model?: string;
+  /** Модель DevOps-агента (разовая подготовка рабочей папки). */
+  devops_model?: string;
+  /** Thinking effort DevOps-агента: настраивается так же, как у шагов. */
+  devops_thinking_level?: ThinkingLevel;
   /** Общий уровень размышления-фолбек для всех шагов. */
   thinking_level?: ThinkingLevel;
   /** Уровень размышления на конкретный шаг; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
-  /** Макс. число параллельных воркеров для resolve (0 — без ограничений). */
+  /** Макс. число параллельных исполнителей для resolve (0 — без ограничений). */
   worker_count?: number;
   /**
    * `true` (по умолчанию) — запустить конвейер сразу после создания.
@@ -221,7 +244,7 @@ export interface CreateIterationRequest {
   thinking_level?: ThinkingLevel;
   /** Уровень размышления на конкретный шаг; приоритет над `thinking_level`. */
   step_thinking_levels?: StepThinkingLevels;
-  /** Макс. число параллельных воркеров для resolve (0 — без ограничений). */
+  /** Макс. число параллельных исполнителей для resolve (0 — без ограничений). */
   worker_count?: number;
   /** ID репозиториев, для которых включён create_mr (из секции pr-шага). */
   pr_repository_ids?: string[];
@@ -445,9 +468,9 @@ export interface ExecutionStage {
   index: number;
   name?: string;
   task?: string;
-  /** Число параллельных воркеров этапа (>= 1). */
+  /** Число параллельных исполнителей этапа (>= 1). */
   executors?: number;
-  /** Подзадачи, по одной на воркера. */
+  /** Подзадачи, по одной на исполнителя. */
   decomposition?: string[];
 }
 
@@ -472,16 +495,19 @@ export interface ExecutionPlan {
 }
 
 /**
- * Живой агент комнаты resolve: координатор (lead) и воркеры сосуществуют в
+ * Живой агент комнаты resolve: координатор (lead) и исполнители сосуществуют в
  * одной итерации. `id` — стабильный адрес сессии агента (per-agent stepRunId):
- * `<stepRunId>` у координатора, `<stepRunId>/worker/<i>` у воркера.
+ * `<stepRunId>` у координатора (финального lead), `<stepRunId>/worker/<i>` —
+ * у исполнителя обычной комнаты, `<stepRunId>/stage/<i>/worker/<k>` — у исполнителя
+ * этапа (`k = 1` — единственный исполнитель одиночного этапа),
+ * `<stepRunId>/stage/<i>/coordinator` — у координатора этапа с исполнителями.
  */
 export interface RoomAgent {
   id: string;
   role: 'worker' | 'coordinator';
   /** 1..N в порядке декомпозиции; null у координатора. */
   index: number | null;
-  /** Человекочитаемая подпись вкладки («Воркер 1», «Координатор»). */
+  /** Человекочитаемая подпись вкладки («Исполнитель 1», «Координатор», «Этап 1 · Исполнитель 1»). */
   label: string;
   /** Номер этапа (1-based) staged-режима; null у обычной комнаты. */
   stage?: number | null;
@@ -533,9 +559,18 @@ export interface StepReport {
    * review/test/pr и у refine, который не делает рекомендацию.
    */
   execution?: ExecutionPlan;
-  /** PR step only: MR title (Jira key + short description, ≤72 chars). */
+  /**
+   * Заголовок MR (≤72 символа, с Jira-ключем, когда он есть в заголовке задачи).
+   * Пишет шаг `pr` — единственный, кто посвящён тексту MR. Публикует им движок,
+   * в том числе обновляя уже открытый MR: payload ветки растёт от итерации к
+   * итерации (`commitAndPush` сквошит к `origin/<base>`), поэтому текст обязан
+   * описывать задачу целиком, а не одну итерацию.
+   */
   title?: string;
-  /** PR step only: full MR description (Markdown with sections). */
+  /**
+   * Описание MR: Markdown с `## Summary` / `## Evidence` / `## Merge Danger`.
+   * Тот же контракт и та же ответственность, что у `title`.
+   */
   description?: string;
   /**
    * PR step only: публикация результата (commit/push + MR) провалилась.
@@ -543,6 +578,20 @@ export interface StepReport {
    * причину, чтобы зелёный шаг не вводил пользователя в заблуждение.
    */
   pr_error?: string;
+  /**
+   * PR step only: per-repo MR-содержимое (title + description). Когда задано,
+   * каждый репозиторий получает свой заголовок и описание; репо без записи
+   * получают общие `title`/`description` (top-level). Отсутствует у старых
+   * отчётов и у шагов, не являющихся pr.
+   */
+  merge_requests?: StepReportMrEntry[];
+}
+
+/** Одна запись per-repo MR-содержимого из отчёта шага pr. */
+export interface StepReportMrEntry {
+  repository_url: string;
+  title: string;
+  description: string;
 }
 
 export interface StepExecutionResult {
@@ -611,7 +660,7 @@ export type WorkspaceProgressStep =
   | 'creating_dirs'
   | 'cloning'
   | 'checking_instructions'
-  | 'bootstrapping'
+  | 'devops'
   | 'installing'
   | 'dev_server'
   | 'ready';
@@ -655,11 +704,6 @@ export type SSEEventType =
   | 'iteration_status'
   /** Прогресс подготовки рабочей папки (clone/install/…): один шаг — событие. */
   | 'workspace_progress'
-  /**
-   * Живой stdout/stderr агента-бутстрапера во время подготовки.
-   * `data` — JSON `{ repo, text, kind: 'stdout' | 'stderr' }`.
-   */
-  | 'bootstrap_log'
   /**
    * Прогресс фонового удаления задачи.
    * `data` — JSON `{ phase: IssueDeletingPhase, message? }`.

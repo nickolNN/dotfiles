@@ -69,7 +69,7 @@ export interface StepSessionRegistry {
   abort(stepRunId: string): boolean;
   /**
    * Steer ВО ВСЕ активные сессии итерации (broadcast); true — задет хотя бы
-   * один. В room-режиме у итерации N воркеров + координатор.
+   * один. В room-режиме у итерации N исполнителей + координатор.
    */
   steerByIteration(iterationId: string, text: string): boolean;
   /**
@@ -107,7 +107,7 @@ export interface StepSessionRegistry {
     command: Record<string, unknown>,
   ): Promise<ControlResult> | null;
   /**
-   * Агенты комнаты итерации в порядке регистрации (Воркер 1..N, Координатор).
+   * Агенты комнаты итерации в порядке регистрации (Исполнитель 1..N, Координатор).
    * Включает уже завершённых (со своим финальным статусом); не-комнатные
    * сессии (single-режим) в список не попадают.
    */
@@ -205,7 +205,7 @@ const MAX_TRACKED_AGENT_ITERATIONS = 64;
  * In-memory реестр: прямой Map stepRunId → сессия и обратный
  * iterationId → множество активных stepRunId (Set хранит порядок вставки).
  *
- * У итерации в room-режиме одновременно живут N воркеров (stepRunId
+ * У итерации в room-режиме одновременно живут N исполнителей (stepRunId
  * `${stepRunId}/worker/<i>`) и позже координатор (stepRunId === шага).
  * steer/abort адресуют ВСЕ активные сессии (broadcast), а prompt/send/
  * respond — «якорную» (последнюю зарегистрированную): её результат —
@@ -352,7 +352,7 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
   }
 
   abortByIteration(iterationId: string): boolean {
-    // Broadcast: abort должен накрыть всех воркеров и координатора.
+    // Broadcast: abort должен накрыть всех исполнителей и координатора.
     let hit = false;
     for (const stepRunId of this.activeStepRunIds(iterationId)) {
       if (this.abort(stepRunId)) hit = true;

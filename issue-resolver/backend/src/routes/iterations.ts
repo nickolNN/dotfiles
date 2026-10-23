@@ -16,9 +16,11 @@ import {
   type IterationRunDeps,
 } from '../workflow/run-iteration.service';
 import {
+  ALL_RESULT_ARTIFACTS,
   DEFAULT_WORKSPACE_ROOT,
+  HTML_ARTIFACT,
   iterationResultDirFor,
-  resultArtifactFor,
+  MD_ARTIFACT,
   workspaceHostDirFor,
 } from '../workspace/paths';
 
@@ -59,17 +61,21 @@ export async function iterationsRoutes(
       if (!iteration) return reply.status(404).send({ error: 'iteration not found' });
       const issue = db.select().from(issues).where(eq(issues.id, iteration.issue_id)).get();
       if (!issue) return reply.status(404).send({ error: 'issue not found' });
-      const artifact = resultArtifactFor(issue.desired_result ?? 'md');
-      if (!artifact) return reply.status(404).send({ error: 'result not found' });
       const dir = iterationResultDirFor(deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT, iteration.issue_id, iteration.id);
-      let body: string;
-      try {
-        body = await readFile(join(dir, artifact.filename), 'utf8');
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return reply.status(404).send({ error: 'result not found' });
-        throw error;
+
+      // Пробуем HTML первым, затем MD (для старых md-задач).
+      let result: { body: string; contentType: string; filename: string } | null = null;
+      for (const artifact of [HTML_ARTIFACT, MD_ARTIFACT]) {
+        try {
+          const body = await readFile(join(dir, artifact.filename), 'utf8');
+          result = { ...artifact, body };
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
       }
-      return reply.type(artifact.contentType).header('Content-Disposition', 'inline').send(body);
+      if (!result) return reply.status(404).send({ error: 'result not found' });
+      return reply.type(result.contentType).header('Content-Disposition', 'inline').send(result.body);
     },
   );
 
@@ -81,17 +87,62 @@ export async function iterationsRoutes(
       if (!iteration) return reply.status(404).send({ error: 'iteration not found' });
       const issue = db.select().from(issues).where(eq(issues.id, iteration.issue_id)).get();
       if (!issue) return reply.status(404).send({ error: 'issue not found' });
-      const artifact = resultArtifactFor(issue.desired_result ?? 'md');
-      if (!artifact) return reply.status(404).send({ error: 'result not found' });
+      const dir = iterationResultDirFor(deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT, iteration.issue_id, iteration.id);
+
+      // Пробуем HTML первым, затем MD.
+      let result: { body: string; contentType: string; filename: string } | null = null;
+      for (const artifact of [HTML_ARTIFACT, MD_ARTIFACT]) {
+        try {
+          const body = await readFile(join(dir, artifact.filename), 'utf8');
+          result = { ...artifact, body };
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+      if (!result) return reply.status(404).send({ error: 'result not found' });
+      return reply.type(result.contentType).header('Content-Disposition', `attachment; filename="${result.filename}"`).send(result.body);
+    },
+  );
+
+  // MD-артефакт (report.md) для скачивания агентами.
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/result/md`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const iteration = db.select().from(iterations).where(eq(iterations.id, id)).get();
+      if (!iteration) return reply.status(404).send({ error: 'iteration not found' });
+      const issue = db.select().from(issues).where(eq(issues.id, iteration.issue_id)).get();
+      if (!issue) return reply.status(404).send({ error: 'issue not found' });
       const dir = iterationResultDirFor(deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT, iteration.issue_id, iteration.id);
       let body: string;
       try {
-        body = await readFile(join(dir, artifact.filename), 'utf8');
+        body = await readFile(join(dir, MD_ARTIFACT.filename), 'utf8');
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return reply.status(404).send({ error: 'result not found' });
         throw error;
       }
-      return reply.type(artifact.contentType).header('Content-Disposition', `attachment; filename="${artifact.filename}"`).send(body);
+      return reply.type(MD_ARTIFACT.contentType).header('Content-Disposition', 'inline').send(body);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/result/md/download`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const iteration = db.select().from(iterations).where(eq(iterations.id, id)).get();
+      if (!iteration) return reply.status(404).send({ error: 'iteration not found' });
+      const issue = db.select().from(issues).where(eq(issues.id, iteration.issue_id)).get();
+      if (!issue) return reply.status(404).send({ error: 'issue not found' });
+      const dir = iterationResultDirFor(deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT, iteration.issue_id, iteration.id);
+      let body: string;
+      try {
+        body = await readFile(join(dir, MD_ARTIFACT.filename), 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return reply.status(404).send({ error: 'result not found' });
+        throw error;
+      }
+      return reply.type(MD_ARTIFACT.contentType).header('Content-Disposition', `attachment; filename="${MD_ARTIFACT.filename}"`).send(body);
     },
   );
 
@@ -174,8 +225,10 @@ export async function iterationsRoutes(
 
       const prepareDeps = {
         container: deps.container, git: deps.git, sse: deps.sse, local: deps.local,
-        ...(deps.bootstrapperFactory ? { bootstrapperFactory: deps.bootstrapperFactory } : {}),
-        bootstrapperTimeoutMs: deps.bootstrapperTimeoutMs, workspaceRoot: deps.workspaceRoot,
+        ...(deps.devopsFactory ? { devopsFactory: deps.devopsFactory } : {}),
+        devopsModel: issue.devops_model ?? undefined,
+        devopsThinkingLevel: issue.devops_thinking_level ?? undefined,
+        devopsTimeoutMs: deps.devopsTimeoutMs, workspaceRoot: deps.workspaceRoot,
       };
 
       void (async () => {
@@ -183,7 +236,7 @@ export async function iterationsRoutes(
           const ws = await prepareIssueWorkspace(db, prepareDeps, { issueId: issue.id, iterationId, repositories });
           void runIssueIteration(db, deps, {
             issue: { id: issue.id, title: issue.title, pipelineSteps: issue.pipeline_steps, description: issue.description ?? '', desiredResult: issue.desired_result ?? 'md', jiraIssueUrl: issue.jira_issue_url },
-            iteration: { id: iterationId, issueId: issue.id, number: iteration.number, context: iteration.context, steps: iteration.steps, reviewContext: iteration.review_context, isReviewNeed: iteration.is_review_need },
+            iteration: { id: iterationId, issueId: issue.id, number: iteration.number, context: iteration.context, steps: iteration.steps, reviewContext: iteration.review_context, isReviewNeed: iteration.is_review_need, worker_count: iteration.worker_count ?? undefined },
             repositories, repoWorkspaces: ws, model: iteration.model ?? undefined, step_models: iteration.step_models, thinking_level: iteration.thinking_level ?? undefined, step_thinking_levels: iteration.step_thinking_levels,
           }).catch((e) => console.error('run failed', e));
         } catch (e) { console.error('prep failed', e); }
@@ -205,6 +258,13 @@ export async function iterationsRoutes(
       if (hasPending) return reply.status(409).send({ error: 'A pending iteration already exists' });
       const now = new Date().toISOString();
       db.update(iterations).set({ status: 'pending', updated_at: now }).where(eq(iterations.id, id)).run();
+
+      // Если задача завершена (completed/failed), но в неё добавили pending-итерацию —
+      // возвращаем задачу в pending, иначе startNextPendingIteration не запустится.
+      const issue = db.select({ status: issues.status }).from(issues).where(eq(issues.id, it.issue_id)).get();
+      if (issue && (issue.status === 'completed' || issue.status === 'failed')) {
+        db.update(issues).set({ status: 'pending', updated_at: now }).where(eq(issues.id, it.issue_id)).run();
+      }
       return reply.status(200).send({ ...it, status: 'pending' });
     },
   );
@@ -236,7 +296,13 @@ export async function iterationsRoutes(
       const errors: string[] = [];
       for (const mr of mrEntries) {
         try {
-          const comments = await deps.mr.fetchComments({ mrUrl: mr.url, token: deps.mrToken ?? '' });
+          const comments = await deps.mr.fetchComments({
+            mrUrl: mr.url,
+            token: deps.mrToken ?? '',
+            // Repository URL того же артефакта: нужен, чтобы долечить
+            // сохранённые bitbucket-ссылки без project-ключа.
+            repositoryUrl: mr.repository_url,
+          });
           for (const c of comments) allComments.push({ repo: mr.repository_url, file: c.file, line: c.line, body: c.body, author: c.author });
         } catch (error) {
           errors.push(`${mr.repository_url}: ${error instanceof Error ? error.message : String(error)}`);

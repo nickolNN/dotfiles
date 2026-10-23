@@ -229,16 +229,20 @@ export function workspaceProgress(
   };
 }
 
-/** `bootstrap_log`: порция живого вывода агента-бутстрапера. */
-export function bootstrapLog(
-  repo: string,
+/** `log`: чанк stdout/stderr агента (шаги, DevOps, Report).
+ * `stepRunId` у issue-уровневых сессий синтетический: `{issueId}/devops` |
+ * `{issueId}/report`; фронт привязывает чанк к SessionView по этому id. */
+export function logChunk(
+  stepRunId: string,
   text: string,
-  kind: 'stdout' | 'stderr' = 'stdout',
+  stream: 'stdout' | 'stderr' = 'stdout',
 ): SseEvent {
   return {
-    type: 'bootstrap_log',
+    type: 'log',
     issueId: 'e2e',
-    data: JSON.stringify({ repo, text, kind }),
+    stepRunId,
+    stream,
+    data: text,
     ts: now(),
   };
 }
@@ -258,6 +262,10 @@ export function iterationStatus(status: string): SseEvent {
  * переподключается примерно раз в 3с, поэтому каждая порция = следующая
  * «волна» событий. Сверх порций отдаётся пустое тело.
  *
+ * `batches` — либо готовые порции, либо фабрика `(call, issueId) => SseEvent[]`
+ * (issueId берётся из URL потока) — нужна issue-уровневым сессиям, чей
+ * `stepRunId` содержит реальный id задачи (`{issueId}/devops`).
+ *
  * `onCall(n)` вызывается перед отдачей порции — удобно переключать
  * состояние моков (например, статус GET /issues/:id) перед терминальным
  * событием.
@@ -265,14 +273,23 @@ export function iterationStatus(status: string): SseEvent {
 export async function mockStreamBatches(
   page: Page,
   pattern: string | RegExp,
-  batches: SseEvent[][],
+  batches:
+    | SseEvent[][]
+    | ((call: number, issueId: string) => SseEvent[]),
   onCall?: (call: number) => void,
 ): Promise<void> {
   let call = 0;
   await page.route(pattern, (route: Route) => {
     call += 1;
     onCall?.(call);
-    const batch = call <= batches.length ? batches[call - 1] : [];
+    const issueId =
+      /issues\/([^/?#]+)\/stream/.exec(route.request().url())?.[1] ?? 'e2e';
+    const batch =
+      typeof batches === 'function'
+        ? batches(call, issueId)
+        : call <= batches.length
+          ? batches[call - 1]
+          : [];
     return route.fulfill({
       status: 200,
       contentType: 'text/event-stream',

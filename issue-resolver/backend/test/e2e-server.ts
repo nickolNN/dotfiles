@@ -5,10 +5,10 @@
  * `ISSUE_RESOLVER_DATA_DIR` (Playwright передаёт свежий временный каталог).
  *
  * Зачем отдельный сервер, а не `src/server.ts`: продуктовый сервер с
- * фейковыми адаптерами не умеет `bootstrap_log` (нет `bootstrapperFactory`) и
+ * фейковыми адаптерами не умеет `devops_log` (нет `devopsFactory`) и
  * не даёт управлять ответами агента. Здесь инжектируем:
  *  1. офлайн-валидатор репозиториев (никакой сети → детерминизм);
- *  2. фабрику анализатора с живым stdout/stderr → SSE `bootstrap_log`;
+ *  2. фабрику анализатора с живым stdout/stderr → SSE `devops_log`;
  *  3. сценарный pi-раннер (`ScenarioPiRunner`): ответы шагов
  *     success/failure/question/timeout задаются через `POST /e2e/scenarios`.
  *
@@ -32,7 +32,7 @@ import {
   ScenarioController,
   ScenarioGitService,
   ScenarioPiRunner,
-  createScenarioBootstrapperFactory,
+  createScenarioDevOpsFactory,
   registerScenarioRoutes,
 } from './e2e-scenarios';
 
@@ -90,7 +90,7 @@ const app = buildApp(db, {
   control: new InMemoryStepSessionRegistry(),
   repos: fakeReposValidator,
   repoResolverFactory: fakeResolverFactory,
-  bootstrapperFactory: createScenarioBootstrapperFactory(scenarioController, {
+  devopsFactory: createScenarioDevOpsFactory(scenarioController, {
     holdMs: bootstrapHoldMs,
   }),
   workspaceRoot: join(dataDir, 'workspaces'),

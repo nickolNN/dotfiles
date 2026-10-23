@@ -514,7 +514,7 @@ describe('TaskDetail — статистика карточки шага', () => 
     const resolve = makeStepRun({
       status: 'success',
       stats: makeStats({
-        // Агрегат шага: воркеры + координатор.
+        // Агрегат шага: исполнители + координатор.
         toolCalls: 7,
         tokens: { input: 2400, output: 500, cacheRead: 10, cacheWrite: 5, total: 2915 },
         cost: 0.0123,

@@ -47,8 +47,8 @@ test.describe('issue lifecycle', () => {
           workspaceProgress('cloning', 'done', TEST_REPO_NAME),
           workspaceProgress('checking_instructions', 'running'),
           workspaceProgress('checking_instructions', 'done', TEST_REPO_NAME),
-          workspaceProgress('bootstrapping', 'running', TEST_REPO_NAME),
-          workspaceProgress('bootstrapping', 'done', TEST_REPO_NAME),
+          workspaceProgress('devops', 'running', TEST_REPO_NAME),
+          workspaceProgress('devops', 'done', TEST_REPO_NAME),
           workspaceProgress('installing', 'running', TEST_REPO_NAME),
           workspaceProgress('installing', 'done', TEST_REPO_NAME),
         ],
@@ -78,7 +78,7 @@ test.describe('issue lifecycle', () => {
     for (const step of [
       'cloning',
       'checking_instructions',
-      'bootstrapping',
+      'devops',
       'installing',
     ]) {
       // checking_instructions приходит и глобально, и на репозиторий — берём

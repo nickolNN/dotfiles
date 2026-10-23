@@ -1,22 +1,33 @@
+import type { ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RunInstructionsStatus } from '@issue-resolver/shared';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeContainerController } from '../src/docker/controller';
+import { devOpsFactoryFor } from '../src/deps';
 import { FakeGitService } from '../src/git/service';
 import { FakePiRunner } from '../src/pi/runner';
+import { RpcPiRunner } from '../src/pi/rpc-runner';
+import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import {
-  PiBootstrapperAgent,
+  PiDevOpsAgent,
   RUN_INSTRUCTIONS_FILE,
-  renderBootstrapPrompt,
-} from '../src/workflow/bootstrapper';
+  renderDevOpsPrompt,
+} from '../src/workflow/devops';
 import type {
   RunInstructionsPort,
   WorkspaceProgress,
 } from '../src/workflow/engine';
 import { prepareWorkspace } from '../src/workflow/engine';
-import { FakeBootstrapperAgent } from './fixtures/fake-bootstrapper';
+import { FakeDevOpsAgent } from './fixtures/fake-devops';
+
+vi.mock('node:child_process', () => ({ spawn: vi.fn(), execFile: vi.fn() }));
+
+import { spawn } from 'node:child_process';
+
+const spawnMock = vi.mocked(spawn);
 
 const REPO_URL = 'https://example.com/acme/app.git';
 const repos = [{ repository_url: REPO_URL, base_branch: 'main' }];
@@ -58,9 +69,53 @@ class FailingInstallGitService extends FakeGitService {
 const roots: string[] = [];
 
 const tempRoot = async (): Promise<string> => {
-  const root = await mkdtemp(join(tmpdir(), 'ir-bootstrapper-'));
+  const root = await mkdtemp(join(tmpdir(), 'ir-devops-'));
   roots.push(root);
   return root;
+};
+
+/** Фейковый child process: EventEmitter + ручные stdout/stderr и запись stdin. */
+function makeFakeChild(): EventEmitter & {
+  stdin: { writable: boolean; write: (chunk: string) => boolean };
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  killed: boolean;
+  kill: (signal?: string) => boolean;
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: { writable: boolean; write: (chunk: string) => boolean };
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    killed: boolean;
+    kill: (signal?: string) => boolean;
+  };
+  child.stdin = { writable: true, write: () => true };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    return true;
+  };
+  return child;
+}
+
+const emit = (
+  child: EventEmitter & { stdout: EventEmitter },
+  event: Record<string, unknown>,
+): void => {
+  child.stdout.emit('data', Buffer.from(`${JSON.stringify(event)}\n`));
+};
+
+/** Закрывает RPC-сессию так, чтобы `run()` резолвился (settle + stats). */
+const settle = (child: EventEmitter & { stdout: EventEmitter }): void => {
+  emit(child, { type: 'agent_settled', aborted: false });
+  emit(child, {
+    type: 'response',
+    command: 'get_session_stats',
+    success: true,
+    data: { sessionId: 's1' },
+  });
 };
 
 afterEach(async () => {
@@ -68,10 +123,10 @@ afterEach(async () => {
 });
 
 describe('prepareWorkspace — анализ run_instructions', () => {
-  it('статус не generated: bootstrapper вызывается, инструкции и analyzing-прогресс сохранены', async () => {
+  it('статус не generated: devops вызывается, инструкции и analyzing-прогресс сохранены', async () => {
     const store = new FakeRunInstructionsStore();
     store.statuses.set(REPO_URL, 'unknown');
-    const agent = new FakeBootstrapperAgent({
+    const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run\nnpm ci',
     });
@@ -84,7 +139,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
         container: new FakeContainerController(),
         git: new FakeGitService(),
         workspaceRoot: root,
-        bootstrapper: (params) => {
+        devops: (params) => {
           factoryCalls.push({
             containerName: params.containerName,
             hostWorkspaceDir: params.hostWorkspaceDir,
@@ -117,26 +172,26 @@ describe('prepareWorkspace — анализ run_instructions', () => {
       { url: REPO_URL, instructions: '# Run\nnpm ci' },
     ]);
     expect(progress).toContainEqual({
-      step: 'bootstrapping',
+      step: 'devops',
       repo: 'app',
       status: 'running',
     });
     expect(progress).toContainEqual({
-      step: 'bootstrapping',
+      step: 'devops',
       repo: 'app',
       status: 'done',
       message: 'Инструкции сохранены',
     });
     // analyzing идёт между clone и install.
     const steps = progress.map((item) => item.step);
-    expect(steps.indexOf('bootstrapping')).toBeGreaterThan(steps.indexOf('cloning'));
-    expect(steps.indexOf('bootstrapping')).toBeLessThan(steps.indexOf('installing'));
+    expect(steps.indexOf('devops')).toBeGreaterThan(steps.indexOf('cloning'));
+    expect(steps.indexOf('devops')).toBeLessThan(steps.indexOf('installing'));
   });
 
-  it('статус generated: bootstrapper не вызывается', async () => {
+  it('статус generated: devops не вызывается', async () => {
     const store = new FakeRunInstructionsStore();
     store.statuses.set(REPO_URL, 'generated');
-    const agent = new FakeBootstrapperAgent({
+    const agent = new FakeDevOpsAgent({
       success: true,
       instructions: 'unused',
     });
@@ -148,7 +203,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
         container: new FakeContainerController(),
         git: new FakeGitService(),
         workspaceRoot: root,
-        bootstrapper: () => agent,
+        devops: () => agent,
         runInstructions: store,
       },
       { id: 'issue-1' },
@@ -157,14 +212,14 @@ describe('prepareWorkspace — анализ run_instructions', () => {
     );
 
     expect(agent.calls).toHaveLength(0);
-    expect(progress.some((item) => item.step === 'bootstrapping')).toBe(false);
+    expect(progress.some((item) => item.step === 'devops')).toBe(false);
     expect(store.saved).toHaveLength(0);
   });
 
   it('фейл анализа: статус failed, прогресс analyzing error', async () => {
     const store = new FakeRunInstructionsStore();
     store.statuses.set(REPO_URL, 'failed');
-    const agent = new FakeBootstrapperAgent({
+    const agent = new FakeDevOpsAgent({
       success: false,
       instructions: null,
       error: 'no lockfile found',
@@ -177,7 +232,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
         container: new FakeContainerController(),
         git: new FakeGitService(),
         workspaceRoot: root,
-        bootstrapper: () => agent,
+        devops: () => agent,
         runInstructions: store,
       },
       { id: 'issue-1' },
@@ -188,7 +243,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
     expect(store.failed).toEqual([REPO_URL]);
     expect(store.saved).toHaveLength(0);
     expect(progress).toContainEqual({
-      step: 'bootstrapping',
+      step: 'devops',
       repo: 'app',
       status: 'error',
       message: 'no lockfile found',
@@ -206,8 +261,8 @@ describe('prepareWorkspace — анализ run_instructions', () => {
           container: new FakeContainerController(),
           git: new FailingInstallGitService(),
           workspaceRoot: root,
-          bootstrapper: () => {
-            throw new Error('bootstrapper must not run for generated');
+          devops: () => {
+            throw new Error('devops must not run for generated');
           },
           runInstructions: store,
         },
@@ -219,10 +274,10 @@ describe('prepareWorkspace — анализ run_instructions', () => {
     expect(store.failed).toEqual([REPO_URL]);
   });
 
-  it('onBootstrapStdout/Stderr получают имя репозитория вместе с выводом', async () => {
+  it('onDevOpsStdout/Stderr получают имя репозитория вместе с выводом', async () => {
     const store = new FakeRunInstructionsStore();
     store.statuses.set(REPO_URL, 'unknown');
-    const agent = new FakeBootstrapperAgent({
+    const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run',
     });
@@ -235,15 +290,15 @@ describe('prepareWorkspace — анализ run_instructions', () => {
         container: new FakeContainerController(),
         git: new FakeGitService(),
         workspaceRoot: root,
-        bootstrapper: (params) => {
+        devops: (params) => {
           // Имитируем живой вывод агента через переданные фабрике колбэки.
           params.onStdout?.('installing deps\n');
           params.onStderr?.('warning\n');
           return agent;
         },
         runInstructions: store,
-        onBootstrapStdout: (repo, chunk) => stdout.push([repo, chunk]),
-        onBootstrapStderr: (repo, chunk) => stderr.push([repo, chunk]),
+        onDevOpsStdout: (repo, chunk) => stdout.push([repo, chunk]),
+        onDevOpsStderr: (repo, chunk) => stderr.push([repo, chunk]),
       },
       { id: 'issue-1' },
       repos,
@@ -271,8 +326,8 @@ describe('prepareWorkspace — запуск dev-сервера', () => {
         container: new FakeContainerController(),
         git,
         workspaceRoot: root,
-        bootstrapper: () => {
-          throw new Error('bootstrapper must not run for generated');
+        devops: () => {
+          throw new Error('devops must not run for generated');
         },
         runInstructions: store,
       },
@@ -355,24 +410,24 @@ describe('prepareWorkspace — запуск dev-сервера', () => {
   });
 });
 
-describe('PiBootstrapperAgent', () => {
+describe('PiDevOpsAgent', () => {
   it('читает RUN_INSTRUCTIONS.md и передаёт отрендеренный промпт в pi', async () => {
     const root = await tempRoot();
     const repoDir = join(root, 'app');
     await mkdir(repoDir, { recursive: true });
     await writeFile(join(repoDir, RUN_INSTRUCTIONS_FILE), '# Install\nnpm install');
-    const template = join(root, 'bootstrapper.md');
+    const template = join(root, 'devops.md');
     await writeFile(template, 'DIR={{REPO_DIR}} NAME={{REPO_NAME}}');
 
     const pi = new FakePiRunner();
-    const agent = new PiBootstrapperAgent({
+    const agent = new PiDevOpsAgent({
       pi,
       containerName: 'issue-resolver-issue-1',
       hostWorkspaceDir: root,
       promptPath: template,
     });
 
-    const result = await agent.bootstrap('/workspaces/issue-1', REPO_URL, 'app');
+    const result = await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
 
     expect(result).toEqual({
       success: true,
@@ -383,29 +438,127 @@ describe('PiBootstrapperAgent', () => {
     expect(pi.calls[0].options?.cwd).toBe('/workspaces/issue-1');
   });
 
+  // Последнее звено цепочки thinking effort, которое нельзя доказать типами:
+  // опция агента должна доехать до `pi.run`, а оттуда — до argv
+  // `['--thinking', level]` (явный тест argv — в rpc-runner.test.ts).
+  it('пробрасывает thinkingLevel в pi.run', async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, 'app'), { recursive: true });
+    await writeFile(join(root, 'app', RUN_INSTRUCTIONS_FILE), '# Run');
+    const template = join(root, 'devops.md');
+    await writeFile(template, '{{REPO_DIR}}');
+
+    const pi = new FakePiRunner();
+    const agent = new PiDevOpsAgent({
+      pi,
+      containerName: 'issue-resolver-issue-1',
+      hostWorkspaceDir: root,
+      thinkingLevel: 'xhigh',
+      promptPath: template,
+    });
+
+    await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
+
+    expect(pi.calls).toHaveLength(1);
+    expect(pi.calls[0].options?.thinkingLevel).toBe('xhigh');
+  });
+
+  // Полный путь через боевой RpcPiRunner: опция агента должна оказаться в argv
+  // реального spawn, а не остаться в объекте опций.
+  it('thinkingLevel доезжает до argv spawn (--thinking high)', async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, 'app'), { recursive: true });
+    await writeFile(join(root, 'app', RUN_INSTRUCTIONS_FILE), '# Run');
+    const template = join(root, 'devops.md');
+    await writeFile(template, '{{REPO_DIR}}');
+
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const agent = new PiDevOpsAgent({
+      pi: new RpcPiRunner('resolve', 'local'),
+      containerName: 'issue-resolver-issue-1',
+      hostWorkspaceDir: root,
+      thinkingLevel: 'high',
+      promptPath: template,
+    });
+
+    const promise = agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--thinking') + 1]).toBe('high');
+
+    settle(child);
+    await promise;
+    spawnMock.mockReset();
+  });
+
   it('нет файла инструкции: success false с понятной причиной', async () => {
     const root = await tempRoot();
     await mkdir(join(root, 'app'), { recursive: true });
-    const template = join(root, 'bootstrapper.md');
+    const template = join(root, 'devops.md');
     await writeFile(template, '{{REPO_DIR}}');
 
-    const agent = new PiBootstrapperAgent({
+    const agent = new PiDevOpsAgent({
       pi: new FakePiRunner(),
       containerName: 'issue-resolver-issue-1',
       hostWorkspaceDir: root,
       promptPath: template,
     });
 
-    const result = await agent.bootstrap('/workspaces/issue-1', REPO_URL, 'app');
+    const result = await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
 
     expect(result.success).toBe(false);
     expect(result.instructions).toBeNull();
     expect(result.error).toContain(RUN_INSTRUCTIONS_FILE);
   });
 
-  it('renderBootstrapPrompt заменяет все вхождения плейсхолдеров', () => {
+  it('renderDevOpsPrompt заменяет все вхождения плейсхолдеров', () => {
     expect(
-      renderBootstrapPrompt('{{REPO_DIR}}/{{REPO_NAME}} @ {{REPO_DIR}}', '/a', 'b'),
+      renderDevOpsPrompt('{{REPO_DIR}}/{{REPO_NAME}} @ {{REPO_DIR}}', '/a', 'b'),
     ).toBe('/a/b @ /a');
+  });
+});
+
+// Регрессия: раньше `devOpsFactoryFor` деструктурировал только 7 имён и молча
+// терял эти пять полей — tsc такое не ловит. Проверяем на боевой фабрике.
+describe('devOpsFactoryFor — проброс полей в pi.run', () => {
+  it('issueId/iterationId/stepRunId/registry и tagInstructions не теряются', async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, 'app'), { recursive: true });
+    await writeFile(join(root, 'app', RUN_INSTRUCTIONS_FILE), '# Run');
+
+    const pi = new FakePiRunner();
+    const registry = new InMemoryStepSessionRegistry();
+    const tagInstructions = '## Tag\nrun proxy on :8081';
+    const factory = devOpsFactoryFor(pi as unknown as RpcPiRunner, 5000);
+
+    const agent = factory({
+      containerName: 'issue-resolver-issue-1',
+      hostWorkspaceDir: root,
+      containerWorkspaceDir: '/workspaces/issue-1',
+      issueId: 'issue-1',
+      iterationId: 'iter-1',
+      stepRunId: 'issue-1/devops',
+      registry,
+      tagInstructions,
+      model: 'opus',
+      thinkingLevel: 'high',
+      timeoutMs: 1234,
+      onStdout: () => {},
+      onStderr: () => {},
+    });
+
+    await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
+
+    expect(pi.calls).toHaveLength(1);
+    expect(pi.calls[0].options).toMatchObject({
+      issueId: 'issue-1',
+      iterationId: 'iter-1',
+      stepRunId: 'issue-1/devops',
+      registry,
+    });
+    // tagInstructions не уходит в pi.run — он подставляется в промпт.
+    expect(pi.calls[0].prompt).toContain('run proxy on :8081');
   });
 });

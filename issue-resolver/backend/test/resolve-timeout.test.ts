@@ -8,7 +8,7 @@
  *
  * Здесь проверяются все три ветки движка:
  *  - single  → `deps.pi.run`;
- *  - room    → `runRoomResolve` (воркер/координатор, параллельно);
+ *  - room    → `runRoomResolve` (исполнитель/координатор, параллельно);
  *  - stages  → `runStagedResolve` (агент этапа).
  */
 import { describe, expect, it } from 'vitest';
@@ -36,11 +36,13 @@ import type {
 } from '../src/workflow/engine';
 import { runIteration } from '../src/workflow/engine';
 import {
-  DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+  DEFAULT_DEVOPS_TIMEOUT_MS,
   DEFAULT_RESOLVE_AGENT_TIMEOUT_MS,
+  DEVOPS_TIMEOUT_ENV,
+  LEGACY_DEVOPS_TIMEOUT_ENV,
   MIN_RESOLVE_AGENT_TIMEOUT_MS,
   resolveAgentTimeoutMs,
-  resolveBootstrapperTimeoutMs,
+  resolveDevOpsTimeoutMs,
 } from '../src/workflow/timeout';
 
 const NOW = '2026-01-01T00:00:00.000Z';
@@ -254,27 +256,46 @@ describe('resolveAgentTimeoutMs — env-таймаут', () => {
   });
 });
 
-describe('resolveBootstrapperTimeoutMs — env-таймаут подготовки', () => {
+describe('resolveDevOpsTimeoutMs — env-таймаут подготовки', () => {
   it('пустой/битый env → дефолт 90 минут', () => {
-    expect(resolveBootstrapperTimeoutMs(undefined)).toBe(
-      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    expect(resolveDevOpsTimeoutMs(undefined)).toBe(
+      DEFAULT_DEVOPS_TIMEOUT_MS,
     );
-    expect(resolveBootstrapperTimeoutMs('')).toBe(
-      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    expect(resolveDevOpsTimeoutMs('')).toBe(
+      DEFAULT_DEVOPS_TIMEOUT_MS,
     );
-    expect(resolveBootstrapperTimeoutMs('abc')).toBe(
-      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    expect(resolveDevOpsTimeoutMs('abc')).toBe(
+      DEFAULT_DEVOPS_TIMEOUT_MS,
     );
-    expect(resolveBootstrapperTimeoutMs('-5')).toBe(
-      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    expect(resolveDevOpsTimeoutMs('-5')).toBe(
+      DEFAULT_DEVOPS_TIMEOUT_MS,
     );
   });
 
   it('env меньше 60с поднимается до минимума, больше — как есть', () => {
-    expect(resolveBootstrapperTimeoutMs('5000')).toBe(
+    expect(resolveDevOpsTimeoutMs('5000')).toBe(
       MIN_RESOLVE_AGENT_TIMEOUT_MS,
     );
-    expect(resolveBootstrapperTimeoutMs('120000')).toBe(120_000);
+    expect(resolveDevOpsTimeoutMs('120000')).toBe(120_000);
+  });
+
+  it('фолбэк на прежнее имя env при отсутствии нового', () => {
+    const prevNew = process.env[DEVOPS_TIMEOUT_ENV];
+    const prevLegacy = process.env[LEGACY_DEVOPS_TIMEOUT_ENV];
+    delete process.env[DEVOPS_TIMEOUT_ENV];
+    delete process.env[LEGACY_DEVOPS_TIMEOUT_ENV];
+    try {
+      process.env[LEGACY_DEVOPS_TIMEOUT_ENV] = '120000';
+      expect(resolveDevOpsTimeoutMs()).toBe(120_000);
+      // Новое имя имеет приоритет над прежним.
+      process.env[DEVOPS_TIMEOUT_ENV] = '180000';
+      expect(resolveDevOpsTimeoutMs()).toBe(180_000);
+    } finally {
+      if (prevNew === undefined) delete process.env[DEVOPS_TIMEOUT_ENV];
+      else process.env[DEVOPS_TIMEOUT_ENV] = prevNew;
+      if (prevLegacy === undefined) delete process.env[LEGACY_DEVOPS_TIMEOUT_ENV];
+      else process.env[LEGACY_DEVOPS_TIMEOUT_ENV] = prevLegacy;
+    }
   });
 });
 
@@ -307,7 +328,7 @@ describe('runIteration — падение/зависание pi-агента з�
     expect(pi.calls[0].options?.timeoutMs).toBe(25);
   });
 
-  it('room: reject pi.run у воркера → 4 resolve попытки, все failed, координатор не решает', async () => {
+  it('room: reject pi.run у исполнителя → 4 resolve попытки, все failed, координатор не решает', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
       () => Promise.resolve(refineResolve(roomPlan)),
@@ -362,7 +383,7 @@ describe('runIteration — падение/зависание pi-агента з�
     expect(resolveOutput(store).stderr).toMatch(/child error|unexpected pi call/);
   });
 
-  it('room: зависание воркеров катится до таймаута → 4 resolve попытки', async () => {
+  it('room: зависание исполнителей катится до таймаута → 4 resolve попытки', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
       () => Promise.resolve(refineResolve(roomPlan)),
@@ -405,6 +426,6 @@ describe('runIteration — падение/зависание pi-агента з�
       'resolve#4:failed',
     ]);
     expect(resolveOutput(store).stderr).toMatch(/timed out|unexpected pi call/);
-    expect(pi.calls[1].options?.stepRunId).toContain('/stage/1/coordinator');
+    expect(pi.calls[1].options?.stepRunId).toContain('/stage/1/worker/1');
   });
 });

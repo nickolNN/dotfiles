@@ -256,10 +256,12 @@ describe('thinking_level — runIssueIteration → pi.run', () => {
     );
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    expect(pi.calls.map((call) => call.options?.thinkingLevel)).toEqual([
-      'medium',
-      'high',
-    ]);
+    // Report-агент добавляет свой pi.run после итерации — считаем шаги пайплайна.
+    expect(
+      pi.calls
+        .filter((call) => call.options?.iterationId !== undefined)
+        .map((call) => call.options?.thinkingLevel),
+    ).toEqual(['medium', 'high']);
   });
 
   it('без thinking → thinkingLevel undefined', async () => {

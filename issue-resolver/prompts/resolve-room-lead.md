@@ -6,6 +6,8 @@ passed.
 
 {{REPOS}}
 
+{{WORKING_STATE}}
+
 {{REFINED_PLAN}}
 
 {{ATTACHMENTS}}

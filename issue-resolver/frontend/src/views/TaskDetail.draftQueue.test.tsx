@@ -171,6 +171,11 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     expect(await screen.findByText('Итерация #2')).toBeInTheDocument();
     expect(screen.getByText('draft')).toBeInTheDocument();
 
+    // После успешного создания черновика модалка закрывается.
+    await waitFor(() =>
+      expect(screen.queryByTestId('new-iteration-island')).toBeNull(),
+    );
+
     const createCall = createCallTo(fetchMock);
     expect(createCall).toBeTruthy();
     expect(JSON.parse(String(createCall?.[1]?.body)).context).toBe('draft plan');
@@ -209,7 +214,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     expect(queueCall).toBeTruthy();
   });
 
-  it('pending-итерация блокирует форму новой итерации', async () => {
+  it('pending-итерация разрешает создать черновик (активная, нет draft)', async () => {
     stubFetch({
       iterations: () => [
         makeIteration({ id: 'iter-1', number: 1, status: 'pending' }),
@@ -219,10 +224,15 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    expect(screen.queryByText('Новая итерация')).toBeNull();
+    // При активной итерации без draft — кнопка открытия модалки.
     expect(
-      screen.queryByRole('button', { name: 'Создать черновик' }),
-    ).toBeNull();
+      screen.getByRole('button', { name: 'Новая итерация' }),
+    ).toBeInTheDocument();
+    // Внутри модалки — submit «Создать черновик», не «Запустить новую итерацию».
+    await openIterationModal();
+    expect(
+      screen.getByRole('button', { name: 'Создать черновик' }),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'Запустить новую итерацию' }),
     ).toBeNull();
@@ -265,6 +275,11 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     );
     expect(putCall).toBeTruthy();
     expect(String(putCall?.[0] ?? '')).toContain('/iterations/iter-2');
+
+    // После успешного сохранения черновика модалка закрывается.
+    await waitFor(() =>
+      expect(screen.queryByTestId('new-iteration-island')).toBeNull(),
+    );
   });
 
   it('«Результаты ревью» без комментариев → сообщение «код чист»', async () => {

@@ -204,13 +204,13 @@ describe('InMemoryStepSessionRegistry', () => {
       id: 'base/worker/0',
       role: 'worker',
       index: 1,
-      label: 'Воркер 1',
+      label: 'Исполнитель 1',
     });
     registry.register('base/worker/1', 'iter-1', spyControl().control, {
       id: 'base/worker/1',
       role: 'worker',
       index: 2,
-      label: 'Воркер 2',
+      label: 'Исполнитель 2',
     });
     registry.register('base', 'iter-1', spyControl().control, {
       id: 'base',
@@ -224,7 +224,7 @@ describe('InMemoryStepSessionRegistry', () => {
         id: 'base/worker/0',
         role: 'worker',
         index: 1,
-        label: 'Воркер 1',
+        label: 'Исполнитель 1',
         stage: null,
         stageName: null,
         status: 'running',
@@ -236,7 +236,7 @@ describe('InMemoryStepSessionRegistry', () => {
         id: 'base/worker/1',
         role: 'worker',
         index: 2,
-        label: 'Воркер 2',
+        label: 'Исполнитель 2',
         stage: null,
         stageName: null,
         status: 'running',
@@ -299,7 +299,7 @@ describe('InMemoryStepSessionRegistry', () => {
       id: 'base/stage/1/worker/0',
       role: 'worker',
       index: 1,
-      label: 'Этап 1 · Воркер 1',
+      label: 'Этап 1 · Исполнитель 1',
       stage: 1,
       stageName: 'Сбор контекста',
     });
@@ -315,7 +315,7 @@ describe('InMemoryStepSessionRegistry', () => {
         id: 'base/stage/1/worker/0',
         role: 'worker',
         index: 1,
-        label: 'Этап 1 · Воркер 1',
+        label: 'Этап 1 · Исполнитель 1',
         stage: 1,
         stageName: 'Сбор контекста',
         status: 'running',
@@ -344,7 +344,7 @@ describe('InMemoryStepSessionRegistry', () => {
       id: 'base/worker/0',
       role: 'worker',
       index: 1,
-      label: 'Воркер 1',
+      label: 'Исполнитель 1',
     });
 
     // До событий — тайминг есть, телеметрии нет.
@@ -381,7 +381,7 @@ describe('InMemoryStepSessionRegistry', () => {
       id: 'base/worker/0',
       role: 'worker',
       index: 1,
-      label: 'Воркер 1',
+      label: 'Исполнитель 1',
     });
 
     // Ответ 1: total растёт 50 → 100 (кумулятив) — берём последний снапшот.
@@ -508,7 +508,7 @@ describe('InMemoryStepSessionRegistry', () => {
         id: `${iterationId}/worker/0`,
         role: 'worker',
         index: 1,
-        label: 'Воркер 1',
+        label: 'Исполнитель 1',
       });
     }
 

@@ -24,7 +24,7 @@ import {
 import { FakeGitService } from '../src/git/service';
 import type { PiRunCall, PiRunner, PiRunOptions } from '../src/pi/runner';
 import type { UiResponsePayload } from '../src/pi/session-registry';
-import type { BootstrapperFactory } from '../src/workflow/engine';
+import type { DevOpsFactory } from '../src/workflow/engine';
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -277,25 +277,25 @@ export class ScenarioGitService extends FakeGitService {
 /**
  * Фабрика анализатора: при `bootstrap: 'failure'` анализ не удаётся,
  * иначе отдаёт валидные инструкции. `holdMs` держит паузу перед выводом —
- * клиент успевает открыть SSE и не теряет `bootstrap_log`.
+ * клиент успевает открыть SSE и не теряет `devops_log`.
  */
-export function createScenarioBootstrapperFactory(
+export function createScenarioDevOpsFactory(
   controller: ScenarioController,
   options: { holdMs?: number } = {},
-): BootstrapperFactory {
+): DevOpsFactory {
   const holdMs = options.holdMs ?? 0;
   return ({ onStdout, onStderr }) => ({
-    async bootstrap(_workspaceDir, _repoUrl, repoName) {
+    async runDevOps(_workspaceDir, _repoUrl, repoName) {
       if (holdMs > 0) await sleep(holdMs);
       if (controller.bootstrapMode === 'failure') {
         onStderr?.(`E2E scenario: failed to analyze ${repoName}\n`);
         return {
           success: false,
           instructions: null,
-          error: 'E2E scenario: bootstrap failed',
+          error: 'E2E scenario: devops failed',
         };
       }
-      onStdout?.(`bootstrapping ${repoName}\n`);
+      onStdout?.(`devops ${repoName}\n`);
       onStderr?.(`warning: ${repoName} lockfile missing\n`);
       return {
         success: true,

@@ -22,6 +22,7 @@ import {
   buildRoomCoordinatorPrompt,
   buildRoomWorkerPrompt,
   buildStageCoordinatorPrompt,
+  buildStageSoloPrompt,
   buildStageWorkerPrompt,
   buildStagedFinalCoordinatorPrompt,
   type RoomPromptInput,
@@ -74,9 +75,10 @@ export interface RoomResolveOptions {
 }
 
 /**
- * Дескриптор воркера: `index` в RoomAgent — 1-based, id — per-agent stepRunId.
- * Со `stage` (staged-режим) id/подпись включают номер этапа, а воркер
- * нумеруется 1-based внутри этапа.
+ * Дескриптор исполнителя: `index` в RoomAgent — 1-based, id — per-agent stepRunId.
+ * Со `stage` (staged-режим) id/подпись включают номер этапа, а исполнитель
+ * нумеруется 1-based внутри этапа. Единственный исполнитель одиночного этапа
+ * (`executors: 1`) — это `index = 0`, т.е. «Этап N · Исполнитель 1».
  */
 const workerAgent = (
   baseStepRunId: string,
@@ -88,7 +90,7 @@ const workerAgent = (
         id: `${baseStepRunId}/stage/${stage.index}/worker/${index + 1}`,
         role: 'worker',
         index: index + 1,
-        label: `Этап ${stage.index} · Воркер ${index + 1}`,
+        label: `Этап ${stage.index} · Исполнитель ${index + 1}`,
         stage: stage.index,
         stageName: stage.name,
       }
@@ -96,12 +98,13 @@ const workerAgent = (
         id: `${baseStepRunId}/worker/${index}`,
         role: 'worker',
         index: index + 1,
-        label: `Воркер ${index + 1}`,
+        label: `Исполнитель ${index + 1}`,
       };
 
 /**
  * Дескриптор координатора: без `stage` — финальный lead шага (id = stepRunId);
- * со `stage` — координатор этапа staged-режима (`<stepRunId>/stage/<i>/coordinator`).
+ * со `stage` — координатор этапа staged-режима (`<stepRunId>/stage/<i>/coordinator`),
+ * у которого есть исполнители (у одиночного этапа координатора нет — там исполнитель).
  */
 const coordinatorAgent = (
   stepRunId: string,
@@ -135,7 +138,7 @@ const abortedResolveResult = (): StepExecutionResult => ({
   aborted: true,
 });
 
-/** Описывает один запуск pi-агента комнаты (воркер или координатор). */
+/** Описывает один запуск pi-агента комнаты (исполнитель или координатор). */
 interface AgentRun {
   stepRunId: string;
   agent: RoomAgentInfo;
@@ -175,7 +178,7 @@ function runAgent(
   );
 }
 
-/** Дескриптор одного воркера: дескриптор агента, его id, подзадача и промпт. */
+/** Дескриптор одного исполнителя: дескриптор агента, его id, подзадача и промпт. */
 interface WorkerJob extends AgentRun {
   item: RoomWorkItem;
 }
@@ -205,7 +208,7 @@ function agentSummary(
   }
 }
 
-/** Запускает N воркеров параллельно, переиспользуется комнатой и этапами. */
+/** Запускает N исполнителей параллельно, переиспользуется комнатой и этапами. */
 async function runWorkersParallel(
   pi: PiRunner,
   input: RoomResolveInput,
@@ -274,7 +277,7 @@ export async function runRoomResolve(
     agent,
     prompt: buildRoomCoordinatorPrompt(input, summaries),
   });
-  // `run.stats` шага — тотал всех агентов (воркеры + координатор), а не
+  // `run.stats` шага — тотал всех агентов (исполнители + координатор), а не
   // телеметрия только последнего координатора.
   const total = sumSessionStats([
     ...workers.map((worker) => worker.stats),
@@ -285,9 +288,10 @@ export async function runRoomResolve(
 
 /**
  * Прогон resolve в режиме последовательных этапов (`mode: 'stages'`). Этапы
- * исполняются СТРОГО по порядку: воркеры этапа (параллельно, если executors
+ * исполняются СТРОГО по порядку: исполнители этапа (параллельно, если executors
  * >= 2) → координатор этапа, пишущий `.issue-stage-<i>.json`; для executors = 1
- * этап выполняет один агент. После всех этапов финальный lead интегрирует их
+ * этап целиком выполняет один исполнитель (`/stage/<i>/worker/1`), пишущий тот же
+ * файл этапа. После всех этапов финальный lead интегрирует их
  * исходы и пишет итоговый `.issue-step-result.json`. Abort на любом этапе
  * немедленно завершает шаг без следующих этапов и финального координатора.
  */
@@ -307,7 +311,7 @@ export async function runStagedResolve(
   const outcomes: { stage: NormalizedStage; outcome: string }[] = [
     ...resume.completed,
   ];
-  // Копилка телеметрии всех агентов шага (воркеры + координаторы этапов) —
+  // Копилка телеметрии всех агентов шага (исполнители + координаторы этапов) —
   // в конце суммируется вместе с финальным координатором.
   const allStats: SessionStats[] = [];
 
@@ -372,12 +376,14 @@ export async function runStagedResolve(
       continue;
     }
 
-    // executors === 1: один агент выполняет весь этап и пишет `.issue-stage-<i>.json`.
-    const agent = coordinatorAgent(options.stepRunId, stage);
+    // executors === 1: весь этап делает один исполнитель (`/stage/<i>/worker/1`).
+    // Промпт — соло-вариант: координатора этапа нет, интегрировать некому,
+    // файл этапа пишет сам исполнитель.
+    const agent = workerAgent(options.stepRunId, 0, stage);
     const result = await runAgent(pi, input, options, {
       stepRunId: agent.id,
       agent,
-      prompt: buildStageCoordinatorPrompt(input, stage, []),
+      prompt: buildStageSoloPrompt(input, stage),
     });
     if (result.stats) allStats.push(result.stats);
     if (result.aborted === true) return abortedResolveResult();

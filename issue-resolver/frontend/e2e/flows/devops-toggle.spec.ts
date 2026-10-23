@@ -12,15 +12,15 @@ import {
 
 /**
  * Галочка «Запустить (установка зависимостей)» = `bootstrap_enabled`.
- * Когда она снята, шаги bootstrapping/installing помечаются «пропущен», но
+ * Когда она снята, шаги devops/installing помечаются «пропущен», но
  * задача всё равно доходит до running. Флаг проверяем и по реальному API.
  */
-test.describe('bootstrap toggle', () => {
-  test('bootstrap выключен: шаги пропущены, задача переходит в running', async ({
+test.describe('devops toggle', () => {
+  test('devops выключен: шаги пропущены, задача переходит в running', async ({
     page,
     request,
   }) => {
-    const title = uniqueTitle('e2e-bootstrap-off');
+    const title = uniqueTitle('e2e-devops-off');
 
     await mockStreamBatches(page, '**/issues/*/stream', [
       [
@@ -30,7 +30,7 @@ test.describe('bootstrap toggle', () => {
         workspaceProgress('cloning', 'done', TEST_REPO_NAME),
         workspaceProgress('checking_instructions', 'running'),
         workspaceProgress('checking_instructions', 'done'),
-        workspaceProgress('bootstrapping', 'done', TEST_REPO_NAME, 'пропущен'),
+        workspaceProgress('devops', 'done', TEST_REPO_NAME, 'пропущен'),
         workspaceProgress('installing', 'done', TEST_REPO_NAME, 'пропущен'),
       ],
       [iterationStatus('running')],
@@ -44,14 +44,14 @@ test.describe('bootstrap toggle', () => {
     const panel = page.getByTestId('workspace-progress');
     await expect(panel).toBeVisible();
 
-    // Сводка в шапке: owner/repo + статус «бутстрап пропущен» из SSE.
+    // Сводка в шапке: owner/repo + статус «devops пропущен» из SSE.
     const repoRow = page.getByTestId('repo-status-row');
     await expect(repoRow).toHaveAttribute('data-repo', 'octocat/Hello-World');
     await expect(repoRow).toHaveAttribute('data-status', 'skipped');
     await expect(repoRow).toContainText('(запуск отключён)');
 
     await expect(
-      page.locator('[data-testid="workspace-step"][data-step="bootstrapping"]'),
+      page.locator('[data-testid="workspace-step"][data-step="devops"]'),
     ).toContainText('пропущен');
     await expect(
       page.locator('[data-testid="workspace-step"][data-step="installing"]'),

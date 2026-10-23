@@ -17,7 +17,7 @@ function makeAgent(overrides: Partial<RoomAgent> = {}): RoomAgent {
     id: 'run-1/worker/0',
     role: 'worker',
     index: 1,
-    label: 'Воркер 1',
+    label: 'Исполнитель 1',
     status: 'running',
     startedAt: null,
     stats: null,
@@ -29,7 +29,7 @@ const WORKER_1 = makeAgent();
 const WORKER_2 = makeAgent({
   id: 'run-1/worker/1',
   index: 2,
-  label: 'Воркер 2',
+  label: 'Исполнитель 2',
   status: 'finished',
 });
 const COORDINATOR = makeAgent({
@@ -128,7 +128,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
       makeAgent({
         id: 'stage-2/worker/0',
         index: 1,
-        label: 'Этап 2 · Воркер 1',
+        label: 'Этап 2 · Исполнитель 1',
         stage: 2,
       } as Partial<RoomAgent>),
       makeAgent({
@@ -141,13 +141,13 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
       makeAgent({
         id: 'stage-1/worker/1',
         index: 2,
-        label: 'Этап 1 · Воркер 2',
+        label: 'Этап 1 · Исполнитель 2',
         stage: 1,
       } as Partial<RoomAgent>),
       makeAgent({
         id: 'stage-1/worker/0',
         index: 1,
-        label: 'Этап 1 · Воркер 1',
+        label: 'Этап 1 · Исполнитель 1',
         stage: 1,
       } as Partial<RoomAgent>),
       makeAgent({
@@ -164,7 +164,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     await screen.findByTestId('room-agents');
 
     const tabs = screen.getAllByTestId('room-agent-tab');
-    // Порядок: этап 1 (воркеры 1,2, затем координатор этапа) → этап 2 →
+    // Порядок: этап 1 (исполнители 1,2, затем координатор этапа) → этап 2 →
     // финальный координатор (stage=null).
     expect(tabs.map((tab) => tab.getAttribute('data-agent-id'))).toEqual([
       'stage-1/worker/0',
@@ -173,16 +173,16 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
       'stage-2/worker/0',
       'final',
     ]);
-    expect(tabs[0]).toHaveTextContent('Этап 1 · Воркер 1');
-    expect(tabs[1]).toHaveTextContent('Этап 1 · Воркер 2');
+    expect(tabs[0]).toHaveTextContent('Этап 1 · Исполнитель 1');
+    expect(tabs[1]).toHaveTextContent('Этап 1 · Исполнитель 2');
     expect(tabs[2]).toHaveTextContent('Этап 1 · Координатор');
     // Координатор этапа — не финальный, «(lead)» ему не добавляем.
     expect(tabs[2]).not.toHaveTextContent('(lead)');
-    expect(tabs[3]).toHaveTextContent('Этап 2 · Воркер 1');
+    expect(tabs[3]).toHaveTextContent('Этап 2 · Исполнитель 1');
     expect(tabs[4]).toHaveTextContent('Координатор (lead)');
   });
 
-  it('рендерит воркеров по порядку и координатора с пометкой (lead)', async () => {
+  it('рендерит исполнителей по порядку и координатора с пометкой (lead)', async () => {
     stubFetch(AGENTS);
 
     render(<RoomAgentTabs iterationId="iter-1" />);
@@ -192,8 +192,8 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
 
     const tabs = screen.getAllByTestId('room-agent-tab');
     expect(tabs).toHaveLength(3);
-    expect(tabs[0]).toHaveTextContent('Воркер 1');
-    expect(tabs[1]).toHaveTextContent('Воркер 2');
+    expect(tabs[0]).toHaveTextContent('Исполнитель 1');
+    expect(tabs[1]).toHaveTextContent('Исполнитель 2');
     expect(tabs[2]).toHaveTextContent('Координатор (lead)');
 
     // Статус каждого агента виден и продублирован в data-status.
@@ -226,11 +226,11 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
 
     act(() => {
       FakeEventSource.instances[0].emit(
-        stepEvent('run-1/worker/0', { type: 'text', text: 'привет от воркера' }),
+        stepEvent('run-1/worker/0', { type: 'text', text: 'привет от исполнителя' }),
       );
     });
 
-    expect(await screen.findByText('привет от воркера')).toBeInTheDocument();
+    expect(await screen.findByText('привет от исполнителя')).toBeInTheDocument();
   });
 
   it('переключение вкладки меняет поток и показывает сессию другого агента', async () => {
@@ -241,12 +241,12 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
 
     act(() => {
       FakeEventSource.instances[0].emit(
-        stepEvent('run-1/worker/0', { type: 'text', text: 'сессия воркера 1' }),
+        stepEvent('run-1/worker/0', { type: 'text', text: 'сессия исполнителя 1' }),
       );
     });
-    expect(await screen.findByText('сессия воркера 1')).toBeInTheDocument();
+    expect(await screen.findByText('сессия исполнителя 1')).toBeInTheDocument();
 
-    fireEvent.click(tabs[1]); // Воркер 2
+    fireEvent.click(tabs[1]); // Исполнитель 2
 
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
     expect(FakeEventSource.instances[0].close).toHaveBeenCalledTimes(1);
@@ -262,11 +262,11 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
 
     act(() => {
       FakeEventSource.instances[1].emit(
-        stepEvent('run-1/worker/1', { type: 'text', text: 'сессия воркера 2' }),
+        stepEvent('run-1/worker/1', { type: 'text', text: 'сессия исполнителя 2' }),
       );
     });
-    expect(await screen.findByText('сессия воркера 2')).toBeInTheDocument();
-    expect(screen.queryByText('сессия воркера 1')).toBeNull();
+    expect(await screen.findByText('сессия исполнителя 2')).toBeInTheDocument();
+    expect(screen.queryByText('сессия исполнителя 1')).toBeNull();
   });
 
   it('персистентные eventsByAgent показываются для выбранного агента', async () => {
@@ -321,7 +321,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     const tabs = await screen.findAllByTestId('room-agent-tab');
     expect(tabs[0]).toHaveAttribute('data-status', 'running');
 
-    // Воркер 1 завершился — родитель бампает refreshKey, статусы перечитываются.
+    // Исполнитель 1 завершился — родитель бампает refreshKey, статусы перечитываются.
     agents = [
       makeAgent({ ...WORKER_1, status: 'finished' }),
       WORKER_2,
@@ -389,7 +389,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
       makeAgent({
         id: 'run-1/worker/1',
         index: 2,
-        label: 'Воркер 2',
+        label: 'Исполнитель 2',
         status: 'finished',
         stats: makeStats({
           tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 2000 },
@@ -425,7 +425,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
       makeAgent({
         id: 'stage-1/worker/0',
         index: 1,
-        label: 'Этап 1 · Воркер 1',
+        label: 'Этап 1 · Исполнитель 1',
         stage: 1,
         stageName: 'Сбор',
         status: 'finished',
@@ -470,7 +470,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
       makeAgent({
         id: 'stage-2/worker/0',
         index: 1,
-        label: 'Этап 2 · Воркер 1',
+        label: 'Этап 2 · Исполнитель 1',
         stage: 2,
         stageName: 'Реализация',
         status: 'running',
@@ -502,7 +502,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     const groups = screen.getAllByTestId('room-stage-group');
     expect(groups).toHaveLength(2);
 
-    // Этап 1: воркер + координатор → токены/cost суммируются, модели
+    // Этап 1: исполнитель + координатор → токены/cost суммируются, модели
     // различаются без дублей, CTX — максимум по этапу.
     expect(groups[0]).toHaveAttribute('data-stage', '1');
     expect(groups[0]).toHaveAttribute('data-stage-name', 'Сбор');
@@ -526,7 +526,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
       within(groups[0]).getByTestId('room-stage-duration').textContent,
     ).not.toBe('—');
 
-    // Этап 2: один воркер без contextUsage → CTX-сегмента нет.
+    // Этап 2: один исполнитель без contextUsage → CTX-сегмента нет.
     expect(groups[1]).toHaveAttribute('data-stage', '2');
     expect(groups[1]).toHaveAttribute('data-stage-name', 'Реализация');
     expect(within(groups[1]).getByTestId('room-stage-tokens')).toHaveTextContent(
@@ -547,7 +547,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
       makeAgent({
         id: 'stage-3/worker/0',
         index: 1,
-        label: 'Этап 3 · Воркер 1',
+        label: 'Этап 3 · Исполнитель 1',
         stage: 3,
         stageName: 'Проверка',
         status: 'finished',

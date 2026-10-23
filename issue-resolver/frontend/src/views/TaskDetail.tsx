@@ -26,7 +26,6 @@ import type {
   StepModels,
   StepThinkingLevels,
   StepRunStatus,
-  ThinkingLevel,
   WorkspaceFile,
 } from '@issue-resolver/shared';
 import {
@@ -36,6 +35,7 @@ import {
 } from '@issue-resolver/shared';
 import { canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
 import {
+  API_BASE,
   abortIteration,
   createIteration,
   createIterationWithFiles,
@@ -47,11 +47,12 @@ import {
   getIterations,
   getModels,
   getQuestionAnswers,
+  getReportStatus,
   getResultFiles,
-  getResultMergeRequests,
   promptIteration,
   queueIteration,
   repeatIteration,
+  runReportAgent,
   startIssue,
   resultFilesArchiveUrl,
   sendIterationCommand,
@@ -65,11 +66,9 @@ import {
   useIterations,
   useStepRuns,
 } from '../stores/queries';
-import type { ResultMergeRequest } from '../api/client';
 import {
   DELETE_TIMEOUT_MS,
   subscribeToIssueEvents,
-  type BootstrapLogPayload,
 } from '../api/sse';
 import {
   sessionEventsOf,
@@ -80,8 +79,15 @@ import AgentMarkdown from '../components/AgentMarkdown';
 import ArtifactsModal from '../components/ArtifactsModal';
 import AutoScrollBox from '../components/AutoScrollBox';
 import FilePicker from '../components/FilePicker';
+import PipelineStepsSection from '../components/PipelineStepsSection';
+import { usePipelineSteps } from '../hooks/usePipelineSteps';
+import {
+  inputClass as FORM_INPUT_CLASS,
+  labelClass as FORM_LABEL_CLASS,
+} from '../components/formStyles';
 import IssueFilesList from '../components/IssueFilesList';
 import MarkdownEditor from '../components/MarkdownEditor';
+import ModelThinkingSelect from '../components/ModelThinkingSelect';
 import RoomAgentTabs from '../components/RoomAgentTabs';
 import SessionView from '../components/SessionView';
 import SessionStatsBar, {
@@ -120,6 +126,7 @@ const STEP_LABELS: Record<PipelineStep, string> = {
   review: 'Код-ревью',
   test: 'Тест',
   pr: 'PR',
+  report: 'Отчёт',
 };
 
 /** Канонический порядок шагов пайплайна: `resolve` не должен идти раньше
@@ -182,16 +189,13 @@ type WorkspaceProgress = {
   dismissed: boolean;
 };
 
-/** Порция живого лога бутстрапера: текст вывода + его поток. */
-type BootstrapLogChunk = Pick<BootstrapLogPayload, 'kind' | 'text'>;
-
 const WORKSPACE_STEP_LABELS: Record<string, string> = {
   creating_dirs: 'Создание рабочей папки',
   cloning: 'Клонирование',
   installing: 'Установка зависимостей',
   dev_server: 'Запуск dev-сервера',
   checking_instructions: 'Проверка инструкции запуска',
-  bootstrapping: 'Bootstrapping',
+  devops: 'DevOps',
   analyzing: 'Настройка проекта',
   ready: 'Готово',
 };
@@ -440,12 +444,8 @@ function RefreshIcon({ className }: { className?: string }) {
   );
 }
 
-const inputClass =
-  'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)] transition-base';
-const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
-/** Компактное поле для инлайн-настройки в строке шага (число агентов). */
-const compactInputClass =
-  'w-16 rounded-none border border-[#008F11] bg-[#0D0208] px-2 py-0.5 text-xs text-[#00FF41] outline-none transition-base focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
+const inputClass = FORM_INPUT_CLASS;
+const labelClass = FORM_LABEL_CLASS;
 
 interface TaskDetailProps {
   issueId?: string | null;
@@ -453,18 +453,25 @@ interface TaskDetailProps {
   autoOpenResult?: boolean;
 }
 
+/** Имя HTML-файла отчёта для атрибута `download`. */
+const RESULT_HTML_FILENAME = 'report.html';
+
 /**
- * Имя файла отчёта для атрибута `download`: без него браузер при 404
- * (JSON-тело) сохранял бы `download.json` вместо осмысленного имени.
+ * Ответ HEAD-проба `/result`: тип содержимого и происхождение артефакта.
+ * `source` приходит из `x-artifact-source` (backend/src/routes/issues.ts):
+ * `root` — свежий отчёт из корня воркспейса, `iteration-snapshot` — снапшот
+ * последней завершённой итерации (то есть ПРЕДЫДУЩАЯ версия).
  */
-function resultFilenameFor(desiredResult: Issue['desired_result']): string {
-  switch (desiredResult) {
-    case 'html':
-      return 'report.html';
-    default:
-      return 'report.md';
-  }
-}
+type ArtifactMeta = {
+  status: number;
+  contentType: string;
+  source: string | null;
+  mtime: string | null;
+};
+
+/** Имя MD-файла отчёта для скачивания агентами. */
+const RESULT_MD_FILENAME = 'report.md';
+
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
@@ -559,17 +566,38 @@ function TaskDetailView({
   const [resultFiles, setResultFiles] = useState<WorkspaceFile[]>([]);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
-  const [selectedSteps, setSelectedSteps] = useState<PipelineStep[]>([]);
   const [workerCount, setWorkerCount] = useState<number>(1);
-  const [stepModels, setStepModels] = useState<StepModels>({});
-  const [stepThinkingLevels, setStepThinkingLevels] =
-    useState<StepThinkingLevels>({});
-  // Репозитории, выбранные для MR в форме итерации (id → выбрано).
-  const [prRepoIds, setPrRepoIds] = useState<Set<string>>(new Set());
   // Флаг: prRepoIds уже инициализированы из issue.repositories.create_mr.
   const [prRepoIdsSeeded, setPrRepoIdsSeeded] = useState(false);
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
+  // Шаг/модель/thinking/MR-репозитории модалки итерации — общий хук с формой
+  // задачи (`usePipelineSteps`), чтобы логика не дублировалась.
+  const iterationPrRepoDefaults = useMemo(
+    () =>
+      state.status === 'ready'
+        ? state.issue.repositories.map((repository) => repository.id)
+        : [],
+    [state],
+  );
+  const {
+    selectedSteps,
+    setSelectedSteps,
+    stepModels,
+    stepThinkingLevels,
+    prRepoIds,
+    setPrRepoIds,
+    chosenSteps,
+    toggleStep,
+    updateStepModel,
+    updateStepThinkingLevel,
+    togglePrRepo,
+  } = usePipelineSteps({
+    models,
+    prAvailable:
+      state.status === 'ready' && state.issue.repositories.length > 0,
+    defaultPrRepoIds: iterationPrRepoDefaults,
+  });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   // Live-события сессии, разложенные по stepRunId: кладём их в SessionView
@@ -578,12 +606,9 @@ function TaskDetailView({
     Record<string, SessionEvent[]>
   >({});
   const [refreshTick, setRefreshTick] = useState(0);
-  // MR-ссылки в шапке задачи: `storedMergeRequests` — персистентные из
-  // `result.json` (переживают перезагрузку), `liveMrUrls` — из живых
-  // SSE-событий `stream: 'mr'` (мгновенно, но не сохранены в step_outputs).
-  const [storedMergeRequests, setStoredMergeRequests] = useState<
-    ResultMergeRequest[]
-  >([]);
+  // MR-ссылки в шапке задачи: `issue.merge_requests` — персистентные из БД
+  // (переживают перезагрузку), `liveMrUrls` — из живых SSE-событий
+  // `stream: 'mr'` (мгновенно, но без перезагрузки).
   const [liveMrUrls, setLiveMrUrls] = useState<string[]>([]);
   const [message, setMessage] = useState('');
   const [messageSending, setMessageSending] = useState(false);
@@ -598,17 +623,30 @@ function TaskDetailView({
   const [fetchReviewMessage, setFetchReviewMessage] = useState<string | null>(null);
   const [startingDraft, setStartingDraft] = useState(false);
   const [startDraftError, setStartDraftError] = useState<string | null>(null);
+
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
     null,
   );
+  // Модалка вывода issue-уровневого отчёта: у него нет `step_run`, поэтому
+  // раскрывается отдельным флагом, а не через `expandedStepRunId`.
+  const [reportExpanded, setReportExpanded] = useState(false);
   const modalScrollRef = useRef<HTMLDivElement | null>(null);
   const modalPinnedRef = useRef(true);
+  /** ID прогона, к которому уже скроллили страницу — не дёргаем повторно. */
+  const lastScrolledRunRef = useRef<string | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
-  const [resultText, setResultText] = useState<string | null>(null);
-  const [resultError, setResultError] = useState<'missing' | 'error' | null>(
-    null,
-  );
-  const [resultLoading, setResultLoading] = useState(false);
+  // Метаданные артефакта отчёта (HEAD /result): откуда он взят и какого типа.
+  // Нужны, чтобы НЕ совать markdown в iframe для HTML и не выдавать прошлый
+  // отчёт за текущий (см. `x-artifact-source` в backend/src/routes/issues.ts).
+  const [artifactMeta, setArtifactMeta] = useState<ArtifactMeta | null>(null);
+  // Механические сигналы по артефактам из `/report/status`: наблюдённая модель
+  // прогона и предупреждения детектов. Это место UI, а не место в артефакте:
+  // имя модели запрещено в report.md/report.html (GLOBAL_AGENTS), но человек
+  // должен видеть, на чём отчёт собран и чем сервер недоволен.
+  const [reportMeta, setReportMeta] = useState<{
+    observedModel?: string;
+    warnings: string[];
+  }>({ warnings: [] });
   const [jiraPreviewOpen, setJiraPreviewOpen] = useState(false);
   const [jiraPreviewText, setJiraPreviewText] = useState<string | null>(null);
   const [jiraPreviewLoading, setJiraPreviewLoading] = useState(false);
@@ -646,11 +684,19 @@ function TaskDetailView({
   // событие issue-уровневое, id итерации в нём нет — панель одна на задачу.
   const [workspaceProgress, setWorkspaceProgress] =
     useState<WorkspaceProgress | null>(null);
-  // Живой лог агента-бутстрапера (`bootstrap_log`): порции stdout/stderr по
-  // репозиториям, пока идёт шаг `bootstrapping` разовой подготовки.
-  const [bootstrapLogs, setBootstrapLogs] = useState<
-    Record<string, BootstrapLogChunk[]>
-  >({});
+  // Отчёт задачи (`report`-агент): `ready` — `report.md` уже есть,
+  // `running` — генерация идёт сейчас (локальный триггер + опрос статуса).
+  const [reportReady, setReportReady] = useState(false);
+  const [reportRunning, setReportRunning] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  /** Время старта текущей генерации: старый `report.md` по mtime не засчитываем. */
+  const reportStartRef = useRef(0);
+  /** Ref-гарда против гонки: стейт-апдейты асинхронны, ref — мгновенный. */
+  const reportRunningRef = useRef(false);
+  /** Модель для ручного запуска отчёта (переопределяет step_models.report). */
+  const [reportModel, setReportModel] = useState<string>('');
+  /** Thinking level для ручного запуска отчёта. */
+  const [reportThinkingLevel, setReportThinkingLevel] = useState<string>('');
   // Ошибка подготовки из `iteration_status` (`status: 'failed'`, поле error).
   const [iterationErrors, setIterationErrors] = useState<
     Record<string, string>
@@ -903,7 +949,9 @@ function TaskDetailView({
     setLiveEventsByRun({});
     setLiveStatusByRun({});
     setWorkspaceProgress(null);
-    setBootstrapLogs({});
+    setReportReady(false);
+    setReportRunning(false);
+    setReportError(null);
     setIterationErrors({});
     setDeleting(false);
     setDeleteTimeoutError(null);
@@ -912,14 +960,33 @@ function TaskDetailView({
     const unsubscribe = subscribeToIssueEvents(issueId, {
       // MR-ссылка шага pr приходит отдельным log-событием `stream: 'mr'`.
       // Копим её в state, чтобы показать в шапке сразу после создания MR,
-      // не дожидаясь перезагрузки stepRuns/result.json.
+      // не дожидаясь обновления issue.merge_requests в БД.
       onLog: (event) => {
-        if (event.stream !== 'mr') return;
-        const url = event.data.trim();
-        if (!url) return;
-        setLiveMrUrls((current) =>
-          current.includes(url) ? current : [...current, url],
-        );
+        // MR-ссылка шага pr приходит отдельным log-событием `stream: 'mr'`.
+        // Копим её в state, чтобы показать в шапке сразу после создания MR,
+        // не дожидаясь обновления issue.merge_requests в БД.
+        if (event.stream === 'mr') {
+          const url = event.data.trim();
+          if (!url) return;
+          setLiveMrUrls((current) =>
+            current.includes(url) ? current : [...current, url],
+          );
+          return;
+        }
+        // DevOps/Report шлют живой stdout/stderr обычными `log`-событиями
+        // с синтетическим stepRunId
+        // (`{issueId}/devops` | `{issueId}/report`). Копим чанки как
+        // `text`-события SessionView, не дожидаясь GET /step-runs.
+        if (event.stream !== 'stdout' && event.stream !== 'stderr') return;
+        const stepRunId = event.stepRunId;
+        if (!stepRunId || event.data === '') return;
+        setLiveEventsByRun((current) => ({
+          ...current,
+          [stepRunId]: [
+            ...(current[stepRunId] ?? []),
+            { type: 'text' as const, text: event.data },
+          ].slice(-500),
+        }));
       },
       onStepEvent: (payload, raw) => {
         const stepRunId = payload.stepRunId ?? raw.stepRunId;
@@ -1000,6 +1067,13 @@ function TaskDetailView({
           status === 'failed' ||
           status === 'cancelled'
         ) {
+          // На терминальной итерации бэкенд fire-and-forget спавнит
+          // report-агента: показываем «⏳ Генерируется» и опрашиваем статус.
+          // Гарда: если уже идёт ручной прогон — не перезатираем.
+          if (reportRunningRef.current) return;
+          reportStartRef.current = Date.now();
+          reportRunningRef.current = true;
+          setReportRunning(true);
           // Сервер — источник истины для терминального статуса: инвалидируем
           // issue/iterations, гидратация `state` подхватит свежие данные.
           void queryClient.invalidateQueries({ queryKey: ['issue', issueId] });
@@ -1020,8 +1094,6 @@ function TaskDetailView({
           clearTimeout(progressTimerRef.current);
           progressTimerRef.current = null;
         }
-        // Новая подготовка — прошлый лог бутстрапера больше не актуален.
-        if (fresh) setBootstrapLogs({});
         const key = `${payload.step}:${payload.repo ?? ''}`;
         setWorkspaceProgress((current) => {
           const entry: WorkspaceProgress =
@@ -1050,16 +1122,6 @@ function TaskDetailView({
         if (payload.step === 'ready' || status === 'error') {
           scheduleProgressFade();
         }
-      },
-      onBootstrapLog: (payload) => {
-        setBootstrapLogs((current) => {
-          const chunks = current[payload.repo] ?? [];
-          const next = [
-            ...chunks,
-            { kind: payload.kind, text: payload.text },
-          ].slice(-500);
-          return { ...current, [payload.repo]: next };
-        });
       },
       onIssueDeleting: (payload) => {
         if (payload.issueId !== issueId) return;
@@ -1121,17 +1183,17 @@ function TaskDetailView({
   }, [deleting]);
 
   useEffect(() => {
-    if (expandedStepRunId === null) return;
+    if (expandedStepRunId === null && !reportExpanded) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setExpandedStepRunId(null);
+        closeModal();
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [expandedStepRunId]);
+  }, [expandedStepRunId, reportExpanded]);
 
   useEffect(() => {
     if (!resultOpen) return;
@@ -1182,6 +1244,74 @@ function TaskDetailView({
       ]
     : [];
 
+  // Issue-уровневые сессии DevOps/Report: их stepRunId синтетические
+  // (`{issueId}/devops` | `{issueId}/report`), событий в step_runs нет —
+  // SessionView кормится только живыми `log`-чанками (text-события).
+  const devopsRunId = issueId ? `${issueId}/devops` : '';
+  const reportRunId = issueId ? `${issueId}/report` : '';
+  const devopsEvents = liveEventsByRun[devopsRunId] ?? [];
+  const reportEvents = liveEventsByRun[reportRunId] ?? [];
+
+  /**
+   * Цель модалки вывода: прогон шага ИЛИ issue-уровневый `report`-прогон.
+   * У отчёта нет `step_run`, поэтому его поля выводятся из живого буфера
+   * SSE (`reportEvents`) и флага прогона, а адрес управления совпадает с
+   * синтетическим `sessionId` (`{issueId}/report`), под которым сессия
+   * зарегистрирована в реестре. Один и тот же control-роут обслуживает обе
+   * цели — `/iterations/:id/...`.
+   */
+  const modalTarget: {
+    title: string;
+    attempt: number;
+    status: StepRunStatus;
+    active: boolean;
+    events: SessionEvent[];
+    stats: StepRunWithEvents['stats'];
+    stdout: string;
+    stderr: string;
+    report: string | null;
+    startedAt: string | undefined;
+    sessionId: string;
+  } | null = expandedStepRun
+    ? {
+        title: STEP_LABELS[expandedStepRun.step],
+        attempt: expandedStepRun.attempt,
+        status: statusOf(expandedStepRun),
+        active: isActiveStatus(statusOf(expandedStepRun)),
+        events: expandedEvents,
+        stats: expandedStepRun.stats ?? null,
+        stdout: expandedStepRun.stdout,
+        stderr: expandedStepRun.stderr,
+        report: expandedStepRun.report,
+        startedAt: expandedStepRun.created_at,
+        sessionId: expandedStepRun.iteration_id,
+      }
+    : reportExpanded
+      ? {
+          title: STEP_LABELS.report,
+          attempt: 1,
+          status: reportRunning
+            ? 'running'
+            : reportError !== null
+              ? 'failed'
+              : 'success',
+          active: reportRunning,
+          events: reportEvents,
+          stats: null,
+          stdout: '',
+          stderr: '',
+          report: null,
+          startedAt: undefined,
+          sessionId: reportRunId,
+        }
+      : null;
+
+  /** Закрывает модалку вывода для обеих целей (шаг и отчёт). */
+  function closeModal() {
+    setExpandedStepRunId(null);
+    setReportExpanded(false);
+  }
+
   // Модалка вывода: автоскролл вниз только пока пользователь прибит ко дну.
   const handleModalScroll = useCallback(() => {
     const el = modalScrollRef.current;
@@ -1195,7 +1325,7 @@ function TaskDetailView({
     if (el && modalPinnedRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [expandedEvents]);
+  }, [modalTarget?.events]);
 
   // Question-события активной итерации (персист + live) в порядке появления,
   // без дублей по id. Учитываем только ещё выполняющиеся шаги: вопрос
@@ -1220,15 +1350,6 @@ function TaskDetailView({
     return questions;
   }, [stepRuns, liveEventsByRun, liveStatusByRun]);
 
-  // Вопрос уместен, только пока активная итерация ещё выполняется, шаг
-  // активен (running/pending/needs_input — см. фильтр `questionEvents`) и ответ не пришёл
-  // ни от сервера, ни локально. Персистентные вопросы завершённых прогонов и
-  // уже отвеченные (`question-answers`) не всплывают после перезагрузки.
-  const activeIteration =
-    state.status === 'ready'
-      ? state.iterations.find((iteration) => iteration.id === activeIterationId)
-      : undefined;
-
   // Неотвеченные вопросы активной итерации: каждый рисуется баннером, а
   // `activeQuestionId` определяет, какая модалка открыта. Так закрытая модалка
   // не прячет вопрос — баннер остаётся кликабельным.
@@ -1242,9 +1363,11 @@ function TaskDetailView({
 
 
 
-  // Авто-скролл внутри карточки итерации к running-воркеру.
-  // Когда статус шага меняется на running (или появляется новый running),
-  // скроллим карточку этого шага в зону видимости.
+  // Авто-скролл внутри карточки итерации к running-исполнителю.
+  // Когда появляется НОВЫЙ running-шаг — скроллим его карточку в зону
+  // видимости ОДИН раз. После этого пользователь свободно листает страницу.
+  // Сброс: когда running-шагов нет или текущий завершился — следующий
+  // новый running снова получит скролл.
   // Если есть неотвеченные вопросы — скролл не срабатывает: пользователь
   // должен видеть вопрос, а не улетать к агенту.
   useEffect(() => {
@@ -1255,7 +1378,14 @@ function TaskDetailView({
       const status = liveStatusByRun[run.id] ?? statusOf(run);
       return isActiveStatus(status);
     });
-    if (!firstRunning) return;
+    if (!firstRunning) {
+      lastScrolledRunRef.current = null;
+      return;
+    }
+
+    // Уже скроллили к этому же прогону — не дёргаем страницу повторно.
+    if (lastScrolledRunRef.current === firstRunning.id) return;
+    lastScrolledRunRef.current = firstRunning.id;
 
     const timer = setTimeout(() => {
       const el = document.querySelector(
@@ -1268,24 +1398,23 @@ function TaskDetailView({
     return () => clearTimeout(timer);
   }, [stepRuns, liveStatusByRun, unansweredQuestions]);
 
-  const iterationRunning = activeIteration?.status === 'running';
-
-  // Опрос снимка управления (react-query, refetchInterval 4с), пока итерация
-  // выполняется. При 409/отсутствии живого шаг-сеанса `getIterationControl`
+  // Опрос снимка управления (react-query, refetchInterval 4с) для ЦЕЛИ
+  // модалки: прогон шага адресуется id итерации, отчёт — синтетическим
+  // `{issueId}/report`. При 409/отсутствии живого сеанса `getIterationControl`
   // отдаёт null → панель скрыта.
-  const controlQuery = useIterationControl(activeIterationId, iterationRunning);
-  const controlSnapshot = iterationRunning
-    ? (controlQuery.data ?? null)
-    : null;
+  const modalSessionId = modalTarget?.sessionId ?? null;
+  const modalRunning = modalTarget?.active ?? false;
+  const controlQuery = useIterationControl(modalSessionId, modalRunning);
+  const controlSnapshot = modalRunning ? (controlQuery.data ?? null) : null;
 
   // `controlTick` — сигнал «перечитать снапшот» после управляющей команды
   // (promptIteration в handleMessageSubmit).
   useEffect(() => {
-    if (controlTick === 0 || !activeIterationId) return;
+    if (controlTick === 0 || !modalSessionId) return;
     void queryClient.invalidateQueries({
-      queryKey: ['iteration-control', activeIterationId],
+      queryKey: ['iteration-control', modalSessionId],
     });
-  }, [controlTick, activeIterationId, queryClient]);
+  }, [controlTick, modalSessionId, queryClient]);
 
   // `editor_text` из живой сессии префилит поле ввода (последнее событие).
   const lastEditorText = useMemo(() => {
@@ -1302,20 +1431,21 @@ function TaskDetailView({
 
   const canStartNormal =
     state.status === 'ready' ? canStartIteration(state.iterations) : false;
-  // Можно создать черновик: есть running итерация, но нет draft/pending.
-  const hasRunningIteration =
+  // Можно создать черновик: есть активная итерация (running/pending/preparing),
+  // но нет draft/pending.
+  const hasActiveIteration =
     state.status === 'ready'
-      ? state.iterations.some((it) => it.status === 'running')
+      ? state.iterations.some((it) => isIterationActive(it.status))
       : false;
   const hasDraftIteration =
     state.status === 'ready'
       ? state.iterations.some((it) => it.status === 'draft')
       : false;
-  const canStartDraftForm = hasRunningIteration && !hasDraftIteration;
+  const canStartDraftForm = hasActiveIteration && !hasDraftIteration;
   const canStart = canStartNormal || canStartDraftForm;
   const submitButtonLabel = hasDraftIteration
     ? 'Сохранить черновик'
-    : hasRunningIteration
+    : hasActiveIteration
       ? 'Создать черновик'
       : 'Запустить новую итерацию';
   // Новые итерации показываем первыми; сам state не мутируем —
@@ -1326,22 +1456,24 @@ function TaskDetailView({
       : [];
   const prAvailable =
     state.status === 'ready' && state.issue.repositories.length > 0;
-  const resultAvailable =
-    state.status === 'ready' &&
-    (state.issue.desired_result === 'md' ||
-      state.issue.desired_result === 'html');
-  // MR-ссылки для шапки: персистентные из result.json + живые из SSE,
-  // дедуп по URL (событие и артефакт дублируют друг друга).
+  const resultAvailable = state.status === 'ready';
+  // MR-ссылки для шапки: персистентные из issue.merge_requests + живые из SSE,
+  // дедуп по URL (событие и данные задачи дублируют друг друга).
   const mrItems = useMemo(() => {
     const byUrl = new Map<string, { url: string; repositoryUrl: string }>();
-    for (const mr of storedMergeRequests) {
-      byUrl.set(mr.url, { url: mr.url, repositoryUrl: mr.repository_url });
+    const stored = state.status === 'ready' ? state.issue.merge_requests : null;
+    if (stored) {
+      for (const mr of stored) {
+        if (!byUrl.has(mr.url)) {
+          byUrl.set(mr.url, { url: mr.url, repositoryUrl: mr.repository_url });
+        }
+      }
     }
     for (const url of liveMrUrls) {
       if (!byUrl.has(url)) byUrl.set(url, { url, repositoryUrl: '' });
     }
     return [...byUrl.values()];
-  }, [storedMergeRequests, liveMrUrls]);
+  }, [state, liveMrUrls]);
 
 
   // Готов ли отчёт: эндпоинт отдаёт отчёт последней
@@ -1381,13 +1513,39 @@ function TaskDetailView({
         }))
       : [];
 
+  // HEAD-проб артефакта при открытии модалки. 404 → «отчёта ещё нет»,
+  // не-html → «только markdown», `iteration-snapshot` → бейдж «предыдущая
+  // версия». Ошибку сети молча гасим: показываем iframe, как раньше.
+  useEffect(() => {
+    if (!resultOpen || !issueId) {
+      setArtifactMeta(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`${API_BASE}/issues/${issueId}/result`, { method: 'HEAD' })
+      .then((response) => {
+        if (cancelled) return;
+        setArtifactMeta({
+          status: response.status,
+          contentType: response.headers.get('content-type') ?? '',
+          source: response.headers.get('x-artifact-source'),
+          mtime: response.headers.get('x-artifact-mtime'),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setArtifactMeta(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resultOpen, issueId]);
+
   // Список порождённых файлов. Best-effort: сеть/не-2xx → пустой список,
   // чтобы шапка не падала. Перезагружается с refreshTick (терминал итерации,
   // новая итерация) и когда отчёт становится готов.
   useEffect(() => {
     if (!issueId || !resultReady) {
       setResultFiles([]);
-      setStoredMergeRequests([]);
       return;
     }
     let cancelled = false;
@@ -1398,19 +1556,72 @@ function TaskDetailView({
       .catch(() => {
         if (!cancelled) setResultFiles([]);
       });
-    // MR-ссылки: pr-шаг best-effort пишет `result.json` в рабочую папку — это
-    // единственный источник, который доступен после перезагрузки страницы.
-    getResultMergeRequests(issueId)
-      .then((list) => {
-        if (!cancelled) setStoredMergeRequests(list);
-      })
-      .catch(() => {
-        if (!cancelled) setStoredMergeRequests([]);
-      });
     return () => {
       cancelled = true;
     };
   }, [issueId, resultReady, refreshTick]);
+
+  // Статус отчёта (`report.md`): разово при заходе и опрос, пока идёт
+  // генерация. Report-агент пишет файл fire-and-forget — явного SSE-финала
+  // нет, поэтому готовность определяем по mtime файла (GET /report/status).
+  useEffect(() => {
+    if (!issueId) return;
+    let cancelled = false;
+
+    const apply = (next: Awaited<ReturnType<typeof getReportStatus>>) => {
+      if (cancelled) return;
+      setReportMeta({
+        observedModel: next.observedModel,
+        warnings: next.warnings ?? [],
+      });
+      if (next.status !== 'success') {
+        if (!reportRunning) setReportReady(false);
+        return;
+      }
+      // Пока идёт новый прогон, старый report.md (mtime до старта) не считаем.
+      const fresh =
+        !reportRunning ||
+        (next.lastRunAt !== undefined &&
+          new Date(next.lastRunAt).getTime() >=
+            reportStartRef.current - 5000);
+      if (!fresh) return;
+      setReportReady(true);
+      reportRunningRef.current = false;
+      setReportRunning(false);
+    };
+
+    if (!reportRunning) {
+      getReportStatus(issueId)
+        .then(apply)
+        .catch(() => {
+          if (!cancelled) setReportReady(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    let attempts = 0;
+    const poll = () => {
+      getReportStatus(issueId)
+        .then(apply)
+        .catch(() => {});
+    };
+    poll();
+    const timer = setInterval(() => {
+      // ~5 мин — сдаёмся, чтобы не крутить опрос вечно (например, на cancelled).
+      if (++attempts > 100) {
+        clearInterval(timer);
+        setReportRunning(false);
+        return;
+      }
+      poll();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [issueId, reportRunning]);
   // Room-режим итерации: последний refine рекомендовал комнату. Для активного
   // resolve карточка шага показывает вкладки агентов вместо одной сессии.
   const roomIteration =
@@ -1426,73 +1637,6 @@ function TaskDetailView({
     stepRuns.status === 'ready' &&
     stepRuns.stepRuns.some((run) => isActiveStatus(statusOf(run)));
   const now = useNow(anyActiveStep);
-
-  function toggleStep(step: PipelineStep) {
-    if (step === 'pr' && !prAvailable) return;
-    setSelectedSteps((current) =>
-      current.includes(step)
-        ? current.filter((value) => value !== step)
-        : [...current, step],
-    );
-    // Сняли шаг pr — сбрасываем выбор репозиториев для MR.
-    // Включили pr и ничего не выбрано — выбираем все репозитории по умолчанию.
-    if (step === 'pr') {
-      const next = new Set(selectedSteps);
-      if (next.has('pr')) {
-        // Снимаем pr
-        setPrRepoIds(new Set());
-      } else {
-        // Включаем pr — выбираем все репо если ничего не выбрано
-        setPrRepoIds((current) => {
-          if (current.size === 0 && state.status === 'ready') {
-            return new Set(
-              state.issue.repositories.map((repo) => repo.id),
-            );
-          }
-          return current;
-        });
-      }
-    }
-  }
-
-  function updateStepModel(step: PipelineStep, value: string) {
-    setStepModels((current) => {
-      const next: StepModels = { ...current };
-      if (value) {
-        next[step] = value;
-      } else {
-        delete next[step];
-      }
-      return next;
-    });
-
-    // Смена модели сбрасывает уровень, несовместимый с её thinkingLevels.
-    const allowed = value
-      ? thinkingLevelsFor(models.find((model) => model.id === value))
-      : [];
-    setStepThinkingLevels((current) => {
-      const level = current[step];
-      if (!level || (value && allowed.includes(level))) return current;
-      const next: StepThinkingLevels = { ...current };
-      delete next[step];
-      return next;
-    });
-  }
-
-  function updateStepThinkingLevel(step: PipelineStep, value: string) {
-    setStepThinkingLevels((current) => {
-      const next: StepThinkingLevels = { ...current };
-      if (value) {
-        next[step] = value as ThinkingLevel;
-      } else {
-        delete next[step];
-      }
-      return next;
-    });
-  }
-
-  // Модель шага доступна только когда шаг отмечен (resolve отмечен всегда).
-  const chosenSteps = new Set<PipelineStep>(['resolve', ...selectedSteps]);
 
   // Палитра слэш-команд: при вводе `/…` фильтруем команды живой сессии.
   const slashQuery = message.startsWith('/') ? message.slice(1) : null;
@@ -1606,6 +1750,8 @@ function TaskDetailView({
       setWorkerCount(1);
       setScrollToIterations(true);
       setRefreshTick((tick) => tick + 1);
+      // Успешное создание итерации/сохранение черновика закрывает модалку.
+      setShowIterationModal(false);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1872,6 +2018,7 @@ function TaskDetailView({
     }
   }
 
+
   async function handleQuestionResponse(
     question: QuestionEvent,
     payload: { value?: string; confirmed?: boolean; cancelled?: boolean },
@@ -1901,12 +2048,12 @@ function TaskDetailView({
 
   /** Отправляет управляющую команду живой сессии и обновляет снимок. */
   async function runControlCommand(command: SessionCommand) {
-    if (!activeIterationId) return;
+    if (!modalSessionId) return;
     setControlError(null);
     setControlBusy(true);
 
     try {
-      const result = await sendIterationCommand(activeIterationId, command);
+      const result = await sendIterationCommand(modalSessionId, command);
       if (!result.ok) {
         setControlError(result.error ?? 'Команда не выполнена');
       }
@@ -1961,30 +2108,27 @@ function TaskDetailView({
 
   async function openResult() {
     setResultOpen(true);
-    setResultText(null);
-    setResultError(null);
-    if (state.status !== 'ready') return;
-    // HTML отдаётся как есть через iframe; markdown (md) тянем текстом.
-    if (state.issue.desired_result === 'html') return;
+  }
 
-    setResultLoading(true);
+  /** Кнопка «🔄 Обновить»: принудительный ре-ран report-агента. */
+  async function handleRefreshReport() {
+    if (state.status !== 'ready' || reportRunningRef.current) return;
+    setReportError(null);
+    reportStartRef.current = Date.now();
+    reportRunningRef.current = true;
+    setReportRunning(true);
     try {
-      const response = await fetch(
-        `/issue-resolver/api/v1/issues/${state.issue.id}/result`,
+      const modelParam = reportModel || undefined;
+      const thinkingParam = reportThinkingLevel || undefined;
+      await runReportAgent(state.issue.id, modelParam, thinkingParam);
+    } catch (error) {
+      reportRunningRef.current = false;
+      setReportRunning(false);
+      setReportError(
+        error instanceof Error
+          ? error.message
+          : 'Не удалось запустить генерацию отчёта',
       );
-      if (response.status === 404) {
-        setResultError('missing');
-        return;
-      }
-      if (!response.ok) {
-        setResultError('error');
-        return;
-      }
-      setResultText(await response.text());
-    } catch {
-      setResultError('error');
-    } finally {
-      setResultLoading(false);
     }
   }
 
@@ -2252,8 +2396,41 @@ function TaskDetailView({
             )}
 
             {resultAvailable && (
-              <div className="mt-3">
+              <section
+                data-testid="report-section"
+                className="mt-3 border border-[#008F11] bg-[#002B00]/40 px-3 py-2"
+              >
                 <div className="flex flex-wrap items-center gap-2">
+                  <h4 className="text-xs uppercase tracking-wider text-[#00FF41]/60">
+                    📄 Отчёт и артефакты
+                  </h4>
+                  <span className="ml-auto text-xs">
+                    {reportRunning ? (
+                      <span
+                        data-testid="report-generating"
+                        className="text-[#FFB000]"
+                      >
+                        ⏳ Генерируется…
+                      </span>
+                    ) : reportReady ? (
+                      <span
+                        data-testid="report-ready"
+                        className="text-[#00FF41]/80"
+                      >
+                        ✓ Сгенерирован
+                      </span>
+                    ) : (
+                      <span
+                        data-testid="report-idle"
+                        className="text-[#00FF41]/50"
+                      >
+                        Отчёт ещё не сгенерирован
+                      </span>
+                    )}
+                  </span>
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     data-testid="open-result"
@@ -2272,8 +2449,121 @@ function TaskDetailView({
                   >
                     Артефакты ({resultFiles.length})
                   </button>
+                  {reportReady && (
+                    <a
+                      data-testid="report-md"
+                      href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/md/download`}
+                      download={RESULT_MD_FILENAME}
+                      className="inline-flex min-h-9 items-center rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 transition-base hover:border-[#00FF41] hover:text-[#00FF41]"
+                    >
+                      📥 MD
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    data-testid="refresh-report"
+                    disabled={reportRunning}
+                    onClick={() => void handleRefreshReport()}
+                    className="min-h-9 rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#008F11] disabled:hover:text-[#00FF41]/80 transition-base"
+                  >
+                    🔄 Обновить
+                  </button>
+                  {reportEvents.length > 0 && (
+                    <button
+                      type="button"
+                      data-testid="report-expand"
+                      onClick={() => {
+                        setExpandedStepRunId(null);
+                        setReportExpanded(true);
+                      }}
+                      className="ml-auto shrink-0 border border-[#008F11] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] transition-base"
+                    >
+                      ⤢ Вывод
+                    </button>
+                  )}
                 </div>
-              </div>
+
+                {models.length > 0 && (
+                  <details className="mt-2">
+                    <summary className="w-fit cursor-pointer text-[11px] text-[#00FF41]/50 hover:text-[#00FF41]/80">
+                      ⚙ Выбрать модель
+                    </summary>
+                    <div className="mt-1">
+                      <ModelThinkingSelect
+                        models={models}
+                        thinkingLevels={thinkingLevelsFor(models.find((m) => `${m.provider}/${m.id}` === reportModel))}
+                        modelValue={reportModel}
+                        thinkingValue={reportThinkingLevel}
+                        disabled={reportRunning}
+                        thinkingDisabled={!reportModel}
+                        modelOptionValue={(m) => `${m.provider}/${m.id}`}
+                        modelOptionLabel={(m) => m.id}
+                        modelPlaceholder="модель по умолчанию"
+                        thinkingPlaceholder="thinking по умолчанию"
+                        modelTestId="report-model-select"
+                        thinkingTestId="report-thinking-select"
+                        modelSelectClassName="min-h-9 rounded-none border border-[#008F11] bg-[#0D0208] px-2 py-1 text-xs text-[#00FF41]/80"
+                        thinkingSelectClassName="min-h-9 rounded-none border border-[#008F11] bg-[#0D0208] px-2 py-1 text-xs text-[#00FF41]/80"
+                        onModelChange={setReportModel}
+                        onThinkingChange={setReportThinkingLevel}
+                      />
+                    </div>
+                  </details>
+                )}
+
+                {(reportMeta.warnings.length > 0 ||
+                  Boolean(reportMeta.observedModel)) && (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {reportMeta.warnings.length > 0 && (
+                      <span
+                        role="alert"
+                        data-testid="report-warnings"
+                        className="text-xs font-medium text-[#FF0033]"
+                      >
+                        ⚠ {reportMeta.warnings.join(' · ')}
+                      </span>
+                    )}
+                    {reportMeta.observedModel && (
+                      <span
+                        data-testid="report-observed-model"
+                        className="text-[11px] text-[#00FF41]/50"
+                      >
+                        Модель прогона: {reportMeta.observedModel}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {reportError && (
+                  <p
+                    role="alert"
+                    data-testid="report-error"
+                    className="mt-2 text-xs font-medium text-[#FF0033]"
+                  >
+                    {reportError}
+                  </p>
+                )}
+
+                {reportRunning && reportEvents.length > 0 && (
+                  <AutoScrollBox
+                    scrollKey={reportEvents.length}
+                    className="mt-2 h-[300px] overflow-auto border border-[#008F11] bg-[#000200] p-2"
+                  >
+                    <div data-testid="report-session">
+                      <SessionView
+                        events={reportEvents}
+                        running
+                        showFooter={false}
+                      />
+                    </div>
+                  </AutoScrollBox>
+                )}
+                {reportEvents.length > 0 && (
+                  <SessionStatsBar
+                    events={reportEvents}
+                    className="mt-2 border-t border-[#008F11]/40 pt-2 text-[10px]"
+                  />
+                )}
+              </section>
             )}
             <IssueFilesList
               files={issueFiles.filter((file) => file.iteration_id === null)}
@@ -2322,43 +2612,57 @@ function TaskDetailView({
                   {startDraftError}
                 </p>
               )}
-              <button
-                type="button"
-                disabled={startingDraft}
-                onClick={() => void handleStartDraft()}
-                className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 md:w-auto"
-              >
-                {startingDraft ? 'Запускаем…' : 'Запустить'}
-              </button>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  disabled={startingDraft}
+                  onClick={() => void handleStartDraft()}
+                  className="min-h-12 rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50"
+                >
+                  {startingDraft ? 'Запускаем…' : 'Запустить'}
+                </button>
+                <button
+                  type="button"
+                  disabled={startingDraft}
+                  data-testid="open-iteration-modal"
+                  onClick={() => setShowIterationModal(true)}
+                  className="min-h-12 rounded-none border border-[#00B4FF] px-5 py-2 text-sm font-medium text-[#00B4FF] hover:bg-[#00B4FF] hover:text-[#0D0208] disabled:opacity-50"
+                >
+                  Редактировать
+                </button>
+              </div>
             </section>
           )}
 
-          {canStart && (
-            <>
-              <button
-                type="button"
-                data-testid="open-iteration-modal"
-                onClick={() => {
-                  // Если есть черновик — подгружаем его контекст в редактор.
-                  if (hasDraftIteration && state.status === 'ready') {
-                    const draft = state.iterations.find((it) => it.status === 'draft');
-                    if (draft) setContext(draft.context ?? '');
-                  }
-                  setShowIterationModal(true);
-                }}
-                className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] md:w-auto"
-              >
-                {hasDraftIteration ? 'Редактировать черновик' : 'Новая итерация'}
-              </button>
+          {/* Кнопка новой итерации / черновика: только для НЕ-draft задач.
+              У черновика своя кнопка «Редактировать» в блоке выше. */}
+          {canStart && state.status === 'ready' && state.issue.status !== 'draft' && (
+            <button
+              type="button"
+              data-testid="open-iteration-modal"
+              onClick={() => {
+                // Если есть черновик — подгружаем его контекст в редактор.
+                if (hasDraftIteration && state.status === 'ready') {
+                  const draft = state.iterations.find((it) => it.status === 'draft');
+                  if (draft) setContext(draft.context ?? '');
+                }
+                setShowIterationModal(true);
+              }}
+              className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] md:w-auto"
+            >
+              {hasDraftIteration ? 'Редактировать черновик' : 'Новая итерация'}
+            </button>
+          )}
 
-              {showIterationModal && (
-                <div
-                  data-testid="iteration-modal-backdrop"
-                  className="fixed inset-0 z-50 flex items-start justify-center bg-[#0D0208]/90 backdrop-blur-sm overflow-y-auto p-4"
-                  onClick={(e) => { if (e.target === e.currentTarget) setShowIterationModal(false); }}
-                  onKeyDown={(e) => { if (e.key === 'Escape') setShowIterationModal(false); }}
-                >
-                  <div className="w-full max-w-3xl mx-4 my-auto">
+          {/* Модалка итерации — общая для черновика и обычных задач. */}
+          {showIterationModal && (
+            <div
+              data-testid="iteration-modal-backdrop"
+              className="fixed inset-0 z-50 flex items-start justify-center bg-[#0D0208]/90 backdrop-blur-sm overflow-y-auto p-4"
+              onClick={(e) => { if (e.target === e.currentTarget) setShowIterationModal(false); }}
+              onKeyDown={(e) => { if (e.key === 'Escape') setShowIterationModal(false); }}
+            >
+              <div className="w-full max-w-3xl mx-4 my-auto">
           <section
             data-testid="new-iteration-island"
             className="rounded-none border border-[#008F11] bg-[#0D0208] p-4 shadow-[0_0_30px_rgba(0,255,65,0.2)]"
@@ -2405,149 +2709,31 @@ function TaskDetailView({
                 disabled={!canStart}
               />
 
-              <fieldset disabled={!canStart}>
-                <legend className={labelClass}>Шаги пайплайна</legend>
-                <div className="space-y-3">
-                  {STEP_OPTIONS.map((step) => {
-                    const isResolve = step.value === 'resolve';
-                    const prBlocked = step.value === 'pr' && !prAvailable;
-                    const checked =
-                      isResolve || (!prBlocked && selectedSteps.includes(step.value));
-                    const modelEnabled =
-                      chosenSteps.has(step.value) && !prBlocked;
-                    const selectedModel = models.find(
-                      (model) => model.id === stepModels[step.value],
-                    );
-                    const thinkingLevels = thinkingLevelsFor(selectedModel);
-                    const thinkingEnabled = Boolean(stepModels[step.value]);
-                    return (
-                      <div
-                        key={step.value}
-                        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
-                      >
-                        <div className="flex flex-col">
-                          <label className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80">
-                            <input
-                              type="checkbox"
-                              className="accent-[#00FF41] transition-base"
-                              checked={checked}
-                              disabled={isResolve || prBlocked}
-                              onChange={() => toggleStep(step.value)}
-                            />
-                            {isResolve
-                              ? 'Исполнение (всегда)'
-                              : prBlocked
-                                ? `${step.label} (нужен репозиторий)`
-                                : step.label}
-                          </label>
-                          {step.value === 'refine' && (
-                            <label
-                              data-testid="refine-planner-hint"
-                              className="flex items-center gap-2 pl-6 text-xs text-[#00FF41]/60"
-                              htmlFor="worker-count"
-                              title="Планируем — решает, запускать ли resolve комнатой агентов; без Планирования всегда ровно один агент. 0 — без ограничений, 1 — один агент, 2-4 — макс. N в комнате."
-                            >
-                              Макс. число параллельных агентов
-                              <input
-                                id="worker-count"
-                                type="number"
-                                min={0}
-                                max={4}
-                                value={workerCount}
-                                onChange={(event) =>
-                                  setWorkerCount(Number(event.target.value) || 0)
-                                }
-                                disabled={!canStart}
-                                className={compactInputClass}
-                                data-testid="worker-count-input"
-                              />
-                            </label>
-                          )}
-                        </div>
-                        {modelEnabled && (
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                            <select
-                              aria-label={`Модель для шага ${step.label}`}
-                              className={`${inputClass} sm:w-64`}
-                              value={stepModels[step.value] ?? ''}
-                              onChange={(event) =>
-                                updateStepModel(step.value, event.target.value)
-                              }
-                              disabled={modelsLoading}
-                            >
-                              <option value="">По умолчанию</option>
-                              {models.map((model) => (
-                                <option key={model.id} value={model.id}>
-                                  {model.name ?? model.id}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              aria-label={`Уровень размышления для шага ${step.label}`}
-                              className={`${inputClass} sm:w-40`}
-                              value={stepThinkingLevels[step.value] ?? ''}
-                              onChange={(event) =>
-                                updateStepThinkingLevel(
-                                  step.value,
-                                  event.target.value,
-                                )
-                              }
-                              disabled={!thinkingEnabled}
-                            >
-                              <option value="">По умолчанию</option>
-                              {thinkingEnabled &&
-                                thinkingLevels.map((level) => (
-                                  <option key={level} value={level}>
-                                    {level}
-                                  </option>
-                                ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </fieldset>
-
-              {/* Репозитории для MR: показываются только при выбранном шаге pr. */}
-              {selectedSteps.includes('pr') && prAvailable && (
-                <fieldset data-testid="pr-repositories-section">
-                  <legend className={labelClass}>
-                    Репозитории для MR
-                  </legend>
-                  <div className="space-y-2">
-                    {(state.status === 'ready'
-                      ? state.issue.repositories
-                      : []
-                    ).map((repository) => (
-                      <label
-                        key={repository.id}
-                        className="flex cursor-pointer items-center gap-2 text-sm text-[#00FF41]/80"
-                      >
-                        <input
-                          type="checkbox"
-                          className="accent-[#00FF41]"
-                          data-testid={`pr-repo-${repository.id}`}
-                          checked={prRepoIds.has(repository.id)}
-                          onChange={() =>
-                            setPrRepoIds((current) => {
-                              const next = new Set(current);
-                              if (next.has(repository.id)) {
-                                next.delete(repository.id);
-                              } else {
-                                next.add(repository.id);
-                              }
-                              return next;
-                            })
-                          }
-                        />
-                        {repoShortName(repository.repository_url)}
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
-              )}
+              <PipelineStepsSection
+                selectedSteps={selectedSteps}
+                stepModels={stepModels}
+                stepThinkingLevels={stepThinkingLevels}
+                models={models}
+                modelsLoading={modelsLoading}
+                workerCount={workerCount}
+                onWorkerCountChange={setWorkerCount}
+                mrRepoOptions={
+                  state.status === 'ready'
+                    ? state.issue.repositories.map((repository) => ({
+                        id: repository.id,
+                        label: repoShortName(repository.repository_url),
+                      }))
+                    : []
+                }
+                prRepoIds={prRepoIds}
+                prDisabled={!prAvailable}
+                disabled={!canStart}
+                stepOptions={STEP_OPTIONS}
+                onToggleStep={toggleStep}
+                onStepModelChange={updateStepModel}
+                onStepThinkingChange={updateStepThinkingLevel}
+                onTogglePrRepo={togglePrRepo}
+              />
 
               {formError && (
                 <p role="alert" className="text-sm font-medium text-[#FF0033]">
@@ -2569,10 +2755,8 @@ function TaskDetailView({
               </div>
             </form>
           </section>
-                  </div>
-                </div>
-              )}
-            </>
+              </div>
+            </div>
           )}
 
           {state.status === 'ready' &&
@@ -2618,41 +2802,19 @@ function TaskDetailView({
                   </li>
                 ))}
               </ul>
-              {Object.keys(bootstrapLogs).length > 0 && (
-                <div
-                  data-testid="bootstrap-log"
-                  className="mt-2 max-h-48 overflow-auto border border-[#008F11] bg-[#0D0208] p-2 font-mono text-[11px] leading-snug"
+              {devopsEvents.length > 0 && (
+                <AutoScrollBox
+                  scrollKey={devopsEvents.length}
+                  className="mt-2 h-[300px] overflow-auto border border-[#008F11] bg-[#000200] p-2"
                 >
-                  {Object.entries(bootstrapLogs).map(([repo, chunks]) => (
-                    <div
-                      key={repo}
-                      data-testid="bootstrap-log-repo"
-                      data-repo={repo}
-                    >
-                      <div className="mb-1 text-[#00FF41]/60">{repo}</div>
-                      <pre className="whitespace-pre-wrap break-all">
-                        {chunks.map((chunk, index) => (
-                          <span
-                            key={index}
-                            data-kind={chunk.kind}
-                            className={
-                              chunk.kind === 'stderr'
-                                ? undefined
-                                : 'text-[#00FF41]/90'
-                            }
-                            style={
-                              chunk.kind === 'stderr'
-                                ? { color: '#FF0033' }
-                                : undefined
-                            }
-                          >
-                            {chunk.text}
-                          </span>
-                        ))}
-                      </pre>
-                    </div>
-                  ))}
-                </div>
+                  <div data-testid="devops-session">
+                    <SessionView
+                      events={devopsEvents}
+                      running
+                      showFooter={false}
+                    />
+                  </div>
+                </AutoScrollBox>
               )}
             </div>
           )}
@@ -3183,6 +3345,7 @@ function TaskDetailView({
             )}
           </div>
           )}
+
       </div>
 
       {resultOpen && state.status === 'ready' && resultAvailable && (
@@ -3199,10 +3362,20 @@ function TaskDetailView({
           >
             <header className="flex flex-wrap items-center gap-3 border-b border-[#008F11] py-4 px-2 sm:px-4">
               <span className="text-[#00FF41]">Отчёт</span>
+              {artifactMeta?.source === 'iteration-snapshot' && (
+                <span
+                  data-testid="artifact-source-badge"
+                  className="border border-[#008F11] px-2 py-0.5 text-[11px] text-[#00FF41]"
+                >
+                  Показана предыдущая версия
+                  {artifactMeta.mtime ? ` от ${artifactMeta.mtime}` : ''} —
+                  новый отчёт ещё не готов.
+                </span>
+              )}
               <a
                 data-testid="result-modal-download"
                 href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/download`}
-                download={resultFilenameFor(state.issue.desired_result)}
+                download={RESULT_HTML_FILENAME}
                 aria-disabled={resultReady ? undefined : true}
                 tabIndex={resultReady ? undefined : -1}
                 onClick={(event) => {
@@ -3214,7 +3387,24 @@ function TaskDetailView({
                     : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
                 }`}
               >
-                Скачать
+                Скачать HTML
+              </a>
+              <a
+                data-testid="result-modal-download-md"
+                href={`/issue-resolver/api/v1/issues/${state.issue.id}/result/md/download`}
+                download={RESULT_MD_FILENAME}
+                aria-disabled={resultReady ? undefined : true}
+                tabIndex={resultReady ? undefined : -1}
+                onClick={(event) => {
+                  if (!resultReady) event.preventDefault();
+                }}
+                className={`inline-flex items-center rounded-none border border-[#008F11] px-2 py-0.5 text-[11px] font-medium transition-base ${
+                  resultReady
+                    ? 'text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41]'
+                    : 'cursor-not-allowed text-[#00FF41]/40 opacity-40'
+                }`}
+              >
+                Скачать .md
               </a>
               <button
                 type="button"
@@ -3227,33 +3417,32 @@ function TaskDetailView({
               </button>
             </header>
             <div className="min-h-0 flex-1 overflow-auto py-4 px-2 sm:px-4">
-              {state.issue.desired_result === 'html' ? (
+              {artifactMeta?.status === 404 ? (
+                <div
+                  data-testid="result-missing"
+                  className="border border-[#008F11] p-4 text-sm text-[#00FF41]"
+                >
+                  Отчёт ещё не сгенерирован. Нажмите «🔄 Обновить», чтобы
+                  запустить report-агента.
+                </div>
+              ) : artifactMeta && !artifactMeta.contentType.includes('text/html') ? (
+                <div
+                  data-testid="result-not-html"
+                  className="border border-[#008F11] p-4 text-sm text-[#00FF41]"
+                >
+                  HTML-версия отчёта недоступна — доступен только markdown.
+                  Скачайте «Скачать .md».
+                </div>
+              ) : (
                 <iframe
                   data-testid="result-html"
                   src={`/issue-resolver/api/v1/issues/${state.issue.id}/result`}
                   title="Отчёт"
+                  sandbox="allow-scripts allow-popups"
+                  referrerPolicy="no-referrer"
                   className="h-full w-full border border-[#008F11] bg-white"
                 />
-              ) : resultLoading ? (
-                <p className="text-sm text-[#00FF41]/60">
-                  Загрузка отчёта…
-                </p>
-              ) : resultError === 'missing' ? (
-                <p className="text-sm text-[#00FF41]/60">
-                  Отчёт ещё не создан
-                </p>
-              ) : resultError === 'error' ? (
-                <p
-                  role="alert"
-                  className="text-sm font-medium text-[#FF0033]"
-                >
-                  Не удалось загрузить отчёт
-                </p>
-              ) : resultText !== null ? (
-                <div data-testid="result-markdown">
-                  <AgentMarkdown>{resultText}</AgentMarkdown>
-                </div>
-              ) : null}
+              )}
             </div>
           </div>
         </div>
@@ -3312,12 +3501,12 @@ function TaskDetailView({
         />
       )}
 
-      {expandedStepRun && (
+      {modalTarget && (
         <div
           data-testid="step-log-modal"
           role="dialog"
           aria-modal="true"
-          onClick={() => setExpandedStepRunId(null)}
+          onClick={closeModal}
           className="fixed inset-0 z-50 flex flex-col bg-[#0D0208]/95 py-4 px-2 sm:px-4"
         >
           <div
@@ -3326,24 +3515,24 @@ function TaskDetailView({
           >
             <header className="flex flex-wrap items-center gap-3 border-b border-[#008F11] py-4 px-2 sm:px-4">
               <span className="text-[#00FF41]">
-                {STEP_LABELS[expandedStepRun.step]}
+                {modalTarget.title}
               </span>
-              {expandedStepRun.attempt > 1 && (
+              {modalTarget.attempt > 1 && (
                 <span className="text-[#00FF41]/60">
-                  попытка {expandedStepRun.attempt}
+                  попытка {modalTarget.attempt}
                 </span>
               )}
               <span
                 className="text-xs uppercase tracking-wider"
-                style={{ color: stepStatusColor[statusOf(expandedStepRun)] }}
+                style={{ color: stepStatusColor[modalTarget.status] }}
               >
-                {statusOf(expandedStepRun)}
+                {modalTarget.status}
               </span>
               <button
                 type="button"
                 data-testid="step-log-modal-close"
                 aria-label="Закрыть"
-                onClick={() => setExpandedStepRunId(null)}
+                onClick={closeModal}
                 className="ml-auto shrink-0 border border-[#008F11] px-3 py-1 text-sm text-[#00FF41] hover:border-[#00FF41] hover:bg-[#003B00] transition-base"
               >
                 ✕
@@ -3357,25 +3546,25 @@ function TaskDetailView({
               className="min-h-0 flex-1 space-y-4 overflow-auto py-4 px-2 sm:px-4"
             >
 
-              {expandedEvents.length > 0 ? (
+              {modalTarget.events.length > 0 ? (
                 <section>
                   <h4 className="mb-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50">
                     session
                   </h4>
                   <div data-testid="modal-session">
                     <SessionView
-                      events={expandedEvents}
-                      stats={expandedStepRun.stats ?? null}
+                      events={modalTarget.events}
+                      stats={modalTarget.stats}
                       showFooter={false}
                       hideInfo={true}
-                      running={isActiveStatus(statusOf(expandedStepRun))}
-                      startedAt={expandedStepRun.created_at}
+                      running={modalTarget.active}
+                      startedAt={modalTarget.startedAt}
                       onRecallQueued={recallQueued}
                     />
                   </div>
                 </section>
               ) : (
-                expandedStepRun.stdout.trim() !== '' && (
+                modalTarget.stdout.trim() !== '' && (
                   <section>
                     <h4 className="mb-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50">
                       stdout
@@ -3384,12 +3573,12 @@ function TaskDetailView({
                       data-testid="modal-stdout"
                       className="border border-[#008F11] bg-[#000200] p-2"
                     >
-                      <AgentMarkdown>{expandedStepRun.stdout}</AgentMarkdown>
+                      <AgentMarkdown>{modalTarget.stdout}</AgentMarkdown>
                     </div>
                   </section>
                 )
               )}
-              {expandedStepRun.stderr.trim() !== '' && (
+              {modalTarget.stderr.trim() !== '' && (
                 <section>
                   <h4 className="mb-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50">
                     stderr
@@ -3398,12 +3587,12 @@ function TaskDetailView({
                     data-testid="modal-stderr"
                     className="overflow-x-auto whitespace-pre-wrap break-words border border-[#008F11] bg-[#000200] p-2 font-mono text-xs text-[#FF0033]"
                   >
-                    {expandedStepRun.stderr}
+                    {modalTarget.stderr}
                   </pre>
                 </section>
               )}
-              {expandedStepRun.report !== null &&
-                expandedStepRun.report.trim() !== '' && (
+              {modalTarget.report !== null &&
+                modalTarget.report.trim() !== '' && (
                   <section>
                     <h4 className="mb-1 text-[10px] uppercase tracking-wider text-[#00FF41]/50">
                       report
@@ -3412,13 +3601,13 @@ function TaskDetailView({
                       data-testid="modal-report"
                       className="border border-[#008F11] bg-[#000200] p-2"
                     >
-                      <StepReportView raw={expandedStepRun.report} />
+                      <StepReportView raw={modalTarget.report} />
                     </div>
                   </section>
                 )}
             </div>
 
-            {(isActiveStatus(statusOf(expandedStepRun)) || statusOf(expandedStepRun) === 'needs_input') && (
+            {(modalTarget.active || modalTarget.status === 'needs_input') && (
               <div className="border-t border-[#008F11] py-3 px-2 sm:px-4">
                 {controlSnapshot && (
                 <div
@@ -3503,7 +3692,7 @@ function TaskDetailView({
                       disabled={aborting}
                       onClick={() => {
                         if (activeIterationId) {
-                          void handleAbort(activeIterationId);
+                          void handleAbort(modalTarget.sessionId);
                         }
                       }}
                       className="min-h-8 border border-[#FF0033] bg-[#2A0008] px-2 py-0.5 text-xs text-[#FF0033] hover:bg-[#FF0033] hover:text-[#0D0208] disabled:opacity-50 transition-base"
@@ -3552,7 +3741,7 @@ function TaskDetailView({
                     onSubmit={(event) => {
                       event.preventDefault();
                       if (activeIterationId) {
-                        void handleMessageSubmit(activeIterationId, message);
+                        void handleMessageSubmit(modalTarget.sessionId, message);
                       }
                     }}
                   >
@@ -3604,9 +3793,9 @@ function TaskDetailView({
                     )}
                     {(() => {
                       let queueEvent: SessionEvent | undefined;
-                      for (let i = expandedEvents.length - 1; i >= 0; i -= 1) {
-                        if (expandedEvents[i].type === 'queue') {
-                          queueEvent = expandedEvents[i];
+                      for (let i = modalTarget.events.length - 1; i >= 0; i -= 1) {
+                        if (modalTarget.events[i].type === 'queue') {
+                          queueEvent = modalTarget.events[i];
                           break;
                         }
                       }
@@ -3732,14 +3921,13 @@ function TaskDetailView({
             )}
 
             <SessionStatsBar
-              events={expandedEvents}
-              stats={expandedStepRun.stats ?? null}
+              events={modalTarget.events}
+              stats={modalTarget.stats}
               className="shrink-0 border-t border-[#008F11] px-2 py-2 sm:px-4"
             />
           </div>
         </div>
       )}
-
 
     </div>
   );

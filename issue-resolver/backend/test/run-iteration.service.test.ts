@@ -33,7 +33,7 @@ import {
   runIssueIteration,
   type IterationRunDeps,
 } from '../src/workflow/run-iteration.service';
-import { FakeBootstrapperAgent } from './fixtures/fake-bootstrapper';
+import { FakeDevOpsAgent } from './fixtures/fake-devops';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 
@@ -334,9 +334,13 @@ describe('runIssueIteration — прямой вызов', () => {
       model: undefined,
     });
 
-    expect(pi.calls).toHaveLength(1);
-    expect(pi.calls[0].prompt).toContain('Описание из тела');
-    expect(pi.calls[0].prompt).toContain('Jira Summary');
+    // Post-iteration report-агент добавляет свой pi.run — считаем шаги пайплайна.
+    const stepCalls = pi.calls.filter(
+      (call) => call.options?.iterationId !== undefined,
+    );
+    expect(stepCalls).toHaveLength(1);
+    expect(stepCalls[0].prompt).toContain('Описание из тела');
+    expect(stepCalls[0].prompt).toContain('Jira Summary');
 
     rmSync(wsRoot, { recursive: true, force: true });
   });
@@ -918,7 +922,10 @@ describe('runIssueIteration — разовая подготовка рабоче
     expect(gated.dependenciesInstalled).toEqual([
       [join(deps.workspaceRoot as string, issueId, 'app')],
     ]);
-    expect(pi.calls).toHaveLength(2);
+    // Два шага пайплайна; report-агент идёт после и не в счёт (нет iterationId).
+    expect(
+      pi.calls.filter((call) => call.options?.iterationId !== undefined),
+    ).toHaveLength(2);
   });
 
   it('workspace уже склонирован → подготовка пропускается, preparing не публикуется', async () => {
@@ -1360,17 +1367,17 @@ describe('runIssueIteration — run_instructions через анализатор
     repoWorkspaces,
   });
 
-  it('status unknown: bootstrapper сохраняет generated и шлёт analyzing', async () => {
+  it('status unknown: devops сохраняет generated и шлёт analyzing', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi, sse } = makeDeps();
     deps.workspaceRoot = tempRoot();
     seedRepository(db, repositories[0].repository_url, 'unknown');
-    const agent = new FakeBootstrapperAgent({
+    const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run\nnpm ci',
     });
-    deps.bootstrapperFactory = () => agent;
+    deps.devopsFactory = () => agent;
     pi.enqueue(pass('resolve'));
 
     const events: SSEEvent[] = [];
@@ -1397,21 +1404,21 @@ describe('runIssueIteration — run_instructions через анализатор
     expect(row?.run_instructions_status).toBe('generated');
     expect(row?.run_instructions).toBe('# Run\nnpm ci');
     expect(progressOf(events)).toContainEqual({
-      step: 'bootstrapping',
+      step: 'devops',
       repo: 'app',
       status: 'done',
       message: 'Инструкции сохранены',
     });
   });
 
-  it('status generated: bootstrapper не вызывается, инструкции не трогаются', async () => {
+  it('status generated: devops не вызывается, инструкции не трогаются', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi } = makeDeps();
     deps.workspaceRoot = tempRoot();
     seedRepository(db, repositories[0].repository_url, 'generated');
-    const agent = new FakeBootstrapperAgent({ success: true, instructions: 'new' });
-    deps.bootstrapperFactory = () => agent;
+    const agent = new FakeDevOpsAgent({ success: true, instructions: 'new' });
+    deps.devopsFactory = () => agent;
     pi.enqueue(pass('resolve'));
 
     const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
@@ -1438,12 +1445,12 @@ describe('runIssueIteration — run_instructions через анализатор
     const { deps, pi, sse } = makeDeps();
     deps.workspaceRoot = tempRoot();
     seedRepository(db, repositories[0].repository_url, 'unknown');
-    const agent = new FakeBootstrapperAgent({
+    const agent = new FakeDevOpsAgent({
       success: false,
       instructions: null,
       error: 'no lockfile',
     });
-    deps.bootstrapperFactory = () => agent;
+    deps.devopsFactory = () => agent;
     pi.enqueue(pass('resolve'));
 
     const events: SSEEvent[] = [];
@@ -1465,7 +1472,7 @@ describe('runIssueIteration — run_instructions через анализатор
     expect(row?.run_instructions_status).toBe('failed');
     expect(row?.run_instructions).toBeNull();
     expect(progressOf(events)).toContainEqual({
-      step: 'bootstrapping',
+      step: 'devops',
       repo: 'app',
       status: 'error',
       message: 'no lockfile',
@@ -1478,11 +1485,11 @@ describe('runIssueIteration — run_instructions через анализатор
     const { deps, pi, sse, git } = makeDeps();
     deps.workspaceRoot = tempRoot();
     seedRepository(db, repositories[0].repository_url, 'unknown');
-    const agent = new FakeBootstrapperAgent({
+    const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run\nnpm ci',
     });
-    deps.bootstrapperFactory = () => agent;
+    deps.devopsFactory = () => agent;
     pi.enqueue(pass('resolve'));
 
     const events: SSEEvent[] = [];
@@ -1511,7 +1518,7 @@ describe('runIssueIteration — run_instructions через анализатор
       'unknown',
     );
     expect(progressOf(events)).toContainEqual({
-      step: 'bootstrapping',
+      step: 'devops',
       repo: 'app',
       status: 'done',
       message: 'пропущен',
@@ -1524,17 +1531,17 @@ describe('runIssueIteration — run_instructions через анализатор
     });
   });
 
-  it('вывод анализатора публикуется как bootstrap_log с именем репозитория', async () => {
+  it('вывод анализатора публикуется как log-события со stepRunId {issueId}/devops', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, sse } = makeDeps();
     deps.workspaceRoot = tempRoot();
     seedRepository(db, repositories[0].repository_url, 'unknown');
-    const agent = new FakeBootstrapperAgent({
+    const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run',
     });
-    deps.bootstrapperFactory = (params) => {
+    deps.devopsFactory = (params) => {
       params.onStdout?.('installing deps\n');
       params.onStderr?.('warning\n');
       return agent;
@@ -1549,28 +1556,39 @@ describe('runIssueIteration — run_instructions через анализатор
       repositories,
     });
 
-    const logs = events.filter((event) => event.type === 'bootstrap_log');
+    // DevOps-вывод идёт через ОБЫЧНЫЕ `log`-события (issue-level SessionView),
+    // а не через старый issue-уровневый `devops_log`.
+    const logs = events.filter((event) => event.type === 'log');
     expect(logs).toHaveLength(2);
-    expect(logs.map((event) => JSON.parse(event.data))).toEqual([
-      { repo: 'app', text: 'installing deps\n', kind: 'stdout' },
-      { repo: 'app', text: 'warning\n', kind: 'stderr' },
-    ]);
-    expect(logs[0].iterationId).toBe(iteration.id);
-    // Логи бутстрапера не маскируются под шаговые `log`-события.
-    expect(events.some((event) => event.type === 'log')).toBe(false);
+    expect(logs[0]).toMatchObject({
+      issueId,
+      iterationId: iteration.id,
+      stepRunId: `${issueId}/devops`,
+      stream: 'stdout',
+      data: 'installing deps\n',
+    });
+    expect(logs[1]).toMatchObject({
+      stepRunId: `${issueId}/devops`,
+      stream: 'stderr',
+      data: 'warning\n',
+    });
+    // Тип удалён из SSEEventType — сравниваем строкой (guard от возврата события).
+    expect(events.some((event) => (event.type as string) === 'devops_log')).toBe(
+      false,
+    );
   });
 
-  it('пробрасывает bootstrapperTimeoutMs в фабрику анализатора', async () => {
+  it('пробрасывает devopsTimeoutMs в фабрику анализатора', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi } = makeDeps();
     deps.workspaceRoot = tempRoot();
     seedRepository(db, repositories[0].repository_url, 'unknown');
     const seen: Array<number | undefined> = [];
-    deps.bootstrapperTimeoutMs = 123_456;
-    deps.bootstrapperFactory = (params) => {
+    deps.devopsTimeoutMs = 123_456;
+    deps.devopsFactory = (params) => {
       seen.push(params.timeoutMs);
-      return new FakeBootstrapperAgent({
+      return new FakeDevOpsAgent({
         success: true,
         instructions: '# Run\nnpm ci',
       });
@@ -1590,5 +1608,337 @@ describe('runIssueIteration — run_instructions через анализатор
 
     // Таймаут доехал до фабрики: без него зависший pi держал бы prepare вечно.
     expect(seen).toEqual([123_456]);
+  });
+});
+
+// ===========================================================================
+// B. Report-агент spawn (B6–B9)
+// ===========================================================================
+
+describe('spawnReportAgent (B6–B9)', () => {
+  const roots: string[] = [];
+
+  const tempRoot = (): string => {
+    const root = mkdtempSync(join(tmpdir(), 'ir-report-spawn-'));
+    roots.push(root);
+    return root;
+  };
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  const reportCall = (pi: FakePiRunner, issueId: string) =>
+    pi.calls.find((call) => call.options?.stepRunId === `${issueId}/report`);
+
+  const runOnce = async (
+    db: Db,
+    deps: IterationRunDeps,
+    issueId: string,
+    iteration: Iteration,
+    number = iteration.number,
+  ) =>
+    runIssueIteration(db, deps, {
+      issue: { id: issueId, title: 'Report задача', pipelineSteps: ['resolve'] },
+      iteration: {
+        id: iteration.id,
+        issueId,
+        number,
+        context: iteration.context,
+        steps: iteration.steps,
+      },
+      repositories,
+      repoWorkspaces: [],
+    });
+
+  it('B6: строит промпт шага report и передаёт iterationCount', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('report'));
+
+    await runOnce(db, deps, issueId, iteration);
+
+    const call = reportCall(pi, issueId);
+    expect(call).toBeDefined();
+    expect(call!.prompt).toContain('Pipeline step: report.');
+    // iterationCount=1 → narratives-папка итерации #1 перечислена в промпте.
+    expect(call!.prompt).toContain('iterations/1/');
+  });
+
+  it('B7: SSE report-агента имеет stepRunId = {issueId}/report и оба stream', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue({
+      step: 'report',
+      exitCode: 0,
+      report: { status: 'pass', summary: 'report ok' },
+      stdout: 'report out\n',
+      stderr: 'report err\n',
+    });
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    await runOnce(db, deps, issueId, iteration);
+
+    const logs = events.filter(
+      (event) => event.type === 'log' && event.stepRunId === `${issueId}/report`,
+    );
+    expect(logs.map((event) => event.stream)).toEqual(['stdout', 'stderr']);
+    expect(logs.map((event) => event.data)).toEqual([
+      'report out\n',
+      'report err\n',
+    ]);
+  });
+
+  it('B8: падение report-агента не роняет итерацию', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('resolve'));
+
+    const original = pi.run.bind(pi);
+    pi.run = (containerName, prompt, options) =>
+      options?.stepRunId === `${issueId}/report`
+        ? Promise.reject(new Error('report boom'))
+        : original(containerName, prompt, options);
+
+    const result = await runOnce(db, deps, issueId, iteration);
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // Итерация в БД тоже completed, несмотря на краш report-агента.
+    expect(
+      db.select().from(iterations).where(eq(iterations.id, iteration.id)).get()
+        ?.status,
+    ).toBe('completed');
+  });
+
+  it('B9: 0 итераций → промпт сообщает об отсутствии narratives', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    db.update(iterations)
+      .set({ number: 0 })
+      .where(eq(iterations.id, iteration.id))
+      .run();
+    const { deps, pi } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('report'));
+
+    await runOnce(db, deps, issueId, iteration, 0);
+
+    const call = reportCall(pi, issueId);
+    expect(call).toBeDefined();
+    expect(call!.prompt.toLowerCase()).toContain('no iteration');
+    expect(call!.prompt).not.toContain('iterations/1/');
+  });
+
+  it('B10: report публикует step_status running → success по {issueId}/report', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('report'));
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    await runOnce(db, deps, issueId, iteration);
+
+    const reportRunId = `${issueId}/report`;
+    const statuses = () =>
+      events.filter(
+        (event) =>
+          event.type === 'step_status' && event.stepRunId === reportRunId,
+      );
+    // Терминал публикуется после `await pi.run` — ждём его, не полагаясь на
+    // порядок микрозадач fire-and-forget прогона.
+    await vi.waitFor(() => expect(statuses()).toHaveLength(2));
+
+    // running — JSON `{status, step, model}`, как у шагов пайплайна.
+    expect(JSON.parse(statuses()[0].data)).toEqual({
+      status: 'running',
+      step: 'report',
+      model: null,
+    });
+    // Терминал — плоская строка статуса (контракт движка).
+    expect(statuses()[1].data).toBe('success');
+    expect(statuses()[1].issueId).toBe(issueId);
+  });
+
+  it('B11: падение report-агента → step_status failed, ошибка в серверном логе', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('resolve'));
+
+    const original = pi.run.bind(pi);
+    pi.run = (containerName, prompt, options) =>
+      options?.stepRunId === `${issueId}/report`
+        ? Promise.reject(new Error('report boom'))
+        : original(containerName, prompt, options);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    try {
+      await runOnce(db, deps, issueId, iteration);
+
+      const reportRunId = `${issueId}/report`;
+      const terminal = () =>
+        events.find(
+          (event) =>
+            event.type === 'step_status' &&
+            event.stepRunId === reportRunId &&
+            event.data === 'failed',
+        );
+      await vi.waitFor(() => expect(terminal()).toBeDefined());
+
+      // Старт тоже виден, а ошибка не тонет в console.error без контекста.
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'step_status' &&
+            event.stepRunId === reportRunId &&
+            event.data.includes('"status":"running"'),
+        ),
+      ).toBe(true);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'report agent failed',
+        expect.objectContaining({ issueId, error: expect.any(Error) }),
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('B12: ненулевой exitCode report-агента → step_status failed', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, pi, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    pi.enqueue(pass('resolve'));
+    // pi завершился с ошибкой без throw — тоже падение прогона.
+    pi.enqueue(fail('report'));
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    try {
+      await runOnce(db, deps, issueId, iteration);
+
+      const reportRunId = `${issueId}/report`;
+      await vi.waitFor(() =>
+        expect(
+          events.find(
+            (event) =>
+              event.type === 'step_status' &&
+              event.stepRunId === reportRunId &&
+              event.data === 'failed',
+          ),
+        ).toBeDefined(),
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+// ===========================================================================
+// C. DevOps SSE миграция (C10–C12)
+// ===========================================================================
+
+describe('DevOps SSE миграция (C10–C12)', () => {
+  const roots: string[] = [];
+
+  const tempRoot = (): string => {
+    const root = mkdtempSync(join(tmpdir(), 'ir-devops-sse-'));
+    roots.push(root);
+    return root;
+  };
+
+  afterEach(() => {
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /** Прогон prepareIssueWorkspace с эмитящим DevOps-агентом; возвращает SSE. */
+  const runDevOps = async (): Promise<{ events: SSEEvent[]; issueId: string }> => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve']);
+    const { deps, sse } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    db.insert(repositoriesTable)
+      .values({
+        id: randomUUID(),
+        url: repositories[0].repository_url,
+        connection_status: 'ok',
+        run_instructions: null,
+        run_instructions_status: 'unknown',
+        created_at: NOW,
+        updated_at: NOW,
+      })
+      .run();
+    deps.devopsFactory = (params) => {
+      params.onStdout?.('installing deps\n');
+      params.onStderr?.('warning\n');
+      return new FakeDevOpsAgent({ success: true, instructions: '# Run' });
+    };
+
+    const events: SSEEvent[] = [];
+    sse.subscribeByIssue(issueId, (event) => events.push(event));
+
+    await prepareIssueWorkspace(db, deps, {
+      issueId,
+      iterationId: iteration.id,
+      repositories,
+    });
+
+    return { events, issueId };
+  };
+
+  it('C10: DevOps stdout → log SSE со stepRunId {issueId}/devops, stream=stdout', async () => {
+    const { events, issueId } = await runDevOps();
+
+    const stdout = events.find(
+      (event) => event.type === 'log' && event.stream === 'stdout',
+    );
+    expect(stdout).toBeDefined();
+    expect(stdout!.stepRunId).toBe(`${issueId}/devops`);
+    expect(stdout!.data).toBe('installing deps\n');
+  });
+
+  it('C11: DevOps stderr → log SSE со stream=stderr', async () => {
+    const { events, issueId } = await runDevOps();
+
+    const stderr = events.find(
+      (event) => event.type === 'log' && event.stream === 'stderr',
+    );
+    expect(stderr).toBeDefined();
+    expect(stderr!.stepRunId).toBe(`${issueId}/devops`);
+    expect(stderr!.data).toBe('warning\n');
+  });
+
+  it('C12: старый devops_log больше не публикуется', async () => {
+    const { events } = await runDevOps();
+
+    // Тип удалён из SSEEventType — сравниваем строкой.
+    expect(events.some((event) => (event.type as string) === 'devops_log')).toBe(
+      false,
+    );
   });
 });

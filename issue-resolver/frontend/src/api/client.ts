@@ -234,6 +234,24 @@ export async function startIssue(issueId: string): Promise<{ ok: boolean; iterat
   return (await response.json()) as { ok: boolean; iterationId: string };
 }
 
+/** Редактирование черновика задачи (PUT /issues/:id). */
+export async function updateIssue(
+  id: string,
+  request: Partial<Pick<Issue, 'title' | 'description' | 'desired_result' | 'jira_issue_url' | 'pipeline_steps' | 'step_models' | 'thinking_level' | 'step_thinking_levels' | 'tag_id' | 'devops_model' | 'devops_thinking_level'> & { worker_count?: number | null; repositories?: Array<{ repo_id?: string; repository_url?: string; base_branch?: string; create_mr?: boolean; bootstrap_enabled?: boolean }> }>,
+): Promise<Issue> {
+  const response = await fetch(`${API_BASE}/issues/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+
+  return (await response.json()) as Issue;
+}
+
 export async function getIssue(id: string): Promise<Issue> {
   const response = await fetch(`${API_BASE}/issues/${id}`);
 
@@ -344,7 +362,7 @@ export async function promptIteration(
 ): Promise<PromptResult> {
   try {
     const response = await fetch(
-      `${API_BASE}/iterations/${iterationId}/prompt`,
+      `${API_BASE}/iterations/${encodeURIComponent(iterationId)}/prompt`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -393,7 +411,7 @@ export async function getIterationControl(
 ): Promise<SessionControlSnapshot | null> {
   try {
     const response = await fetch(
-      `${API_BASE}/iterations/${iterationId}/control`,
+      `${API_BASE}/iterations/${encodeURIComponent(iterationId)}/control`,
     );
     if (!response.ok) return null;
 
@@ -414,7 +432,7 @@ export async function sendIterationCommand(
 ): Promise<ControlResult> {
   try {
     const response = await fetch(
-      `${API_BASE}/iterations/${iterationId}/control`,
+      `${API_BASE}/iterations/${encodeURIComponent(iterationId)}/control`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -461,7 +479,7 @@ export async function sendIterationMessage(
   message: string,
 ): Promise<{ ok: boolean }> {
   const response = await fetch(
-    `${API_BASE}/iterations/${iterationId}/message`,
+    `${API_BASE}/iterations/${encodeURIComponent(iterationId)}/message`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -493,7 +511,7 @@ export async function sendUiResponse(
   payload: UiResponsePayload,
 ): Promise<{ ok: boolean }> {
   const response = await fetch(
-    `${API_BASE}/iterations/${iterationId}/ui-response`,
+    `${API_BASE}/iterations/${encodeURIComponent(iterationId)}/ui-response`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -509,9 +527,12 @@ export async function sendUiResponse(
 }
 
 export async function abortIteration(iterationId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/iterations/${iterationId}/abort`, {
-    method: 'POST',
-  });
+  const response = await fetch(
+    `${API_BASE}/iterations/${encodeURIComponent(iterationId)}/abort`,
+    {
+      method: 'POST',
+    },
+  );
 
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
@@ -972,7 +993,54 @@ export interface CleanupResult {
   orphaned_workspaces: number;
   killed_processes: number;
   deleted_dirs: number;
+  /** Брошенные комнаты задач (`issue-*` без живых агентов). */
+  deleted_rooms: number;
   errors: string[];
+}
+
+/** Принудительный запуск report-агента для задачи. */
+export async function runReportAgent(issueId: string, model?: string, thinkingLevel?: string): Promise<{ ok: boolean; reportRunId: string }> {
+  const params = new URLSearchParams();
+  if (model) params.set('model', model);
+  if (thinkingLevel) params.set('thinking', thinkingLevel);
+  const qs = params.toString();
+  const url = `${API_BASE}/issues/${encodeURIComponent(issueId)}/report${qs ? `?${qs}` : ''}`;
+  const response = await fetch(url, { method: 'POST' });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as { ok: boolean; reportRunId: string };
+}
+
+/** Статус отчёта задачи: `report.md` есть (`success`) или ещё нет (`idle`). */
+export interface ReportStatus {
+  status: 'idle' | 'running' | 'success' | 'failed';
+  /** mtime `report.md` — когда отчёт последний раз перезаписан. */
+  lastRunAt?: string;
+  /**
+   * Наблюдённая модель прогона (что реально сообщила сессия), а НЕ запрошенная.
+   * Отсутствует после рестарта сервера: значение живёт в памяти процесса и из
+   * артефакта не выводится. Во время прогона его тоже нет — бэкенд в это окно
+   * возвращает только `{ status: 'running' }`.
+   */
+  observedModel?: string;
+  /**
+   * Механические предупреждения по артефактам: `model id leaked into <file>`,
+   * `model-like id leaked into <file>`, `anchored on previous report: <path>`.
+   * Слой паттернов считается на чтении, поэтому переживает рестарт.
+   */
+  warnings?: string[];
+}
+
+/** Готовность отчёта задачи (`GET /issues/:id/report/status`). */
+export async function getReportStatus(issueId: string): Promise<ReportStatus> {
+  const response = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(issueId)}/report/status`,
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as ReportStatus;
 }
 
 export async function cleanupOrphans(): Promise<CleanupResult> {

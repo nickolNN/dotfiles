@@ -139,6 +139,14 @@ export function insertTag(db: Db, input: CreateTagRequest): Tag {
 /**
  * Обновляет имя/описание, а при заданном `repositories` — полностью заменяет
  * список связей (удалить старые, вставить новые). undefined — тега нет.
+ *
+ * Правка `run_instructions` (и только она, и только при реальной смене текста)
+ * обесценивает разовый анализ репозиториев тега: их `run_instructions*`
+ * сбрасываются в `null`/`unknown`, чтобы движок заново запустил DevOps-агента
+ * с новыми инструкциями. Обратная запись из `WORKSPACE_INSTRUCTIONS.md`
+ * (`updateTagRunInstructions`) инвалидации НЕ вызывает — иначе анализ
+ * повторялся бы на каждой итерации, потому что этот файл содержит порты и
+ * пути конкретной задачи.
  */
 export function updateTag(
   db: Db,
@@ -163,6 +171,14 @@ export function updateTag(
     patch.run_instructions_status = input.run_instructions ? 'generated' : 'unknown';
   }
   const nextRepositories = input.repositories;
+  // Смена тег-инструкций обесценивает разовый анализ репозиториев тега: их
+  // `run_instructions*` описывают ПРЕЖНЮЮ топологию workspace'а, а движок при
+  // `status = 'generated'` пропускает DevOps-агента целиком — новые инструкции
+  // не доехали бы до агента никогда. Сброс в `unknown` заставляет прогнать
+  // анализ заново (текст тоже чистим: старые команды больше не актуальны).
+  const instructionsChanged =
+    input.run_instructions !== undefined &&
+    input.run_instructions !== existing.run_instructions;
 
   db.transaction((tx) => {
     tx.update(tags).set(patch).where(eq(tags.id, id)).run();
@@ -185,6 +201,27 @@ export function updateTag(
           .run();
       }
     }
+
+    if (instructionsChanged) {
+      // Инвалидируем состав тега ПОСЛЕ замены связей: если список репозиториев
+      // менялся в том же запросе, актуален уже новый набор.
+      const repoIds = tx
+        .select({ id: tagRepositories.repository_id })
+        .from(tagRepositories)
+        .where(eq(tagRepositories.tag_id, id))
+        .all()
+        .map((row) => row.id);
+      if (repoIds.length > 0) {
+        tx.update(repositories)
+          .set({
+            run_instructions: null,
+            run_instructions_status: 'unknown',
+            updated_at: now,
+          })
+          .where(inArray(repositories.id, repoIds))
+          .run();
+      }
+    }
   });
 
   return getTag(db, id);
@@ -199,6 +236,9 @@ export function deleteTag(db: Db, id: string): boolean {
 /**
  * Записывает результат работы агента-анализатора для тега: Markdown-инструкцию
  * и её статус (аналог `updateRepositoryRunInstructions`).
+ *
+ * Намеренно НЕ инвалидирует `repositories.run_instructions*`: это запись
+ * собственного вывода агента (см. `updateTag` про причину).
  */
 export function updateTagRunInstructions(
   db: Db,

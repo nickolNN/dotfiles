@@ -16,6 +16,7 @@ import { FakeJiraClient, type JiraClient } from './jira/client';
 import { InMemoryStepSessionRegistry } from './pi/session-registry';
 import { controlRoutes } from './routes/control';
 import { healthRoutes } from './routes/health';
+import { isAllowedOrigin } from './http/origin';
 import { issuesRoutes } from './routes/issues';
 import { createIssueService } from './issues/service';
 import { iterationsRoutes } from './routes/iterations';
@@ -39,6 +40,9 @@ declare module 'fastify' {
 
 const MIN_HTTP_STATUS = 400;
 const MAX_HTTP_STATUS = 599;
+
+/** Методы, меняющие состояние: для них Origin проверяем независимо от CORS. */
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** Лимиты multipart-загрузок: до 10 файлов по 25 МБ. */
 const MAX_UPLOAD_FILE_SIZE = 25 * 1024 * 1024;
@@ -80,20 +84,55 @@ export interface AppDeps extends Partial<IterationRunDeps> {
   repos?: ReposValidator;
   /** Фабрика резолверов для CRUD /repositories; по умолчанию — сеть. */
   repoResolverFactory?: RepoResolverFactory;
+  /**
+   * Корень комнат pi-агентов для уборки в `POST /admin/cleanup-orphans`;
+   * по умолчанию — `<agentDir>/rooms` (`PI_CODING_AGENT_DIR` или `~/.pi/agent`).
+   */
+  roomsRoot?: string;
 }
 
 export function buildApp(
   db: Db,
   deps: AppDeps = {},
 ): FastifyInstance {
-  const { jira = new FakeJiraClient(), repos, repoResolverFactory, ...runOverrides } = deps;
+  const {
+    jira = new FakeJiraClient(),
+    repos,
+    repoResolverFactory,
+    roomsRoot,
+    ...runOverrides
+  } = deps;
   const runDeps: IterationRunDeps = { ...defaultRunDeps(), ...runOverrides };
   const app = Fastify({ logger: false });
 
   // Доступ к deps для роутов и тестов (заодно виден из Fastify-инстанса).
   app.decorate('iterationRunDeps', runDeps);
 
-  app.register(cors, { origin: true });
+  app.register(cors, {
+    origin: (requestOrigin, callback) =>
+      callback(null, isAllowedOrigin(requestOrigin ?? '')),
+  });
+
+  // CORS защищает только чтение ответа: простой POST улетает и без него.
+  // Поэтому тот же allow-list применяем к мутирующим методам на уровне
+  // preHandler — чужой origin получает 403 ещё до обработчика.
+  app.addHook('preHandler', async (request, reply) => {
+    if (!MUTATING_METHODS.has(request.method)) return;
+    const origin = request.headers.origin;
+    if (origin && !isAllowedOrigin(origin)) {
+      return reply.code(403).send({ error: 'origin not allowed' });
+    }
+  });
+
+  // Одна строка на каждую мутацию (method/path/origin/status) — чтобы авторство
+  // изменений восстанавливалось из лога без полного request-логирования.
+  // Тела/заголовки кроме Origin не пишем.
+  app.addHook('onResponse', async (request, reply) => {
+    if (!MUTATING_METHODS.has(request.method)) return;
+    console.log(
+      `mutate ${request.method} ${request.url} origin=${request.headers.origin ?? 'none'} status=${reply.statusCode} at=${new Date().toISOString()}`,
+    );
+  });
 
   app.register(multipart, {
     limits: { fileSize: MAX_UPLOAD_FILE_SIZE, files: MAX_UPLOAD_FILES },
@@ -126,7 +165,7 @@ export function buildApp(
     });
     await tagsRoutes(instance, db);
     await settingsRoutes(instance, db);
-    await adminRoutes(instance, db, runDeps.workspaceRoot);
+    await adminRoutes(instance, db, runDeps.workspaceRoot, roomsRoot);
     await iterationsRoutes(instance, db, runDeps);
     await controlRoutes(instance, runDeps.control);
     await streamRoutes(instance, db, runDeps.sse, runDeps.control, runDeps.container);

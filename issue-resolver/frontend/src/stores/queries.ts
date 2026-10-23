@@ -105,7 +105,7 @@ export function useSetHostname() {
   });
 }
 
-/** Удаляет орфанед-задачи и убивает их процессы (`POST /admin/cleanup-orphans`). */
+/** Убирает орфанед-задачи/процессы и брошенные комнаты (`POST /admin/cleanup-orphans`). */
 export function useCleanupOrphans() {
   return useMutation<CleanupResult, Error, void>({
     mutationFn: cleanupOrphans,

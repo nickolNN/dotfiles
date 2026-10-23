@@ -25,6 +25,7 @@ import type {
 import {
   extractRepoNameFromUrl,
   MAX_SELF_RETRIES,
+  maxExecutorsFor,
   nextStepDecision,
   parseStepReport,
   planExecutionMode,
@@ -36,6 +37,7 @@ import type {
   DevServerStartResult,
   GitPrepareResult,
   GitService,
+  RepoChangeDigest,
 } from '../git/service';
 import type { PiRunner } from '../pi/runner';
 import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry';
@@ -53,7 +55,7 @@ import {
   workspaceHostDirFor,
 } from '../workspace/paths';
 import { buildStepPrompt, type PrTarget } from './prompts';
-import type { BootstrapperAgent } from './bootstrapper';
+import type { DevOpsAgent } from './devops';
 import { runRoomResolve, runStagedResolve } from './room';
 import { resolveAgentTimeoutMs, withAgentTimeout } from './timeout';
 
@@ -128,6 +130,33 @@ export interface WorkflowDeps {
    * Движок от БД не зависит, поэтому статус задачи меняет вызывающий слой.
    */
   onQuestionStatus?: (status: 'question' | 'running') => void;
+  /**
+   * Post-iteration report agent spawn. Called when an iteration reaches a
+   * terminal state (completed/failed) — NOT on retry loops. The engine
+   * passes the iteration outcome and the callback decides whether to spawn.
+   */
+  onIterationTerminal?: (outcome: IterationTerminalOutcome) => void;
+}
+
+/**
+ * Сигнал движка о терминальном завершении итерации (не retry).
+ * Содержит всё, что нужно report-агенту для сборки отчёта.
+ */
+export interface IterationTerminalOutcome {
+  issueId: string;
+  /** id терминалившейся итерации — источник единой модели отчёта. */
+  iterationId: string;
+  issueTitle: string;
+  iterationNumber: number;
+  iterationStatus: 'completed' | 'failed';
+  iterationCount: number;
+  /** Путь рабочей папки на host-машине. */
+  workspaceHostDir: string;
+  /** Путь рабочей папки, видимый агенту. */
+  workspaceContainerPath: string;
+  containerName: string;
+  repoPaths: string[];
+  thinkingLevel?: ThinkingLevel;
 }
 
 export interface RunIterationInput {
@@ -228,7 +257,7 @@ export interface RunInstructionsPort {
 }
 
 /** Фабрика анализатора для конкретной рабочей папки задачи. */
-export type BootstrapperFactory = (params: {
+export type DevOpsFactory = (params: {
   /** Имя контейнера задачи. */
   containerName: string;
   /** Host-путь рабочей папки задачи (чтение результата). */
@@ -250,13 +279,21 @@ export type BootstrapperFactory = (params: {
   tagInstructions?: string | null;
   /** Модель агента-анализатора (по умолчанию — дефолт pi). */
   model?: string;
+  /** Уровень размышления pi (`--thinking`) для агента-анализатора. */
+  thinkingLevel?: ThinkingLevel;
   /** Таймаут анализа (мс); undefined — без потолка (фейковый дефолт/тесты). */
   timeoutMs?: number;
-  /** Stream stdout от агента-бутстрапера в SSE. */
+  /** Stream stdout от DevOps-агента в SSE. */
   onStdout?: (chunk: string) => void;
-  /** Stream stderr от агента-бутстрапера в SSE. */
+  /** Stream stderr от DevOps-агента в SSE. */
   onStderr?: (chunk: string) => void;
-}) => BootstrapperAgent;
+  /** Имена всех репозиториев в workspace (через запятую). */
+  reposNames?: string | null;
+  /** Имена репозиториев, отмеченных для запуска dev-сервера (через запятую). */
+  reposRequireDevServer?: string | null;
+  /** Per-репозиторий инструкции по запуску (Markdown-секция с ###). */
+  reposInstructions?: string | null;
+}) => DevOpsAgent;
 
 /** Зависимости разовой подготовки рабочей папки (подмножество WorkflowDeps). */
 export interface PrepareWorkspaceDeps {
@@ -267,38 +304,46 @@ export interface PrepareWorkspaceDeps {
   /** Локальный режим без Docker: анализ идёт в host-папке задачи. */
   local?: boolean;
   /** Фабрика анализатора; без неё анализ не запускается. */
-  bootstrapper?: BootstrapperFactory;
+  devops?: DevOpsFactory;
   /** Порт чтения/записи `run_instructions*`; без него анализ не запускается. */
   runInstructions?: RunInstructionsPort;
   /** Модель анализирующего pi-агента. */
-  bootstrapperModel?: string;
+  devopsModel?: string;
+  /** Уровень размышления pi (`--thinking`) для агента-анализатора. */
+  devopsThinkingLevel?: ThinkingLevel;
   /**
    * Таймаут одного прогона анализа (мс). Не задан — фабрика анализатора берёт
    * свой дефолт; без потолка зависший `pi` держит задачу в `preparing`.
    */
-  bootstrapperTimeoutMs?: number;
+  devopsTimeoutMs?: number;
   /**
    * Порт dev-сервера задачи (из port-allocator). Пробрасывается в промпт
-   * bootstrapper'а как `{{DEV_SERVER_PORT}}`. Задан — legacy-автозапуск
+   * DevOps-агента как `{{DEV_SERVER_PORT}}`. Задан — legacy-автозапуск
    * dev-сервера из `RUN_INSTRUCTIONS.md` пропускается (управляемый сервер
    * поднимает `prepareIssueWorkspace` из `DEV_SERVER.sh`).
    */
   devServerPort?: number;
-  /** Проброс stdout агента-бутстрапера в SSE: имя репозитория + порция вывода. */
-  onBootstrapStdout?: (repo: string, chunk: string) => void;
-  /** Проброс stderr агента-бутстрапера в SSE: имя репозитория + порция вывода. */
-  onBootstrapStderr?: (repo: string, chunk: string) => void;
-  /** ID задачи — комната `issue-<issueId>` для интерактивной сессии bootstrapper'а. */
+  /** Проброс stdout DevOps-агента в SSE: имя репозитория + порция вывода. */
+  onDevOpsStdout?: (repo: string, chunk: string) => void;
+  /** Проброс stderr DevOps-агента в SSE: имя репозитория + порция вывода. */
+  onDevOpsStderr?: (repo: string, chunk: string) => void;
+  /** ID задачи — комната `issue-<issueId>` для интерактивной сессии DevOps-агента. */
   issueId?: string;
   /** ID итерации — адрес сессии в реестре. */
   iterationId?: string;
-  /** Реестр живых сессий для steer/abort bootstrapper'а. */
+  /** Реестр живых сессий для steer/abort DevOps-агента. */
   control?: import('../pi/session-registry').StepSessionRegistry;
   /**
    * Тег-инструкции — Markdown-документ о том, как запускать весь набор репозиториев
    * вместе (прокси, порты, переменные). null — инструкций нет.
    */
   tagInstructions?: string | null;
+  /** Имена всех репозиториев в workspace (через запятую). */
+  reposNames?: string | null;
+  /** Имена репозиториев, отмеченных для запуска dev-сервера (через запятую). */
+  reposRequireDevServer?: string | null;
+  /** Per-репозиторий инструкции по запуску (Markdown-секция с ###). */
+  reposInstructions?: string | null;
 }
 
 /**
@@ -425,7 +470,7 @@ export async function prepareWorkspace(
   const generatedRepos: string[] = [];
   const runInstructions = deps.runInstructions;
   onProgress?.({ step: 'checking_instructions', status: 'running' });
-  if (deps.bootstrapper && runInstructions) {
+  if (deps.devops && runInstructions) {
     const containerWorkspaceDir = deps.local
       ? workspaceHostDir
       : workspaceContainerDirFor(issue.id);
@@ -434,7 +479,7 @@ export async function prepareWorkspace(
       if (!isBootstrapEnabled(workspace)) {
         // Репозиторий только клонируется: анализ запуска пропущен.
         onProgress?.({
-          step: 'bootstrapping',
+          step: 'devops',
           repo: repoName,
           status: 'done',
           message: 'пропущен',
@@ -448,25 +493,29 @@ export async function prepareWorkspace(
         continue;
       }
       onProgress?.({ step: 'checking_instructions', repo: repoName, status: 'running' });
-      onProgress?.({ step: 'bootstrapping', repo: repoName, status: 'running' });
-      const bootstrapId = `${issue.id}/bootstrap`;
-      const bootstrapper = deps.bootstrapper({
+      onProgress?.({ step: 'devops', repo: repoName, status: 'running' });
+      const devopsId = `${issue.id}/devops`;
+      const devops = deps.devops({
         containerName: spec.containerName,
         hostWorkspaceDir: workspaceHostDir,
         containerWorkspaceDir,
         issueId: issue.id,
         iterationId: deps.iterationId,
-        stepRunId: bootstrapId,
+        stepRunId: devopsId,
         registry: deps.control,
         tagInstructions: deps.tagInstructions,
-        model: deps.bootstrapperModel,
-        timeoutMs: deps.bootstrapperTimeoutMs,
+        reposNames: deps.reposNames,
+        reposRequireDevServer: deps.reposRequireDevServer,
+        reposInstructions: deps.reposInstructions,
+        model: deps.devopsModel,
+        thinkingLevel: deps.devopsThinkingLevel,
+        timeoutMs: deps.devopsTimeoutMs,
         // Репозиторий известен только в цикле — заворачиваем колбэки, чтобы
-        // SSE-логи бутстрапера можно было привязать к конкретному репо.
-        onStdout: (chunk) => deps.onBootstrapStdout?.(repoName, chunk),
-        onStderr: (chunk) => deps.onBootstrapStderr?.(repoName, chunk),
+        // SSE-логи DevOps-агента можно было привязать к конкретному репо.
+        onStdout: (chunk) => deps.onDevOpsStdout?.(repoName, chunk),
+        onStderr: (chunk) => deps.onDevOpsStderr?.(repoName, chunk),
       });
-      const result = await bootstrapper.bootstrap(
+      const result = await devops.runDevOps(
         containerWorkspaceDir,
         workspace.repoUrl,
         repoName,
@@ -486,7 +535,7 @@ export async function prepareWorkspace(
           `run instructions for ${repoName}:\n${result.instructions}`,
         );
         onProgress?.({
-          step: 'bootstrapping',
+          step: 'devops',
           repo: repoName,
           status: 'done',
           message: 'Инструкции сохранены',
@@ -494,7 +543,7 @@ export async function prepareWorkspace(
       } else {
         runInstructions.saveFailed(workspace.repoUrl);
         onProgress?.({
-          step: 'bootstrapping',
+          step: 'devops',
           repo: repoName,
           status: 'error',
           message: result.error ?? 'не удалось сгенерировать инструкции',
@@ -592,6 +641,25 @@ async function readStepReportFile(
     return parseStepReport(text);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Снимок рабочей копии для промптов шага. Дешёвый (два read-only git-вызова на
+ * репозиторий) и снимает с агента обязанность заново открывать шаг
+ * `git status`/`git diff --stat`. Сбой git не должен ронять шаг из-за
+ * ориентации — поэтому best-effort с пустым дайджестом.
+ */
+async function changeDigestOf(
+  git: GitService,
+  repoPaths: string[],
+): Promise<RepoChangeDigest[]> {
+  if (repoPaths.length === 0) return [];
+  try {
+    return await git.changeDigest(repoPaths);
+  } catch (error) {
+    console.error('workflow: change digest failed, prompt without it', error);
+    return [];
   }
 }
 
@@ -711,6 +779,27 @@ export async function runIteration(
   let refinedExecution: ExecutionPlan | null = null;
   // Общий таймаут одного pi-агента: override прогона или env-дефолт (30 мин).
   const agentTimeoutMs = input.agentTimeoutMs ?? resolveAgentTimeoutMs();
+  // Потолок параллельности из `worker_count` задачи: единственная ручка
+  // пользователя на число исполнителей, поэтому она ограничивает движок, а не
+  // только текст промпта refine (0/undefined → системный потолок).
+  const maxExecutors = maxExecutorsFor(iteration.worker_count);
+
+  /** Строит IterationTerminalOutcome для post-iteration report-агента. */
+  const buildTerminalOutcome = (
+    outcomeStatus: 'completed' | 'failed' | 'cancelled',
+  ): IterationTerminalOutcome => ({
+    issueId: issue.id,
+    iterationId: iteration.id,
+    issueTitle: issue.title,
+    iterationNumber: iteration.number,
+    iterationStatus: outcomeStatus === 'cancelled' ? 'failed' : outcomeStatus,
+    iterationCount: iteration.number,
+    workspaceHostDir,
+    workspaceContainerPath,
+    containerName,
+    repoPaths,
+    thinkingLevel: input.thinking_level,
+  });
 
   while (stepIndex < steps.length) {
     const step = steps[stepIndex];
@@ -736,6 +825,8 @@ export async function runIteration(
 
     // Общий prompt-контекст шага: одинаков для single-resolve и работников
     // комнаты (у комнаты отличие только в buildRoom* промптах).
+    // Снимок перечитывается перед КАЖДЫМ шагом: предыдущий шаг что-то изменил.
+    const stateDigest = await changeDigestOf(deps.git, repoPaths);
     const promptContext = {
       issueTitle: issue.title,
       description: input.description ?? '',
@@ -751,6 +842,7 @@ export async function runIteration(
       devServerPort: input.devServerPort ?? null,
       prTargets,
       workerCount: iteration.worker_count ?? undefined,
+      stateDigest,
     };
     const runOptions = {
       model,
@@ -817,9 +909,12 @@ export async function runIteration(
     };
 
     // Детерминированная развилка топологии resolve: refine рекомендует
-    // single|room|stages, движок распоряжается (см. planExecutionMode).
+    // single|room|stages, движок распоряжается (см. planExecutionMode) с учётом
+    // `worker_count` задачи: room с потолком < 2 исполнителей смысла не имеет.
     const topology =
-      step === 'resolve' ? planExecutionMode(refinedExecution) : 'single';
+      step === 'resolve'
+        ? planExecutionMode(refinedExecution, maxExecutors)
+        : 'single';
     const onWorkerStart = (
       item: RoomWorkItem,
       total: number,
@@ -844,6 +939,7 @@ export async function runIteration(
           {
             containerName,
             execution: refinedExecution as ExecutionPlan,
+            maxExecutors,
             ...promptContext,
             refinedPlan,
           },
@@ -860,6 +956,7 @@ export async function runIteration(
           {
             containerName,
             execution: refinedExecution as ExecutionPlan,
+            maxExecutors,
             ...promptContext,
             refinedPlan,
           },
@@ -923,6 +1020,7 @@ export async function runIteration(
         continue;
       }
 
+      void deps.onIterationTerminal?.(buildTerminalOutcome('failed'));
       return { iterationStatus: 'failed', needsInput: false };
     }
 
@@ -955,6 +1053,7 @@ export async function runIteration(
           report?.title || input.issue.title,
           report?.description || report?.summary || '',
           stepRun.id,
+          report?.merge_requests,
         );
       } catch (error) {
         // publishPrResult не бросает на per-repo ошибках, но подстрахуемся:
@@ -1056,6 +1155,7 @@ export async function runIteration(
     }
 
     if (status === 'aborted') {
+      void deps.onIterationTerminal?.(buildTerminalOutcome('cancelled'));
       return { iterationStatus: 'cancelled', needsInput: false };
     }
 
@@ -1095,6 +1195,7 @@ export async function runIteration(
     switch (decision.kind) {
       case 'advance':
         if (decision.iterationCompleted) {
+          void deps.onIterationTerminal?.(buildTerminalOutcome('completed'));
           return { iterationStatus: 'completed', needsInput: false };
         }
         stepIndex += 1;
@@ -1110,11 +1211,13 @@ export async function runIteration(
       case 'needs_input':
         return { iterationStatus: 'failed', needsInput: true };
       case 'iteration_failed':
+        void deps.onIterationTerminal?.(buildTerminalOutcome('failed'));
         return { iterationStatus: 'failed', needsInput: false };
     }
   }
 
   // Пустой конвейер: запускать нечего — итерация тривиально завершена.
+  void deps.onIterationTerminal?.(buildTerminalOutcome('completed'));
   return { iterationStatus: 'completed', needsInput: false };
 }
 
@@ -1185,6 +1288,11 @@ async function publishPrResult(
   title: string,
   description: string,
   stepRunId: string,
+  reportMrEntries?: readonly {
+    repository_url: string;
+    title: string;
+    description: string;
+  }[],
 ): Promise<PrPublishOutcome> {
   const baseBranchByUrl = new Map(
     input.repositories.map((repo) => [repo.repository_url, repo.base_branch]),
@@ -1199,6 +1307,18 @@ async function publishPrResult(
   const artifacts: MrResultArtifact[] = [];
   const errors: PrPublishError[] = [];
 
+  // Per-repo title/description из отчёта агента pr: если агент написал
+  // отдельное описание для конкретного репозитория — используем его;
+  // иначе — общие title/description (обратная совместимость).
+  const perRepoMap = new Map<string, { title: string; description: string }>();
+  if (reportMrEntries) {
+    for (const entry of reportMrEntries) {
+      if (entry.repository_url && entry.title) {
+        perRepoMap.set(entry.repository_url, entry);
+      }
+    }
+  }
+
   // Нет репозиториев — нечего коммитить/пушить и не для чего создавать MR.
   if (repoWorkspaces.length === 0) {
     return { artifacts, errors };
@@ -1209,6 +1329,11 @@ async function publishPrResult(
     if (!createMrByUrl.get(workspace.repoUrl)) {
       continue;
     }
+    // Per-repo title/description из отчёта агента: если агент написал
+    // отдельный текст для этого репо — берём его, иначе общий.
+    const repoOverride = perRepoMap.get(workspace.repoUrl);
+    const repoTitle = repoOverride?.title || title;
+    const repoDescription = repoOverride?.description || description;
     // Фаза нужна для понятного сообщения об ошибке: commit/push и создание MR
     // падают по разным причинам (push rejected vs сеть/токен/конфликт веток).
     let phase = 'commit/push';
@@ -1256,6 +1381,44 @@ async function publishPrResult(
       let mrResult: { mrUrl: string; id: string };
       if (existing) {
         mrResult = existing;
+        // Пуш обновляет ДИФФ, но не текст. А payload этого диффа — вся задача:
+        // ветка стабильна по issueId, а `commitAndPush` делает `reset --soft
+        // origin/<base>`, сквошируя все итерации в один коммит. Значит и
+        // description должен описывать задачу целиком, а не ту итерацию, на
+        // которой MR создавался, — иначе он остаётся текстом первой итерации
+        // при растущем содержимом. Best-effort: сбой обновления текста не
+        // валит публикацию и не блокирует остальные репозитории (код уже
+        // запушен, MR открыт — это успех публикации).
+        try {
+          await deps.mr.updateMr({
+            repositoryUrl: workspace.repoUrl,
+            mrId: existing.id,
+            title: repoTitle,
+            description: repoDescription,
+            token: input.mrToken ?? '',
+            source,
+          });
+          deps.sse.publish(
+            streamEvent(
+              input.issue.id,
+              input.iteration.id,
+              stepRunId,
+              'mr',
+              `заголовок и описание MR обновлены — ${existing.mrUrl}`,
+            ),
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          deps.sse.publish(
+            streamEvent(
+              input.issue.id,
+              input.iteration.id,
+              stepRunId,
+              'mr',
+              `MR обновлён кодом, но текст обновить не удалось: ${message}`,
+            ),
+          );
+        }
         deps.sse.publish(
           streamEvent(
             input.issue.id,
@@ -1271,8 +1434,8 @@ async function publishPrResult(
           baseBranch:
             baseBranchByUrl.get(workspace.repoUrl) ?? workspace.branch,
           headBranch: featureBranch,
-          title,
-          description,
+          title: repoTitle,
+          description: repoDescription,
           token: input.mrToken ?? '',
           source,
         });
@@ -1281,8 +1444,8 @@ async function publishPrResult(
       artifacts.push({
         repositoryUrl: workspace.repoUrl,
         mrUrl: mrResult.mrUrl,
-        title,
-        description,
+        title: repoTitle,
+        description: repoDescription,
       });
       deps.sse.publish(
         streamEvent(
@@ -1295,6 +1458,12 @@ async function publishPrResult(
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // 409 DuplicatePullRequestException разрешается внутри MR-клиента:
+      // `createMr` сам находит существующий PR и возвращает его canonical
+      // web-URL. Движок web-URL не конструирует: прошлая такая склейка
+      // (`/scm/<p>/<repo>` → `/projects/<p>/repos/<repo>`) съедала
+      // project-ключ, и в result.json сохранялась ссылка, по которой
+      // комментарии ревью нельзя получить.
       errors.push({
         repositoryUrl: workspace.repoUrl,
         message: `${workspace.repoUrl} — ${phase}: ${message}`,

@@ -1,19 +1,23 @@
-# Prompt: Repository Analyzer
+# Prompt: DevOps
 
-Role: project analyzer / devops engineer — you make this repository installable,
-buildable and runnable, and you leave behind the instructions that prove it.
+Role: devops engineer — you make this task dev server for this issue for agent (container)
+and human (host machine) to be able to test
 
 ## Context
 
-- Project directory: `{{REPO_DIR}}` (already cloned)
-- Repository name: `{{REPO_NAME}}`
-- Workspace root: the **parent** of `{{REPO_DIR}}`. It may contain sibling
-  repositories — you can read them, but write only where told below.
-- Workspace entry port: `{{DEV_SERVER_PORT}}` (if it reads `AUTO`, pick a free
+- One or several repositories already cloned to the work folder
+- Repositories names: `{{REPOS_NAMES}}`
+- Some of them marked to have dev server
+launched `{{REPOS_REQUIRE_DEV_SERVER}}`
+- Each separate repository can have instructions to launch
+dev server: {{REPOS_INSTRUCTIONS}}
+- Issue can have a **Tag** which can also have instructions about
+developer infrastructure: `{{TAG_INSTRUCTIONS}}`
+- Tag instructions should be preferred over repo ones
+- Issue dev server port: `{{DEV_SERVER_PORT}}` (if it reads `AUTO`, pick a free
   port and use it consistently)
 - You work inside a task container; other agents will later solve a development
   task in this same directory, relying on what you write here.
-{{TAG_INSTRUCTIONS}}
 
 ## Read this first: the port contract
 
@@ -59,10 +63,10 @@ failure, not a workaround — the shell would load with every remote missing.
 
 ## Docker-in-docker is not available
 
-A committed `nginx-local/docker-compose.yaml` is written for a developer's
-laptop. Inside this task container you **cannot** run docker. Do not try
-`docker`, `docker compose`, `podman`, or any container runtime — they will fail.
-Instead run the same proxy **natively**.
+Inside this task container you **cannot** run docker. Skip any attepts and
+ideas to try `docker`, `docker compose`, `podman`,
+or any container runtime — they will fail.
+Instead run the same proxy **natively**, you have nginx available.
 
 Translate the compose file into a native run using this table:
 
@@ -111,7 +115,7 @@ http {
             try_files $uri $uri/ /index.html;
         }
 
-        location /services/drive {
+        location /services/service {
             proxy_pass http://127.0.0.1:4201;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
@@ -215,6 +219,7 @@ install nginx.
    `chmod +x`.
 
    Standalone app:
+
    ```bash
    #!/bin/bash
    cd "$(dirname "$0")"
@@ -224,6 +229,7 @@ install nginx.
 
    Shell of a micro-frontend set — start the upstreams you need, then the proxy
    in the foreground on `{{DEV_SERVER_PORT}}`:
+
    ```bash
    #!/bin/bash
    set -e
@@ -233,6 +239,7 @@ install nginx.
    ```
 
    Upstream service (its own port, **not** `{{DEV_SERVER_PORT}}`):
+
    ```bash
    #!/bin/bash
    cd "$(dirname "$0")"
@@ -268,9 +275,9 @@ install nginx.
    ## Port map
    | Repo | Path prefix | Upstream port | Status |
    | ---- | ----------- | ------------- | ------ |
-   | kc_front | / | (shell, served by proxy) | ✅ built |
-   | kc_drive_front | /services/drive | 4201 | ✅ running |
-   | kc_docs_editor_front | /services/editor | 4218 | ⛔ clone-only |
+   | core | / | (shell, served by proxy) | ✅ built |
+   | drive | /services/drive | 4201 | ✅ running |
+   | editor | /services/editor | 4218 | ⛔ clone-only |
 
    ## <Repo name>
    - Port, role, install/build/run summary, gotchas.

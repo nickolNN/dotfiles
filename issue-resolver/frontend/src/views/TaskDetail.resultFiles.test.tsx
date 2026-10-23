@@ -219,29 +219,25 @@ describe('TaskDetail — порождённые файлы отчёта', () => 
     expect(archive).toHaveTextContent('Скачать всё (.tar.gz)');
   });
 
-  it.each([
-    ['md', 'report.md'],
-    ['html', 'report.html'],
-  ] as const)(
-    'download-result для desired_result=%s получает имя %s',
-    async (desired, filename) => {
-      stubFetch(makeIssue({ desired_result: desired }), []);
+  it('download-кнопок две: Скачать HTML (report.html) и Скачать .md (report.md)', async () => {
+    stubFetch(makeIssue(), []);
 
-      render(<TaskDetail issueId="issue-1" />);
-      await screen.findByText('Fix login bug');
-      await waitFor(() =>
-        expect(screen.getByTestId('open-result')).toBeEnabled(),
-      );
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+    await waitFor(() =>
+      expect(screen.getByTestId('open-result')).toBeEnabled(),
+    );
 
-      // Кнопка «Скачать» теперь в модалке.
-      fireEvent.click(screen.getByTestId('open-result'));
-      const modal = await screen.findByTestId('result-modal');
-      expect(within(modal).getByTestId('result-modal-download')).toHaveAttribute(
-        'download',
-        filename,
-      );
-    },
-  );
+    fireEvent.click(screen.getByTestId('open-result'));
+    const modal = await screen.findByTestId('result-modal');
+    expect(within(modal).getByTestId('result-modal-download')).toHaveAttribute(
+      'download',
+      'report.html',
+    );
+    expect(
+      within(modal).getByTestId('result-modal-download-md'),
+    ).toHaveAttribute('download', 'report.md');
+  });
 
   it('пока отчёт не готов — кнопка артефактов задизейблена', async () => {
     // Итераций нет → resultReady = false.

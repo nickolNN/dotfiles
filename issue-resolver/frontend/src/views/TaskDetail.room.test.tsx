@@ -85,7 +85,7 @@ const AGENTS: RoomAgent[] = [
     id: 'run-resolve/worker/0',
     role: 'worker',
     index: 1,
-    label: 'Воркер 1',
+    label: 'Исполнитель 1',
     status: 'running',
     startedAt: null,
     stats: null,
@@ -94,7 +94,7 @@ const AGENTS: RoomAgent[] = [
     id: 'run-resolve/worker/1',
     role: 'worker',
     index: 2,
-    label: 'Воркер 2',
+    label: 'Исполнитель 2',
     status: 'running',
     startedAt: null,
     stats: null,
@@ -176,7 +176,7 @@ describe('TaskDetail — вкладки агентов комнаты (room-ре
 
     const tabs = screen.getAllByTestId('room-agent-tab');
     expect(tabs).toHaveLength(2);
-    expect(tabs[0]).toHaveTextContent('Воркер 1');
+    expect(tabs[0]).toHaveTextContent('Исполнитель 1');
 
     // Открыт per-agent SSE, а не общий поток шага.
     const agentSource = FakeEventSource.instances.find((source) =>

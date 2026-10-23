@@ -8,8 +8,9 @@ import { RpcPiRunner } from '../src/pi/rpc-runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import { HttpMrClient } from '../src/pr/mr';
 import {
-  BOOTSTRAPPER_TIMEOUT_ENV,
-  DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+  DEVOPS_TIMEOUT_ENV,
+  DEFAULT_DEVOPS_TIMEOUT_MS,
+  LEGACY_DEVOPS_TIMEOUT_ENV,
 } from '../src/workflow/timeout';
 
 describe('buildDepsFromEnv', () => {
@@ -85,17 +86,32 @@ describe('buildDepsFromEnv', () => {
     ).toBe('bitbucket-token');
   });
 
-  it('bootstrapperTimeoutMs: дефолт 30 мин, env-override и фабрика', () => {
+  it('devopsTimeoutMs: дефолт 30 мин, env-override и фабрика', () => {
     const defaults = buildDepsFromEnv({ ISSUE_RESOLVER_LOCAL: '1' });
-    expect(defaults.bootstrapperTimeoutMs).toBe(
-      DEFAULT_BOOTSTRAPPER_TIMEOUT_MS,
+    expect(defaults.devopsTimeoutMs).toBe(
+      DEFAULT_DEVOPS_TIMEOUT_MS,
     );
-    expect(typeof defaults.bootstrapperFactory).toBe('function');
+    expect(typeof defaults.devopsFactory).toBe('function');
 
     const overridden = buildDepsFromEnv({
       ISSUE_RESOLVER_LOCAL: '1',
-      [BOOTSTRAPPER_TIMEOUT_ENV]: '120000',
+      [DEVOPS_TIMEOUT_ENV]: '120000',
     });
-    expect(overridden.bootstrapperTimeoutMs).toBe(120_000);
+    expect(overridden.devopsTimeoutMs).toBe(120_000);
+
+    // Фолбэк на прежнее имя env при отсутствии нового.
+    const legacy = buildDepsFromEnv({
+      ISSUE_RESOLVER_LOCAL: '1',
+      [LEGACY_DEVOPS_TIMEOUT_ENV]: '120000',
+    });
+    expect(legacy.devopsTimeoutMs).toBe(120_000);
+
+    // Новое имя приоритетнее прежнего.
+    const both = buildDepsFromEnv({
+      ISSUE_RESOLVER_LOCAL: '1',
+      [DEVOPS_TIMEOUT_ENV]: '180000',
+      [LEGACY_DEVOPS_TIMEOUT_ENV]: '120000',
+    });
+    expect(both.devopsTimeoutMs).toBe(180_000);
   });
 });

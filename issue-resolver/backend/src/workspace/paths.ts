@@ -21,25 +21,43 @@ export const workspaceHostDirFor = (root: string, issueId: string): string =>
 export const workspaceContainerDirFor = (issueId: string): string =>
   `${CONTAINER_WORKSPACE_ROOT}/${issueId}`;
 
-/** Артефакт результата задачи: имя файла и его content-type по desired_result. */
+/** Артефакт результата задачи: имя файла и его content-type. */
 export interface ResultArtifact {
   filename: string;
   contentType: string;
 }
 
+/** HTML-артефакт (всегда report.html для людей). */
+export const HTML_ARTIFACT: ResultArtifact = {
+  filename: 'report.html',
+  contentType: 'text/html',
+};
+
+/** MD-артефакт (всегда report.md для агентов). */
+export const MD_ARTIFACT: ResultArtifact = {
+  filename: 'report.md',
+  contentType: 'text/markdown',
+};
+
+/** Все артефакты, которые агент обязан произвести. */
+export const ALL_RESULT_ARTIFACTS: readonly ResultArtifact[] = [
+  HTML_ARTIFACT,
+  MD_ARTIFACT,
+];
+
 /**
- * Имя файла и content-type результата по desired_result. undefined трактуется
- * как 'md'. Для неизвестного значения — null (артефакта нет).
+ * Имя файла и content-type результата по desired_result.
+ * Для старых задач с явным 'md'/'html' — один артефакт.
+ * undefined (новые задачи) — null (используйте ALL_RESULT_ARTIFACTS).
  */
 export function resultArtifactFor(
   desiredResult: DesiredResult | undefined,
 ): ResultArtifact | null {
   switch (desiredResult) {
-    case undefined:
     case 'md':
-      return { filename: 'report.md', contentType: 'text/markdown' };
+      return MD_ARTIFACT;
     case 'html':
-      return { filename: 'report.html', contentType: 'text/html' };
+      return HTML_ARTIFACT;
     default:
       return null;
   }

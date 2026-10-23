@@ -41,36 +41,64 @@ describe('AutoScrollBox — кнопка live и авто-прокрутка', (
     expect(button.className).toContain('shadow-[0_0_8px_rgba(0,255,65,0.5)]');
   });
 
-  it('live ON — новые события авто-скроллят вниз', () => {
+  it('live ON (у дна) — новые события авто-скроллят вниз', () => {
     const { rerender } = render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
     const el = scrollEl();
+    // scrollHeight=777, clientHeight=300, scrollTop=477 → 0px от дна (у дна)
     setLayout(el, { scrollHeight: 777, clientHeight: 300 });
+    el.scrollTop = 477;
 
     rerender(<AutoScrollBox scrollKey={1}>x</AutoScrollBox>);
 
     expect(el.scrollTop).toBe(777);
   });
 
-  it('live ON — скролл пользователя не выключает авто-следование (жёсткий режим)', () => {
+  it('пользователь отмотал вверх → авто-pause live, новые события НЕ скроллят', () => {
     const { rerender } = render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
     const el = scrollEl();
     setLayout(el, { scrollHeight: 777, clientHeight: 300 });
+    el.scrollTop = 0; // пользователь наверху
 
-    el.scrollTop = 0; // пользователь отмотал наверх
     fireEvent.scroll(el);
 
-    // Кнопка всё ещё показывает live (ON) — прокрутка пользователя
-    // не снимает режим.
-    const button = screen.getByTestId('scroll-to-bottom');
-    expect(button).toHaveAttribute('data-live', 'true');
+    // Кнопка перешла в OFF (авто-pause).
+    const offButton = screen.getByTestId('scroll-to-bottom');
+    expect(offButton).toHaveAttribute('data-live', 'false');
+    expect(offButton).toHaveTextContent('▼ live');
+    expect(offButton.className).toContain('text-[#00FF41]/40');
 
     rerender(<AutoScrollBox scrollKey={1}>x</AutoScrollBox>);
 
-    // Авто-скролл всё равно утащит ко дну — live ON.
+    // Позиция не изменилась — авто-скролл на паузе.
+    expect(el.scrollTop).toBe(0);
+  });
+
+  it('пользователь докрутил до дна → авто-resume live', () => {
+    const { rerender } = render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
+    const el = scrollEl();
+    setLayout(el, { scrollHeight: 777, clientHeight: 300 });
+    el.scrollTop = 0;
+    fireEvent.scroll(el); // авто-pause
+    expect(screen.getByTestId('scroll-to-bottom')).toHaveAttribute(
+      'data-live',
+      'false',
+    );
+
+    // Докрутили до дна.
+    el.scrollTop = 477; // 777 - 477 - 300 = 0 → у дна
+    fireEvent.scroll(el);
+
+    const onButton = screen.getByTestId('scroll-to-bottom');
+    expect(onButton).toHaveAttribute('data-live', 'true');
+    expect(onButton).toHaveTextContent('● live');
+
+    rerender(<AutoScrollBox scrollKey={1}>x</AutoScrollBox>);
+
+    // Авто-скролл снова работает.
     expect(el.scrollTop).toBe(777);
   });
 
-  it('клик по кнопке: ON → OFF (без скролла), OFF → ON (скролл ко дну)', () => {
+  it('клик по кнопке (OFF) — скролл вниз + включение live', () => {
     render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
     const el = scrollEl();
     setLayout(el, { scrollHeight: 777, clientHeight: 300 });
@@ -78,38 +106,23 @@ describe('AutoScrollBox — кнопка live и авто-прокрутка', (
     (el as unknown as { scrollTo: (options: ScrollToOptions) => void }).scrollTo =
       scrollTo;
 
-    // Шаг 1: ON → OFF — скролл НЕ дёргается, кнопка становится приглушённой.
-    fireEvent.click(screen.getByTestId('scroll-to-bottom'));
-    const offButton = screen.getByTestId('scroll-to-bottom');
-    expect(offButton).toHaveAttribute('data-live', 'false');
-    expect(offButton).toHaveTextContent('● live');
-    // OFF = приглушённая
-    expect(offButton.className).toContain('text-[#00FF41]/40');
-    // scrollTo не вызывался при выключении.
-    expect(scrollTo).not.toHaveBeenCalled();
+    // Сначала авто-pause: отмотали вверх.
+    el.scrollTop = 100;
+    fireEvent.scroll(el);
+    expect(screen.getByTestId('scroll-to-bottom')).toHaveAttribute(
+      'data-live',
+      'false',
+    );
 
-    // Шаг 2: OFF → ON — скролл ко дну, кнопка яркая.
+    // Клик: скролл вниз + live ON.
     fireEvent.click(screen.getByTestId('scroll-to-bottom'));
     const onButton = screen.getByTestId('scroll-to-bottom');
     expect(onButton).toHaveAttribute('data-live', 'true');
     expect(onButton).toHaveTextContent('● live');
-    expect(onButton.className).toContain('shadow-[0_0_8px_rgba(0,255,65,0.5)]');
+    expect(onButton.className).toContain(
+      'shadow-[0_0_8px_rgba(0,255,65,0.5)]',
+    );
     expect(scrollTo).toHaveBeenCalledWith({ top: 777, behavior: 'auto' });
     expect(el.scrollTop).toBe(777);
-  });
-
-  it('live OFF — новые события НЕ авто-скроллят', () => {
-    const { rerender } = render(<AutoScrollBox scrollKey={0}>x</AutoScrollBox>);
-    const el = scrollEl();
-    setLayout(el, { scrollHeight: 777, clientHeight: 300 });
-
-    // Выключаем live.
-    fireEvent.click(screen.getByTestId('scroll-to-bottom'));
-
-    el.scrollTop = 100;
-    rerender(<AutoScrollBox scrollKey={1}>x</AutoScrollBox>);
-
-    // Позиция не изменилась — live OFF.
-    expect(el.scrollTop).toBe(100);
   });
 });

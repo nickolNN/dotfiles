@@ -124,6 +124,18 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
     sidecar publishes a port into a *running* container without a restart.
 - Gotcha: fixed ports only (no `-p 0:PORT`); the in-container dev server must
   listen on `0.0.0.0`.
+- Corporate HTTPS: VPN routing already reaches containers (Docker Desktop
+  NATs through macOS, which holds the VPN routes/DNS) — what fails is trust.
+  Drop CA certificates into `dotfiles-agent/certs/` (**any file names**,
+  `*.pem`/`*.crt`) and `build.sh` feeds both stores: OpenSSL for
+  `git`/`curl`/chromium, and `NODE_EXTRA_CA_CERTS` for Node — whose built-in
+  Mozilla bundle `update-ca-certificates` never touches, which is why
+  `yarn install` fails on an internal registry while `curl` succeeds. Empty
+  folder = normal, the build step is conditional; private keys are refused.
+- Per-machine `docker run` flags (no rebuild): `AGENT_DOCKER_ARGS="--dns …"`
+  / `"-e HTTPS_PROXY=http://host.docker.internal:PORT"` / `--add-host` —
+  stored as a container label and diffed, so changing it *recreates* the
+  container (killing running agents); set it before spawning
 
 ## Excluded from git
 
@@ -132,7 +144,9 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `.DS_Store`, `kilo/opencode.jsonc`, `kilo/kilo.jsonc`,
   `pi/sessions/`, `pi/memory/`, `pi/npm/node_modules/`, `pi/auth.json`,
   `pi/models.json`, `pi/mcp.json`, `pi/mcp-auth.json`, `pi/mcp.log*`,
-  `pi/models-store.json`, `pi/trust.json`, `pi/*.sh`, `.agents`
+  `pi/models-store.json`, `pi/trust.json`, `pi/*.sh`,
+  `dotfiles-agent/certs/*` (except `.gitkeep`, which must stay tracked so the
+  folder exists for the image build), `.agents`
 
 ## Branches
 

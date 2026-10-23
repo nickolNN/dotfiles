@@ -8,7 +8,7 @@ export type RepoPrepStatus =
   | 'pending'
   | 'cloning'
   | 'cloned'
-  | 'bootstrapping'
+  | 'devops'
   | 'installed'
   | 'dev_server'
   | 'ready'
@@ -30,11 +30,11 @@ export const REPO_PREP_LABELS: Record<RepoPrepStatus, string> = {
   pending: 'в очереди',
   cloning: 'клонирование',
   cloned: 'склонирован',
-  bootstrapping: 'анализ запуска',
+  devops: 'анализ запуска',
   installed: 'зависимости установлены',
   dev_server: 'запуск dev-сервера',
   ready: 'готов',
-  skipped: 'бутстрап пропущен',
+  skipped: 'DevOps пропущен',
   failed: 'ошибка',
 };
 
@@ -43,7 +43,7 @@ export const REPO_PREP_MARKS: Record<RepoPrepStatus, string> = {
   pending: '🟡',
   cloning: '🔵',
   cloned: '🔵',
-  bootstrapping: '🟣',
+  devops: '🟣',
   installed: '🟢',
   dev_server: '🔷',
   ready: '✅',
@@ -56,7 +56,7 @@ export const REPO_PREP_COLORS: Record<RepoPrepStatus, string> = {
   pending: '#FFB000',
   cloning: '#00B4FF',
   cloned: '#00B4FF',
-  bootstrapping: '#9D7CFF',
+  devops: '#9D7CFF',
   installed: '#00FF41',
   dev_server: '#00B4FF',
   ready: '#00FF41',
@@ -120,8 +120,8 @@ export function repoPrepStatus(
   }
 
   if (lastStep(own, 'installing')) return skipped ? 'skipped' : 'installed';
-  if (lastStep(own, 'bootstrapping')) {
-    return skipped ? 'skipped' : 'bootstrapping';
+  if (lastStep(own, 'devops')) {
+    return skipped ? 'skipped' : 'devops';
   }
   if (lastStep(own, 'checking_instructions')) return 'cloned';
 

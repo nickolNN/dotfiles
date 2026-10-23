@@ -332,6 +332,116 @@ describe('GitCliService.installDependencies', () => {
   });
 });
 
+describe('GitCliService.commitAndPush — squash + force-push', () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  it('squashBase → push с --force (remote-ветка уже существует от предыдущего прогона)', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ir-force-'));
+    roots.push(repo);
+    await mkdir(path.join(repo, '.git'), { recursive: true });
+    const execCalls: { args: string[]; cwd?: string }[] = [];
+    const exec: GitExecFile = (_file, args, options) => {
+      execCalls.push({ args: [...args], cwd: options.cwd });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const service = new GitCliService(
+      path.join(repo, 'originals'),
+      exec,
+      10_000,
+    );
+
+    await service.commitAndPush({
+      repoPath: repo,
+      branchName: 'feature/fix-bug-abc123',
+      commitMessage: 'feat: Fix bug',
+      squashBase: 'origin/main',
+    });
+
+    const pushCall = execCalls.find(
+      (call) => call.args.includes('push'),
+    );
+    expect(pushCall).toBeDefined();
+    expect(pushCall!.args).toContain('--force');
+    expect(pushCall!.args).toContain('--set-upstream');
+    expect(pushCall!.args).toContain('feature/fix-bug-abc123');
+  });
+
+  it('без squashBase → push БЕЗ --force (обычный fast-forward)', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ir-noforce-'));
+    roots.push(repo);
+    await mkdir(path.join(repo, '.git'), { recursive: true });
+    const execCalls: { args: string[]; cwd?: string }[] = [];
+    const exec: GitExecFile = (_file, args, options) => {
+      execCalls.push({ args: [...args], cwd: options.cwd });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const service = new GitCliService(
+      path.join(repo, 'originals'),
+      exec,
+      10_000,
+    );
+
+    await service.commitAndPush({
+      repoPath: repo,
+      branchName: 'feature/no-squash',
+      commitMessage: 'feat: No squash',
+      // squashBase не задан
+    });
+
+    const pushCall = execCalls.find(
+      (call) => call.args.includes('push'),
+    );
+    expect(pushCall).toBeDefined();
+    expect(pushCall!.args).not.toContain('--force');
+  });
+
+  it('squashBase + BITBUCKET_TOKEN → push с --force и credential.helper', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ir-token-'));
+    roots.push(repo);
+    await mkdir(path.join(repo, '.git'), { recursive: true });
+    const execCalls: { args: string[] }[] = [];
+    const exec: GitExecFile = (_file, args) => {
+      execCalls.push({ args: [...args] });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const service = new GitCliService(
+      path.join(repo, 'originals'),
+      exec,
+      10_000,
+    );
+    const prev = process.env.BITBUCKET_TOKEN;
+    process.env.BITBUCKET_TOKEN = 'test-token';
+    try {
+      await service.commitAndPush({
+        repoPath: repo,
+        branchName: 'feature/token-test',
+        commitMessage: 'feat: Token',
+        squashBase: 'origin/main',
+      });
+
+      const pushCall = execCalls.find((call) => call.args.includes('push'));
+      expect(pushCall).toBeDefined();
+      // credential.helper должен быть ДО --force (pushArgs.unshift вставляет
+      // -c перед остальными, а --force добавляется pushArgs.push до unshift).
+      expect(pushCall!.args).toContain('--force');
+      expect(
+        pushCall!.args.some(
+          (arg) => arg.startsWith('credential.helper=') && arg.includes('test-token'),
+        ),
+      ).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.BITBUCKET_TOKEN;
+      else process.env.BITBUCKET_TOKEN = prev;
+    }
+  });
+});
+
 describe('GitCliService.prepare — идемпотентность', () => {
   const roots: string[] = [];
 

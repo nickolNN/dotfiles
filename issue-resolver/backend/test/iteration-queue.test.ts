@@ -168,7 +168,7 @@ interface ProbeCall {
 /**
  * PiRunner, который (а) считает одновременные вызовы и (б) либо сам завершается
  * через паузу (auto), либо ждёт явного `releaseAll()` (ручной режим). Позволяет
- * доказать и параллельность воркеров, и последовательность шагов/итераций.
+ * доказать и параллельность исполнителей, и последовательность шагов/итераций.
  */
 class ProbeRunner implements PiRunner {
   active = 0;
@@ -187,6 +187,20 @@ class ProbeRunner implements PiRunner {
     options?: PiRunOptions,
   ): Promise<StepExecutionResult> {
     const id = options?.agent?.id ?? options?.stepRunId ?? '?';
+    const result: StepExecutionResult = {
+      step: 'resolve',
+      exitCode: 0,
+      report: { status: 'pass', summary: `${id} ok` },
+      stdout: '',
+      stderr: '',
+    };
+    // Post-iteration report-агент запускается fire-and-forget ПОСЛЕ конвейера:
+    // он не часть последовательности шагов/итераций, поэтому не участвует
+    // в учёте одновременных агентов (см. инвариант «один агент за раз»).
+    if (options?.stepRunId?.endsWith('/report')) {
+      return Promise.resolve(result);
+    }
+
     const call: ProbeCall = {
       id,
       iterationId: options?.iterationId,
@@ -199,13 +213,6 @@ class ProbeRunner implements PiRunner {
     const finish = (): void => {
       this.active -= 1;
       call.endedAt = Date.now();
-    };
-    const result: StepExecutionResult = {
-      step: 'resolve',
-      exitCode: 0,
-      report: { status: 'pass', summary: `${id} ok` },
-      stdout: '',
-      stderr: '',
     };
 
     if (this.auto) {
@@ -636,12 +643,12 @@ const roomOptions: RoomResolveOptions = {
   issueId: 'issue-1',
 };
 
-describe('room-режим: воркеры одного шага бегут параллельно', () => {
-  it('3 воркера стартуют одновременно, координатор — только после них', async () => {
+describe('room-режим: исполнители одного шага бегут параллельно', () => {
+  it('3 исполнителя стартуют одновременно, координатор — только после них', async () => {
     const pi = new ProbeRunner(false);
     const promise = runRoomResolve(pi, roomInput(ROOM_PLAN), roomOptions);
 
-    // Все три воркера уже в полёте — без ожидания их завершения.
+    // Все три исполнителя уже в полёте — без ожидания их завершения.
     await waitFor(() => (pi.active >= 3 ? true : undefined));
     expect(pi.active).toBe(3);
     expect(pi.maxActive).toBe(3);
@@ -650,10 +657,10 @@ describe('room-режим: воркеры одного шага бегут па�
       'run-1/worker/1',
       'run-1/worker/2',
     ]);
-    // Пока воркеры живы, координатор (id = stepRunId) ещё не стартовал.
+    // Пока исполнители живы, координатор (id = stepRunId) ещё не стартовал.
     expect(pi.calls.some((call) => call.id === 'run-1')).toBe(false);
 
-    // Отпускаем воркеров — теперь запускается ровно один координатор.
+    // Отпускаем исполнителей — теперь запускается ровно один координатор.
     pi.releaseAll();
     await waitFor(() => (pi.calls.some((call) => call.id === 'run-1') ? true : undefined));
     expect(pi.active).toBe(1);
@@ -661,5 +668,140 @@ describe('room-режим: воркеры одного шага бегут па�
     pi.releaseAll();
     const result = await promise;
     expect(result.report?.summary).toBe('run-1 ok');
+  });
+});
+
+describe('worker_count доезжает до refine-промпта', () => {
+  it('POST /issues/:id/iterations с worker_count=3 → планировщик видит 3', async () => {
+    const { db, pi, app } = makeEnv();
+    const issueId = seedIssue(db);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `${ISSUES}/${issueId}/iterations`,
+      payload: { context: 'ctx', steps: ['refine'], worker_count: 3 },
+    });
+    expect(res.statusCode).toBe(201);
+
+    await waitFor(() => (pi.calls.length > 0 ? pi.calls.length : undefined));
+    const refinePrompt = pi.calls
+      .map((call) => call.prompt)
+      .find((text) => text.includes('Maximum parallel agents'));
+    expect(refinePrompt).toBeDefined();
+    expect(refinePrompt).toContain('Maximum parallel agents: 3');
+    expect(refinePrompt).not.toContain('Maximum parallel agents: 1 (');
+  });
+});
+
+// ===========================================================================
+// 7. Статус задачи учитывает pending-итерации в очереди
+// ===========================================================================
+
+describe('статус задачи при наличии pending-итерации в очереди', () => {
+  it('после completed-итерации задача остаётся pending, если очередь не пуста', async () => {
+    const db = createDb(':memory:');
+    const root = tempRoot('ir-status-');
+    const issueId = seedIssue(db);
+    const firstId = seedIteration(db, issueId, { number: 1, status: 'running' });
+    seedIteration(db, issueId, { number: 2, status: 'pending' });
+
+    const pi = new ProbeRunner(true, 10);
+    const { deps } = makeDeps(pi);
+    deps.workspaceRoot = root;
+
+    const result = await runIssueIteration(db, deps, {
+      issue: issueInput(issueId, ['resolve']),
+      iteration: {
+        id: firstId,
+        issueId,
+        number: 1,
+        context: 'ctx',
+        steps: ['resolve'],
+      },
+      repositories: [],
+      repoWorkspaces: [],
+    });
+
+    // Итерация завершилась.
+    expect(result.iterationStatus).toBe('completed');
+
+    // Пока pending-итерация не стартовала — задача pending.
+    // После старта — running. В любом случае не completed.
+    // (startNextPendingIteration стартует асинхронно, поэтому проверяем
+    // что статус либо pending, либо уже running — но не completed.)
+    const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
+    expect(['pending', 'running']).toContain(issue?.status);
+
+    // Дожидаемся, пока очередь разгребётся — задача станет completed.
+    await waitFor(() => {
+      const row = db
+        .select()
+        .from(iterations)
+        .where(eq(iterations.id, firstId))
+        .get();
+      return row?.status === 'completed' ? true : undefined;
+    });
+    // Итерация #2 тоже должна завершиться.
+    const secondStatus = await waitFor(() => {
+      const row = db
+        .select()
+        .from(iterations)
+        .where(eq(iterations.issue_id, issueId))
+        .orderBy(iterations.number)
+        .all()
+        .at(-1);
+      return row && row.status !== 'pending' && row.status !== 'running'
+        ? row.status
+        : undefined;
+    });
+    expect(secondStatus).toBe('completed');
+  });
+
+  it('после completed-итерации без очереди задача → completed', async () => {
+    const db = createDb(':memory:');
+    const root = tempRoot('ir-status-');
+    const issueId = seedIssue(db);
+    const iterationId = seedIteration(db, issueId, { number: 1, status: 'running' });
+
+    const pi = new ProbeRunner(true, 10);
+    const { deps } = makeDeps(pi);
+    deps.workspaceRoot = root;
+
+    await runIssueIteration(db, deps, {
+      issue: issueInput(issueId, ['resolve']),
+      iteration: {
+        id: iterationId,
+        issueId,
+        number: 1,
+        context: 'ctx',
+        steps: ['resolve'],
+      },
+      repositories: [],
+      repoWorkspaces: [],
+    });
+
+    const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
+    expect(issue?.status).toBe('completed');
+  });
+
+  it('queue из draft → pending поправляет completed-задачу в pending', async () => {
+    const { db, app } = makeEnv();
+    const issueId = seedIssue(db);
+
+    // Задача вручную помечена completed, но имеет draft-итерацию.
+    db.update(issues).set({ status: 'completed' }).where(eq(issues.id, issueId)).run();
+    const draftId = seedIteration(db, issueId, { number: 1, status: 'draft' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `${ITERATIONS}/${draftId}/queue`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('pending');
+
+    // Задача теперь pending, а не completed.
+    const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
+    expect(issue?.status).toBe('pending');
   });
 });
