@@ -12,8 +12,6 @@ passed. You are also the one who writes the deliverable.
 
 {{PREVIOUS_OUTCOME}}
 
-{{DESIRED_RESULT}}
-
 {{DOWNSTREAM_AWARENESS}}
 
 ## Stage outcomes

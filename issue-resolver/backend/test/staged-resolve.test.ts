@@ -145,11 +145,13 @@ describe('runStagedResolve — последовательные этапы', () 
     expect(pi.calls[3].prompt).toContain('Починка');
     expect(pi.calls[3].prompt).toContain('.issue-stage-2.json');
 
-    // Финальный lead: исходы обоих этапов, deliverable и финальный отчёт, память.
+    // Финальный lead: исходы обоих этапов, финальный отчёт, память;
+    // report.md/report.html генерирует ТОЛЬКО report-шаг.
     expect(pi.calls[4].prompt).toContain('LEAD');
     expect(pi.calls[4].prompt).toContain('s1coord');
     expect(pi.calls[4].prompt).toContain('s2');
-    expect(pi.calls[4].prompt).toContain('report.md');
+    expect(pi.calls[4].prompt).not.toContain('report.md');
+    expect(pi.calls[4].prompt).not.toContain('report.html');
     expect(pi.calls[4].prompt).toContain('.issue-step-result.json');
     expect(pi.calls[4].prompt).toContain('memory_write');
 

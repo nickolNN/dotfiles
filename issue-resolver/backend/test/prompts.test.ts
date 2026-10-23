@@ -138,24 +138,27 @@ describe('buildStepPrompt', () => {
     expect(withoutRepos).not.toContain('Dependencies are already installed');
   });
 
-  it('resolve: desiredResult html → self-contained report.html instruction', () => {
+  it('resolve: НЕ говорит генерировать report.html — это задача report-агента', () => {
     const text = prompt('resolve', { desiredResult: 'html' });
 
-    expect(text).toContain('report.html');
-    expect(text).toContain('self-contained');
-    expect(text).toContain('data URIs');
+    expect(text).not.toContain('report.html');
+    expect(text).not.toContain('self-contained');
+    expect(text).not.toContain('data URIs');
+    // .issue-step-result.json всё ещё обязателен для каждого шага.
     expect(text).toContain('.issue-step-result.json');
   });
 
-  it('resolve: deliverable — всегда report.md + report.html (md/undefined)', () => {
+  it('resolve: НЕ говорит генерировать report.md/report.html — это удел report-шага', () => {
     for (const desiredResult of ['md', undefined] as const) {
       const text = prompt('resolve', { desiredResult });
 
-      expect(text).toContain('report.md');
-      expect(text).toContain('report.html');
-      expect(text).toContain('self-contained');
-      expect(text).toContain('data URIs');
+      expect(text).not.toContain('report.md');
+      expect(text).not.toContain('report.html');
+      expect(text).not.toContain('self-contained');
+      expect(text).not.toContain('data URIs');
+      // resolve пишет .issue-step-result.json и narrative .resolve.md для report-агента.
       expect(text).toContain('.issue-step-result.json');
+      expect(text).toContain('.resolve.md');
     }
   });
 
@@ -477,7 +480,7 @@ describe('staged prompts', () => {
     expect(text).toContain('This is NOT the step result');
   });
 
-  it('final lead: integrates all stage outcomes, deliverable + final report + memory', () => {
+  it('final lead: integrates all stage outcomes + final report + memory, без HTML-deliverable', () => {
     const text = buildStagedFinalCoordinatorPrompt(roomInput, [
       { stage, outcome: 'stage 1 done' },
       {
@@ -490,7 +493,9 @@ describe('staged prompts', () => {
     expect(text).toContain('FINAL');
     expect(text).toContain('stage 1 done');
     expect(text).toContain('stage 2 done');
-    expect(text).toContain('report.md');
+    // report.md/report.html генерирует ТОЛЬКО report-шаг, не resolve.
+    expect(text).not.toContain('report.md');
+    expect(text).not.toContain('report.html');
     expect(text).toContain('.issue-step-result.json');
     expect(text).toContain('memory_write');
     expect(text).toContain('[[resolve]]');
