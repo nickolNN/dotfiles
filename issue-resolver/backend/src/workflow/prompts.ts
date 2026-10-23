@@ -307,7 +307,6 @@ function previousOutcomeBlock(outcome?: string | null): string {
     : '';
 }
 
-/** Артефакт задачи (единый текст на все промпты). Результат — всегда два файла. */
 /** Блок narrative-файлов итераций для report-агента. */
 function iterationNarrativesBlock(iterationCount: number): string {
   if (iterationCount <= 0) {
@@ -328,20 +327,6 @@ function iterationNarrativesBlock(iterationCount: number): string {
     );
   }
   return lines.join('\n');
-}
-
-function desiredResultBlock(_desiredResult?: DesiredResult): string {
-  return [
-    'Deliverable: TWO files at the working-folder root:',
-    '',
-    '1. `report.md` — Markdown for agents: analysis, conclusions, and',
-    'instructions ready to be loaded by another agent as task context.',
-    'Plain Markdown, no HTML wrapper.',
-    '2. `report.html` — self-contained standalone page (inline CSS/JS/images via',
-    'data URIs) for humans to read and share.',
-    '',
-    'In addition to `.issue-step-result.json`.',
-  ].join('\n');
 }
 
 // ── Pipeline awareness ──────────────────────────────────────────────
@@ -448,7 +433,6 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
         input.repoPaths.length > 0
           ? `Work in the repository working paths above.\n${DEPENDENCIES_PREPARED}`
           : '',
-      DESIRED_RESULT: desiredResultBlock(input.desiredResult),
       DOWNSTREAM_AWARENESS: resolveDownstreamAwareness(input.pipelineSteps).join('\n'),
     }),
 
@@ -528,7 +512,6 @@ function roomValues(
     ATTACHMENTS: attachmentsBlock(input.attachmentPaths),
     WORKING_STATE: workingStateBlock(input.stateDigest),
     PREVIOUS_OUTCOME: previousOutcomeBlock(input.previousOutcome),
-    DESIRED_RESULT: desiredResultBlock(input.desiredResult),
     DOWNSTREAM_AWARENESS: resolveDownstreamAwareness(input.pipelineSteps).join('\n'),
     ...extra,
   };

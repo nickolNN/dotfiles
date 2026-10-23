@@ -14,8 +14,6 @@ passed.
 
 {{PREVIOUS_OUTCOME}}
 
-{{DESIRED_RESULT}}
-
 {{DOWNSTREAM_AWARENESS}}
 
 ## Worker sub-tasks

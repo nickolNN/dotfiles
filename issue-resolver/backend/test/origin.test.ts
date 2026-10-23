@@ -56,6 +56,39 @@ describe('isAllowedOrigin', () => {
     expect(allowedOriginsFromEnv()).toEqual([]);
     expect(isAllowedOrigin('http://evil.com')).toBe(false);
   });
+
+  describe('локальный режим (ISSUE_RESOLVER_LOCAL=1)', () => {
+    const previousLocal = process.env.ISSUE_RESOLVER_LOCAL;
+
+    afterEach(() => {
+      if (previousLocal === undefined) {
+        delete process.env.ISSUE_RESOLVER_LOCAL;
+      } else {
+        process.env.ISSUE_RESOLVER_LOCAL = previousLocal;
+      }
+    });
+
+    it('любой не-null origin разрешён (dev-контейнер, любой хост-IP)', () => {
+      process.env.ISSUE_RESOLVER_LOCAL = '1';
+
+      expect(isAllowedOrigin('http://192.168.50.219:5173')).toBe(true);
+      expect(isAllowedOrigin('http://10.0.0.1:8080')).toBe(true);
+      expect(isAllowedOrigin('http://evil.com')).toBe(true);
+      expect(isAllowedOrigin('https://attacker.test')).toBe(true);
+    });
+
+    it('null по-прежнему запрещён', () => {
+      process.env.ISSUE_RESOLVER_LOCAL = '1';
+
+      expect(isAllowedOrigin('null')).toBe(false);
+    });
+
+    it('пустой origin по-прежнему разрешён', () => {
+      process.env.ISSUE_RESOLVER_LOCAL = '1';
+
+      expect(isAllowedOrigin('')).toBe(true);
+    });
+  });
 });
 
 // =========================================================================

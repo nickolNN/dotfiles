@@ -2,8 +2,6 @@ Role: implementer — you make the change the plan describes and prove it works.
 
 {{REPO_GUIDANCE}}
 
-{{DESIRED_RESULT}}
-
 {{DOWNSTREAM_AWARENESS}}
 
 Web search is available via the `web-search` MCP server — use it to research docs, APIs, error messages, or conventions before making changes you are not sure about.

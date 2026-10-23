@@ -30,6 +30,9 @@ export function allowedOriginsFromEnv(raw?: string): string[] {
  * Пропускает ли политика этот `Origin`. Пустая строка (заголовка нет) —
  * разрешена; `null` — запрещён; localhost-паттерн или точная строка из env —
  * разрешены. Env читается на каждом вызове (важно для тестов и рантайма).
+ *
+ * В локальном режиме (`ISSUE_RESOLVER_LOCAL=1`) разрешён любой не-null origin:
+ * разработчик сам себе хост, и порт наружу может быть любым IP машины.
  */
 export function isAllowedOrigin(
   origin: string,
@@ -37,5 +40,6 @@ export function isAllowedOrigin(
 ): boolean {
   if (!origin) return true;
   if (origin === 'null') return false;
+  if (process.env.ISSUE_RESOLVER_LOCAL === '1') return true;
   return LOCAL_ORIGIN.test(origin) || extra.includes(origin);
 }

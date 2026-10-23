@@ -157,6 +157,8 @@ export interface IterationTerminalOutcome {
   containerName: string;
   repoPaths: string[];
   thinkingLevel?: ThinkingLevel;
+  /** Шаги конвейера этой итерации — чтобы post-iteration report не спавнился, когда report уже в пайплайне. */
+  pipelineSteps: PipelineStep[];
 }
 
 export interface RunIterationInput {
@@ -799,6 +801,7 @@ export async function runIteration(
     containerName,
     repoPaths,
     thinkingLevel: input.thinking_level,
+    pipelineSteps: steps,
   });
 
   while (stepIndex < steps.length) {

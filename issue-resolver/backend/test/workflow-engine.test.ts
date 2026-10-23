@@ -298,23 +298,24 @@ describe('runIteration — один шаг', () => {
     );
   });
 
-  it('desiredResult html → resolve prompt содержит report.html', async () => {
+  it('desiredResult html → resolve prompt HE содержит report.html (это удел report-шага)', async () => {
     const { deps, pi } = makeDeps();
     pi.enqueue(pass('resolve'));
 
     await runIteration(deps, makeInput(['resolve'], undefined, 'html'));
 
-    expect(pi.calls[0].prompt).toContain('report.html');
+    expect(pi.calls[0].prompt).not.toContain('report.html');
+    expect(pi.calls[0].prompt).not.toContain('report.md');
   });
 
-  it('desiredResult не задан → resolve prompt всё равно требует report.md и report.html', async () => {
+  it('desiredResult не задан → resolve prompt HE требует report.md и report.html', async () => {
     const { deps, pi } = makeDeps();
     pi.enqueue(pass('resolve'));
 
     await runIteration(deps, makeInput(['resolve']));
 
-    expect(pi.calls[0].prompt).toContain('report.md');
-    expect(pi.calls[0].prompt).toContain('report.html');
+    expect(pi.calls[0].prompt).not.toContain('report.md');
+    expect(pi.calls[0].prompt).not.toContain('report.html');
   });
 
   it('devServerPort → test-промпт несёт URL живого приложения', async () => {
