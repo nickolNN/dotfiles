@@ -54,6 +54,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
 function makeStepRun(overrides: Record<string, unknown> = {}) {
   return {
     id: 'run-1',
+    issue_id: 'issue-1',
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
@@ -740,6 +741,7 @@ describe('TaskDetail', () => {
     });
     const stepRun = {
       id: 'run-review',
+      issue_id: 'issue-1',
       iteration_id: 'iter-1',
       step: 'review',
       attempt: 1,

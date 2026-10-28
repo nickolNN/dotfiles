@@ -15,7 +15,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app';
 import { createDb } from '../src/db/client';
-import { issueRepositories, issues, iterations } from '../src/db/schema';
+import { issueRepositories, issues, iterations, stepRuns } from '../src/db/schema';
 import { FakePiRunner, type PiRunOptions } from '../src/pi/runner';
 import { InMemorySseHub } from '../src/sse/hub';
 import { isReportRunActive } from '../src/workflow/run-iteration.service';
@@ -128,7 +128,7 @@ describe('POST /issues — успешное создание', () => {
     expect(response.json().pipeline_steps).toEqual(['review', 'resolve', 'test']);
   });
 
-  it('pipeline_steps без resolve → resolve добавлен в начало', async () => {
+  it('pipeline_steps без resolve → ровно выбранное, resolve не навязан', async () => {
     const response = await post({
       title: 'Без resolve',
       pipeline_steps: ['review', 'test'],
@@ -138,7 +138,7 @@ describe('POST /issues — успешное создание', () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(response.json().pipeline_steps).toEqual(['resolve', 'review', 'test']);
+    expect(response.json().pipeline_steps).toEqual(['review', 'test']);
   });
 
   it('пишет issue_repositories и iteration #1 в БД (одна транзакция)', async () => {
@@ -176,7 +176,7 @@ describe('POST /issues — успешное создание', () => {
     // Фоновый прогон стартует сразу после создания → running/completed.
     expect(['running', 'completed']).toContain(iterationRows[0].status);
     expect(iterationRows[0].context).toBe('доп контекст');
-    expect(iterationRows[0].steps).toEqual(['resolve', 'review']);
+    expect(iterationRows[0].steps).toEqual(['review']);
   });
 
   it('шаги: review-only НЕ добавляет test', async () => {
@@ -190,7 +190,7 @@ describe('POST /issues — успешное создание', () => {
 
     expect(response.statusCode).toBe(201);
     const steps = response.json().pipeline_steps as string[];
-    expect(steps).toEqual(['resolve', 'review']);
+    expect(steps).toEqual(['review']);
     expect(steps).not.toContain('test');
   });
 
@@ -205,7 +205,7 @@ describe('POST /issues — успешное создание', () => {
 
     expect(response.statusCode).toBe(201);
     const steps = response.json().pipeline_steps as string[];
-    expect(steps).toEqual(['resolve', 'test']);
+    expect(steps).toEqual(['test']);
     expect(steps).not.toContain('review');
   });
 
@@ -219,11 +219,7 @@ describe('POST /issues — успешное создание', () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(response.json().pipeline_steps).toEqual([
-      'resolve',
-      'review',
-      'test',
-    ]);
+    expect(response.json().pipeline_steps).toEqual(['review', 'test']);
   });
 
   it('шаги: без review/test в pipeline_steps — ни одного (is_review_need больше не навязывает)', async () => {
@@ -273,7 +269,6 @@ describe('POST /issues — успешное создание', () => {
 
     expect(response.statusCode).toBe(201);
     expect(response.json().pipeline_steps).toEqual([
-      'resolve',
       'review',
       'test',
       'pr',
@@ -600,7 +595,15 @@ describe('report routes (D13–D18)', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: 'idle' });
+    const body = response.json();
+    expect(body.status).toBe('idle');
+    // Артефактов нет — обе половины отчёта помечены `present: false`.
+    expect(body.artifacts.md).toEqual({
+      present: false,
+      bytes: 0,
+      mtime: null,
+    });
+    expect(body.artifacts.html.present).toBe(false);
   });
 
   it('D16: GET /issues/:id/report/status с report.md → success + lastRunAt', async () => {
@@ -630,6 +633,73 @@ describe('report routes (D13–D18)', () => {
     expect(response.json()).toEqual({ error: 'issue not found' });
   });
 
+  it('D17b: строка running без сердцебиения → failed, строка погашена', async () => {
+    const id = await createIssue();
+    const staleAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    const runId = randomUUID();
+    db.insert(stepRuns)
+      .values({
+        id: runId,
+        issue_id: id,
+        iteration_id: null,
+        step: 'report',
+        attempt: 1,
+        status: 'running',
+        context: 'manual',
+        feedback: null,
+        created_at: staleAt,
+        updated_at: staleAt,
+      })
+      .run();
+
+    const response = await reportApp.inject({
+      method: 'GET',
+      url: `${ENDPOINT}/${id}/report/status`,
+    });
+
+    const body = response.json();
+    // A row with a dead heartbeat is not "in progress": the UI must be able to
+    // retry instead of holding a disabled button forever.
+    expect(body.status).toBe('failed');
+    expect(body.feedback).toContain('нет активности');
+    expect(body.finishedAt).toBe(staleAt);
+    const row = db.select().from(stepRuns).where(eq(stepRuns.id, runId)).get();
+    expect(row?.status).toBe('failed');
+  });
+
+  it('D17c: живой прогон остаётся running и без finishedAt', async () => {
+    const id = await createIssue();
+    const freshAt = new Date().toISOString();
+    const runId = randomUUID();
+    db.insert(stepRuns)
+      .values({
+        id: runId,
+        issue_id: id,
+        iteration_id: null,
+        step: 'report',
+        attempt: 1,
+        status: 'running',
+        context: 'manual',
+        feedback: null,
+        created_at: freshAt,
+        updated_at: freshAt,
+      })
+      .run();
+
+    const body = (
+      await reportApp.inject({
+        method: 'GET',
+        url: `${ENDPOINT}/${id}/report/status`,
+      })
+    ).json();
+
+    expect(body.status).toBe('running');
+    expect(body.runStatus).toBe('running');
+    // `finishedAt` is terminal-only: a heartbeat is not a finish.
+    expect(body.finishedAt).toBeUndefined();
+    expect(body.updatedAt).toBe(freshAt);
+  });
+
   it('D18: POST /report публикует step_status running → success по reportRunId', async () => {
     const id = await createIssue();
     const events: SSEEvent[] = [];
@@ -654,7 +724,15 @@ describe('report routes (D13–D18)', () => {
       status: 'running',
       step: 'report',
     });
-    expect(statuses()[1].data).toBe('success');
+    // Прогон, который не создал report.md, — провал, а не «успех с пустым
+    // отчётом»: именно эта ложь и висела в UI.
+    expect(statuses()[1].data).toBe('failed');
+    const status = await reportApp.inject({
+      method: 'GET',
+      url: `${ENDPOINT}/${id}/report/status`,
+    });
+    expect(status.json().status).toBe('failed');
+    expect(status.json().feedback).toContain('report.md');
   });
 
   it('D19: POST /report архивирует прошлый отчёт до спавна; /result → 404, не 500', async () => {
@@ -752,7 +830,53 @@ describe('report routes (D13–D18)', () => {
         method: 'GET',
         url: `${ENDPOINT}/${id}/report/status`,
       });
-      expect(statusDuring.json()).toEqual({ status: 'running' });
+      expect(statusDuring.json().status).toBe('running');
+
+      pi.releaseRun();
+      await vi.waitFor(() => expect(isReportRunActive(id)).toBe(false));
+    } finally {
+      await guardApp.close();
+    }
+  });
+
+  it('D22: POST /report во время активного прогона → 409, без второго архива', async () => {
+    const id = seedIssueRow();
+    const wsDir = join(root, id);
+    mkdirSync(wsDir, { recursive: true });
+    writeFileSync(join(wsDir, 'report.md'), '# СТАРЫЙ\n', 'utf8');
+
+    const pi = new PendingReportPi();
+    const guardApp = buildApp(db, {
+      workspaceRoot: root,
+      sse: new InMemorySseHub(),
+      pi,
+    });
+    try {
+      const first = await guardApp.inject({
+        method: 'POST',
+        url: `${ENDPOINT}/${id}/report`,
+      });
+      expect(first.statusCode).toBe(202);
+      const stamps = readdirSync(join(wsDir, 'reports'));
+      expect(stamps).toHaveLength(1);
+
+      // Второй POST не архивирует корень повторно и не спавнит агента:
+      // иначе отчёт первого прогона исчез бы из /result.
+      const second = await guardApp.inject({
+        method: 'POST',
+        url: `${ENDPOINT}/${id}/report`,
+      });
+      expect(second.statusCode).toBe(409);
+      expect(second.json()).toEqual({ error: 'report run already active' });
+      expect(readdirSync(join(wsDir, 'reports'))).toEqual(stamps);
+
+      // Отказ не сбрасывает флаг активного прогона.
+      expect(isReportRunActive(id)).toBe(true);
+      const status = await guardApp.inject({
+        method: 'GET',
+        url: `${ENDPOINT}/${id}/report/status`,
+      });
+      expect(status.json().status).toBe('running');
 
       pi.releaseRun();
       await vi.waitFor(() => expect(isReportRunActive(id)).toBe(false));
@@ -804,7 +928,7 @@ describe('report routes (D13–D18)', () => {
           method: 'GET',
           url: `${ENDPOINT}/${id}/report/status`,
         });
-        expect(status.json()).toEqual({ status: 'failed' });
+        expect(status.json()).toMatchObject({ status: 'failed' });
       });
     } finally {
       await failApp.close();
@@ -882,7 +1006,7 @@ describe('report routes (D13–D18)', () => {
           method: 'GET',
           url: `${ENDPOINT}/${id}/report/status`,
         });
-        expect(status.json()).toEqual({
+        expect(status.json()).toMatchObject({
           status: 'success',
           lastRunAt: expect.any(String),
           warnings: [

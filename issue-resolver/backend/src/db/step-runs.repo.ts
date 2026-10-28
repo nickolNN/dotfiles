@@ -9,16 +9,36 @@ import {
   type StepRunStatus,
   type StepRunWithLog,
 } from '@issue-resolver/shared';
-import { asc, eq, getTableColumns } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns } from 'drizzle-orm';
+import { capSessionEvents } from '../pi/session-events-cap';
 import type { Db } from './client';
-import { stepOutputs, stepRuns } from './schema';
+import { iterations, stepOutputs, stepRuns } from './schema';
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Задача, которой принадлежит итерация. Нужна, чтобы прогоны внутри итерации
+ * не заставляли каждый вызывающий слой дублировать `issue_id`.
+ */
+function issueIdOfIteration(db: Db, iterationId: string): string | null {
+  const row = db
+    .select({ issue_id: iterations.issue_id })
+    .from(iterations)
+    .where(eq(iterations.id, iterationId))
+    .get();
+  return row?.issue_id ?? null;
+}
+
 export interface CreateStepRunInput {
-  iterationId: string;
+  /**
+   * Задача-владелец. Для прогона внутри итерации может не передаваться —
+   * выводится из итерации; для прогона вне итерации обязателен.
+   */
+  issueId?: string;
+  /** null — прогон вне итерации (отчёт, ручной запуск шага). */
+  iterationId: string | null;
   step: PipelineStep;
   attempt: number;
   context: string;
@@ -81,8 +101,17 @@ export async function createStepRun(
   input: CreateStepRunInput,
 ): Promise<StepRun> {
   const now = nowIso();
+  const issueId =
+    input.issueId ??
+    (input.iterationId ? issueIdOfIteration(db, input.iterationId) : null);
+  if (!issueId) {
+    throw new Error(
+      'createStepRun: issueId обязателен для прогона вне итерации',
+    );
+  }
   const row: StepRun = {
     id: randomUUID(),
+    issue_id: issueId,
     iteration_id: input.iterationId,
     step: input.step,
     attempt: input.attempt,
@@ -162,6 +191,40 @@ export async function getStepRun(db: Db, id: string): Promise<StepRun | null> {
   return db.select().from(stepRuns).where(eq(stepRuns.id, id)).get() ?? null;
 }
 
+/**
+ * Прогоны задачи независимо от итерации: и обычные шаги, и прогоны вне
+ * итерации (`iteration_id = NULL`, например report). Порядок — по времени
+ * создания: ручной прогон живёт рядом с историей шагов и не требует
+ * фиктивной итерации.
+ */
+export async function listStepRunsByIssue(
+  db: Db,
+  issueId: string,
+): Promise<StepRun[]> {
+  return db
+    .select()
+    .from(stepRuns)
+    .where(eq(stepRuns.issue_id, issueId))
+    .orderBy(asc(stepRuns.created_at), asc(stepRuns.id))
+    .all();
+}
+
+/** Последний прогон шага в задаче (в т.ч. вне итерации) — источник статуса. */
+export async function getLatestStepRunForIssue(
+  db: Db,
+  issueId: string,
+  step: PipelineStep,
+): Promise<StepRun | null> {
+  return (
+    db
+      .select()
+      .from(stepRuns)
+      .where(and(eq(stepRuns.issue_id, issueId), eq(stepRuns.step, step)))
+      .orderBy(desc(stepRuns.created_at), desc(stepRuns.id))
+      .get() ?? null
+  );
+}
+
 /** Отчёт шага; UNIQUE(step_run_id) не даёт записать второй отчёт на тот же прогон. */
 export async function createStepOutput(
   db: Db,
@@ -226,4 +289,43 @@ export async function listStepRunsWithLog(
     report: row.report ?? null,
     screenshots_dir: row.screenshots_dir ?? null,
   }));
+}
+
+/**
+ * Один прогон с логом. Нужен прогонам вне итерации (отчёт): у них нет
+ * `iteration_id`, и списковый маршрут итерации до них не достаёт.
+ */
+export async function getStepRunWithLog(
+  db: Db,
+  stepRunId: string,
+): Promise<StepRunWithLog | null> {
+  const row = db
+    .select({
+      ...getTableColumns(stepRuns),
+      stdout: stepOutputs.stdout,
+      stderr: stepOutputs.stderr,
+      outputEvents: stepOutputs.events,
+      stats: stepOutputs.stats,
+      report: stepOutputs.report,
+      screenshots_dir: stepOutputs.screenshots_dir,
+    })
+    .from(stepRuns)
+    .leftJoin(stepOutputs, eq(stepRuns.id, stepOutputs.step_run_id))
+    .where(eq(stepRuns.id, stepRunId))
+    .get();
+
+  if (!row) return null;
+  const { outputEvents, ...rest } = row;
+  return {
+    ...rest,
+    stdout: rest.stdout ?? '',
+    stderr: rest.stderr ?? '',
+    // The cap is mandatory on read as well: the DB still holds rows written
+    // before the limit existed (one of them is 175 MB of events), and shipping
+    // one to the browser freezes the tab on the first output view.
+    events: capSessionEvents(pickStepRunEvents(outputEvents, rest.events)),
+    stats: parseStats(rest.stats ?? null),
+    report: rest.report ?? null,
+    screenshots_dir: rest.screenshots_dir ?? null,
+  };
 }

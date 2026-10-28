@@ -22,6 +22,11 @@ import {
 } from '../db/issue-files.repo';
 import { getRepository } from '../db/repositories.repo';
 import { issueRepositories, issues, iterations } from '../db/schema';
+import {
+  getLatestStepRunForIssue,
+  getStepRunWithLog,
+  updateStepRun,
+} from '../db/step-runs.repo';
 import type { JiraClient, JiraIssueFull } from '../jira/client';
 import {
   createIssueRequestSchema,
@@ -41,6 +46,7 @@ import {
   observedModelFor,
   runIssueIteration,
   runReportAgent,
+  REPORT_RUN_STALE_MS,
 } from '../workflow/run-iteration.service';
 import { buildStepPrompt } from '../workflow/prompts';
 import {
@@ -54,6 +60,7 @@ import { readRequestPayload } from './multipart';
 import {
   containerNameFor,
   DEFAULT_WORKSPACE_ROOT,
+  workspaceContainerDirFor,
   workspaceHostDirFor,
 } from '../workspace/paths';
 
@@ -81,21 +88,16 @@ function artifactWarningHeaders(
 }
 
 /**
- * Эффективные шаги задачи: 'resolve' всегда присутствует; при createMr —
- * 'pr' в конец. Список шагов приходит из `pipeline_steps`/`steps` напрямую:
- * review и test выбираются независимо пользователем, флагом не навязываются.
- * Остальное — без дублей, в исходном порядке.
+ * Steps as the user selected them (deduped; empty → DEFAULT_STEPS) with `pr`
+ * appended when createMr. `resolve` is not injected — the checkbox is
+ * authoritative, otherwise "MR only" was impossible.
  */
 function resolvePipelineSteps(
   input: PipelineStep[] | undefined,
   createMr: boolean,
 ): PipelineStep[] {
   const steps = input && input.length > 0 ? input : DEFAULT_STEPS;
-  const deduped = [...new Set(steps)];
-  const withResolve: PipelineStep[] = deduped.includes('resolve')
-    ? deduped
-    : ['resolve', ...deduped];
-  return combineSteps(withResolve, createMr);
+  return combineSteps([...new Set(steps)], createMr);
 }
 
 /**
@@ -188,6 +190,30 @@ function rfc5987(value: string): string {
     /['()!*]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );
+}
+
+/**
+ * Артефакты отчёта на диске: наличие, размер и mtime.
+ * `mtime` — ISO-Z без миллисекунд (один формат с `x-artifact-mtime`).
+ */
+async function reportArtifactsOnDisk(hostDir: string): Promise<{
+  md: { present: boolean; bytes: number; mtime: string | null };
+  html: { present: boolean; bytes: number; mtime: string | null };
+}> {
+  const { stat } = await import('node:fs/promises');
+  const read = async (name: string) => {
+    try {
+      const file = await stat(join(hostDir, name));
+      return {
+        present: file.size > 0,
+        bytes: file.size,
+        mtime: file.mtime.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      };
+    } catch {
+      return { present: false, bytes: 0, mtime: null };
+    }
+  };
+  return { md: await read('report.md'), html: await read('report.html') };
 }
 
 /**
@@ -587,6 +613,12 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
+      // A second run would archive the root the active run is still writing
+      // into, so the finished report would vanish from /result.
+      if (isReportRunActive(id)) {
+        return reply.status(409).send({ error: 'report run already active' });
+      }
+
       const reportRunId = `${id}/report`;
       const wsRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
       const hostDir = workspaceHostDirFor(wsRoot, id);
@@ -616,11 +648,13 @@ export async function issuesRoutes(
           feedback: null,
           repoPaths: repoWorkspaces,
           iterationCount,
+          // The report agent writes at this path; a clone path is not it.
+          workingDir: deps.local ? hostDir : workspaceContainerDirFor(id),
         });
 
         // Архивация прошлых артефактов живёт внутри `runReportAgent` — одна
         // точка для post-iteration и этого роута.
-        void runReportAgent(deps, {
+        void runReportAgent({ ...deps, db }, {
           issueId: id,
           containerName,
           hostDir,
@@ -656,41 +690,100 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      // Активный прогон → `running`, а не `idle` по пустому корню: корень
-      // заархивирован на время работы агента, и UI должен видеть «генерируется».
-      if (isReportRunActive(id)) {
-        return { status: 'running' };
-      }
-
+      // Активный прогон в памяти важнее строки в БД: корень на время работы
+      // заархивирован, и «idle» по пустому корню был бы враньём.
       const wsRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
       const hostDir = workspaceHostDirFor(wsRoot, id);
-      const reportMdPath = join(hostDir, 'report.md');
+      const artifacts = await reportArtifactsOnDisk(hostDir);
+      const run = await getLatestStepRunForIssue(db, id, 'report');
 
-      let reportExists = false;
-      let lastRunAt: string | undefined;
-      try {
-        const { stat } = await import('node:fs/promises');
-        const reportStat = await stat(reportMdPath);
-        reportExists = true;
-        lastRunAt = reportStat.mtime.toISOString().replace(/\.\d{3}Z$/, 'Z');
-      } catch {
-        reportExists = false;
+      // A `running` row with no live process is not "in progress", it is dead:
+      // the run lives in process memory, and its death used to leave the row in
+      // `running` forever (UI held «⏳» and blocked «Обновить»). A live run bumps
+      // `updated_at` every REPORT_RUN_HEARTBEAT_MS, so a row quiet for longer
+      // than REPORT_RUN_STALE_MS is honestly driven to `failed`.
+      if (
+        run &&
+        run.status === 'running' &&
+        !isReportRunActive(id) &&
+        Date.now() - Date.parse(run.updated_at) > REPORT_RUN_STALE_MS
+      ) {
+        const minutes = Math.max(
+          1,
+          Math.round((Date.now() - Date.parse(run.updated_at)) / 60_000),
+        );
+        const feedback = `report failed: нет активности ${minutes} мин — прогон прерван`;
+        await updateStepRun(db, run.id, { status: 'failed', feedback });
+        run.status = 'failed';
+        run.feedback = feedback;
       }
 
-      let status: 'success' | 'failed' | 'idle' = 'idle';
-      if (reportExists) status = 'success';
-      else if (lastReportFailed(id)) status = 'failed';
+      let status: 'idle' | 'running' | 'success' | 'failed';
+      if (isReportRunActive(id)) status = 'running';
+      else if (run) {
+        if (run.status === 'success') status = 'success';
+        else if (run.status === 'failed') status = 'failed';
+        // `pending`/`running` без записи в памяти = прогон прерван рестартом;
+        // reconcileInterruptedRuns гасит такие строки в `failed` при старте.
+        else status = 'running';
+      } else if (artifacts.md.present) {
+        // Файл есть, строки прогона нет (например, БД пересоздана) — отчёт
+        // действительно доступен, и `idle` было бы враньём в другую сторону.
+        status = 'success';
+      } else {
+        status = lastReportFailed(id) ? 'failed' : 'idle';
+      }
 
       const warnings = reportWarningsFor(id, hostDir);
       const observedModel = observedModelFor(id);
       return {
         status,
-        ...(lastRunAt ? { lastRunAt } : {}),
+        // Исход прогона из БД: время, причина и что реально легло на диск.
+        // Раньше `status` выводился из наличия report.md, поэтому прогон,
+        // который не создал ничего, выглядел успешным.
+        ...(run
+          ? {
+              runId: run.id,
+              runStatus: run.status,
+              startedAt: run.created_at,
+              // `finishedAt` only for a terminal row: a live run bumps
+              // `updated_at` too, but that is a heartbeat, not a finish.
+              ...(run.status === 'success' || run.status === 'failed'
+                ? { finishedAt: run.updated_at }
+                : {}),
+              // Last activity — the UI tells a live run from a hung one by this
+              // instead of trusting the word `running`.
+              updatedAt: run.updated_at,
+              ...(run.feedback ? { feedback: run.feedback } : {}),
+            }
+          : {}),
+        artifacts,
+        ...(artifacts.md.mtime ? { lastRunAt: artifacts.md.mtime } : {}),
         // Наблюдённая (а не запрошенная) модель — additive; после рестарта
         // отсутствует, и UI рисует «нет телеметрии», а не пустое значение.
         ...(observedModel ? { observedModel } : {}),
         ...(warnings.length > 0 ? { warnings } : {}),
       };
+    },
+  );
+
+  // GET /issues/:id/report/run — последний прогон отчёта вместе с логом сессии.
+  // Живёт вне итерации (step_runs.iteration_id = NULL), поэтому у шагового
+  // маршрута `/iterations/:id/step-runs` его нет.
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/report/run`,
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!service.getIssue(db, config, id)) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+      const run = await getLatestStepRunForIssue(db, id, 'report');
+      if (!run) return reply.status(404).send({ error: 'report run not found' });
+      const withLog = await getStepRunWithLog(db, run.id);
+      if (!withLog) {
+        return reply.status(404).send({ error: 'report run not found' });
+      }
+      return withLog;
     },
   );
 
@@ -927,37 +1020,33 @@ export async function issuesRoutes(
         )
         .get();
 
-      if (hasRunning) {
-        const hasPlanned = db
-          .select({ id: iterations.id })
-          .from(iterations)
-          .where(
-            and(
-              eq(iterations.issue_id, id),
-              eq(iterations.status, 'pending'),
-            ),
-          )
-          .get();
-        if (hasPlanned) {
-          return reply.status(409).send({
-            error: 'A pending iteration already exists — wait for it to start',
-          });
-        }
-        const hasDraft = db
-          .select({ id: iterations.id })
-          .from(iterations)
-          .where(
-            and(
-              eq(iterations.issue_id, id),
-              eq(iterations.status, 'draft'),
-            ),
-          )
-          .get();
-        if (hasDraft) {
-          return reply.status(409).send({
-            error: 'A draft iteration already exists — edit or delete it first',
-          });
-        }
+      // Queue slots are per issue and do not depend on a running iteration: with
+      // these checks nested under `hasRunning`, an idle issue accepted a second
+      // pending row and execution order drifted away from the numbers
+      // (#2 → #4 → #3 in a real run).
+      const hasPlanned = db
+        .select({ id: iterations.id })
+        .from(iterations)
+        .where(
+          and(eq(iterations.issue_id, id), eq(iterations.status, 'pending')),
+        )
+        .get();
+      if (hasPlanned) {
+        return reply.status(409).send({
+          error: 'A pending iteration already exists — wait for it to start',
+        });
+      }
+      const hasDraft = db
+        .select({ id: iterations.id })
+        .from(iterations)
+        .where(
+          and(eq(iterations.issue_id, id), eq(iterations.status, 'draft')),
+        )
+        .get();
+      if (hasDraft) {
+        return reply.status(409).send({
+          error: 'A draft iteration already exists — edit or delete it first',
+        });
       }
 
       db.insert(iterations).values(iteration).run();

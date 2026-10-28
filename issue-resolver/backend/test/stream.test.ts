@@ -57,9 +57,16 @@ function insertStepRun(
   status: StepRunStatus,
 ): string {
   const id = randomUUID();
+  const issueId =
+    db
+      .select({ issue_id: iterations.issue_id })
+      .from(iterations)
+      .where(eq(iterations.id, iterationId))
+      .get()?.issue_id ?? '';
   db.insert(stepRuns)
     .values({
       id,
+      issue_id: issueId,
       iteration_id: iterationId,
       step: 'resolve',
       attempt: 1,

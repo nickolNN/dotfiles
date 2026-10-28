@@ -200,16 +200,18 @@ export async function iterationsRoutes(
         and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'running')),
       ).get();
 
-      if (hasRunning) {
-        const hasPlanned = db.select({ id: iterations.id }).from(iterations).where(
-          and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'pending')),
-        ).get();
-        if (hasPlanned) return reply.status(409).send({ error: 'A pending iteration already exists — wait for it to start' });
-        const hasDraft = db.select({ id: iterations.id }).from(iterations).where(
-          and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'draft')),
-        ).get();
-        if (hasDraft) return reply.status(409).send({ error: 'A draft iteration already exists — edit or delete it first' });
+      // See POST /iterations in issues.ts: the slot checks hold with or without
+      // a running iteration, else the queue can hold two pending rows.
+      const hasPlanned = db.select({ id: iterations.id }).from(iterations).where(
+        and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'pending')),
+      ).get();
+      if (hasPlanned) return reply.status(409).send({ error: 'A pending iteration already exists — wait for it to start' });
+      const hasDraft = db.select({ id: iterations.id }).from(iterations).where(
+        and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'draft')),
+      ).get();
+      if (hasDraft) return reply.status(409).send({ error: 'A draft iteration already exists — edit or delete it first' });
 
+      if (hasRunning) {
         // Вставляем как draft.
         db.insert(iterations).values({ ...iteration, status: 'draft' }).run();
         // Копируем вложения.

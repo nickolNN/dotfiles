@@ -12,6 +12,7 @@ import type {
   ThinkingLevel,
 } from '@issue-resolver/shared';
 import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
 
 export const issues = sqliteTable('issues', {
   id: text('id').primaryKey(),
@@ -202,9 +203,17 @@ export const stepRuns = sqliteTable(
   'step_runs',
   {
     id: text('id').primaryKey(),
-    iteration_id: text('iteration_id')
+    /**
+     * Владелец прогона. Заполнен всегда: прогон вне итерации (report, ручной
+     * запуск шага) принадлежит задаче напрямую, а не какой-то итерации.
+     */
+    issue_id: text('issue_id')
       .notNull()
-      .references(() => iterations.id, { onDelete: 'cascade' }),
+      .references(() => issues.id, { onDelete: 'cascade' }),
+    /** null — прогон вне итерации (отчёт и подобные ручные запуски). */
+    iteration_id: text('iteration_id').references(() => iterations.id, {
+      onDelete: 'cascade',
+    }),
     step: text('step').$type<PipelineStep>().notNull(),
     attempt: integer('attempt').notNull(),
     status: text('status').$type<StepRunStatus>().notNull(),
@@ -224,11 +233,15 @@ export const stepRuns = sqliteTable(
     updated_at: text('updated_at').notNull(),
   },
   (table) => ({
-    uniqueAttempt: uniqueIndex('step_runs_iteration_id_step_attempt_unique').on(
-      table.iteration_id,
-      table.step,
-      table.attempt,
-    ),
+    // Частичные индексы: в SQLite NULL-ы в UNIQUE не конфликтуют между собой,
+    // поэтому общий индекс (iteration_id, step, attempt) не стережёт дубли
+    // прогонов вне итерации — это делает второй, по issue_id.
+    uniqueAttempt: uniqueIndex('step_runs_iteration_step_attempt_unique')
+      .on(table.iteration_id, table.step, table.attempt)
+      .where(sql`${table.iteration_id} IS NOT NULL`),
+    uniqueIssueAttempt: uniqueIndex('step_runs_issue_step_attempt_unique')
+      .on(table.issue_id, table.step, table.attempt)
+      .where(sql`${table.iteration_id} IS NULL`),
   }),
 );
 

@@ -86,6 +86,16 @@ function describeGitError(
   return error instanceof Error ? error : new Error(String(error));
 }
 
+/**
+ * A commit against an empty index is not a failure — publish still pushes the
+ * branch. Matches git's stderr wording, including "nothing added to commit but
+ * untracked files present".
+ */
+function isNothingToCommitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /nothing (added )?to commit/i.test(message);
+}
+
 export interface GitPrepareInput {
   repoUrls: string[];
   baseBranches: string[];
@@ -651,15 +661,30 @@ export class GitCliService implements GitService {
       await this.git(['-C', input.repoPath, 'reset', '--soft', input.squashBase]);
     }
     await this.git(['-C', input.repoPath, 'add', '-A']);
-    // «nothing to commit» — не ошибка: пуш нужен даже без изменений.
-    await this.git([
-      '-C',
-      input.repoPath,
-      'commit',
-      '--no-verify',
-      '-m',
-      input.commitMessage,
-    ]).catch(() => undefined);
+    // Identity via `-c`, not the user's config: an agent container has no
+    // global user.name/user.email, and `git commit` then dies with "Author
+    // identity unknown". The failure used to be swallowed below, so a branch
+    // with zero commits was pushed and GitHub answered 422 on MR creation.
+    const identity = [
+      '-c',
+      `user.name=${process.env.GIT_AUTHOR_NAME || 'issue-resolver'}`,
+      '-c',
+      `user.email=${process.env.GIT_AUTHOR_EMAIL || 'issue-resolver@localhost'}`,
+    ];
+    try {
+      await this.git([
+        '-C',
+        input.repoPath,
+        ...identity,
+        'commit',
+        '--no-verify',
+        '-m',
+        input.commitMessage,
+      ]);
+    } catch (error) {
+      // A no-op commit is expected: the push still has to run.
+      if (!isNothingToCommitError(error)) throw error;
+    }
 
     // Push with token from env (GitHub/GitLab/Bitbucket) — без него git
     // пытается читать username с терминала и падает «No such device».

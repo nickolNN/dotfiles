@@ -1,4 +1,7 @@
-Output contract — `.issue-step-result.json` at the root of the working folder.
+Output contract — `.issue-step-result.json` at the root of the working folder
+(the "Working folder" block above states its absolute path). Write the file
+exactly there, never inside a repository working copy: steps that wrote into a
+clone produced runs whose verdict came from another step's report.
 It is the single source of truth for this step: the engine reads it to decide
 whether the step passed, and the next steps read it as your hand-off. Without
 this file the step counts as incomplete.

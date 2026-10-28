@@ -61,13 +61,15 @@ class InMemoryStepRunStore implements StepRunStore {
   }
 
   async createStepRun(input: {
-    iterationId: string;
+    issueId?: string;
+    iterationId: string | null;
     step: PipelineStep;
     attempt: number;
     context: string;
   }): Promise<StepRun> {
     const run: StepRun = {
       id: `run-${++this.seq}`,
+      issue_id: input.issueId ?? 'issue-1',
       iteration_id: input.iterationId,
       step: input.step,
       attempt: input.attempt,
@@ -138,6 +140,7 @@ const makeDeps = () => {
 const makeInput = (
   steps: PipelineStep[],
   agentTimeoutMs?: number,
+  agentStallTimeoutMs?: number,
 ): RunIterationInput => ({
   issue: {
     id: 'issue-timeout-1',
@@ -161,6 +164,7 @@ const makeInput = (
     { repository_url: 'https://example.com/a.git', base_branch: 'main' },
   ],
   ...(agentTimeoutMs !== undefined ? { agentTimeoutMs } : {}),
+  ...(agentStallTimeoutMs !== undefined ? { agentStallTimeoutMs } : {}),
 });
 
 /** Скриптованный PiRunner: по одному handler'у на вызов; умеет reject/hang. */
@@ -427,5 +431,43 @@ describe('runIteration — падение/зависание pi-агента з�
     ]);
     expect(resolveOutput(store).stderr).toMatch(/timed out|unexpected pi call/);
     expect(pi.calls[1].options?.stepRunId).toContain('/stage/1/worker/1');
+  });
+
+  it('single: молчащее зависание → сторож тишины снимает прогон, не дожидаясь 3ч', async () => {
+    const { deps, store } = makeDeps();
+    deps.pi = new ScriptedPiRunner([hang]);
+
+    // The hard timeout stays at its 3 h default: the watchdog is what kills it.
+    const result = await runIteration(
+      deps,
+      makeInput(['resolve'], DEFAULT_RESOLVE_AGENT_TIMEOUT_MS, 30),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(trace(store)[0]).toBe('resolve#1:failed');
+    expect(store.outputs[0].stderr).toMatch(/stalled: no output for 30ms/);
+  });
+
+  it('single: поток вывода дольше «тишины» → сторож не срабатывает', async () => {
+    const { deps, store } = makeDeps();
+    deps.pi = new ScriptedPiRunner([
+      (call) =>
+        new Promise<StepExecutionResult>((resolve) => {
+          let ticks = 0;
+          const timer = setInterval(() => {
+            ticks += 1;
+            call.options?.onStdout?.(`chunk ${ticks}`);
+            if (ticks < 6) return;
+            clearInterval(timer);
+            resolve(passResolve('живой агент'));
+          }, 15);
+        }),
+    ]);
+
+    // Silence 60 ms < total run ~90 ms: only the activity counter saves it.
+    const result = await runIteration(deps, makeInput(['resolve'], 60_000, 60));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual(['resolve#1:success']);
   });
 });

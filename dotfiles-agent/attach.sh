@@ -294,13 +294,6 @@ if [ -d "${SKILLS_DIR}" ]; then
   docker cp "${SKILLS_DIR}/." "${CONTAINER}:/home/agent/.agents/skills/"
 fi
 
-# ── Sync the pi model list (host config → container) ─────────────
-# The image bakes models.json at build time, so a router preset added on the
-# host afterwards would never show up; the baked copy also points local
-# inference at the host's loopback, which inside a bridge-networked container
-# is the container itself. See sync-models.sh.
-"${SCRIPT_DIR}/sync-models.sh" "${CONTAINER}" || true
-
 # Remote skills are baked at build time and the repo overlay cannot add them,
 # so a skill that entered the Dockerfile list after the last image build is
 # missing here in silence. Make it a warning (never a failure) — pipeline step

@@ -342,6 +342,52 @@ describe('POST /issues/:id/iterations — одна активная итерац
     expect(pi.calls).toHaveLength(0);
   });
 
+  it('pending без running (задача простаивает) → 409, очередь не копится', async () => {
+    const { db, pi, app } = makeEnv();
+    const issueId = seedIssue(db);
+    seedIteration(db, issueId, { number: 1, status: 'failed' });
+    seedIteration(db, issueId, { number: 2, status: 'pending' });
+
+    // The check used to live under `hasRunning`: an idle issue accepted a
+    // second pending row and execution order drifted away from the numbers.
+    const before = iterationRows(db, issueId).length;
+    const res = await app.inject({
+      method: 'POST',
+      url: `${ISSUES}/${issueId}/iterations`,
+      payload: { context: 'ctx', steps: ['resolve'] },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: 'A pending iteration already exists — wait for it to start',
+    });
+    expect(iterationRows(db, issueId)).toHaveLength(before);
+    expect(pi.calls).toHaveLength(0);
+  });
+
+  it('repeat при draft без running → 409 (порядок итераций не ломается)', async () => {
+    const { db, pi, app } = makeEnv();
+    const issueId = seedIssue(db);
+    const sourceId = seedIteration(db, issueId, {
+      number: 1,
+      status: 'completed',
+    });
+    seedIteration(db, issueId, { number: 2, status: 'draft' });
+
+    const before = iterationRows(db, issueId).length;
+    const res = await app.inject({
+      method: 'POST',
+      url: `${ITERATIONS}/${sourceId}/repeat`,
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: 'A draft iteration already exists — edit or delete it first',
+    });
+    expect(iterationRows(db, issueId)).toHaveLength(before);
+    expect(pi.calls).toHaveLength(0);
+  });
+
   it('без running-итерации создаёт pending и запускает пайплайн', async () => {
     const { db, pi, app } = makeEnv();
     const issueId = seedIssue(db);

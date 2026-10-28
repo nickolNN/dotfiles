@@ -42,6 +42,7 @@ function makeStepRun(
 ): StepRunWithLog {
   return {
     id: 'run-1',
+    issue_id: 'issue-1',
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
@@ -168,6 +169,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
       'iter-1': [
         makeStepRun({
           id: 'run-a',
+          issue_id: 'issue-1',
           iteration_id: 'iter-1',
           step: 'resolve',
           status: 'success',

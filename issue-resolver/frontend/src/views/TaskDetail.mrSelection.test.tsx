@@ -174,3 +174,108 @@ describe('TaskDetail — выбор репозиториев для MR', () => {
     expect(body.pr_repository_ids).toEqual([]);
   });
 });
+
+/** Iteration modal over an issue with the given step set. */
+async function setupIterationForm(issue: Issue) {
+  const iteration = makeIteration();
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith('/iterations')) {
+      if (init?.method === 'POST') {
+        return Promise.resolve(jsonResponse(iteration, { status: 201 }));
+      }
+      return Promise.resolve(jsonResponse([iteration]));
+    }
+    return Promise.resolve(jsonResponse(issue));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  render(<TaskDetail issueId={issue.id} />);
+  await openIterationModal();
+  return fetchMock;
+}
+
+function submittedBody(fetchMock: ReturnType<typeof vi.fn>): {
+  steps?: string[];
+} {
+  const postCall = fetchMock.mock.calls.find(
+    ([, init]) => init?.method === 'POST',
+  );
+  expect(postCall).toBeTruthy();
+  const [, init] = postCall as [string, RequestInit];
+  return JSON.parse(String(init.body)) as { steps?: string[] };
+}
+
+async function submitIteration(context = 'ctx') {
+  setMarkdownEditorValue('Контекст итерации', context);
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Запустить новую итерацию' }),
+  );
+}
+
+describe('TaskDetail — набор шагов итерации', () => {
+  it('без галочек: запуск недоступен, POST не уходит', async () => {
+    const fetchMock = await setupIterationForm(
+      makeIssue({ pipeline_steps: ['resolve'] }),
+    );
+
+    fireEvent.click(await screen.findByLabelText('Исполнение'));
+
+    expect(
+      screen.getByText('Отметь хотя бы один шаг пайплайна.'),
+    ).toBeInTheDocument();
+    const submit = screen.getByRole('button', {
+      name: 'Запустить новую итерацию',
+    });
+    expect(submit).toBeDisabled();
+
+    setMarkdownEditorValue('Контекст итерации', 'ctx');
+    fireEvent.click(submit);
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === 'POST'),
+    ).toBe(false);
+  });
+
+  it('одна галочка: снятый resolve и PR → steps только pr', async () => {
+    const fetchMock = await setupIterationForm(makeIssue());
+
+    fireEvent.click(await screen.findByLabelText('Исполнение'));
+    await submitIteration();
+
+    expect(submittedBody(fetchMock).steps).toEqual(['pr']);
+  });
+
+  it('одна галочка: только resolve без PR → steps [resolve]', async () => {
+    const fetchMock = await setupIterationForm(makeIssue());
+
+    fireEvent.click(await screen.findByLabelText('PR'));
+    await submitIteration();
+
+    expect(submittedBody(fetchMock).steps).toEqual(['resolve']);
+  });
+
+  it('две галочки: resolve + review → оба в payload', async () => {
+    const fetchMock = await setupIterationForm(
+      makeIssue({ pipeline_steps: ['resolve'] }),
+    );
+
+    fireEvent.click(await screen.findByLabelText('Код-ревью'));
+    await submitIteration();
+
+    expect(submittedBody(fetchMock).steps).toEqual(['resolve', 'review']);
+  });
+
+  it('три галочки: порядок канонический, а не пользовательский', async () => {
+    const fetchMock = await setupIterationForm(
+      makeIssue({ pipeline_steps: ['test', 'resolve', 'refine'] }),
+    );
+
+    await screen.findByLabelText('Тест');
+    await submitIteration();
+
+    expect(submittedBody(fetchMock).steps).toEqual([
+      'refine',
+      'resolve',
+      'test',
+    ]);
+  });
+});

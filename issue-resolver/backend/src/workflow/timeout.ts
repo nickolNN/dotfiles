@@ -101,3 +101,70 @@ export function withAgentTimeout<T>(
     );
   });
 }
+
+/** Env var for the agent silence window (ms). */
+export const AGENT_STALL_TIMEOUT_ENV =
+  'ISSUE_RESOLVER_AGENT_STALL_TIMEOUT_MS';
+
+/**
+ * 15 min without a single chunk or session event. The hard ceiling (3 h) fires
+ * too late: real runs sat 2h21m after the agent went quiet.
+ */
+export const DEFAULT_AGENT_STALL_TIMEOUT_MS = 15 * 60_000;
+
+/** Floor for the env value; a per-run override bypasses this clamp. */
+export const MIN_AGENT_STALL_TIMEOUT_MS = 30_000;
+
+/** Silence window in ms from env, clamped to the floor; invalid → default. */
+export function resolveAgentStallTimeoutMs(
+  raw: string | undefined = process.env[AGENT_STALL_TIMEOUT_ENV],
+): number {
+  const parsed = Number(raw);
+  if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_AGENT_STALL_TIMEOUT_MS;
+  }
+  return Math.max(parsed, MIN_AGENT_STALL_TIMEOUT_MS);
+}
+
+/**
+ * Rejects once `activity()` has not changed for `stallMs`. Every chunk of step
+ * output must bump the counter, otherwise a live but silent run gets killed.
+ */
+export function withAgentStallGuard<T>(
+  promise: Promise<T>,
+  options: {
+    stallMs: number;
+    label: string;
+    activity: () => number;
+    /** Counter poll interval (default 1 s). */
+    pollMs?: number;
+  },
+): Promise<T> {
+  const { stallMs, label, activity } = options;
+  const pollMs = Math.max(1, Math.min(options.pollMs ?? 1_000, stallMs));
+  return new Promise<T>((resolve, reject) => {
+    let seen = activity();
+    let seenAt = Date.now();
+    const timer = setInterval(() => {
+      const current = activity();
+      if (current !== seen) {
+        seen = current;
+        seenAt = Date.now();
+        return;
+      }
+      if (Date.now() - seenAt < stallMs) return;
+      clearInterval(timer);
+      reject(new Error(`${label} stalled: no output for ${stallMs}ms`));
+    }, pollMs);
+    promise.then(
+      (value) => {
+        clearInterval(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearInterval(timer);
+        reject(error);
+      },
+    );
+  });
+}

@@ -231,6 +231,7 @@ describe('DELETE /issues/:id — полная зачистка', () => {
     db.insert(stepRuns)
       .values({
         id: stepRunId,
+        issue_id: issueId,
         iteration_id: iteration!.id,
         step: 'test',
         attempt: 1,

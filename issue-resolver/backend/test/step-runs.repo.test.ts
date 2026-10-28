@@ -540,14 +540,30 @@ describe('listStepRunsWithLog', () => {
   });
 });
 
-describe('ensureStepRunColumns (миграция)', () => {
-  it('добавляет events в legacy step_runs и идемпотентна', () => {
+describe('ensureStepRunIssueColumn (миграция)', () => {
+  it('пересобирает legacy step_runs: issue_id из итерации, iteration_id nullable', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ir-step-run-'));
     const file = join(dir, 'legacy.db');
     try {
-      const raw = new Database(file);
-      raw.exec(`
-        CREATE TABLE step_runs (
+      // 1. Современная схема + реальные родители (FK включён).
+      createDb(file);
+      const seed = new Database(file);
+      seed.pragma('foreign_keys = ON');
+      seed
+        .prepare(
+          "INSERT INTO issues (id, title, description, desired_result, pipeline_steps, status, created_at, updated_at) VALUES ('i1', 'task', '', 'md', '[]', 'completed', '2026-01-01', '2026-01-01')",
+        )
+        .run();
+      seed
+        .prepare(
+          "INSERT INTO iterations (id, issue_id, number, context, steps, status, created_at, updated_at) VALUES ('it1', 'i1', 1, '', '[]', 'completed', '2026-01-01', '2026-01-01')",
+        )
+        .run();
+
+      // 2. Откат к legacy-форме: NOT NULL iteration_id, без issue_id/events.
+      seed.pragma('foreign_keys = OFF');
+      seed.exec(`
+        CREATE TABLE step_runs_legacy (
           id TEXT PRIMARY KEY,
           iteration_id TEXT NOT NULL,
           step TEXT NOT NULL,
@@ -558,28 +574,46 @@ describe('ensureStepRunColumns (миграция)', () => {
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+        INSERT INTO step_runs_legacy (id, iteration_id, step, attempt, status, context, created_at, updated_at)
+          VALUES ('r1', 'it1', 'resolve', 1, 'pending', '', '2026-01-01', '2026-01-01');
+        DROP TABLE step_runs;
+        ALTER TABLE step_runs_legacy RENAME TO step_runs;
       `);
-      raw.close();
+      seed.close();
 
+      // 3. Миграция, дважды — идемпотентна.
       createDb(file);
-      createDb(file); // повторный запуск не должен падать
+      createDb(file);
 
       const check = new Database(file);
-      const columns = (
-        check.pragma('table_info(step_runs)') as { name: string }[]
-      ).map((column) => column.name);
+      check.pragma('foreign_keys = ON');
+      const columns = new Map(
+        (check.pragma('table_info(step_runs)') as { name: string; notnull: number }[]).map(
+          (column) => [column.name, column.notnull],
+        ),
+      );
+      const migrated = check
+        .prepare(
+          "SELECT issue_id, iteration_id, events FROM step_runs WHERE id = 'r1'",
+        )
+        .get() as { issue_id: string; iteration_id: string | null; events: string };
+
+      // Прогон вне итерации (report) больше не требует итерации.
       check
         .prepare(
-          "INSERT INTO step_runs (id, iteration_id, step, attempt, status, context, created_at, updated_at) VALUES ('r1','it1','resolve',1,'pending','','2026-01-01','2026-01-01')",
+          "INSERT INTO step_runs (id, issue_id, iteration_id, step, attempt, status, context, created_at, updated_at) VALUES ('r2', 'i1', NULL, 'report', 1, 'pending', '', '2026-01-01', '2026-01-01')",
         )
         .run();
-      const stored = check
-        .prepare("SELECT events FROM step_runs WHERE id = 'r1'")
-        .get() as { events?: string };
+      const reportRun = check
+        .prepare("SELECT iteration_id FROM step_runs WHERE id = 'r2'")
+        .get() as { iteration_id: string | null };
       check.close();
 
-      expect(columns).toContain('events');
-      expect(stored.events).toBe('[]');
+      expect(columns.get('issue_id')).toBe(1);
+      expect(columns.get('iteration_id')).toBe(0);
+      expect(migrated.issue_id).toBe('i1');
+      expect(migrated.events).toBe('[]');
+      expect(reportRun.iteration_id).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

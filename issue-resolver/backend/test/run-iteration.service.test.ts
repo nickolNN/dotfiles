@@ -1026,15 +1026,20 @@ describe('runIssueIteration — разовая подготовка рабоче
     await prepareIssueWorkspace(db, deps, input);
     await prepareIssueWorkspace(db, deps, input);
 
-    // Публикация (`pr`) делает `git add -A`, поэтому RUN_INSTRUCTIONS.md и
-    // DEV_SERVER.sh должны быть в локальном exclude — иначе они уедут в MR.
+    // Publish runs `git add -A`, so all of these must sit in the local exclude.
     const lines = readFileSync(
       join(root, issueId, 'app', '.git', 'info', 'exclude'),
       'utf8',
     )
       .split('\n')
       .filter((line) => line.startsWith('/'));
-    expect(lines).toEqual(['/RUN_INSTRUCTIONS.md', '/DEV_SERVER.sh']);
+    expect(lines).toEqual([
+      '/RUN_INSTRUCTIONS.md',
+      '/DEV_SERVER.sh',
+      '/.issue-step-result.json',
+      '/.issue-worker-result-*.json',
+      '/.issue-stage-*.json',
+    ]);
   });
 
   it('prepareIssueWorkspace init-fail → задача и итерация failed, pi не вызван', async () => {
@@ -1771,9 +1776,22 @@ describe('spawnReportAgent (B6–B9)', () => {
       step: 'report',
       model: null,
     });
-    // Терминал — плоская строка статуса (контракт движка).
-    expect(statuses()[1].data).toBe('success');
+    // Терминал — плоская строка статуса (контракт движка). Прогон без
+    // артефактов не «успех с пустым отчётом», а провал: report.md не появился.
+    expect(statuses()[1].data).toBe('failed');
     expect(statuses()[1].issueId).toBe(issueId);
+    // Исход прогона персистентен: строка step_runs вне итерации + лог.
+    const reportRun = db
+      .select()
+      .from(stepRuns)
+      .all()
+      .find((run) => run.step === 'report');
+    expect(reportRun).toMatchObject({
+      issue_id: issueId,
+      iteration_id: null,
+      status: 'failed',
+    });
+    expect(reportRun?.feedback).toContain('report.md');
   });
 
   it('B11: падение report-агента → step_status failed, ошибка в серверном логе', async () => {

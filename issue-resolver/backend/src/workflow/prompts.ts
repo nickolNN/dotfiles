@@ -114,6 +114,8 @@ export interface StepPromptInput {
   iterationCount?: number;
   /** Путь к каталогу narratives для report-агента (видный агенту). */
   iterationNarrativesDir?: string;
+  /** Working folder as the agent sees it (session cwd); stated in the prompt. */
+  workingDir?: string;
 }
 
 export interface RoomPromptInput {
@@ -138,6 +140,8 @@ export interface RoomPromptInput {
   prTargets?: PrTarget[];
   /** Снимок рабочей копии перед шагом (см. `StepPromptInput.stateDigest`). */
   stateDigest?: RepoChangeDigest[];
+  /** Working folder as the agent sees it (session cwd); stated in the prompt. */
+  workingDir?: string;
 }
 
 export interface WorkerSummary {
@@ -148,8 +152,26 @@ export interface WorkerSummary {
 
 // ── Shared blocks (single source of truth for every prompt) ─────────
 
-function outputContract(): string {
-  return readPrompt('output-contract.md');
+function outputContract(workingDir?: string): string {
+  const contract = readPrompt('output-contract.md');
+  if (!workingDir) return contract;
+  return [
+    `Output contract — write exactly \`${join(workingDir, '.issue-step-result.json')}\` (absolute path).`,
+    'A copy inside a repository working copy is ignored by the engine.',
+    '',
+    contract,
+  ].join('\n');
+}
+
+/** The agent's cwd: the parent of the clones, never a clone itself. */
+function workingFolderBlock(workingDir?: string): string {
+  if (!workingDir) return '';
+  return [
+    `Working folder (your session's cwd): ${workingDir}`,
+    'It is the parent of the repository working copies above — not a clone.',
+    'Step artifacts (report files, screenshots/, narratives) belong here, never',
+    'inside a clone: whatever the clone contains is what the merge request ships.',
+  ].join('\n');
 }
 
 /** Вход задачи: один блок для всех step- и room-промптов. */
@@ -482,6 +504,9 @@ export function buildStepPrompt(input: StepPromptInput): string {
   const state = workingStateBlock(input.stateDigest);
   if (state) lines.push('', state);
 
+  const working = workingFolderBlock(input.workingDir);
+  if (working) lines.push('', working);
+
   // План refine — вход для следующих шагов; самому refine он не нужен.
   const plan = input.step === 'refine' ? '' : refinedPlanBlock(input.refinedPlan);
   if (plan) lines.push('', plan);
@@ -491,7 +516,7 @@ export function buildStepPrompt(input: StepPromptInput): string {
   const previousOutcome = previousOutcomeBlock(input.previousOutcome);
   if (previousOutcome) lines.push('', previousOutcome);
 
-  lines.push('', outputContract());
+  lines.push('', outputContract(input.workingDir));
   return lines.join('\n');
 }
 
@@ -504,10 +529,15 @@ function roomValues(
 ): Record<string, string> {
   return {
     TASK_CONTEXT: taskContext(input),
-    REPOS: reposBlock(input.repoPaths, input.devServerPort, {
-      preparedNote: true,
-      prTargets: input.prTargets,
-    }),
+    REPOS: [
+      reposBlock(input.repoPaths, input.devServerPort, {
+        preparedNote: true,
+        prTargets: input.prTargets,
+      }),
+      workingFolderBlock(input.workingDir),
+    ]
+      .filter((block) => block.length > 0)
+      .join('\n\n'),
     REFINED_PLAN: refinedPlanBlock(input.refinedPlan),
     ATTACHMENTS: attachmentsBlock(input.attachmentPaths),
     WORKING_STATE: workingStateBlock(input.stateDigest),
@@ -556,7 +586,7 @@ export function buildRoomCoordinatorPrompt(
       WORKER_SUMMARIES:
         summaries || 'No worker reports: perform the resolve task YOURSELF and produce the step result directly.',
     }),
-  )}\n\n${outputContract()}`;
+  )}\n\n${outputContract(input.workingDir)}`;
 }
 
 export function buildStageWorkerPrompt(
@@ -632,5 +662,5 @@ export function buildStagedFinalCoordinatorPrompt(
       STAGE_OUTCOMES:
         outcomes || 'No stage reports: perform the resolve task YOURSELF and produce the step result directly.',
     }),
-  )}\n\n${outputContract()}`;
+  )}\n\n${outputContract(input.workingDir)}`;
 }

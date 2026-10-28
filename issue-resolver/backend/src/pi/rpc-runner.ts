@@ -775,6 +775,37 @@ const STATS_POLL_MS = 3000;
  * Точка инъекции CLI pi: продакшен зовёт `pi` (или `PI_BIN`), тесты — shim.
  * Инъекция не меняет поведение по умолчанию (`piCommand` по умолчанию 'pi').
  */
+const LAUNCHER_ENV_KEYS = [
+  'PI_SESSION_FILE',
+  'PI_SESSION_ID',
+  'PI_SESSION_NAME',
+  'PI_MODEL',
+  'PI_PROVIDER',
+  // The launcher's room is not the step's room: only `room` decides it.
+  'PI_AGENT_ROOM',
+] as const;
+
+/**
+ * Environment for an agent spawned locally (`transport: 'local'`).
+ *
+ * The backend is often started from a pi session (`bin/service.sh` from an
+ * agent shell), so `process.env` carries THAT session's identity. An inherited
+ * `PI_SESSION_FILE` makes the step agent resume a foreign session instead of
+ * starting its own: the foreign history lands in the step log wholesale (a
+ * report run produced 175 MB of events in `step_outputs`), and the launcher's
+ * model overrides `--model`. Session identity and model are therefore not
+ * inherited — only config (`PI_CODING_AGENT_DIR`) and the agent's own room.
+ */
+export function stepAgentEnv(
+  base: NodeJS.ProcessEnv,
+  room?: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const key of LAUNCHER_ENV_KEYS) delete env[key];
+  if (room) env.PI_AGENT_ROOM = room;
+  return env;
+}
+
 export interface RpcPiRunnerConfig {
   /** Исполняемый файл pi; по умолчанию env `PI_BIN`, иначе 'pi'. */
   piCommand?: string;
@@ -818,7 +849,7 @@ export class RpcPiRunner implements PiRunner {
               {
                 cwd: options.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
-                ...(room ? { env: { ...process.env, PI_AGENT_ROOM: room } } : {}),
+                env: stepAgentEnv(process.env, room),
               },
             )
           : spawn(

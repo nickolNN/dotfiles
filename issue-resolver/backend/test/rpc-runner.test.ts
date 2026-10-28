@@ -523,15 +523,20 @@ describe('RpcPiRunner — комната агента per-task (PI_AGENT_ROOM)',
     await promise;
   });
 
-  it('local без issueId → env отсутствует', async () => {
+  it('local без issueId → env без идентичности запускающей сессии', async () => {
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child as unknown as ChildProcess);
 
     const runner = new RpcPiRunner('resolve', 'local');
     const promise = runner.run('container-1', 'prompt', { cwd: '/tmp' });
 
-    const options = spawnMock.mock.calls[0][2] as { env?: unknown };
-    expect('env' in options).toBe(false);
+    // Env is always passed now — it is what strips the launcher's session
+    // identity (otherwise the step agent resumes the caller's session).
+    const options = spawnMock.mock.calls[0][2] as { env?: NodeJS.ProcessEnv };
+    expect(options.env).toBeDefined();
+    expect(options.env?.PI_SESSION_FILE).toBeUndefined();
+    expect(options.env?.PI_SESSION_ID).toBeUndefined();
+    expect(options.env?.PI_AGENT_ROOM).toBeUndefined();
 
     settle(child);
     await promise;

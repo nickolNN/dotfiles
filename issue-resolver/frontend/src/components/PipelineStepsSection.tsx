@@ -29,7 +29,7 @@ export interface PipelineStepOption {
 }
 
 export interface PipelineStepsSectionProps {
-  /** Отмеченные шаги; `resolve` можно не включать — он всегда отмечен внутри. */
+  /** Checked steps; every step, `resolve` included, is toggled by the user. */
   selectedSteps: PipelineStep[];
   stepModels: StepModels;
   stepThinkingLevels: StepThinkingLevels;
@@ -76,8 +76,7 @@ export default function PipelineStepsSection({
   onTogglePrRepo,
   stepOptions = DEFAULT_STEP_OPTIONS,
 }: PipelineStepsSectionProps) {
-  // `resolve` отмечен всегда — независимо от того, пришёл он в selectedSteps.
-  const chosenSteps = new Set<PipelineStep>(['resolve', ...selectedSteps]);
+  const chosenSteps = new Set<PipelineStep>(selectedSteps);
   const showWorkerCount = workerCount !== undefined && onWorkerCountChange;
   const showPrRepositories = selectedSteps.includes('pr') && !prDisabled;
 
@@ -87,26 +86,20 @@ export default function PipelineStepsSection({
         <legend className={labelClass}>Шаги пайплайна и модели</legend>
         <div className="space-y-3">
           {stepOptions.map((step) => {
-            const isResolve = step.value === 'resolve';
             const prBlocked = step.value === 'pr' && prDisabled;
-            const checked =
-              isResolve || (!prBlocked && selectedSteps.includes(step.value));
+            const checked = !prBlocked && selectedSteps.includes(step.value);
             const modelEnabled = chosenSteps.has(step.value) && !prBlocked;
             const selectedModel = models.find(
               (model) => model.id === stepModels[step.value],
             );
-            const labelSuffix = isResolve
-              ? ' (всегда)'
-              : prBlocked
-                ? ' (нужен репозиторий)'
-                : undefined;
+            const labelSuffix = prBlocked ? ' (нужен репозиторий)' : undefined;
 
             return (
               <StepRow
                 key={step.value}
                 step={step}
                 checked={checked}
-                disabled={disabled || isResolve || prBlocked}
+                disabled={disabled || prBlocked}
                 labelSuffix={labelSuffix}
                 modelEnabled={modelEnabled}
                 thinkingLevels={thinkingLevelsFor(selectedModel)}

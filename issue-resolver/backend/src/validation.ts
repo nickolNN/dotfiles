@@ -18,6 +18,11 @@ const STEP_MODEL_KEYS = [...PIPELINE_STEPS, 'report'] as const;
 /** Частичная карта «шаг → id модели»: ключи из PIPELINE_STEPS + `report`. */
 const stepModelsSchema = z.record(z.enum(STEP_MODEL_KEYS), z.string());
 
+/** Non-empty step selection: `[]` means "nothing chosen", not "use defaults". */
+const selectedStepsSchema = z
+  .array(z.enum(PIPELINE_STEPS))
+  .min(1, 'выберите хотя бы один шаг пайплайна');
+
 /** Уровень размышления pi: словарь CLI-флага `--thinking`. */
 const thinkingLevelSchema = z.enum([
   'off',
@@ -89,7 +94,7 @@ export const createIssueRequestSchema = z
     desired_result: z.enum(['md', 'html']).optional(),
     review_context: z.string().optional(),
     is_review_need: z.boolean().optional(),
-    pipeline_steps: z.array(z.enum(PIPELINE_STEPS)).optional(),
+    pipeline_steps: selectedStepsSchema.optional(),
     tag_id: z.string().optional(),
     model: z.string().optional(),
     step_models: stepModelsSchema.optional(),
@@ -113,7 +118,7 @@ export const createIterationRequestSchema = z.object({
   context: z.string().min(1),
   review_context: z.string().optional(),
   is_review_need: z.boolean().optional(),
-  steps: z.array(z.enum(PIPELINE_STEPS)).optional(),
+  steps: selectedStepsSchema.optional(),
   /** ID репозиториев, для которых включён create_mr (выбирается из секции pr-шага). */
   pr_repository_ids: z.array(z.string()).optional(),
   model: z.string().optional(),
@@ -181,7 +186,7 @@ export const updateIssueRequestSchema = z.object({
   jira_issue_url: z.string().url().optional().nullable(),
   description: z.string().optional(),
   desired_result: z.enum(['md', 'html']).optional(),
-  pipeline_steps: z.array(z.enum(PIPELINE_STEPS)).optional(),
+  pipeline_steps: selectedStepsSchema.optional(),
   step_models: stepModelsSchema.optional(),
   thinking_level: thinkingLevelSchema.optional().nullable(),
   step_thinking_levels: stepThinkingLevelsSchema,

@@ -79,6 +79,13 @@
 - `pi/settings.json`, `pi/web-search.json`, `pi/themes/`, `pi/extensions/`
   tracked
 - `pi/models.json` gitignored — holds literal API keys, never commit
+- `pi/settings.json` включает `codemode` (`"defaultTools": ["+codemode"]`):
+  инструмент регистрируется неактивным и без этого ключа живёт только как
+  побочный эффект MCP (`exposure: "codemode"` в `mcp.json` включает его через
+  `builtin:mcp`) — выключи MCP, и он молча исчезает. `jq -s '.[0] * .[1]'`
+  в `dotfiles-agent/Dockerfile` мержит только `packages`, так что ключ
+  переживает сборку образа. Новые сессии видят его сразу, живой — после
+  `/reload`
 - `pi/sync-thinking-rules.sh` — syncs `reasoning` / `thinkingLevelMap` in
   `models.json` from pi's model catalog (`models-store.json`, refreshed by
   `pi update --models`); matches custom-provider models by normalized
@@ -106,10 +113,6 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `agent-attach`, `agent-fwd`, `agent-stop`
 - Containers are per-directory (`container-name.sh`); durable state is in
   volumes, so recreating a container is cheap and safe
-- Local inference: `dotfiles-agent/sync-models.sh` runs on every spawn/attach —
-  copies the host's `pi/models.json` in and rewrites host-loopback `baseUrl`s to
-  the container gateway (host router must bind `0.0.0.0`, or run a relay on a
-  spare port via `AGENT_LOCAL_INFERENCE_HOST`)
 - Agent rooms are per-task: `spawn-pi-agent.sh` (`--room NAME`) and
   `attach.sh -- pi` set `PI_AGENT_ROOM` to the folder basename (the
   `pi-agents-talk-to-each-other` extension then ignores the global

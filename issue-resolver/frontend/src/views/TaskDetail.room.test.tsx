@@ -47,6 +47,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
 function makeStepRun(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog {
   return {
     id: 'run-resolve',
+    issue_id: 'issue-1',
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,

@@ -252,7 +252,10 @@ export interface CreateIterationRequest {
 
 export interface StepRun {
   id: string;
-  iteration_id: string;
+  /** Задача-владелец прогона: заполнена всегда, в т.ч. для прогонов без итерации. */
+  issue_id: string;
+  /** null — прогон вне итерации (отчёт, ручные запуски шага). */
+  iteration_id: string | null;
   step: PipelineStep;
   attempt: number;
   status: StepRunStatus;

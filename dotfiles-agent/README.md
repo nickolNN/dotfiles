@@ -35,7 +35,6 @@ See the `Dockerfile` for the full list and the reasoning behind each layer.
 | `check-remote-skills.sh` | warn when the image lacks remote skills the Dockerfile declares (run by spawn/attach; never fails) |
 | `container-name.sh` | per-directory container naming (per-folder isolation) |
 | `port-forward.sh` | ad-hoc host→container port forwarding (no restart) |
-| `sync-models.sh` | copy the host's `pi/models.json` into the container and rewrite host-loopback endpoints (run by spawn/attach; never fails) |
 | `stop-all.sh` | stop/remove every `dotfiles-agent` container (incl. forwards) |
 | `install-aliases.sh` | install `agent-*` zsh aliases (idempotent) |
 | `host-notify/install.sh` | install macOS notification bridge (LaunchAgent) |
@@ -152,55 +151,6 @@ Notes:
   and recreate forever
 - the in-container dev server must listen on `0.0.0.0` (not `127.0.0.1`) for
   host access to reach it
-
-## Local inference from the container (llama.cpp router)
-
-`models.json` points the `local-inference` provider at the *host's* loopback
-(`http://127.0.0.1:18080/v1`). Inside a bridge-networked container that address is
-the container itself, so it fails twice over: wrong address, and the router
-normally binds loopback only. Both halves have to be fixed.
-
-**1. Host side — let the router listen beyond loopback.** For llama-swap add
-`--host 0.0.0.0` (or bind the docker0 IP); behind an ssh tunnel forward with
-`-g -L 0.0.0.0:18080:...`. Diagnose first, don't guess:
-
-```bash
-ss -ltnp 'sport = :18080'   # 127.0.0.1:18080 is why the container is refused
-socat TCP-LISTEN:18081,fork,reuseaddr TCP:127.0.0.1:18080   # relay, if the router itself cannot be reconfigured
-```
-
-**Loopback is only half of it — the host firewall blocks the rest.** On a host
-with firewalld/`INPUT DROP`, every packet from docker0 to the host is dropped, so
-even a router bound to `0.0.0.0` stays unreachable from the container. Symptom: a
-*timeout* on `172.17.0.1:18080`, and on an unbound port too (`172.17.0.1:1`) — an
-unbound port would have answered RST if the packets reached the host at all.
-Container-to-container traffic is unaffected (that is `FORWARD`, not `INPUT`).
-Either allow the port (`firewall-cmd --zone=docker --add-port=18080/tcp`, or
-`iptables -I INPUT -i docker0 -p tcp --dport 18080 -j ACCEPT`) alongside the
-non-loopback bind, or skip the whole question with `agent-spawn --network-host`
-(host netns: the container's `127.0.0.1` *is* the router, no firewall hop).
-
-`agent-fwd` does **not** help here: it publishes a *container* port outward — the
-opposite direction — and dies with `address already in use` because the router
-already owns the host port.
-
-**2. Container side — `sync-models.sh`, run by every `agent-spawn`/`agent-attach`.**
-It copies the host's `~/.config/pi/models.json` into the container, so a preset
-added to the router on the PC shows up without an image rebuild, and rewrites
-host-loopback `baseUrl`s to the container's gateway (the host as seen from the
-bridge), keeping each URL's own port. A `--network-host` container shares the
-host's netns, so its copy is left unmodified.
-
-`AGENT_LOCAL_INFERENCE_HOST=<host[:port]>` overrides the rewrite target when the
-router is not on the docker host — a relay on a spare port, or a sibling
-container on the same bridge.
-
-Verify from inside the container (this is also how the issue-resolver backend
-sees the list — `GET /issue-resolver/api/v1/models`):
-
-```bash
-curl -s "$(jq -r '.providers["local-inference"].baseUrl' ~/.pi/agent/models.json)/models" | jq -r '.data[].id'
-```
 
 ## Reaching the corporate network (VPN, internal CAs)
 

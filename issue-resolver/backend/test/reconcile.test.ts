@@ -61,9 +61,17 @@ function insertStepRun(
   attempt: number,
 ): string {
   const id = newId();
+  // issue_id обязателен и для прогонов в итерации: FK на issues.
+  const issueId =
+    db
+      .select({ issue_id: iterations.issue_id })
+      .from(iterations)
+      .where(eq(iterations.id, iterationId))
+      .get()?.issue_id ?? '';
   db.insert(stepRuns)
     .values({
       id,
+      issue_id: issueId,
       iteration_id: iterationId,
       step: 'resolve',
       attempt,

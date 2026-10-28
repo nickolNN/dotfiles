@@ -17,6 +17,7 @@ import type {
   SavedRepo,
   SessionCommand,
   SessionControlSnapshot,
+  StepRunWithLog,
   Tag,
   UpdateRepoRequest,
   UpdateTagRequest,
@@ -1012,16 +1013,42 @@ export async function runReportAgent(issueId: string, model?: string, thinkingLe
   return (await response.json()) as { ok: boolean; reportRunId: string };
 }
 
-/** Статус отчёта задачи: `report.md` есть (`success`) или ещё нет (`idle`). */
+/** Артефакт отчёта на диске: наличие, размер и mtime (ISO-Z без мс). */
+export interface ReportArtifactInfo {
+  present: boolean;
+  bytes: number;
+  mtime: string | null;
+}
+
+/**
+ * Статус отчёта задачи. `status` выводится из последнего прогона (строка
+ * `step_runs` вне итерации), а не из наличия файла: прогон, который ничего не
+ * создал, — `failed`, даже если exit code был 0.
+ */
 export interface ReportStatus {
   status: 'idle' | 'running' | 'success' | 'failed';
+  /** Идентификатор прогона для `GET /issues/:id/report/run`. */
+  runId?: string;
+  /** Статус строки прогона в БД (шире, чем `status`: pending/running/...). */
+  runStatus?: string;
+  /** When the run started / was last updated (ISO). */
+  startedAt?: string;
+  finishedAt?: string;
+  /**
+   * Last activity of the run (heartbeat). Present while `running` too: a run
+   * whose heartbeat stopped is dead, not busy.
+   */
+  updatedAt?: string;
+  /** Причина падения или пометка "только markdown". */
+  feedback?: string;
+  /** Что реально легло на диск: обе половины отчёта. */
+  artifacts?: { md: ReportArtifactInfo; html: ReportArtifactInfo };
   /** mtime `report.md` — когда отчёт последний раз перезаписан. */
   lastRunAt?: string;
   /**
    * Наблюдённая модель прогона (что реально сообщила сессия), а НЕ запрошенная.
    * Отсутствует после рестарта сервера: значение живёт в памяти процесса и из
-   * артефакта не выводится. Во время прогона его тоже нет — бэкенд в это окно
-   * возвращает только `{ status: 'running' }`.
+   * артефакта не выводится. Во время прогона его тоже нет.
    */
   observedModel?: string;
   /**
@@ -1041,6 +1068,20 @@ export async function getReportStatus(issueId: string): Promise<ReportStatus> {
     throw new Error(await readErrorMessage(response));
   }
   return (await response.json()) as ReportStatus;
+}
+
+/**
+ * Последний прогон отчёта с логом сессии (`GET /issues/:id/report/run`).
+ * Живёт вне итерации, поэтому у шагового маршрута итерации его нет.
+ */
+export async function getReportRun(issueId: string): Promise<StepRunWithLog> {
+  const response = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(issueId)}/report/run`,
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as StepRunWithLog;
 }
 
 export async function cleanupOrphans(): Promise<CleanupResult> {

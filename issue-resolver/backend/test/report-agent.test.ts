@@ -45,12 +45,14 @@ import { FakeMrClient } from '../src/pr/mr';
 import { InMemorySseHub } from '../src/sse/hub';
 import {
   archiveReportArtifacts,
+  isReportRunActive,
   observedModelFor,
   reportModelFor,
   reportWarningsFor,
   runIssueIteration,
   runReportAgent,
   type IterationRunDeps,
+  type ReportRunDeps,
 } from '../src/workflow/run-iteration.service';
 import { buildStepPrompt } from '../src/workflow/prompts';
 
@@ -389,7 +391,8 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
   it('F29: утечка id модели в артефакт → warnings + console.warn, файл не правится', async () => {
     const root = tempRoot();
-    const { issueId } = seedIteration(createDb(':memory:'));
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
     const model = 'provider1/leaky-model-x1';
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
@@ -405,6 +408,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
         sse: new InMemorySseHub(),
         control: new InMemoryStepSessionRegistry(),
         workspaceRoot: root,
+        db,
       },
       {
         issueId,
@@ -432,7 +436,8 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
   it('F30: чистый отчёт → предупреждений нет', async () => {
     const root = tempRoot();
-    const { issueId } = seedIteration(createDb(':memory:'));
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
       'report.md': '# Отчёт без идентификатора\n',
@@ -446,6 +451,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
         sse: new InMemorySseHub(),
         control: new InMemoryStepSessionRegistry(),
         workspaceRoot: root,
+        db,
       },
       {
         issueId,
@@ -461,7 +467,8 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
   it('F31: чужой id модели в артефакте → model-like warning (слой 2, без input.model)', async () => {
     const root = tempRoot();
-    const { issueId } = seedIteration(createDb(':memory:'));
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
       'report.md': '# Отчёт\nПровайдер: provider2/deepseek-x\n',
@@ -476,6 +483,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
         sse: new InMemorySseHub(),
         control: new InMemoryStepSessionRegistry(),
         workspaceRoot: root,
+        db,
       },
       {
         issueId,
@@ -493,7 +501,8 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
   it('F32: легальный текст (signal store model, модель данных) → без warning', async () => {
     const root = tempRoot();
-    const { issueId } = seedIteration(createDb(':memory:'));
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
       'report.md': [
@@ -513,6 +522,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
         sse: new InMemorySseHub(),
         control: new InMemoryStepSessionRegistry(),
         workspaceRoot: root,
+        db,
       },
       {
         issueId,
@@ -528,7 +538,8 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
   it('F33: строка старта несёт trigger и timestamp', async () => {
     const root = tempRoot();
-    const { issueId } = seedIteration(createDb(':memory:'));
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
       'report.md': '# ok\n',
@@ -543,6 +554,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
           sse: new InMemorySseHub(),
           control: new InMemoryStepSessionRegistry(),
           workspaceRoot: root,
+          db,
         },
         {
           issueId,
@@ -569,7 +581,8 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
   it('F34: stats.model → observedModel (игла точного слоя), running.model остаётся null', async () => {
     const root = tempRoot();
-    const { issueId } = seedIteration(createDb(':memory:'));
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ObservedModelReportPi(root, 'provider9/x');
     const sse = new InMemorySseHub();
@@ -577,7 +590,13 @@ describe('report-агент — интеграция (F22–F25)', () => {
     sse.subscribeByIssue(issueId, (event) => events.push(event));
 
     await runReportAgent(
-      { pi, sse, control: new InMemoryStepSessionRegistry(), workspaceRoot: root },
+      {
+        pi,
+        sse,
+        control: new InMemoryStepSessionRegistry(),
+        workspaceRoot: root,
+        db,
+      },
       { issueId, containerName: 'c', hostDir: join(root, issueId), prompt: 'p' },
     );
 
@@ -597,7 +616,8 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
   it('F35: чтение прошлого отчёта из tool_use → anchored on previous report', async () => {
     const root = tempRoot();
-    const { issueId } = seedIteration(createDb(':memory:'));
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
       'report.md': '# ok\n',
@@ -628,6 +648,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
         sse: new InMemorySseHub(),
         control: new InMemoryStepSessionRegistry(),
         workspaceRoot: root,
+        db,
       },
       { issueId, containerName: 'c', hostDir: join(root, issueId), prompt: 'p' },
     );
@@ -650,7 +671,8 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
   it('F36: легальные источники (report-1.md, .resolve.md) → без anchoring warning', async () => {
     const root = tempRoot();
-    const { issueId } = seedIteration(createDb(':memory:'));
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
       'report.md': '# ok\n',
@@ -686,6 +708,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
         sse: new InMemorySseHub(),
         control: new InMemoryStepSessionRegistry(),
         workspaceRoot: root,
+        db,
       },
       { issueId, containerName: 'c', hostDir: join(root, issueId), prompt: 'p' },
     );
@@ -774,6 +797,83 @@ describe('report-агент — интеграция (F22–F25)', () => {
       expect(
         readFileSync(join(wsDir, 'reports', stamps[0], 'report.md'), 'utf8'),
       ).toBe('# СТАРЫЙ\n');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('F30: второй прогон поверх активного не архивирует корень и не спавнит агента', async () => {
+    const root = tempRoot();
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db, ['resolve']);
+    const wsDir = join(root, issueId);
+    mkdirSync(wsDir, { recursive: true });
+    writeFileSync(join(wsDir, 'report.md'), '# СТАРЫЙ\n', 'utf8');
+
+    const releases: Array<() => void> = [];
+    class PendingReportPi extends FakePiRunner {
+      override run(
+        containerName: string,
+        prompt: string,
+        options?: PiRunOptions,
+      ) {
+        if (options?.stepRunId?.endsWith('/report')) {
+          return new Promise<StepExecutionResult>((resolve) => {
+            releases.push(() =>
+              resolve({
+                step: 'report',
+                exitCode: 0,
+                report: null,
+                stdout: '',
+                stderr: '',
+                aborted: false,
+              } as unknown as StepExecutionResult),
+            );
+          });
+        }
+        return super.run(containerName, prompt, options);
+      }
+    }
+
+    const pi = new PendingReportPi();
+    const deps: ReportRunDeps = {
+      pi,
+      sse: new InMemorySseHub(),
+      control: new InMemoryStepSessionRegistry(),
+      workspaceRoot: root,
+      db,
+    };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const first = runReportAgent(deps, {
+        issueId,
+        containerName: 'c',
+        hostDir: wsDir,
+        prompt: 'p',
+        trigger: 'post-iteration',
+      });
+      // Запись прогона в БД асинхронна (строка `step_runs` создаётся до
+      // архивации), поэтому спавн ждём, а не считаем синхронным.
+      await vi.waitFor(() => expect(releases).toHaveLength(1));
+      expect(isReportRunActive(issueId)).toBe(true);
+      const stamps = readdirSync(join(wsDir, 'reports'));
+      expect(stamps).toHaveLength(1);
+
+      // Ручной запуск поверх активного: отказ до архивации, без спавна.
+      await runReportAgent(deps, {
+        issueId,
+        containerName: 'c',
+        hostDir: wsDir,
+        prompt: 'p',
+        trigger: 'manual',
+      });
+      expect(releases).toHaveLength(1);
+      expect(readdirSync(join(wsDir, 'reports'))).toEqual(stamps);
+      expect(isReportRunActive(issueId)).toBe(true);
+
+      releases[0]();
+      await first;
+      expect(isReportRunActive(issueId)).toBe(false);
     } finally {
       errorSpy.mockRestore();
     }

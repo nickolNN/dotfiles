@@ -152,7 +152,7 @@ RUN . /etc/environment \
   && LG_FALLBACK=0.66.2 \
   && LG_VERSION=$(curl --retry 3 --retry-delay 5 --retry-all-errors -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/jesseduffield/lazygit/releases/latest | sed 's#.*/tag/v\?##') \
   && case "$LG_VERSION" in [0-9]*) ;; *) echo "WARN: lazygit version lookup returned '$LG_VERSION' — falling back to ${LG_FALLBACK}" >&2; LG_VERSION=$LG_FALLBACK ;; esac \
-  && case "$TARGETARCH" in arm64) LG_ARCH=arm64 ;; *) LG_ARCH=x86_64 ;; esac \
+  && case "$TARGETARCH" in amd64) LG_ARCH=x86_64 ;; arm64) LG_ARCH=arm64 ;; *) echo "ERROR: lazygit publishes no asset for TARGETARCH=$TARGETARCH" >&2; exit 1 ;; esac \
   && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL "https://github.com/jesseduffield/lazygit/releases/download/v${LG_VERSION}/lazygit_${LG_VERSION}_linux_${LG_ARCH}.tar.gz" \
   | tar xz -C /usr/local/bin lazygit
 
@@ -473,7 +473,10 @@ RUN git config --global protocol.version 2 \
 RUN jq -c '{packages: (.packages // [])}' \
     /home/agent/.pi/agent/settings.json > /tmp/pi-pkg-meta.json
 
-# ── Host config (volatile — kept LAST so edits only bust this layer) ──
+# ── Host config (volatile — kept last among the config layers) ──
+# Digest-based: touching anything under `pi/` changes this COPY's digest, so
+# this layer rebuilds, and so do the few after it (pi-lens posture,
+# trust.json, ENTRYPOINT) — while the heavy installs above stay cached.
 COPY --chown=agent:agent pi/ /tmp/pi-config/
 # GLOBAL_AGENTS.md must NOT land in /tmp/pi-config: `pi/AGENTS.md` is a
 # symlink and `COPY pi/` restores it over any file we put there. Stage it
