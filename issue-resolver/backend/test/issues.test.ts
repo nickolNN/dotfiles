@@ -366,7 +366,7 @@ class PendingReportPi extends FakePiRunner {
     prompt: string,
     options?: PiRunOptions,
   ): Promise<StepExecutionResult> {
-    if (options?.stepRunId?.endsWith('/report')) {
+    if (options?.stepRunId?.endsWith('.report')) {
       return new Promise((resolve) => {
         this.release = () =>
           resolve({
@@ -394,7 +394,7 @@ class FailingReportPi extends FakePiRunner {
     prompt: string,
     options?: PiRunOptions,
   ): Promise<StepExecutionResult> {
-    if (options?.stepRunId?.endsWith('/report')) {
+    if (options?.stepRunId?.endsWith('.report')) {
       return Promise.reject(new Error('report boom'));
     }
     return super.run(containerName, prompt, options);
@@ -415,7 +415,7 @@ class LeakyReportPi extends FakePiRunner {
     prompt: string,
     options?: PiRunOptions,
   ): Promise<StepExecutionResult> {
-    if (options?.stepRunId?.endsWith('/report') && options.cwd) {
+    if (options?.stepRunId?.endsWith('.report') && options.cwd) {
       mkdirSync(options.cwd, { recursive: true });
       writeFileSync(
         join(options.cwd, 'report.md'),
@@ -446,7 +446,7 @@ class ObservedModelPi extends FakePiRunner {
     prompt: string,
     options?: PiRunOptions,
   ): Promise<StepExecutionResult> {
-    if (options?.stepRunId?.endsWith('/report') && options.cwd) {
+    if (options?.stepRunId?.endsWith('.report') && options.cwd) {
       mkdirSync(options.cwd, { recursive: true });
       writeFileSync(
         join(options.cwd, 'report.md'),
@@ -489,7 +489,7 @@ class AnchoringReportPi extends FakePiRunner {
     prompt: string,
     options?: PiRunOptions,
   ): Promise<StepExecutionResult> {
-    if (options?.stepRunId?.endsWith('/report') && options.cwd) {
+    if (options?.stepRunId?.endsWith('.report') && options.cwd) {
       mkdirSync(options.cwd, { recursive: true });
       writeFileSync(join(options.cwd, 'report.md'), '# Отчёт\n', 'utf8');
       writeFileSync(
@@ -573,7 +573,7 @@ describe('report routes (D13–D18)', () => {
     });
 
     expect(response.statusCode).toBe(202);
-    expect(response.json()).toEqual({ ok: true, reportRunId: `${id}/report` });
+    expect(response.json()).toEqual({ ok: true, reportRunId: `issue.${id}.report` });
   });
 
   it('D14: POST /issues/:id/report неизвестной задачи → 404', async () => {
@@ -1204,7 +1204,7 @@ describe('report routes (D13–D18)', () => {
 
       await vi.waitFor(() => {
         const call = pi.calls.find(
-          (item) => item.options?.stepRunId === `${id}/report`,
+          (item) => item.options?.stepRunId === `issue.${id}.report`,
         );
         expect(call?.options?.model).toBe('iteration-model-y');
       });

@@ -1594,8 +1594,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     // refine + 2 workers + coordinator = 4 pi-вызова (3 на resolve-часть).
     expect(pi.calls).toHaveLength(4);
     const resolveRunId = store.runs[1].id;
-    expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRunId}/worker/0`);
-    expect(pi.calls[2].options?.stepRunId).toBe(`${resolveRunId}/worker/1`);
+    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.w0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.w1`);
     expect(pi.calls[3].options?.stepRunId).toBe(resolveRunId);
 
     // Итоговый report шага — от координатора (единственный решающий).
@@ -1625,7 +1625,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     // Реестр отдаёт агентов комнаты в порядке исполнитель1, исполнитель2, координатор.
     expect(control.listAgents('iter-1')).toEqual([
       {
-        id: `${resolveRunId}/worker/0`,
+        id: `run.${resolveRunId}.w0`,
         role: 'worker',
         index: 1,
         label: 'Исполнитель 1',
@@ -1637,7 +1637,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         stats: null,
       },
       {
-        id: `${resolveRunId}/worker/1`,
+        id: `run.${resolveRunId}.w1`,
         role: 'worker',
         index: 2,
         label: 'Исполнитель 2',
@@ -1671,14 +1671,14 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     for (const event of tagged) {
       perAgent.set(event.agentId ?? '', (perAgent.get(event.agentId ?? '') ?? 0) + 1);
     }
-    expect(perAgent.get(`${resolveRunId}/worker/0`)).toBe(3);
-    expect(perAgent.get(`${resolveRunId}/worker/1`)).toBe(3);
+    expect(perAgent.get(`run.${resolveRunId}.w0`)).toBe(3);
+    expect(perAgent.get(`run.${resolveRunId}.w1`)).toBe(3);
     expect(perAgent.get(resolveRunId)).toBe(3);
     expect(
       JSON.parse(tagged[0].data) as { agentId?: string },
     ).toMatchObject({
       stepRunId: resolveRunId,
-      agentId: `${resolveRunId}/worker/0`,
+      agentId: `run.${resolveRunId}.w0`,
     });
   });
 
@@ -1730,9 +1730,9 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     // refine + 2 исполнителя + координатор (а не 4 исполнителя).
     expect(pi.calls).toHaveLength(4);
     expect(pi.calls.map((call) => call.options?.stepRunId).slice(1)).toEqual([
-      expect.stringContaining('/worker/0'),
-      expect.stringContaining('/worker/1'),
-      expect.not.stringContaining('/worker/'),
+      expect.stringContaining('.w0'),
+      expect.stringContaining('.w1'),
+      expect.not.stringContaining('.w'),
     ]);
   });
 
@@ -1759,8 +1759,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     // refine + 2 исполнителя = 3 вызова; координатор после abort не запускался.
     expect(pi.calls).toHaveLength(3);
     const resolveRunId = store.runs[1].id;
-    expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRunId}/worker/0`);
-    expect(pi.calls[2].options?.stepRunId).toBe(`${resolveRunId}/worker/1`);
+    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.w0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.w1`);
     expect(store.runs[1].status).toBe('aborted');
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:aborted']);
   });
@@ -1820,10 +1820,10 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     const resolveRunId = store.runs[1].id;
     expect(pi.calls.slice(1).map((call) => call.options?.stepRunId)).toEqual([
-      `${resolveRunId}/stage/1/worker/1`,
-      `${resolveRunId}/stage/1/worker/2`,
-      `${resolveRunId}/stage/1/coordinator`,
-      `${resolveRunId}/stage/2/worker/1`,
+      `run.${resolveRunId}.s1.w0`,
+      `run.${resolveRunId}.s1.w1`,
+      `run.${resolveRunId}.s1.lead`,
+      `run.${resolveRunId}.s2.w0`,
       resolveRunId,
     ]);
     expect(JSON.parse(store.outputs[1].report)).toMatchObject({

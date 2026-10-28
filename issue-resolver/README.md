@@ -102,9 +102,12 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 дополнительно страхуется внешним таймером движка. Отдельно работает сторож
 тишины — `ISSUE_RESOLVER_AGENT_STALL_TIMEOUT_MS` (мс, дефолт 15 мин; минимум
 30с): если за это время от агента не пришло ни одного чанка stdout/stderr или
-события сессии, прогон снимается как зависший (`<step> agent stalled: no output
-for Nms`), не дожидаясь трёхчасового потолка. Счётчик активности питают те же
-колбэки, что публикуют SSE. Таймаут pi-агента разовой
+события сессии, сторож сначала пробует разбудить агента, а не убить его:
+отправляет `follow_up`-нудж с просьбой доложить одной строкой, даёт ещё окно
+тишины, затем шлёт `compact` — и только после этого снимает прогон как зависший
+(`<step> agent stalled: no output for Nms (tried: nudge, compact)`), не дожидаясь
+трёхчасового потолка. Счётчик активности питают те же колбэки, что публикуют
+SSE. Таймаут pi-агента разовой
 подготовки — `ISSUE_RESOLVER_DEVOPS_TIMEOUT_MS` (мс, дефолт 90 мин; тот
 же минимум 60с; если новая переменная не задана, читается устаревшее имя —
 `LEGACY_DEVOPS_TIMEOUT_ENV`): прокидывается в `PiDevOpsAgent` через
@@ -492,7 +495,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   событие со `status: 'error'` и
   `message` и `iteration_status` со `status: 'failed'` + `error`. Живой
   stdout/stderr DevOps-агента идёт обычными SSE `log`-событиями с
-  синтетическим `stepRunId = '{issueId}/devops'` (`stream` — `stdout`/`stderr`,
+  адресом `issue.<issueId>.devops` (`stream` — `stdout`/`stderr`,
   `data` — чанк вывода); UI конвертирует чанки в `text`-события и рендерит их
   тем же `SessionView`, что и шаги, в скроллируемом окне ~300px под панелью
   подготовки. Пару
@@ -533,7 +536,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   narratives `iterations/<n>/.<step>.md` всех итераций (плюс `report-<number>.md`
   как фолбек и `git diff --stat` рабочей копии). Прогон виден в SSE: на старте
   публикуется `step_status` `running`, на финише — терминальный `success`/
-  `failed` по `stepRunId = '{issueId}/report'` (тот же ключ, что несут
+  `failed` по адресу `issue.<issueId>.report` (тот же ключ, что несут
   `log`/`step_event` и `reportRunId` в `POST /issues/:id/report`); ошибка
   агента не тонет молча — старт/итог/длительность пишутся в серверный лог
   (`report agent started|finished: … trigger=post-iteration|manual [origin=…]
@@ -589,7 +592,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   почему важно смотреть и на `content-type`, и на `x-artifact-source`. После
   успеха новый отчёт попадает и в снапшот итерации.
 - **Управление report-агентом как шагом**: живая report-сессия
-  регистрируется в реестре под синтетическим `stepRunId = '{issueId}/report'`
+  регистрируется в реестре под адресом `issue.<issueId>.report`
   (SSE и control-роуты работают с этим id), но сам прогон живёт в БД обычной
   строкой `step_runs` — поэтому исход, длительность и вся сессия видны после
   перезагрузки и рестарта. control-роуты
@@ -719,8 +722,8 @@ Node-reverse-proxy (node в образе всегда), без попыток е
     свой итог (`memory_write`, теги `#issue-resolver`/`[[stage-N]]`).
   - иначе (нет плана, битый, `single`, < 2 валидных этапов) — один агент.
   В `room`/`stages` у каждого агента свой `RoomAgent.id` (`<stepRunId>` у
-  финального координатора, `<stepRunId>/worker/<i>` у исполнителей комнаты,
-  `<stepRunId>/stage/<s>/worker/<w>` и `<stepRunId>/stage/<s>/coordinator` у
+  финального координатора, `run.<stepRunId>.w<i>` у исполнителей комнаты,
+  `run.<stepRunId>.s<s>.w<w>` и `run.<stepRunId>.s<s>.lead` у
   staged-агентов) и отдельный per-agent SSE (`/agents/stream?agentId=`), а
   `RoomAgent` несёт `stage`/`stageName` (staged-режим), `startedAt` (ISO) и
   агрегированные `stats` (токены/cost/context из usage/stats-событий его
@@ -878,7 +881,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   `<details>` внизу; HTML отдаётся в iframe с
   `sandbox="allow-scripts allow-popups"` (без `allow-same-origin`) — отчёт
   не видит origin приложения и не может писать в его хранилища. Живой
-  `SessionView` с `log`-чанками `stepRunId = '{issueId}/report'` показывается
+  `SessionView` с `log`-чанками адреса `issue.<issueId>.report` показывается
   там же в шапке, пока идёт генерация. Старого блока с сырым `devops_log`
   и его `onDevOpsLog`-колбэка в карточке больше нет.
 - **Английские промпты**: тексты шагов конвейера (`workflow/prompts.ts`) и

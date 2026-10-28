@@ -13,6 +13,9 @@ import type {
   ThinkingLevel,
 } from '@issue-resolver/shared';
 import {
+  SESSION_HEARTBEAT_MS,
+  SESSION_STALE_MS,
+  SessionAddress,
   extractIssueKeyFromUrl,
   extractRepoNameFromUrl,
   stepRunStatusFromResult,
@@ -31,6 +34,15 @@ import {
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Db } from '../db/client';
+import { startAgentSession } from '../pi/agent-session';
+import {
+  resolveAgentStallTimeoutMs,
+  withAgentStallGuard,
+} from './timeout';
+import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
+import { soloRunExcludeTools } from '../pi/tool-policy';
+import { stallRecoveries } from '../pi/stall-recovery';
+import { STEP_SYSTEM_APPEND } from './prompts';
 import { capSessionEvents } from '../pi/session-events-cap';
 import { allocateDevPort, releaseIssueDevPorts } from '../port-allocator';
 import { listAttachableRelPaths } from '../db/issue-files.repo';
@@ -51,7 +63,10 @@ import {
 import type { ContainerController } from '../docker/controller';
 import type { GitPrepareResult, GitService } from '../git/service';
 import type { PiRunner } from '../pi/runner';
-import type { StepSessionRegistry } from '../pi/session-registry';
+import {
+  runTarget,
+  type StepSessionRegistry,
+} from '../pi/session-registry';
 import type { MrClient } from '../pr/mr';
 import type { SseHub } from '../sse/hub';
 import type {
@@ -717,7 +732,10 @@ export async function prepareIssueWorkspace(
         type: 'log',
         issueId: input.issueId,
         iterationId: input.iterationId,
-        stepRunId: `${input.issueId}/devops`,
+        stepRunId: SessionAddress.forIssueRun(
+          input.issueId,
+          'devops',
+        ).toString(),
         stream: 'stdout',
         data: chunk,
         ts: new Date().toISOString(),
@@ -727,7 +745,10 @@ export async function prepareIssueWorkspace(
         type: 'log',
         issueId: input.issueId,
         iterationId: input.iterationId,
-        stepRunId: `${input.issueId}/devops`,
+        stepRunId: SessionAddress.forIssueRun(
+          input.issueId,
+          'devops',
+        ).toString(),
         stream: 'stderr',
         data: chunk,
         ts: new Date().toISOString(),
@@ -1103,10 +1124,10 @@ const activeReportRuns = new Set<string>();
  * moving. Without it a dead run is indistinguishable from a live one — the UI
  * keeps «⏳» and blocks the retry although the process is long gone.
  */
-export const REPORT_RUN_HEARTBEAT_MS = 20_000;
+export const REPORT_RUN_HEARTBEAT_MS = SESSION_HEARTBEAT_MS;
 
 /** A `running` row without updates for longer than this is dead (see `/report/status`). */
-export const REPORT_RUN_STALE_MS = 120_000;
+export const REPORT_RUN_STALE_MS = SESSION_STALE_MS;
 
 /**
  * Исход последнего report-прогона (process-local): нужен `/report/status`,
@@ -1238,16 +1259,15 @@ export interface RunReportAgentInput {
   prompt: string;
   model?: string;
   thinkingLevel?: ThinkingLevel;
-  /** Кто запустил прогон: терминальная итерация или ручной POST /report. */
+  /** Who started the run: a terminal iteration or a manual POST /report. */
   trigger?: 'post-iteration' | 'manual';
-  /** Для ручного запуска — Origin HTTP-запроса (атрибуция в логе). */
+  /** Manual runs only: request origin, for log attribution. */
   origin?: string | null;
 }
 
 /**
- * `step_status` для issue-уровневого report-прогона: та же форма, что у шагов
- * пайплайна (running — JSON `{status, step, model}`, терминал — строка
- * статуса), но без `iterationId` — отчёт живёт на уровне задачи.
+ * `step_status` for an issue-level report run: same shape as pipeline steps,
+ * with `iterationId` omitted because a report lives at the task level.
  */
 function reportStepStatusEvent(
   issueId: string,
@@ -1268,17 +1288,19 @@ function reportStepStatusEvent(
 }
 
 /**
- * Запускает report-агента с единым SSE-контрактом: `step_status` running →
- * терминальный success/failed по stepRunId `{issueId}/report` плюс live
- * log/step_event. Ошибки агента не пробрасываются: они публикуются как
- * `failed` и пишутся в серверный лог, чтобы fire-and-forget прогон не тонул
- * молча. Старт/итог/длительность видны в `/tmp/ir-backend.log`.
+ * Runs the report agent under one SSE contract: `step_status` running, then a
+ * terminal success/failed for the report run, plus live
+ * log/step_event. Agent errors are published as `failed` and logged instead of
+ * thrown: a fire-and-forget run must not fail silently.
  */
 export async function runReportAgent(
   deps: ReportRunDeps,
   input: RunReportAgentInput,
 ): Promise<void> {
-  const reportRunId = `${input.issueId}/report`;
+  const reportRunId = SessionAddress.forIssueRun(
+    input.issueId,
+    'report',
+  ).toString();
 
   // One run per issue: a second run would archive the root the first run is
   // still writing into and double the agent work. Refuse before archiving.
@@ -1290,9 +1312,6 @@ export async function runReportAgent(
     return;
   }
 
-  // Прогон живёт в БД как обычный step_run: iteration_id = NULL, step = report.
-  // Поэтому исход, длительность и вся сессия видны после перезагрузки страницы
-  // и рестарта сервиса, а ручной запуск не требует фиктивной итерации.
   let stepRunId: string;
   try {
     const previous = await listStepRunsByIssue(deps.db, input.issueId);
@@ -1313,10 +1332,8 @@ export async function runReportAgent(
     return;
   }
 
-  // Архивация — ОДНА точка на оба входа (post-iteration и ручной POST):
-  // агент не должен «дописывать» прошлый отчёт, в корне его больше нет.
-  // Сбой → терминальный `failed` + лог, агента НЕ спавним (старый файл
-  // остаётся в корне — это видимое, но честное состояние).
+  // One archive point for both entry paths, so a new run never appends to a
+  // previous report. A failed archive is terminal: the agent is not spawned.
   let archive: ReportArchiveResult;
   try {
     archive = archiveReportArtifacts(deps.workspaceRoot, input.issueId);
@@ -1350,102 +1367,88 @@ export async function runReportAgent(
   );
   activeReportRuns.add(input.issueId);
 
-  // Heartbeat: `updated_at` is the only liveness signal in the DB. Write
-  // errors are swallowed — telemetry must never take the run down.
-  const heartbeat = setInterval(() => {
-    void updateStepRun(deps.db, stepRunId, { status: 'running' }).catch(
-      (error: unknown) => {
-        console.error('report heartbeat failed', { stepRunId, error });
-      },
-    );
-  }, REPORT_RUN_HEARTBEAT_MS);
-  heartbeat.unref?.();
-
   let status: StepRunStatus = 'failed';
   let failure: unknown;
   let observedModel: string | undefined;
   let anchoredPath: string | null = null;
-  // Сессия прогона целиком — в `step_outputs` на финише: иначе после
-  // перезагрузки страницы "отчёт генерируется" показывал пустую панель.
-  let stdoutText = '';
-  let stderrText = '';
-  const sessionEvents: SessionEvent[] = [];
-  let stats: SessionStats | null = null;
+  // Plumbing of the live session (SSE, accumulation, heartbeat) lives in one
+  // module; this function only decides what the outcome means.
+  const session = startAgentSession(
+    {
+      sse: deps.sse,
+      store: {
+        appendStepRunEvent: (id, event) =>
+          appendStepRunEvent(deps.db, id, event),
+        updateStepRun: (id, patch) => updateStepRun(deps.db, id, patch),
+      },
+    },
+    {
+      issueId: input.issueId,
+      sessionId: reportRunId,
+      persistStepRunId: stepRunId,
+      heartbeatMs: REPORT_RUN_HEARTBEAT_MS,
+      // Anchoring visibility: the agent reads a PREVIOUS report (archive or
+      // snapshot). Signal only, never a block; at most one path per run.
+      onEvent: (event) => {
+        if (anchoredPath === null) {
+          anchoredPath = anchoredPreviousReportPath(event);
+        }
+      },
+    },
+  );
   try {
-    const result = await deps.pi.run(input.containerName, input.prompt, {
-      // Report пишет в host-папку задачи: контейнер итерации к этому моменту
-      // уже не нужен, а артефакты должны осесть в переживающей папке.
+    const reportRun = deps.pi.run(input.containerName, input.prompt, {
       cwd: input.hostDir,
       model: input.model,
       thinkingLevel: input.thinkingLevel,
       stepRunId: reportRunId,
       issueId: input.issueId,
       registry: deps.control,
-      onStdout: (chunk: string) => {
-        stdoutText += chunk;
-        deps.sse.publish({
-          type: 'log',
-          issueId: input.issueId,
-          stepRunId: reportRunId,
-          stream: 'stdout',
-          data: chunk,
-          ts: new Date().toISOString(),
-        });
-      },
-      onStderr: (chunk: string) => {
-        stderrText += chunk;
-        deps.sse.publish({
-          type: 'log',
-          issueId: input.issueId,
-          stepRunId: reportRunId,
-          stream: 'stderr',
-          data: chunk,
-          ts: new Date().toISOString(),
-        });
-      },
-      // Структурированные события сессии (thinking/tool_use/…) — в SSE
-      // обычным step_event, чтобы SessionView отчёта показывал не только
-      // сырой stdout.
-      onEvent: (event) => {
-        // Видимость якорения: агент читает ПРОШЛЫЙ отчёт (архив/снапшот).
-        // Только сигнал, не блокировка; максимум один путь на прогон.
-        if (anchoredPath === null) {
-          anchoredPath = anchoredPreviousReportPath(event);
-        }
-        sessionEvents.push(event);
-        deps.sse.publish({
-          type: 'step_event',
-          issueId: input.issueId,
-          stepRunId: reportRunId,
-          stream: 'system',
-          data: JSON.stringify({ stepRunId: reportRunId, event }),
-          ts: new Date().toISOString(),
-        });
+      sessionDir: issueSessionDir(input.issueId),
+      excludeTools: soloRunExcludeTools(),
+      systemAppend: STEP_SYSTEM_APPEND,
+      sessionName: sessionDisplayName({ step: 'report', issueId: input.issueId }),
+      ...session.callbacks,
+    });
+    // Silence is the one failure an agent cannot report itself: cancel the live
+    // session instead of waiting for a process that will never finish.
+    const stallMs = resolveAgentStallTimeoutMs();
+    const result = await withAgentStallGuard(reportRun, {
+      stallMs,
+      label: 'report agent',
+      activity: () => session.activity(),
+      recover: stallRecoveries({
+        control: deps.control,
+        target: runTarget(reportRunId),
+        graceMs: stallMs,
+      }),
+      onStall: () => {
+        // The report session is registered under its own run id, not under the
+        // issue: address it exactly, or the command reaches no one.
+        void deps.control?.send(runTarget(reportRunId), { type: 'abort_retry' });
+        deps.control?.abort(reportRunId);
       },
     });
-    // Что сессия назвала фактически — единственная честная игла для детекта.
+    // The model the session actually used: the only honest signal for leakage.
     observedModel = result.stats?.model ?? undefined;
-    stats = result.stats ?? null;
+    session.setStats(result.stats ?? null);
     const derived = result.aborted
       ? 'failed'
       : stepRunStatusFromResult(result.exitCode, result.report);
-    // Для отчёта осмысленны только success/failed (`needs_input`/`skipped`
-    // у него не бывает): всё, кроме явного успеха, — падение прогона.
     status = derived === 'success' ? 'success' : 'failed';
     if (status === 'failed') failure = `exit status: ${derived}`;
   } catch (error) {
     failure = error;
     status = 'failed';
   } finally {
-    // Снятие флага — строго в `finally`: любой throw выше (в т.ч. из
-    // `sse.publish`) не имеет права оставить «вечный активный» прогон, иначе
-    // `/report/status` навсегда `running`, а UI крутит «⏳» навсегда.
+    // Strictly in `finally`: any throw above must not leave the flag set, or
+    // `/report/status` stays `running` forever.
     activeReportRuns.delete(input.issueId);
-    clearInterval(heartbeat);
+    session.stop();
     if (observedModel) observedReportModel.set(input.issueId, observedModel);
     else observedReportModel.delete(input.issueId);
-    // Контракт прогона: успех без report.md — не успех. Раньше exit 0 при пустом
-    // корне давал `success`, и UI зелёным бейджем врал о готовом отчёте.
+    // Success without report.md is not success: exit 0 on an empty folder used
+    // to show a green badge for a report that did not exist.
     const artifacts = reportArtifactsPresent(input.hostDir);
     if (status === 'success' && !artifacts.md) {
       status = 'failed';
@@ -1453,12 +1456,10 @@ export async function runReportAgent(
     }
     if (status === 'success') {
       lastReportOutcome.delete(input.issueId);
-      // Игла — наблюдённая модель (если сессия её назвала), иначе запрошенная.
       const warnings = [
         ...detectModelLeak(input.hostDir, observedModel ?? input.model),
-        // Якорение — своя строка (отдельно от модели), но тег warn'а общий,
-        // чтобы грепалось вместе с моделью. Сигнал из tool_use, не из файла:
-        // process-local, после рестарта с диска не пересчитывается.
+        // Anchoring is its own line but shares the warning tag, so it greps
+        // alongside the model. The signal comes from tool_use, not the file.
         ...(anchoredPath
           ? [`anchored on previous report: ${anchoredPath}`]
           : []),
@@ -1475,8 +1476,6 @@ export async function runReportAgent(
     } else {
       lastReportOutcome.set(input.issueId, 'failed');
     }
-    // Персистентность — последний шаг: сюда доходит любой исход, включая
-    // прерванный throw'ом. UI читает именно эту строку, а не память процесса.
     let feedback: string | null = null;
     if (status === 'failed') {
       const reason =
@@ -1485,16 +1484,14 @@ export async function runReportAgent(
     } else if (!artifacts.html) {
       feedback = 'report.html отсутствует — доступен только markdown';
     }
+    const snapshot = session.snapshot();
     await persistReportRun(deps.db, stepRunId, {
       status,
       feedback,
-      stdout: stdoutText,
-      stderr: stderrText,
-      // The session log is capped per run: without a ceiling a run full of
-      // screenshots wrote hundreds of megabytes into the DB and froze the tab
-      // on view.
-      events: capSessionEvents(sessionEvents),
-      stats,
+      stdout: snapshot.stdout,
+      stderr: snapshot.stderr,
+      events: capSessionEvents(snapshot.events),
+      stats: snapshot.stats,
       artifacts,
     });
   }
@@ -1515,8 +1512,8 @@ export async function runReportAgent(
 }
 
 /**
- * Создаёт и запускает report-агента для сборки `report.md` и `report.html`
- * по итогам завершённых итераций. Fire-and-forget: ошибки не роняют итерацию.
+ * Spawns the report agent that builds `report.md`/`report.html` from finished
+ * iterations. Fire-and-forget: failures never take an iteration down.
  */
 async function spawnReportAgent(
   db: Db,

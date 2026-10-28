@@ -8,7 +8,12 @@ import type {
   PipelineStep,
   ThinkingLevel,
 } from '@issue-resolver/shared';
-import { extractIssueKeyFromUrl, extractRepoNameFromUrl, type TaskStatus } from '@issue-resolver/shared';
+import {
+  SessionAddress,
+  extractIssueKeyFromUrl,
+  extractRepoNameFromUrl,
+  type TaskStatus,
+} from '@issue-resolver/shared';
 import { and, eq, max } from 'drizzle-orm';
 import type { IssueService } from '../issues/service';
 import type { FastifyInstance } from 'fastify';
@@ -46,9 +51,9 @@ import {
   observedModelFor,
   runIssueIteration,
   runReportAgent,
-  REPORT_RUN_STALE_MS,
 } from '../workflow/run-iteration.service';
 import { buildStepPrompt } from '../workflow/prompts';
+import { isSessionStale, quietMinutes } from '../pi/session-liveness';
 import {
   attachmentsFilePathFor,
   saveUpload,
@@ -568,7 +573,7 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      // Guard: только внутри рабочей папки задачи (защита от traversal).
+      // Guard: inside the task workspace only (path traversal).
       const path = workspaceFilePathFor(
         deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
         id,
@@ -589,7 +594,7 @@ export async function issuesRoutes(
       }
 
       const name = basename(path);
-      // `inline=1` — для предпросмотра (iframe/img); без него — скачивание.
+      // `inline=1` serves a preview (iframe/img); otherwise a download.
       const disposition =
         request.query.inline === '1'
           ? 'inline'
@@ -619,7 +624,7 @@ export async function issuesRoutes(
         return reply.status(409).send({ error: 'report run already active' });
       }
 
-      const reportRunId = `${id}/report`;
+      const reportRunId = SessionAddress.forIssueRun(id, 'report').toString();
       const wsRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
       const hostDir = workspaceHostDirFor(wsRoot, id);
       const containerName = containerNameFor(id);
@@ -652,22 +657,22 @@ export async function issuesRoutes(
           workingDir: deps.local ? hostDir : workspaceContainerDirFor(id),
         });
 
-        // Архивация прошлых артефактов живёт внутри `runReportAgent` — одна
-        // точка для post-iteration и этого роута.
+        // Archiving lives inside `runReportAgent`: one point for both the
+        // post-iteration and this route.
         void runReportAgent({ ...deps, db }, {
           issueId: id,
           containerName,
           hostDir,
           prompt,
-          // Модель отчёта: query-param ручного запуска переопределяет
-          // step_models.report → модель последней завершённой итерации.
+          // Report model: a manual query param overrides step_models.report,
+          // which overrides the last finished iteration's model.
           model: (request.query as Record<string, string>).model || reportModelFor(db, id),
           thinkingLevel: (request.query as Record<string, string>).thinking as ThinkingLevel | undefined,
-          // Атрибуция: ручной запуск + Origin запроса видны в серверном логе.
+          // Attribution: a manual run and its Origin show up in the server log.
           trigger: 'manual',
           origin: request.headers.origin ?? null,
         }).then(() =>
-          // Отчёт дописан — обновляем снапшот, который читает GET /result.
+          // Report written: refresh the snapshot that GET /result reads.
           refreshLatestResultSnapshot(db, deps.workspaceRoot, id).catch(
             (error) => console.error('refresh report snapshot failed', error),
           ),
@@ -690,28 +695,26 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      // Активный прогон в памяти важнее строки в БД: корень на время работы
-      // заархивирован, и «idle» по пустому корню был бы враньём.
+      // The in-memory active run outranks the DB row: the root is archived
+      // while the agent works, so `idle` from an empty root would be a lie.
       const wsRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
       const hostDir = workspaceHostDirFor(wsRoot, id);
       const artifacts = await reportArtifactsOnDisk(hostDir);
       const run = await getLatestStepRunForIssue(db, id, 'report');
+      const now = Date.now();
 
       // A `running` row with no live process is not "in progress", it is dead:
       // the run lives in process memory, and its death used to leave the row in
       // `running` forever (UI held «⏳» and blocked «Обновить»). A live run bumps
-      // `updated_at` every REPORT_RUN_HEARTBEAT_MS, so a row quiet for longer
-      // than REPORT_RUN_STALE_MS is honestly driven to `failed`.
+      // `updated_at` every heartbeat, so a row that missed the stale window is
+      // honestly driven to `failed`.
       if (
         run &&
         run.status === 'running' &&
         !isReportRunActive(id) &&
-        Date.now() - Date.parse(run.updated_at) > REPORT_RUN_STALE_MS
+        isSessionStale(run.updated_at, now)
       ) {
-        const minutes = Math.max(
-          1,
-          Math.round((Date.now() - Date.parse(run.updated_at)) / 60_000),
-        );
+        const minutes = quietMinutes(run.updated_at, now);
         const feedback = `report failed: нет активности ${minutes} мин — прогон прерван`;
         await updateStepRun(db, run.id, { status: 'failed', feedback });
         run.status = 'failed';
@@ -723,12 +726,12 @@ export async function issuesRoutes(
       else if (run) {
         if (run.status === 'success') status = 'success';
         else if (run.status === 'failed') status = 'failed';
-        // `pending`/`running` без записи в памяти = прогон прерван рестартом;
-        // reconcileInterruptedRuns гасит такие строки в `failed` при старте.
+        // `pending`/`running` with no in-memory run was interrupted by a
+        // restart; reconcileInterruptedRuns drives those rows to `failed`.
         else status = 'running';
       } else if (artifacts.md.present) {
-        // Файл есть, строки прогона нет (например, БД пересоздана) — отчёт
-        // действительно доступен, и `idle` было бы враньём в другую сторону.
+        // Artifact present but no run row (fresh DB): the report really is
+        // there, and `idle` would be the opposite lie.
         status = 'success';
       } else {
         status = lastReportFailed(id) ? 'failed' : 'idle';
@@ -738,9 +741,9 @@ export async function issuesRoutes(
       const observedModel = observedModelFor(id);
       return {
         status,
-        // Исход прогона из БД: время, причина и что реально легло на диск.
-        // Раньше `status` выводился из наличия report.md, поэтому прогон,
-        // который не создал ничего, выглядел успешным.
+        // Outcome from the DB: time, reason, and what actually hit the disk.
+        // Status used to be derived from report.md existing at all, so a run
+        // that produced nothing looked successful.
         ...(run
           ? {
               runId: run.id,
@@ -759,17 +762,16 @@ export async function issuesRoutes(
           : {}),
         artifacts,
         ...(artifacts.md.mtime ? { lastRunAt: artifacts.md.mtime } : {}),
-        // Наблюдённая (а не запрошенная) модель — additive; после рестарта
-        // отсутствует, и UI рисует «нет телеметрии», а не пустое значение.
+        // The observed (not requested) model: additive, missing after a
+        // restart, so the UI shows "no telemetry" rather than a guess.
         ...(observedModel ? { observedModel } : {}),
         ...(warnings.length > 0 ? { warnings } : {}),
       };
     },
   );
 
-  // GET /issues/:id/report/run — последний прогон отчёта вместе с логом сессии.
-  // Живёт вне итерации (step_runs.iteration_id = NULL), поэтому у шагового
-  // маршрута `/iterations/:id/step-runs` его нет.
+  // GET /issues/:id/report/run — latest report run with its session log. It
+  // lives outside any iteration (iteration_id = NULL), hence its own route.
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/report/run`,
     async (request, reply) => {

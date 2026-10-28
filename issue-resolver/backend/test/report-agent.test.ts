@@ -95,7 +95,7 @@ class ReportStubPi extends FakePiRunner {
     options?: PiRunOptions,
   ): Promise<StepExecutionResult> {
     const result = super.run(containerName, prompt, options);
-    if (options?.stepRunId?.endsWith('/report') && options.issueId) {
+    if (options?.stepRunId?.endsWith('.report') && options.issueId) {
       const dir = join(this.root, options.issueId);
       mkdirSync(dir, { recursive: true });
       for (const [name, content] of Object.entries(this.files)) {
@@ -121,7 +121,7 @@ class ObservedModelReportPi extends ReportStubPi {
     options?: PiRunOptions,
   ): Promise<StepExecutionResult> {
     const result = await super.run(containerName, prompt, options);
-    if (options?.stepRunId?.endsWith('/report')) {
+    if (options?.stepRunId?.endsWith('.report')) {
       result.stats = {
         model: this.observed,
         userMessages: 0,
@@ -233,7 +233,7 @@ async function runOnce(
 
 function reportCall(pi: FakePiRunner, issueId: string) {
   return pi.calls.find(
-    (call) => call.options?.stepRunId === `${issueId}/report`,
+    (call) => call.options?.stepRunId === `issue.${issueId}.report`,
   );
 }
 
@@ -775,7 +775,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
         prompt: string,
         options?: PiRunOptions,
       ) {
-        if (options?.stepRunId?.endsWith('/report')) {
+        if (options?.stepRunId?.endsWith('.report')) {
           return Promise.reject(new Error('report boom'));
         }
         return super.run(containerName, prompt, options);
@@ -817,7 +817,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
         prompt: string,
         options?: PiRunOptions,
       ) {
-        if (options?.stepRunId?.endsWith('/report')) {
+        if (options?.stepRunId?.endsWith('.report')) {
           return new Promise<StepExecutionResult>((resolve) => {
             releases.push(() =>
               resolve({

@@ -132,7 +132,7 @@ function stubFetch(options: {
       return Promise.resolve(
         options.onReportPost
           ? options.onReportPost()
-          : jsonResponse({ ok: true, reportRunId: 'issue-1/report' }),
+          : jsonResponse({ ok: true, reportRunId: 'issue.issue-1.report' }),
       );
     }
     if (url.endsWith('/control') && init?.method === 'POST') {
@@ -182,7 +182,7 @@ function emitReportLog(text: string, stream: 'stdout' | 'stderr' = 'stdout') {
     FakeEventSource.instances[0].emit({
       type: 'log',
       issueId: 'issue-1',
-      stepRunId: 'issue-1/report',
+      stepRunId: 'issue.issue-1.report',
       stream,
       data: text,
       ts: '2026-10-09T00:00:00.000Z',
@@ -523,10 +523,10 @@ function emitReportStats() {
     FakeEventSource.instances[0].emit({
       type: 'step_event',
       issueId: 'issue-1',
-      stepRunId: 'issue-1/report',
+      stepRunId: 'issue.issue-1.report',
       stream: 'system',
       data: JSON.stringify({
-        stepRunId: 'issue-1/report',
+        stepRunId: 'issue.issue-1.report',
         event: {
           type: 'stats',
           stats: {

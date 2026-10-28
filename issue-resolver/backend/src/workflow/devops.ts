@@ -4,6 +4,9 @@ import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SessionEvent, ThinkingLevel } from '@issue-resolver/shared';
 import type { PiRunner } from '../pi/runner';
+import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
+import { soloRunExcludeTools } from '../pi/tool-policy';
+import { STEP_SYSTEM_APPEND } from './prompts';
 
 /** Cwd-agnostic path to <repo>/prompts/devops.md, resolved from this module. */
 export const DEFAULT_DEVOPS_PROMPT_PATH = join(
@@ -208,6 +211,17 @@ export class PiDevOpsAgent implements DevOpsAgent {
           iterationId: this.options.iterationId,
           stepRunId: this.options.stepRunId,
           registry: this.options.registry,
+          excludeTools: soloRunExcludeTools(),
+          systemAppend: STEP_SYSTEM_APPEND,
+          ...(this.options.issueId
+            ? {
+                sessionDir: issueSessionDir(this.options.issueId),
+                sessionName: sessionDisplayName({
+                  step: 'devops',
+                  issueId: this.options.issueId,
+                }),
+              }
+            : {}),
           onStdout: this.options.onStdout,
           onStderr: this.options.onStderr,
           onEvent: this.options.onEvent,

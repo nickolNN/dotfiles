@@ -21,13 +21,12 @@ passed. You are also the one who writes the deliverable.
 Read the full files listed above in the working folder — the summaries are a map,
 the files are the truth.
 
-## Shared room memory
+## Stage memory
 
-- Each stage published a short outcome to the shared room memory. Read them with
-  the `memory_read` / `memory_search` tools (tags `#issue-resolver`,
-  `[[stage-N]]`), in addition to the working-folder files.
-- When the resolve step is finished, write the overall resolve outcome with the
-  `memory_write` tool: tags `#issue-resolver` and `[[resolve]]`.
+- Each stage recorded its outcome in the shared memory under `[[stage-N]]`. Read
+  those entries with `memory_search`, in addition to the working-folder files.
+- When the resolve step is finished, record the overall outcome under
+  `[[resolve]]`, following the memory rules below.
 
 ## Your job
 

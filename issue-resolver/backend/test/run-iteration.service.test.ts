@@ -1568,12 +1568,12 @@ describe('runIssueIteration — run_instructions через анализатор
     expect(logs[0]).toMatchObject({
       issueId,
       iterationId: iteration.id,
-      stepRunId: `${issueId}/devops`,
+      stepRunId: `issue.${issueId}.devops`,
       stream: 'stdout',
       data: 'installing deps\n',
     });
     expect(logs[1]).toMatchObject({
-      stepRunId: `${issueId}/devops`,
+      stepRunId: `issue.${issueId}.devops`,
       stream: 'stderr',
       data: 'warning\n',
     });
@@ -1636,7 +1636,7 @@ describe('spawnReportAgent (B6–B9)', () => {
   });
 
   const reportCall = (pi: FakePiRunner, issueId: string) =>
-    pi.calls.find((call) => call.options?.stepRunId === `${issueId}/report`);
+    pi.calls.find((call) => call.options?.stepRunId === `issue.${issueId}.report`);
 
   const runOnce = async (
     db: Db,
@@ -1695,7 +1695,7 @@ describe('spawnReportAgent (B6–B9)', () => {
     await runOnce(db, deps, issueId, iteration);
 
     const logs = events.filter(
-      (event) => event.type === 'log' && event.stepRunId === `${issueId}/report`,
+      (event) => event.type === 'log' && event.stepRunId === `issue.${issueId}.report`,
     );
     expect(logs.map((event) => event.stream)).toEqual(['stdout', 'stderr']);
     expect(logs.map((event) => event.data)).toEqual([
@@ -1713,7 +1713,7 @@ describe('spawnReportAgent (B6–B9)', () => {
 
     const original = pi.run.bind(pi);
     pi.run = (containerName, prompt, options) =>
-      options?.stepRunId === `${issueId}/report`
+      options?.stepRunId === `issue.${issueId}.report`
         ? Promise.reject(new Error('report boom'))
         : original(containerName, prompt, options);
 
@@ -1760,7 +1760,7 @@ describe('spawnReportAgent (B6–B9)', () => {
 
     await runOnce(db, deps, issueId, iteration);
 
-    const reportRunId = `${issueId}/report`;
+    const reportRunId = `issue.${issueId}.report`;
     const statuses = () =>
       events.filter(
         (event) =>
@@ -1803,7 +1803,7 @@ describe('spawnReportAgent (B6–B9)', () => {
 
     const original = pi.run.bind(pi);
     pi.run = (containerName, prompt, options) =>
-      options?.stepRunId === `${issueId}/report`
+      options?.stepRunId === `issue.${issueId}.report`
         ? Promise.reject(new Error('report boom'))
         : original(containerName, prompt, options);
 
@@ -1814,7 +1814,7 @@ describe('spawnReportAgent (B6–B9)', () => {
     try {
       await runOnce(db, deps, issueId, iteration);
 
-      const reportRunId = `${issueId}/report`;
+      const reportRunId = `issue.${issueId}.report`;
       const terminal = () =>
         events.find(
           (event) =>
@@ -1858,7 +1858,7 @@ describe('spawnReportAgent (B6–B9)', () => {
     try {
       await runOnce(db, deps, issueId, iteration);
 
-      const reportRunId = `${issueId}/report`;
+      const reportRunId = `issue.${issueId}.report`;
       await vi.waitFor(() =>
         expect(
           events.find(
@@ -1936,7 +1936,7 @@ describe('DevOps SSE миграция (C10–C12)', () => {
       (event) => event.type === 'log' && event.stream === 'stdout',
     );
     expect(stdout).toBeDefined();
-    expect(stdout!.stepRunId).toBe(`${issueId}/devops`);
+    expect(stdout!.stepRunId).toBe(`issue.${issueId}.devops`);
     expect(stdout!.data).toBe('installing deps\n');
   });
 
@@ -1947,7 +1947,7 @@ describe('DevOps SSE миграция (C10–C12)', () => {
       (event) => event.type === 'log' && event.stream === 'stderr',
     );
     expect(stderr).toBeDefined();
-    expect(stderr!.stepRunId).toBe(`${issueId}/devops`);
+    expect(stderr!.stepRunId).toBe(`issue.${issueId}.devops`);
     expect(stderr!.data).toBe('warning\n');
   });
 

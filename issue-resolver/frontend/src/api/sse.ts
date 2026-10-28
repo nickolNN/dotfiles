@@ -467,11 +467,11 @@ export function subscribeToGlobalStream(cb: SseCallbacks): () => void {
 }
 
 /**
- * Подписка на поток событий КОНКРЕТНОГО агента комнаты
- * (`GET /iterations/:id/agents/stream?agentId=`). `agentId` исполнителя содержит
- * `/` (`<stepRunId>/worker/<i>`) — кодируем его через `encodeURIComponent`.
+ * Stream of ONE room agent (`GET /iterations/:id/agents/stream?agentId=`).
+ * Agent ids are session addresses, so they still go through
+ * `encodeURIComponent` before hitting the query string.
  *
- * Возвращает функцию отписки; без `EventSource` (SSR) — no-op.
+ * Returns an unsubscribe function; without `EventSource` (SSR) it is a no-op.
  */
 export function subscribeToAgentEvents(
   iterationId: string,

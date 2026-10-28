@@ -23,13 +23,14 @@ import type {
   WorkspaceProgressReporter,
 } from '@issue-resolver/shared';
 import {
-  extractRepoNameFromUrl,
   MAX_SELF_RETRIES,
+  SELF_RETRY_STEPS,
+  SessionAddress,
+  extractRepoNameFromUrl,
   maxExecutorsFor,
   nextStepDecision,
   parseStepReport,
   planExecutionMode,
-  SELF_RETRY_STEPS,
   stepRunStatusFromResult,
 } from '@issue-resolver/shared';
 import type { ContainerController } from '../docker/controller';
@@ -40,7 +41,11 @@ import type {
   RepoChangeDigest,
 } from '../git/service';
 import type { PiRunner } from '../pi/runner';
-import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry';
+import {
+  iterationTarget,
+  type RoomAgentInfo,
+  type StepSessionRegistry,
+} from '../pi/session-registry';
 import {
   detectGitHost,
   formatPrPublishErrors,
@@ -54,9 +59,16 @@ import {
   workspaceContainerDirFor,
   workspaceHostDirFor,
 } from '../workspace/paths';
-import { buildStepPrompt, type PrTarget } from './prompts';
+import {
+  STEP_SYSTEM_APPEND,
+  buildStepPrompt,
+  type PrTarget,
+} from './prompts';
 import type { DevOpsAgent } from './devops';
 import { runRoomResolve, runStagedResolve } from './room';
+import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
+import { soloRunExcludeTools } from '../pi/tool-policy';
+import { stallRecoveries } from '../pi/stall-recovery';
 import {
   resolveAgentStallTimeoutMs,
   resolveAgentTimeoutMs,
@@ -507,7 +519,7 @@ export async function prepareWorkspace(
       }
       onProgress?.({ step: 'checking_instructions', repo: repoName, status: 'running' });
       onProgress?.({ step: 'devops', repo: repoName, status: 'running' });
-      const devopsId = `${issue.id}/devops`;
+      const devopsId = SessionAddress.forIssueRun(issue.id, 'devops').toString();
       const devops = deps.devops({
         containerName: spec.containerName,
         hostWorkspaceDir: workspaceHostDir,
@@ -937,6 +949,13 @@ export async function runIteration(
       issueId: issue.id,
       registry: deps.control,
       timeoutMs: agentTimeoutMs,
+      sessionDir: issueSessionDir(issue.id),
+      systemAppend: STEP_SYSTEM_APPEND,
+      sessionName: sessionDisplayName({
+        step,
+        issueId: issue.id,
+        attempt: stepRun.attempt,
+      }),
       onStdout: (chunk: string, agent?: RoomAgentInfo) => {
         stepActivity += 1;
         deps.sse.publish(
@@ -1039,6 +1058,12 @@ export async function runIteration(
         ...promptContext,
         refinedPlan,
       };
+      // Room tools exist for agents that run side by side. A lone step agent
+      // only pays for their declarations and can steer itself by accident.
+      const soloStepOptions =
+        topology === 'room' || topology === 'stages'
+          ? runOptions
+          : { ...runOptions, excludeTools: soloRunExcludeTools() };
       let agentRun: Promise<StepExecutionResult>;
       if (topology === 'room') {
         agentRun = runRoomResolve(deps.pi, resolveInput, roomOptions);
@@ -1049,7 +1074,11 @@ export async function runIteration(
           deps.pi.run(
             containerName,
             buildStepPrompt({ step, ...promptContext, refinedPlan }),
-            { ...runOptions, stepRunId: stepRun.id },
+            {
+              ...soloStepOptions,
+              stepRunId: stepRun.id,
+              sessionId: SessionAddress.forStepRun(stepRun.id).toString(),
+            },
           ),
           agentTimeoutMs,
           `${step} agent`,
@@ -1059,6 +1088,20 @@ export async function runIteration(
         stallMs: agentStallMs,
         label: `${step} agent`,
         activity: () => stepActivity,
+        recover: stallRecoveries({
+          control: deps.control,
+          target: iterationTarget(iteration.id),
+          graceMs: agentStallMs,
+        }),
+        // A silent agent is still alive: cancel it instead of leaving the
+        // process behind a rejected promise. Clear the retry loop first —
+        // a plain abort does not stop an in-flight auto-retry.
+        onStall: () => {
+          void deps.control?.send(iterationTarget(iteration.id), {
+            type: 'abort_retry',
+          });
+          deps.control?.abortByIteration(iteration.id);
+        },
       });
     } catch (error) {
       // Падение/зависание pi-агента (spawn ENOENT, timeout, child error,

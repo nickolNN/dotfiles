@@ -103,6 +103,10 @@ export function withAgentTimeout<T>(
 }
 
 /** Env var for the agent silence window (ms). */
+import type { StallRecovery } from '../pi/stall-recovery';
+
+export type { StallRecovery };
+
 export const AGENT_STALL_TIMEOUT_ENV =
   'ISSUE_RESOLVER_AGENT_STALL_TIMEOUT_MS';
 
@@ -125,10 +129,12 @@ export function resolveAgentStallTimeoutMs(
   }
   return Math.max(parsed, MIN_AGENT_STALL_TIMEOUT_MS);
 }
-
 /**
  * Rejects once `activity()` has not changed for `stallMs`. Every chunk of step
  * output must bump the counter, otherwise a live but silent run gets killed.
+ *
+ * A silent agent is not a dead one, so `recover` gets a chance to wake it (a
+ * `follow_up` nudge, then a context compaction) before the run is failed.
  */
 export function withAgentStallGuard<T>(
   promise: Promise<T>,
@@ -138,31 +144,118 @@ export function withAgentStallGuard<T>(
     activity: () => number;
     /** Counter poll interval (default 1 s). */
     pollMs?: number;
+    /** Attempted in order, each with its own grace window. */
+    recover?: StallRecovery[];
+    /**
+     * Ceiling for one recovery attempt (default 30 s). A delivery that hangs
+     * must not hold the run: the guard moves down the ladder instead.
+     */
+    attemptTimeoutMs?: number;
+    /**
+     * Called once when every recovery failed. The caller cancels the live
+     * session, so a rejected promise does not leave the process behind.
+     */
+    onStall?: () => void;
   },
 ): Promise<T> {
   const { stallMs, label, activity } = options;
   const pollMs = Math.max(1, Math.min(options.pollMs ?? 1_000, stallMs));
+  const pending = [...(options.recover ?? [])];
+  const tried: string[] = [];
+  const attemptTimeoutMs = Math.max(1, options.attemptTimeoutMs ?? 30_000);
+
+  /** Recovery is best effort: a hang or a throw counts as "no window". */
+  const attemptWithCeiling = (
+    attempt: StallRecovery['attempt'],
+  ): Promise<number> =>
+    new Promise<number>((resolveAttempt) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        settled = true;
+        resolveAttempt(0);
+      }, attemptTimeoutMs);
+      const finish = (grace: number) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolveAttempt(grace);
+      };
+      Promise.resolve()
+        .then(attempt)
+        .then((grace) => finish(grace ?? 0))
+        .catch(() => finish(0));
+    });
+
   return new Promise<T>((resolve, reject) => {
     let seen = activity();
     let seenAt = Date.now();
+    let graceMs = 0;
+    let recovering = false;
+    let finished = false;
+
+    const stop = () => {
+      finished = true;
+      clearInterval(timer);
+    };
+
+    const giveUp = () => {
+      stop();
+      try {
+        options.onStall?.();
+      } catch {
+        // Cancelling is best effort; the stall error is what the caller needs.
+      }
+      const suffix = tried.length > 0 ? ` (tried: ${tried.join(', ')})` : '';
+      reject(new Error(`${label} stalled: no output for ${stallMs}ms${suffix}`));
+    };
+
+    /** Runs the next recovery attempt, or gives up when the list is empty. */
+    const attemptNext = () => {
+      const next = pending.shift();
+      if (!next) {
+        giveUp();
+        return;
+      }
+      tried.push(next.label);
+      // While an attempt is in flight the window must not fire again, or an
+      // empty ladder would give up before the nudge even reached the agent.
+      recovering = true;
+      void attemptWithCeiling(next.attempt).then((grace) => {
+        recovering = false;
+        if (finished) return;
+        if (grace > 0) {
+          // The agent gets a full window to show any sign of life.
+          seen = activity();
+          seenAt = Date.now();
+          graceMs = grace;
+          return;
+        }
+        if (pending.length > 0) attemptNext();
+        else giveUp();
+      });
+    };
+
     const timer = setInterval(() => {
       const current = activity();
       if (current !== seen) {
         seen = current;
         seenAt = Date.now();
+        graceMs = 0;
         return;
       }
-      if (Date.now() - seenAt < stallMs) return;
-      clearInterval(timer);
-      reject(new Error(`${label} stalled: no output for ${stallMs}ms`));
+      if (recovering) return;
+      if (Date.now() - seenAt < (graceMs > 0 ? graceMs : stallMs)) return;
+      graceMs = 0;
+      attemptNext();
     }, pollMs);
+
     promise.then(
       (value) => {
-        clearInterval(timer);
+        stop();
         resolve(value);
       },
       (error) => {
-        clearInterval(timer);
+        stop();
         reject(error);
       },
     );

@@ -26,6 +26,22 @@ export const DEFAULT_SESSION_EVENTS_LIMITS: SessionEventsLimits = {
 
 const KEEP_STRING_CHARS = 1_000;
 
+/** First line of the marker prepended when events are dropped. */
+export const TRUNCATION_MARKER_PREFIX = '… session log truncated:';
+
+/**
+ * The marker is data, not a special event type, so a re-capped log must not
+ * stack markers: the writer appends one event at a time and re-caps on every
+ * append, which would otherwise leave one marker per overflow.
+ */
+export function isTruncationMarker(event: SessionEvent): boolean {
+  return (
+    event.type === 'text' &&
+    typeof (event as { text?: unknown }).text === 'string' &&
+    (event as { text: string }).text.startsWith(TRUNCATION_MARKER_PREFIX)
+  );
+}
+
 /**
  * A single event above the ceiling: long strings are cut with an explicit
  * marker, nested objects (tool arguments) are replaced by their size. The
@@ -62,9 +78,15 @@ export function capSessionEvents(
 ): SessionEvent[] {
   if (events.length === 0) return events;
 
+  // A previous marker is not content: re-capping replaces it.
+  const source = isTruncationMarker(events[0] as SessionEvent)
+    ? events.slice(1)
+    : events;
+  if (source.length === 0) return events;
+
   // Shrink once, then walk backwards accumulating sizes: no in-place mutation
   // of the caller's array and no post-hoc reversal.
-  const shrunk = events.map((event) =>
+  const shrunk = source.map((event) =>
     shrinkEvent(event, limits.maxEventBytes),
   );
   const sizes = shrunk.map((event) => JSON.stringify(event).length + 1);
@@ -83,7 +105,7 @@ export function capSessionEvents(
   return [
     {
       type: 'text',
-      text: `… session log truncated: ${dropped} events dropped, last ${kept.length} shown (budget ${Math.round(limits.maxBytes / 1000)} KB)`,
+      text: `${TRUNCATION_MARKER_PREFIX} ${dropped} events dropped, last ${kept.length} shown (budget ${Math.round(limits.maxBytes / 1000)} KB)`,
     },
     ...kept,
   ];

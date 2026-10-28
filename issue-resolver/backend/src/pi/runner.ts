@@ -13,8 +13,22 @@ export interface PiRunOptions {
   /** Уровень размышления pi (`--thinking`): off|minimal|low|medium|high|xhigh|max. */
   thinkingLevel?: string;
   cwd?: string;
+  /** `--tools`: replace the selection with this allowlist. */
   tools?: string[];
+  /** `--exclude-tools`: remove from the selection after everything else. */
+  excludeTools?: string[];
   timeoutMs?: number;
+  /**
+   * Pi session id (`--session-id`), see `SessionAddress`. Supplying it makes the
+   * agent's own session file carry the id we route logs and control by.
+   */
+  sessionId?: string;
+  /** `--session-dir`: where this session's file is stored (see issueSessionDir). */
+  sessionDir?: string;
+  /** `--append-system-prompt`: contract text that must survive compaction. */
+  systemAppend?: string;
+  /** `--name`: human-readable session name for listings. */
+  sessionName?: string;
   /** id прогона шага: адрес живой сессии в реестре. */
   stepRunId?: string;
   /** id итерации: адрес живой сессии по итерации. */

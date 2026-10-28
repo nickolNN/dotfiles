@@ -12,7 +12,10 @@ import {
   handleBuiltinSlash,
   parseSlash,
 } from '../pi/slash-commands';
-import type { StepSessionRegistry } from '../pi/session-registry';
+import {
+  iterationTarget,
+  type StepSessionRegistry,
+} from '../pi/session-registry';
 
 const CONTROL_PATH = '/issue-resolver/api/v1/iterations';
 
@@ -195,7 +198,7 @@ async function resolveModelByQuery(
   iterationId: string,
   query: string,
 ): Promise<{ provider: string; id: string } | null> {
-  const result = await control.sendByIteration(iterationId, {
+  const result = await control.send(iterationTarget(iterationId), {
     type: 'get_available_models',
   });
   const models = asRecord(result?.data)?.models;
@@ -265,7 +268,7 @@ export async function controlRoutes(
             ...(outcome.error ? { error: outcome.error } : {}),
           };
         }
-        const sent = await control.sendByIteration(id, outcome.command);
+        const sent = await control.send(iterationTarget(id), outcome.command);
         if (sent === null) {
           return reply.status(409).send({ error: 'no active step session' });
         }
@@ -280,7 +283,7 @@ export async function controlRoutes(
       }
     }
 
-    const result = control.promptByIteration(id, message, mode);
+    const result = control.prompt(iterationTarget(id), message, mode);
     if (result === null) {
       return reply.status(409).send({ error: 'no active step session' });
     }
@@ -292,7 +295,7 @@ export async function controlRoutes(
     `${CONTROL_PATH}/:id/control`,
     async (request, reply) => {
       const { id } = request.params;
-      const statePromise = control.sendByIteration(id, { type: 'get_state' });
+      const statePromise = control.send(iterationTarget(id), { type: 'get_state' });
       if (statePromise === null) {
         return reply.status(409).send({ error: 'no active step session' });
       }
@@ -300,9 +303,9 @@ export async function controlRoutes(
       const [stateResult, modelsResult, levelsResult, commandsResult] =
         await Promise.all([
           statePromise,
-          control.sendByIteration(id, { type: 'get_available_models' }),
-          control.sendByIteration(id, { type: 'get_available_thinking_levels' }),
-          control.sendByIteration(id, { type: 'get_commands' }),
+          control.send(iterationTarget(id), { type: 'get_available_models' }),
+          control.send(iterationTarget(id), { type: 'get_available_thinking_levels' }),
+          control.send(iterationTarget(id), { type: 'get_commands' }),
         ]);
 
       return buildSnapshot(
@@ -328,8 +331,8 @@ export async function controlRoutes(
         return reply.status(400).send({ error: 'unknown command type' });
       }
 
-      const result = await control.sendByIteration(
-        request.params.id,
+      const result = await control.send(
+        iterationTarget(request.params.id),
         piCommand,
       );
       if (result === null) {

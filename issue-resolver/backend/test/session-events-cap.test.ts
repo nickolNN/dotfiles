@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   capSessionEvents,
   DEFAULT_SESSION_EVENTS_LIMITS,
+  isTruncationMarker,
 } from '../src/pi/session-events-cap';
 
 const text = (value: string): SessionEvent => ({ type: 'text', text: value });
@@ -53,5 +54,20 @@ describe('capSessionEvents', () => {
       DEFAULT_SESSION_EVENTS_LIMITS.maxEventBytes + 1_000,
     );
     expect(JSON.stringify(event)).toContain('truncated');
+  });
+
+  it('повторная обрезка не накапливает маркеры', () => {
+    // The writer appends one event at a time and re-caps on every append.
+    let log: SessionEvent[] = Array.from({ length: 40 }, (_, index) =>
+      text(`${index}:`.padEnd(100_000, 'y')),
+    );
+
+    for (let round = 0; round < 5; round += 1) {
+      log = capSessionEvents([...log, text(`${round}:tail`.padEnd(100_000, 'z'))]);
+    }
+
+    const markers = log.filter(isTruncationMarker);
+    expect(markers).toHaveLength(1);
+    expect(isTruncationMarker(log[0] as SessionEvent)).toBe(true);
   });
 });

@@ -430,7 +430,7 @@ describe('runIteration — падение/зависание pi-агента з�
       'resolve#4:failed',
     ]);
     expect(resolveOutput(store).stderr).toMatch(/timed out|unexpected pi call/);
-    expect(pi.calls[1].options?.stepRunId).toContain('/stage/1/worker/1');
+    expect(pi.calls[1].options?.stepRunId).toContain('.s1.w0');
   });
 
   it('single: молчащее зависание → сторож тишины снимает прогон, не дожидаясь 3ч', async () => {
@@ -446,6 +446,50 @@ describe('runIteration — падение/зависание pi-агента з�
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
     expect(trace(store)[0]).toBe('resolve#1:failed');
     expect(store.outputs[0].stderr).toMatch(/stalled: no output for 30ms/);
+  });
+
+  it('single: тишина → сначала follow-up nudge и compact, потом abort', async () => {
+    const { deps, store } = makeDeps();
+    const seen: string[] = [];
+    deps.pi = {
+      run: (_container, _prompt, options) => {
+        options?.registry?.register(
+          options.stepRunId!,
+          options.iterationId!,
+          {
+            steer: () => seen.push('steer'),
+            abort: () => seen.push('abort'),
+            respond: () => {},
+            prompt: async (_message, mode) => {
+              seen.push(`prompt:${mode ?? 'plain'}`);
+              return { ok: true } as never;
+            },
+            send: async (command) => {
+              seen.push(`send:${String(command.type)}`);
+              return { ok: true } as never;
+            },
+          },
+        );
+        return hang();
+      },
+    };
+
+    const result = await runIteration(
+      deps,
+      makeInput(['resolve'], DEFAULT_RESOLVE_AGENT_TIMEOUT_MS, 30),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    // Ladder: wake the agent up, then compact, and only then kill it.
+    expect(seen.slice(0, 4)).toEqual([
+      'prompt:followUp',
+      'send:compact',
+      'send:abort_retry',
+      'abort',
+    ]);
+    // Each self-retry runs the whole ladder again, never skipping a rung.
+    expect(seen.filter((entry) => entry === 'send:abort_retry')).toHaveLength(4);
+    expect(store.outputs[0].stderr).toMatch(/tried: nudge, compact/);
   });
 
   it('single: поток вывода дольше «тишины» → сторож не срабатывает', async () => {

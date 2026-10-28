@@ -142,9 +142,9 @@ describe('топологии исполнения resolve — демо-прим�
 
     // 3 исполнителя (0-based id в room-режиме) → 1 координатор.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
-      'run-1/worker/0',
-      'run-1/worker/1',
-      'run-1/worker/2',
+      'run.run-1.w0',
+      'run.run-1.w1',
+      'run.run-1.w2',
       'run-1',
     ]);
     expect(pi.calls.slice(0, 3).map((c) => c.options?.agent?.label)).toEqual([
@@ -179,9 +179,9 @@ describe('топологии исполнения resolve — демо-прим�
 
     // executors=1 → один исполнитель этапа (`/stage/<i>/worker/1`), затем финал.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
-      'run-1/stage/1/worker/1',
-      'run-1/stage/2/worker/1',
-      'run-1/stage/3/worker/1',
+      'run.run-1.s1.w0',
+      'run.run-1.s2.w0',
+      'run.run-1.s3.w0',
       'run-1',
     ]);
     expect(pi.calls.map((c) => c.options?.agent?.label)).toEqual([
@@ -220,14 +220,14 @@ describe('топологии исполнения resolve — демо-прим�
     // Строгий порядок: этап1 (исполнители ∥ → координатор) → этап2 (1 исполнитель) →
     // этап3 (исполнители ∥ → координатор) → финальный lead.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
-      'run-1/stage/1/worker/1',
-      'run-1/stage/1/worker/2',
-      'run-1/stage/1/coordinator',
-      'run-1/stage/2/worker/1',
-      'run-1/stage/3/worker/1',
-      'run-1/stage/3/worker/2',
-      'run-1/stage/3/worker/3',
-      'run-1/stage/3/coordinator',
+      'run.run-1.s1.w0',
+      'run.run-1.s1.w1',
+      'run.run-1.s1.lead',
+      'run.run-1.s2.w0',
+      'run.run-1.s3.w0',
+      'run.run-1.s3.w1',
+      'run.run-1.s3.w2',
+      'run.run-1.s3.lead',
       'run-1',
     ]);
     // Финальный lead регистрируется со stage=null (фолбек координатора шага).

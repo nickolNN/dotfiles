@@ -100,9 +100,9 @@ describe('resolve не становится aborted, когда все аген�
     expect(result.report?.summary).toBe('coord');
     // Координатор действительно запускался последним.
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run-1/worker/0',
-      'run-1/worker/1',
-      'run-1/worker/2',
+      'run.run-1.w0',
+      'run.run-1.w1',
+      'run.run-1.w2',
       'run-1',
     ]);
   });

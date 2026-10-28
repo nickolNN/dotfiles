@@ -10,6 +10,10 @@
   (in `agent-skills/` or the remote skills shipped into the image), update
   that skill's `SKILL.md` in the same change — its frontmatter description
   and body are documentation the agent reads, and a stale skill is a bug.
+- **Code comments are English, and few.** No Russian in code — not in a
+  comment, docstring, or TODO. If a comment only restates the code, delete it
+  instead of translating it; keep the non-obvious "why", in English. Russian
+  stays only where it is data: UI labels, user-facing strings, test titles.
 
 ## Setup
 

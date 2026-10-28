@@ -38,4 +38,12 @@ describe('stepAgentEnv', () => {
     // Without an explicit room the agent must not join the caller's room.
     expect(env.PI_AGENT_ROOM).toBeUndefined();
   });
+
+  it('не ходит в pi.dev: каталог и версия отключены, телеметрия выключена', () => {
+    const env = stepAgentEnv({ PATH: '/usr/bin' });
+
+    expect(env.PI_OFFLINE).toBe('1');
+    expect(env.PI_SKIP_VERSION_CHECK).toBe('1');
+    expect(env.PI_TELEMETRY).toBe('0');
+  });
 });

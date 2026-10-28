@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { createDb } from '../src/db/client';
 import type { Db } from '../src/db/client';
 import { issues, iterations, stepOutputs, stepRuns } from '../src/db/schema';
+import { isTruncationMarker } from '../src/pi/session-events-cap';
 import {
   appendStepRunEvent,
   createStepOutput,
@@ -654,5 +655,40 @@ describe('ensureStepOutputColumns (миграция)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('appendStepRunEvent — бюджет лога', () => {
+  it('длинный лог усечён при записи, маркер один', async () => {
+    const db = makeDb();
+    const iterationId = seedIteration(db);
+    const run = await createStepRun(db, {
+      iterationId,
+      step: 'resolve',
+      attempt: 1,
+      context: 'seed',
+    });
+
+    // 40 events x ~100 KB = ~4 MB, twice the budget.
+    for (let index = 0; index < 40; index += 1) {
+      await appendStepRunEvent(db, run.id, {
+        type: 'text',
+        text: `${index}:`.padEnd(100_000, 'x'),
+      });
+    }
+
+    const stored = db.select().from(stepRuns).where(eq(stepRuns.id, run.id)).get();
+    const events = (stored?.events ?? []) as SessionEvent[];
+    const bytes = events.reduce(
+      (sum, event) => sum + JSON.stringify(event).length + 1,
+      0,
+    );
+
+    // The budget belongs to the store: a caller that forgets it cannot blow the
+    // row up to 175 MB again.
+    expect(bytes).toBeLessThanOrEqual(2_000_000 + 10_000);
+    expect(events.filter(isTruncationMarker)).toHaveLength(1);
+    // Tail kept: the newest event is there, the oldest is gone.
+    expect(JSON.stringify(events.at(-1))).toContain('39:');
   });
 });

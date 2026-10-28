@@ -30,9 +30,11 @@ import type {
   WorkspaceFile,
 } from '@issue-resolver/shared';
 import {
+  SessionAddress,
   extractRepoNameFromUrl,
   formatDateTime,
   formatRelativeTime,
+  SESSION_STALE_MS,
 } from '@issue-resolver/shared';
 import { canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
 import {
@@ -475,11 +477,9 @@ type ArtifactMeta = {
 /** Имя MD-файла отчёта для скачивания агентами. */
 const RESULT_MD_FILENAME = 'report.md';
 
-/**
- * Mirrors the backend's REPORT_RUN_STALE_MS: a run with no heartbeat for longer
- * than this is shown as dead (and may be retried), not as still generating.
- */
-const REPORT_STALE_MS = 120_000;
+// The stale window is a shared contract, not a copy: a UI that guesses it
+// differently than the server either kills live runs or hides dead ones.
+const REPORT_STALE_MS = SESSION_STALE_MS;
 
 type LoadState =
   | { status: 'loading' }
@@ -495,7 +495,7 @@ type StepRunsState =
 function filterArtifacts(files: IssueFile[]): IssueFile[] {
   return files.filter((file) => {
     const path = file.rel_path;
-    // Исключаем служебные каталоги и lock-файлы.
+    // Skip service directories and lock files.
     if (
       path.startsWith('node_modules/') ||
       path.startsWith('.git/') ||
@@ -1272,11 +1272,14 @@ function TaskDetailView({
       ]
     : [];
 
-  // Issue-уровневые сессии DevOps/Report: их stepRunId синтетические
-  // (`{issueId}/devops` | `{issueId}/report`), событий в step_runs нет —
-  // SessionView кормится только живыми `log`-чанками (text-события).
-  const devopsRunId = issueId ? `${issueId}/devops` : '';
-  const reportRunId = issueId ? `${issueId}/report` : '';
+  // Issue-level sessions (DevOps/Report) have addresses, not step runs: no
+  // `step_runs` row, so SessionView lives on the live `log` chunks alone.
+  const devopsRunId = issueId
+    ? SessionAddress.forIssueRun(issueId, 'devops').toString()
+    : '';
+  const reportRunId = issueId
+    ? SessionAddress.forIssueRun(issueId, 'report').toString()
+    : '';
   const devopsEvents = liveEventsByRun[devopsRunId] ?? [];
   const reportEvents = liveEventsByRun[reportRunId] ?? [];
   // Статус отчёта — 4 честных состояния из БД. Раньше UI выводил успех из
@@ -1649,9 +1652,9 @@ function TaskDetailView({
     };
   }, [issueId, resultReady, refreshTick]);
 
-  // Статус отчёта — из БД, а не из наличия файла: опрос идёт всегда (прогон
-  // fire-and-forget, явного SSE-финала нет), пока не придёт терминальный
-  // статус. Готовность = `success` (есть report.md), html — отдельный флаг.
+  // Report status comes from the DB, not from a file being present: polling
+  // never gives up (the run is fire-and-forget, with no SSE finale) until a
+  // terminal status arrives. Readiness follows the artifact, html is its own flag.
   useEffect(() => {
     if (!issueId) return;
     let cancelled = false;
@@ -1669,9 +1672,8 @@ function TaskDetailView({
 
     const apply = (next: ReportStatus) => {
       if (cancelled) return;
-      // Форма ответа — часть контракта: без `artifacts` это не статус отчёта
-      // (например, чужой роут или заглушка), и такой ответ игнорируем, а не
-      // выводим из него «running» для всего компонента.
+      // Response shape is part of the contract: without `artifacts` this is not
+      // a report status, so ignore it instead of deriving `running` from it.
       if (!next || !next.artifacts) return;
       setReportStatusInfo(next);
       setReportMeta({
@@ -1687,8 +1689,8 @@ function TaskDetailView({
       const running = next.status === 'running';
       reportRunningRef.current = running;
       setReportRunning(running);
-      // Сессию прогона (события/stdout/stats) читаем из БД: после перезагрузки
-      // страницы иначе не остаётся ничего, кроме бейджа.
+      // Hydrate the run's session (events/stdout/stats) from the DB; otherwise a
+      // page reload leaves nothing but the badge.
       if (!running) hydrateRun();
     };
 
@@ -1700,8 +1702,8 @@ function TaskDetailView({
     reportPollRef.current = poll;
 
     poll();
-    // Без «сдаёмся через 5 минут»: прогон отчёта идёт десятки минут, и
-    // оборванный опрос показывал «закончилось» посреди работы.
+    // No give-up timer: a report run takes tens of minutes, and a truncated
+    // poll used to report "finished" mid-flight.
     timer = setInterval(poll, 4000);
     return () => {
       cancelled = true;
@@ -1709,8 +1711,8 @@ function TaskDetailView({
       if (timer) clearInterval(timer);
     };
   }, [issueId]);
-  // Room-режим итерации: последний refine рекомендовал комнату. Для активного
-  // resolve карточка шага показывает вкладки агентов вместо одной сессии.
+  // Room mode: the last refine recommended a room, so an active resolve step
+  // shows agent tabs instead of a single session.
   const roomIteration =
     stepRuns.status === 'ready' && isRoomIteration(stepRuns.stepRuns);
   const hint = !hasIterationSteps
@@ -1721,7 +1723,7 @@ function TaskDetailView({
         ? 'После Resolver автоматически запустится Код-ревью.'
         : 'Итерация завершится сразу после работы Resolver.';
 
-  // Один живой тик на все карточки шагов: активные показывают elapsed.
+  // One shared tick for every step card that shows elapsed time.
   const anyActiveStep =
     stepRuns.status === 'ready' &&
     stepRuns.stepRuns.some((run) => isActiveStatus(statusOf(run)));
@@ -1742,7 +1744,7 @@ function TaskDetailView({
       ? Math.max(1, Math.round((now - reportLastActivity) / 60_000))
       : 0;
 
-  // Палитра слэш-команд: при вводе `/…` фильтруем команды живой сессии.
+  // Slash palette: filter the live session's commands while typing `/…`.
   const slashQuery = message.startsWith('/') ? message.slice(1) : null;
   const commandMatches =
     slashQuery !== null && controlSnapshot

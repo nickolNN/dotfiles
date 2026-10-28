@@ -7,6 +7,7 @@ import type {
   StepExecutionResult,
 } from '@issue-resolver/shared';
 import {
+  SessionAddress,
   clampExecutors,
   DEFAULT_MAX_ROOM_EXECUTORS,
   parseStepReport,
@@ -30,6 +31,8 @@ import {
 } from './prompts';
 import { readStageOutcomes } from './stage-outcomes';
 import { resolveAgentTimeoutMs, withAgentTimeout } from './timeout';
+import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
+import { STEP_SYSTEM_APPEND } from './prompts';
 
 /** Вход комнаты resolve: общий prompt-контекст + план и адрес контейнера. */
 export interface RoomResolveInput extends RoomPromptInput {
@@ -52,7 +55,7 @@ export interface RoomResolveOptions {
   /** Уровень размышления pi, общий для работников и координатора. */
   thinkingLevel?: string;
   cwd?: string;
-  /** stepRunId ШАГА resolve; работники получают `${stepRunId}/worker/<i>`. */
+  /** stepRunId of the resolve STEP; workers address as `<stepRunId>.w<i>`. */
   stepRunId: string;
   iterationId: string;
   issueId?: string;
@@ -87,7 +90,9 @@ const workerAgent = (
 ): RoomAgentInfo =>
   stage
     ? {
-        id: `${baseStepRunId}/stage/${stage.index}/worker/${index + 1}`,
+        id: SessionAddress.forStepRun(baseStepRunId)
+          .stageWorker(stage.index, index)
+          .toString(),
         role: 'worker',
         index: index + 1,
         label: `Этап ${stage.index} · Исполнитель ${index + 1}`,
@@ -95,7 +100,7 @@ const workerAgent = (
         stageName: stage.name,
       }
     : {
-        id: `${baseStepRunId}/worker/${index}`,
+        id: SessionAddress.forStepRun(baseStepRunId).worker(index).toString(),
         role: 'worker',
         index: index + 1,
         label: `Исполнитель ${index + 1}`,
@@ -103,7 +108,7 @@ const workerAgent = (
 
 /**
  * Дескриптор координатора: без `stage` — финальный lead шага (id = stepRunId);
- * со `stage` — координатор этапа staged-режима (`<stepRunId>/stage/<i>/coordinator`),
+ * with `stage` — coordinator of a staged run (`<address>.s<i>.lead`),
  * у которого есть исполнители (у одиночного этапа координатора нет — там исполнитель).
  */
 const coordinatorAgent = (
@@ -112,7 +117,9 @@ const coordinatorAgent = (
 ): RoomAgentInfo =>
   stage
     ? {
-        id: `${stepRunId}/stage/${stage.index}/coordinator`,
+        id: SessionAddress.forStepRun(stepRunId)
+          .stageCoordinator(stage.index)
+          .toString(),
         role: 'coordinator',
         index: null,
         label: `Этап ${stage.index} · Координатор`,
@@ -167,6 +174,17 @@ function runAgent(
     registry: options.registry,
     agent: run.agent,
     timeoutMs,
+    ...(options.issueId
+      ? {
+          systemAppend: STEP_SYSTEM_APPEND,
+          sessionDir: issueSessionDir(options.issueId),
+          sessionName: sessionDisplayName({
+            step: 'resolve',
+            issueId: options.issueId,
+            suffix: run.agent.label,
+          }),
+        }
+      : {}),
     onStdout: (chunk) => options.onStdout?.(chunk, run.agent),
     onStderr: (chunk) => options.onStderr?.(chunk, run.agent),
     onEvent: (event) => options.onEvent?.(event, run.agent),
@@ -290,7 +308,7 @@ export async function runRoomResolve(
  * Прогон resolve в режиме последовательных этапов (`mode: 'stages'`). Этапы
  * исполняются СТРОГО по порядку: исполнители этапа (параллельно, если executors
  * >= 2) → координатор этапа, пишущий `.issue-stage-<i>.json`; для executors = 1
- * этап целиком выполняет один исполнитель (`/stage/<i>/worker/1`), пишущий тот же
+ * the whole stage is done by one worker (`<address>.s<i>.w0`) writing the same
  * файл этапа. После всех этапов финальный lead интегрирует их
  * исходы и пишет итоговый `.issue-step-result.json`. Abort на любом этапе
  * немедленно завершает шаг без следующих этапов и финального координатора.
@@ -376,7 +394,7 @@ export async function runStagedResolve(
       continue;
     }
 
-    // executors === 1: весь этап делает один исполнитель (`/stage/<i>/worker/1`).
+    // executors === 1: one worker does the whole stage (`<address>.s<i>.w0`).
     // Промпт — соло-вариант: координатора этапа нет, интегрировать некому,
     // файл этапа пишет сам исполнитель.
     const agent = workerAgent(options.stepRunId, 0, stage);

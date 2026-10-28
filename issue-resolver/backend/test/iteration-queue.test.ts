@@ -197,7 +197,7 @@ class ProbeRunner implements PiRunner {
     // Post-iteration report-агент запускается fire-and-forget ПОСЛЕ конвейера:
     // он не часть последовательности шагов/итераций, поэтому не участвует
     // в учёте одновременных агентов (см. инвариант «один агент за раз»).
-    if (options?.stepRunId?.endsWith('/report')) {
+    if (options?.stepRunId?.endsWith('.report')) {
       return Promise.resolve(result);
     }
 
@@ -699,9 +699,9 @@ describe('room-режим: исполнители одного шага бегу
     expect(pi.active).toBe(3);
     expect(pi.maxActive).toBe(3);
     expect(pi.calls.map((call) => call.id)).toEqual([
-      'run-1/worker/0',
-      'run-1/worker/1',
-      'run-1/worker/2',
+      'run.run-1.w0',
+      'run.run-1.w1',
+      'run.run-1.w2',
     ]);
     // Пока исполнители живы, координатор (id = stepRunId) ещё не стартовал.
     expect(pi.calls.some((call) => call.id === 'run-1')).toBe(false);

@@ -539,7 +539,7 @@ describe('devOpsFactoryFor — проброс полей в pi.run', () => {
       containerWorkspaceDir: '/workspaces/issue-1',
       issueId: 'issue-1',
       iterationId: 'iter-1',
-      stepRunId: 'issue-1/devops',
+      stepRunId: 'issue.issue-1.devops',
       registry,
       tagInstructions,
       model: 'opus',
@@ -555,7 +555,7 @@ describe('devOpsFactoryFor — проброс полей в pi.run', () => {
     expect(pi.calls[0].options).toMatchObject({
       issueId: 'issue-1',
       iterationId: 'iter-1',
-      stepRunId: 'issue-1/devops',
+      stepRunId: 'issue.issue-1.devops',
       registry,
     });
     // tagInstructions не уходит в pi.run — он подставляется в промпт.
