@@ -315,6 +315,11 @@ export type CompactionReason = 'manual' | 'threshold' | 'overflow';
  * инструментов, компакция, ретраи, очередь, статусы расширений). */
 export type SessionEvent =
   | { type: 'text'; text: string }
+  // Live accumulation of assistant prose during streaming (`text_delta`) — the
+  // mirror of `thinking_update`: one growing block instead of dozens of chunks
+  // that the UI rendered as a block per token. Not persisted into
+  // step_outputs.events: the authoritative block is `text`.
+  | { type: 'text_update'; contentIndex: number; partialText: string }
   | { type: 'thinking'; thinking: string }
   // Живое накопление размышления во время стрима (`thinking_delta`).
   // Не персистится в step_outputs.events: авторитетный блок — `thinking`.

@@ -3,9 +3,13 @@ import type { SessionEvent, SessionStats } from '@issue-resolver/shared';
 import { RpcSessionParser } from '../src/pi/rpc-runner';
 
 describe('RpcSessionParser', () => {
-  it('text_delta идёт в stdout, toolcall_delta — нет', () => {
+  it('text_delta → накопительные text_update, toolcall_delta — никуда', () => {
     const out: string[] = [];
-    const parser = new RpcSessionParser({ onStdout: (chunk) => out.push(chunk) });
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({
+      onStdout: (chunk) => out.push(chunk),
+      onEvent: (event) => events.push(event),
+    });
 
     parser.handle({
       type: 'message_update',
@@ -41,7 +45,15 @@ describe('RpcSessionParser', () => {
       assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'Hello world' },
     });
 
-    expect(out).toEqual(['Hello ', 'world']);
+    // Live prose is one growing event per delta; deltas no longer reach the
+    // stdout channel (frontend log chunks) — that drew a block per token and
+    // duplicated it with the final `text`.
+    expect(out).toEqual([]);
+    expect(events).toEqual([
+      { type: 'text_update', contentIndex: 0, partialText: 'Hello ' },
+      { type: 'text_update', contentIndex: 0, partialText: 'Hello world' },
+      { type: 'text', text: 'Hello world' },
+    ]);
     expect(parser.stdout()).toBe('Hello world');
     expect(parser.stdout()).not.toContain('command');
     expect(parser.events()).toEqual([{ type: 'text', text: 'Hello world' }]);
@@ -256,11 +268,15 @@ describe('RpcSessionParser', () => {
     assistantMessage('M2');
     assistantMessage('M3');
 
-    // Живые thinking_update игнорируем: проверяем именно персистентные блоки.
-    const events = emitted.filter((event) => event.type !== 'thinking_update');
+    // Live updates (thinking_update/text_update) are filtered out: this asserts
+    // the persisted blocks only.
+    const events = emitted.filter(
+      (event) => event.type !== 'thinking_update' && event.type !== 'text_update',
+    );
 
     // Регрессия: раньше был ровно 1 thinking + 1 text на всю сессию.
     expect(emitted.filter((event) => event.type === 'thinking_update')).toHaveLength(3);
+    expect(emitted.filter((event) => event.type === 'text_update')).toHaveLength(3);
     expect(events.map((event) => event.type)).toEqual([
       'thinking',
       'text',
@@ -339,6 +355,8 @@ describe('RpcSessionParser', () => {
         usage: { input: 100, output: 1, cacheRead: 2, cacheWrite: 3, total: 106 },
         cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 },
       },
+      // Live prose arrives alongside usage and is not rendered as its own block.
+      { type: 'text_update', contentIndex: 0, partialText: 'Hi ' },
     ]);
   });
 
@@ -859,6 +877,57 @@ describe('RpcSessionParser', () => {
 
     expect(parser.stdout()).toBe('');
     expect(parser.events()).toEqual([]);
+  });
+});
+
+describe('RpcSessionParser — обрыв ответа по лимиту вывода', () => {
+  it('message_end со stopReason=length → notice об обрыве по лимиту вывода', () => {
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    parser.handle({ type: 'message_start', message: { role: 'assistant' } });
+    parser.handle({
+      type: 'message_update',
+      assistantMessageEvent: {
+        type: 'thinking_delta',
+        contentIndex: 0,
+        delta: 'долго думаю',
+      },
+    });
+    parser.handle({
+      type: 'message_end',
+      message: { role: 'assistant', stopReason: 'length' },
+    });
+
+    // Truncation is surfaced, not swallowed: a turn that died on thinking has
+    // no tool call to explain the missing artifact. Live updates are not
+    // persisted, so `parser.events()` holds only the final thinking block.
+    expect(events.map((event) => event.type)).toEqual([
+      'thinking_update',
+      'thinking',
+      'notice',
+    ]);
+    expect(parser.events()).toEqual([
+      { type: 'thinking', thinking: 'долго думаю' },
+      {
+        type: 'notice',
+        level: 'warning',
+        message:
+          'ответ оборван лимитом вывода модели (maxTokens) — ход закончился без tool-call',
+      },
+    ]);
+  });
+
+  it('message_end со stopReason=stop не шумит notice', () => {
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    parser.handle({
+      type: 'message_end',
+      message: { role: 'assistant', stopReason: 'stop' },
+    });
+
+    expect(events).toEqual([]);
   });
 });
 

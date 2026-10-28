@@ -93,7 +93,10 @@ const DIALOG_METHODS = new Set<SessionQuestion['method']>([
   'editor',
 ]);
 
-/** Колбэки живого разбора: проза шага (stdout) и структурированные события. */
+/**
+ * Live parse callbacks: structured events (including live prose via
+ * `text_update`) plus stdout/stderr for non-RPC modes.
+ */
 export interface RpcParseHandlers {
   onStdout?: (chunk: string) => void;
   onEvent?: (event: SessionEvent) => void;
@@ -208,13 +211,13 @@ const toolResultText = (result: unknown): string => {
 };
 
 /**
- * Чистый разбор потока событий `pi --mode rpc` по подтипам.
+ * Pure parser of the `pi --mode rpc` event stream, by subtype.
  *
- * В stdout попадает ТОЛЬКО проза агента (`text_delta`, авторитетно
- * фиксируемая `text_end.content`) — аргументы tool-call (`toolcall_delta`)
- * в него не пишутся. Структурированные события (текст-блоки, `tool_use`,
- * `tool_result`) собираются в упорядоченный массив и отдаются в `onEvent`
- * по мере прихода.
+ * Prose is authoritative: `text_end.content` fixes the persisted
+ * `stdout()`, while `text_delta` feeds live subscribers with cumulative
+ * `text_update` events. Tool-call arguments (`toolcall_delta`) never reach
+ * prose. Structured events (text blocks, `tool_use`, `tool_result`) are
+ * collected in order and handed to `onEvent` as they arrive.
  */
 export class RpcSessionParser {
   private readonly handler: RpcParseHandlers;
@@ -392,6 +395,25 @@ export class RpcSessionParser {
     if (event.type === 'message_update') {
       this.handleUsage(event.usage);
       this.handleAssistantMessage(event.assistantMessageEvent);
+      return;
+    }
+
+    // Truncated response: the provider returned `stopReason: 'length'`. The turn
+    // may end on thinking alone (no tool call) — without an explicit event that
+    // reads as "the agent just stopped". This is exactly how the report step
+    // ended up without `report.html`: the model burned its whole maxTokens
+    // budget on reasoning. The message is user-facing, hence Russian.
+    if (event.type === 'message_end') {
+      const message = asRecord(event.message);
+      if (message?.role === 'assistant' && message.stopReason === 'length') {
+        this.flush();
+        this.push({
+          type: 'notice',
+          level: 'warning',
+          message:
+            'ответ оборван лимитом вывода модели (maxTokens) — ход закончился без tool-call',
+        });
+      }
       return;
     }
 
@@ -600,11 +622,16 @@ export class RpcSessionParser {
         this.textByIndex.set(index, '');
         this.textOrder.push(index);
       }
-      this.textByIndex.set(
-        index,
-        `${this.textByIndex.get(index) ?? ''}${message.delta}`,
-      );
-      this.handler.onStdout?.(message.delta);
+      const partialText = `${this.textByIndex.get(index) ?? ''}${message.delta}`;
+      this.textByIndex.set(index, partialText);
+      // Live prose arrives as cumulative `text_update`, like thinking: one chunk
+      // per delta made the UI draw a block per token (and duplicate it with the
+      // final `text`). `stdout()` still joins `textByIndex`.
+      this.handler.onEvent?.({
+        type: 'text_update',
+        contentIndex: index,
+        partialText,
+      });
       return;
     }
 

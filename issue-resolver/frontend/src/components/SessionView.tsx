@@ -78,6 +78,8 @@ interface AnalyzedEvents {
   bashText: string | null;
   /** Последний `partialText` живого `thinking_update` (финального блока ещё нет). */
   liveThinking: string | null;
+  /** Last `partialText` of a live `text_update` (no final `text` yet). */
+  liveText: string | null;
   info: SessionInfo;
 }
 
@@ -112,20 +114,39 @@ export default function SessionView({
     answersByQuestionId,
     bashText,
     liveThinking,
+    liveText,
     info,
   } = analyzed;
 
   useDocumentTitle(info.title);
 
   const now = useNow(running);
-  const phase = workingPhase(visible, resultByCallId, liveThinking !== null);
+  const phase = workingPhase(
+    visible,
+    resultByCallId,
+    liveThinking !== null,
+    liveText !== null,
+  );
   const elapsedMs = running ? workingElapsedMs(now, startedAt) : null;
-  // Живой блок размышления: финального `thinking` ещё нет, показываем
-  // накопленный partial и держим его «стримящимся».
-  const liveThinkingBlock =
-    running && liveThinking !== null ? (
-      <ThinkingBlock thinking={liveThinking} streaming />
-    ) : null;
+  // Live stream blocks: no final `text`/`thinking` yet — render the accumulated
+  // partial and keep it "streaming".
+  const liveBlocks = (
+    <>
+      {running && liveText !== null && (
+        <div className="animate-fade-in-up">
+          <div
+            data-testid="session-text-live"
+            className="session-msg session-msg--text"
+          >
+            <AgentMarkdown>{liveText}</AgentMarkdown>
+          </div>
+        </div>
+      )}
+      {running && liveThinking !== null && (
+        <ThinkingBlock thinking={liveThinking} streaming />
+      )}
+    </>
+  );
 
   if (visible.length === 0 && !infoOnly) {
     return (
@@ -144,7 +165,7 @@ export default function SessionView({
         </div>
         {!hideInfo && (
           <>
-            {liveThinkingBlock}
+            {liveBlocks}
             {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
             {bashText !== null && <BashBlock text={bashText} />}
             <SessionWidgets widgets={info.widgetsBelow} placement="belowEditor" />
@@ -161,7 +182,7 @@ export default function SessionView({
       <div className="session-view">
         <SessionInfoBar info={info} onRecallQueued={onRecallQueued} />
         <SessionWidgets widgets={info.widgetsAbove} placement="aboveEditor" />
-        {liveThinkingBlock}
+        {liveBlocks}
         {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
         {bashText !== null && <BashBlock text={bashText} />}
         <SessionWidgets widgets={info.widgetsBelow} placement="belowEditor" />
@@ -193,7 +214,7 @@ export default function SessionView({
       ))}
       {!hideInfo && (
         <>
-          {liveThinkingBlock}
+          {liveBlocks}
           {running && <SessionWorking phase={phase} elapsedMs={elapsedMs} />}
           {bashText !== null && <BashBlock text={bashText} />}
           <SessionWidgets widgets={info.widgetsBelow} placement="belowEditor" />
@@ -228,6 +249,7 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
   let title: string | null = null;
   let editorText: string | null = null;
   let liveThinking: string | null = null;
+  let liveText: string | null = null;
 
   for (const event of events) {
     switch (event.type) {
@@ -295,6 +317,15 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
         // отдельного live-блока; в `visible` его не пушим (готового блока нет).
         liveThinking = event.partialText;
         break;
+      case 'text_update':
+        // Same for prose: one growing line instead of a block per chunk.
+        liveText = event.partialText;
+        break;
+      case 'text':
+        // The final block retires live prose, so it is not rendered twice.
+        visible.push(event);
+        liveText = null;
+        break;
       case 'thinking':
         // Финальный блок приходит ПОСЛЕ своих update'ов — ретирит live-partial,
         // чтобы не было дубля.
@@ -313,6 +344,7 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
     answersByQuestionId,
     bashText: bashDeltas.length > 0 ? bashDeltas.join('') : null,
     liveThinking,
+    liveText,
     info: {
       sessionName,
       thinkingLevel,
@@ -356,8 +388,10 @@ function workingPhase(
   visible: SessionEvent[],
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>,
   liveThinking = false,
+  liveText = false,
 ): WorkingPhase {
   if (liveThinking) return { kind: 'thinking' };
+  if (liveText) return { kind: 'text' };
   const last = visible[visible.length - 1];
   if (!last) return { kind: 'idle' };
   if (last.type === 'tool_use' && !resultByCallId.has(last.toolCallId)) {

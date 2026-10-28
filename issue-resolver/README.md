@@ -48,6 +48,16 @@ cd frontend && npx playwright test
 гасит backend + frontend; режим задаётся `IR_MODE=local|docker` (дефолт `local`),
 PID-файлы и логи — в `/tmp` (переопределяются `IR_PID_DIR`/`IR_LOG_DIR`).
 
+**Браузеры для тестов рабочей папки — `bin/pw-browsers.sh [repo-dir]`.** Образ
+везёт браузеры только под свою версию Playwright (`PLAYWRIGHT_BROWSERS_PATH=`
+`/opt/ms-playwright` плюс build-time алиасы), а склонированный репозиторий
+приносит свою (`@playwright/test` 1.63 ↔ `chromium-1243`) — тогда каждый тест
+падает на `browserType.launch: Executable doesn't exist at /opt/ms-playwright/…`
+и агент тестирует чужим Playwright. Скрипт идемпотентен: запускает браузер
+**родным** Playwright репозитория и, только если не вышло, доставляет недостающую
+ревизию его же `playwright install chromium`. Вызывается из промптов `devops`
+(подготовка рабочей папки) и `test` (перед прогоном).
+
 **Доступ по локальной сети (LAN).** Vite слушает `0.0.0.0:5173` и
 проксирует `/issue-resolver` на `127.0.0.1:8080`, поэтому наружу достаточно
 опубликовать один порт UI — сам backend слушает только loopback
@@ -840,6 +850,9 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   (структурированные session-события `sessionEventsOf(run)` + буфер SSE
   `liveEventsByRun`, тот же `SessionView`) в фиксированном окне ~300px с
   авто-прокруткой вниз (`AutoScrollBox`, `scrollKey = events.length`);
+  живая проза агента идёт накопительным событием `text_update` (как
+  `thinking_update`), поэтому стрим — один растущий блок, а не цепочка
+  «по токену на строку»; финальный `text` его ретирит;
   завершённый шаг вместо него показывает статус-чип и краткое саммари отчёта
   (`parseStepReport(run.report)`, `data-testid="step-summary"`, summary обрезан
   `line-clamp-4`), а при отсутствии/битом отчёте (в т.ч. устаревшая строка

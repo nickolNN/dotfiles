@@ -648,3 +648,72 @@ describe('SessionView — живое размышление (thinking_update)', 
     );
   });
 });
+describe('SessionView — живая проза (text_update)', () => {
+  it('running: update\u2019ы дают один live-блок с последним partial \u2014 не по блоку на чанк', () => {
+    render(
+      <SessionView
+        running
+        events={[
+          { type: 'text_update', contentIndex: 0, partialText: 'One' },
+          { type: 'text_update', contentIndex: 0, partialText: 'One bug in ' },
+          {
+            type: 'text_update',
+            contentIndex: 0,
+            partialText: 'One bug in the restore section',
+          },
+        ]}
+      />,
+    );
+
+    const blocks = screen.getAllByTestId('session-text-live');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toHaveTextContent('One bug in the restore section');
+    // updates are not pushed into `visible` as separate rows
+    expect(screen.queryAllByTestId('session-text')).toHaveLength(0);
+    expect(screen.getByTestId('session-working')).toHaveAttribute(
+      'data-phase',
+      'text',
+    );
+  });
+
+  it('финальный text ретирит live-прогу \u2014 остаётся один финальный блок', () => {
+    const { rerender } = render(
+      <SessionView
+        running
+        events={[
+          { type: 'text_update', contentIndex: 0, partialText: 'partial' },
+        ]}
+      />,
+    );
+    expect(screen.getAllByTestId('session-text-live')).toHaveLength(1);
+
+    rerender(
+      <SessionView
+        running
+        events={[
+          { type: 'text_update', contentIndex: 0, partialText: 'partial' },
+          { type: 'text', text: 'финальный текст' },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByTestId('session-text-live')).toBeNull();
+    expect(screen.getAllByTestId('session-text')).toHaveLength(1);
+    expect(screen.getByTestId('session-text')).toHaveTextContent(
+      'финальный текст',
+    );
+  });
+
+  it('не-running (персистентная) сессия: text_update не рисует live-блок', () => {
+    render(
+      <SessionView
+        events={[
+          { type: 'text_update', contentIndex: 0, partialText: 'partial' },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByTestId('session-text-live')).toBeNull();
+    expect(screen.queryAllByTestId('session-text')).toHaveLength(0);
+  });
+});
