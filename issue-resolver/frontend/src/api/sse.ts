@@ -158,6 +158,7 @@ export function parseIssueDeletedPayload(
 /** Все типы `SessionEvent` из shared-union (дискриминант `type`). */
 const SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'text',
+  'text_update',
   'thinking',
   'thinking_update',
   'usage',

@@ -1005,16 +1005,23 @@ function TaskDetailView({
         // с синтетическим stepRunId
         // (`{issueId}/devops` | `{issueId}/report`). Копим чанки как
         // `text`-события SessionView, не дожидаясь GET /step-runs.
+        // A chunk is a fragment of one prose stream, so append it to the trailing
+        // `text` block: a block per chunk drew one token per line.
         if (event.stream !== 'stdout' && event.stream !== 'stderr') return;
         const stepRunId = event.stepRunId;
         if (!stepRunId || event.data === '') return;
-        setLiveEventsByRun((current) => ({
-          ...current,
-          [stepRunId]: [
-            ...(current[stepRunId] ?? []),
-            { type: 'text' as const, text: event.data },
-          ].slice(-500),
-        }));
+        setLiveEventsByRun((current) => {
+          const events = current[stepRunId] ?? [];
+          const last = events[events.length - 1];
+          const next: SessionEvent[] =
+            last?.type === 'text'
+              ? [
+                  ...events.slice(0, -1),
+                  { type: 'text', text: last.text + event.data },
+                ]
+              : [...events, { type: 'text', text: event.data }];
+          return { ...current, [stepRunId]: next.slice(-500) };
+        });
       },
       onStepEvent: (payload, raw) => {
         const stepRunId = payload.stepRunId ?? raw.stepRunId;
@@ -1579,6 +1586,22 @@ function TaskDetailView({
             ) ?? devServerPortOf(state.issue) ?? undefined,
         }))
       : [];
+
+  // Review results belong to the repository's MR, not to an iteration: the
+  // fetch endpoint still needs one iteration whose `result.json` carries those
+  // MRs, so pick the newest terminal iteration that ran the `pr` step.
+  const reviewIteration =
+    state.status === 'ready'
+      ? ([...state.iterations]
+          .filter(
+            (iteration) =>
+              iteration.steps.includes('pr') &&
+              iteration.status !== 'running' &&
+              iteration.status !== 'pending' &&
+              iteration.status !== 'preparing',
+          )
+          .sort((a, b) => b.number - a.number)[0] ?? null)
+      : null;
 
   // HEAD-проб артефакта при открытии модалки. 404 → «отчёта ещё нет»,
   // не-html → «только markdown», `iteration-snapshot` → бейдж «предыдущая
@@ -2449,16 +2472,39 @@ function TaskDetailView({
                         );
                         if (mrMatch) {
                           return (
-                            <a
-                              data-testid="repo-mr-link"
-                              href={mrMatch.url}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              title={mrMatch.url}
-                              className="border border-[#00B4FF] px-1 py-0.5 text-[10px] text-[#00B4FF] no-underline hover:bg-[#00B4FF] hover:text-[#0D0208] transition-base"
-                            >
-                              MR
-                            </a>
+                            <>
+                              <a
+                                data-testid="repo-mr-link"
+                                href={mrMatch.url}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                title={mrMatch.url}
+                                className="border border-[#00B4FF] px-1 py-0.5 text-[10px] text-[#00B4FF] no-underline hover:bg-[#00B4FF] hover:text-[#0D0208] transition-base"
+                              >
+                                MR
+                              </a>
+                              {/* No MR → no review results: the button only
+                                  exists next to a live MR link. */}
+                              {reviewIteration && (
+                                <button
+                                  type="button"
+                                  data-testid="fetch-review"
+                                  title="Результаты ревью MR"
+                                  disabled={
+                                    fetchingReviewId === reviewIteration.id
+                                  }
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    void handleFetchReview(reviewIteration);
+                                  }}
+                                  className="border border-[#00B4FF] bg-[#001018] px-1 py-0.5 text-[10px] text-[#00B4FF] hover:bg-[#00B4FF] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+                                >
+                                  {fetchingReviewId === reviewIteration.id
+                                    ? 'Загружаем…'
+                                    : '📋 Ревью'}
+                                </button>
+                              )}
+                            </>
                           );
                         }
                         return (
@@ -2478,6 +2524,24 @@ function TaskDetailView({
                     </li>
                   ))}
                 </ul>
+                {fetchReviewError && (
+                  <p
+                    role="alert"
+                    data-testid="fetch-review-error"
+                    className="mt-2 text-xs font-medium text-[#FF0033]"
+                  >
+                    {fetchReviewError}
+                  </p>
+                )}
+                {fetchReviewMessage && (
+                  <p
+                    role="status"
+                    data-testid="fetch-review-message"
+                    className="mt-2 text-xs font-medium text-[#00FF41]"
+                  >
+                    {fetchReviewMessage}
+                  </p>
+                )}
               </div>
             )}
             {state.issue.jira_issue_url && (
@@ -2983,25 +3047,6 @@ function TaskDetailView({
                 {repeatError}
               </p>
             )}
-            {fetchReviewError && (
-              <p
-                role="alert"
-                data-testid="fetch-review-error"
-                className="mb-3 text-xs font-medium text-[#FF0033]"
-              >
-                {fetchReviewError}
-              </p>
-            )}
-            {fetchReviewMessage && (
-              <p
-                role="status"
-                data-testid="fetch-review-message"
-                className="mb-3 text-xs font-medium text-[#00FF41]"
-              >
-                {fetchReviewMessage}
-              </p>
-            )}
-
             {state.iterations.length === 0 ? (
               <div className="rounded-none border border-dashed border-[#008F11] p-6 text-center text-sm text-[#00FF41]/60">
                 Итераций пока нет.
@@ -3066,34 +3111,12 @@ function TaskDetailView({
                           event.stopPropagation();
                           void handleRepeat(iteration);
                         }}
-                        className="min-h-8 shrink-0 border border-[#008F11] bg-[#002B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 transition-base"
+                        className="ml-auto min-h-8 shrink-0 border border-[#008F11] bg-[#002B00] px-3 py-1 text-xs font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 transition-base"
                       >
                         {repeatingId === iteration.id
                           ? 'Повторяем…'
                           : '↻ Повторить'}
                       </button>
-                      {iteration.steps.includes('pr') &&
-                        iteration.status !== 'running' &&
-                        iteration.status !== 'pending' &&
-                        iteration.status !== 'preparing' && (
-                          <button
-                            type="button"
-                            data-testid="fetch-review"
-                            disabled={
-                              fetchingReviewId === iteration.id ||
-                              isIterationActive(iteration.status)
-                            }
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleFetchReview(iteration);
-                            }}
-                            className="min-h-8 shrink-0 border border-[#00B4FF] bg-[#001018] px-3 py-1 text-xs font-medium text-[#00B4FF] hover:bg-[#00B4FF] hover:text-[#0D0208] disabled:opacity-50 transition-base"
-                          >
-                            {fetchingReviewId === iteration.id
-                              ? 'Загружаем…'
-                              : '📋 Результаты ревью'}
-                          </button>
-                        )}
                       {iteration.status === 'draft' && (
                         <button
                           type="button"

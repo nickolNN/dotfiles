@@ -170,9 +170,26 @@ install nginx.
    failed attempts, move on and document the failure in `## Notes` with the exact
    error — a documented failure is a useful result, a silent one is not.
 
-4. **Verify the build.** If the project has a build step, run it and fix as in
-   step 3. For a shell repo, the build output is what the proxy will serve —
-   note its absolute path.
+4. **Verify the build — and the test toolchain.** If the project has a build
+   step, run it and fix as in step 3. For a shell repo, the build output is what
+   the proxy will serve — note its absolute path.
+
+   If the repo has its own browser tests (`playwright.config.*`,
+   `@playwright/test` in `package.json`), make them launchable **with the repo's
+   own Playwright**. The container ships browsers only for the version baked
+   into the image, so a repo pinning a different one dies on
+   `browserType.launch: Executable doesn't exist at /opt/ms-playwright/<…>`.
+   Run, from the repo root:
+
+   ```bash
+   bash /home/agent/workspace/issue-resolver/bin/pw-browsers.sh .
+   ```
+
+   It is idempotent: probes a real browser launch through the repo's Playwright
+   and, only if that fails, installs the missing revision with the repo's own
+   `playwright install`. Record the outcome (version + pass/fail) in `## Notes`,
+   and never substitute another copy of Playwright — that would verify a
+   different version than the project pins.
 
 5. **Write `{{REPO_DIR}}/RUN_INSTRUCTIONS.md`** — the file other agents and the
    system read. Keep the exact heading names and the fenced command blocks: the

@@ -47,6 +47,29 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
   };
 }
 
+/** Задача с репозиторием и живой MR-ссылкой: кнопка ревью живёт рядом с ней. */
+function makeIssueWithMr(): Issue {
+  return makeIssue({
+    repositories: [
+      {
+        id: 'repo-1',
+        repository_url: 'https://github.com/acme/app',
+        branch_name: 'feature/x',
+        create_mr: true,
+        bootstrap_enabled: true,
+        created_at: '2026-10-09T00:00:00.000Z',
+        updated_at: '2026-10-09T00:00:00.000Z',
+      },
+    ],
+    merge_requests: [
+      {
+        repository_url: 'https://github.com/acme/app',
+        url: 'https://github.com/acme/app/pull/7',
+      },
+    ],
+  });
+}
+
 function jsonResponse(
   body: unknown,
   init: { ok?: boolean; status?: number } = {},
@@ -282,7 +305,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     );
   });
 
-  it('«Результаты ревью» без комментариев → сообщение «код чист»', async () => {
+  it('кнопка «Ревью» у MR без комментариев → сообщение «код чист»', async () => {
     stubFetch({
       iterations: () => [
         makeIteration({
@@ -293,6 +316,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
         }),
       ],
       review: () => Promise.resolve(jsonResponse({ comments: [] })),
+      issue: makeIssueWithMr(),
     });
 
     render(<TaskDetail issueId="issue-1" />);
@@ -304,7 +328,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     expect(message).toHaveTextContent('Комментариев ревью нет — код чист');
   });
 
-  it('«Результаты ревью» с комментариями → File и предзаполнение без автозапуска', async () => {
+  it('кнопка «Ревью» у MR с комментариями → File и предзаполнение без автозапуска', async () => {
     const fetchMock = stubFetch({
       iterations: () => [
         makeIteration({
@@ -328,6 +352,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
             ],
           }),
         ),
+      issue: makeIssueWithMr(),
     });
 
     render(<TaskDetail issueId="issue-1" />);
@@ -348,6 +373,41 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     // Итерация НЕ создаётся автоматически.
     expect(createCallTo(fetchMock)).toBeUndefined();
     expect(screen.getAllByText(/^Итерация #/)).toHaveLength(1);
+  });
+
+  it('без активного MR кнопки «Ревью» нет', async () => {
+    stubFetch({
+      iterations: () => [
+        makeIteration({
+          id: 'iter-1',
+          number: 1,
+          status: 'completed',
+          steps: ['resolve', 'pr'],
+        }),
+      ],
+      issue: makeIssue({
+        repositories: [
+          {
+            id: 'repo-1',
+            repository_url: 'https://github.com/acme/app',
+            branch_name: 'feature/x',
+            create_mr: true,
+            bootstrap_enabled: true,
+            created_at: '2026-10-09T00:00:00.000Z',
+            updated_at: '2026-10-09T00:00:00.000Z',
+          },
+        ],
+        merge_requests: [],
+      }),
+    });
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Итерация #1');
+
+    // MR ещё не создан: смотреть нечего, кнопки нет ни в строке репозитория,
+    // ни в списке итераций.
+    expect(screen.getByTestId('repo-mr-badge')).toBeInTheDocument();
+    expect(screen.queryByTestId('fetch-review')).toBeNull();
   });
 
   it('без активной итерации форма работает как раньше: «Запустить новую итерацию»', async () => {

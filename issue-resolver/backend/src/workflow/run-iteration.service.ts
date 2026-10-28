@@ -1476,15 +1476,24 @@ export async function runReportAgent(
     } else {
       lastReportOutcome.set(input.issueId, 'failed');
     }
+    // A run that hits the output cap can end mid-turn (thinking only, no tool
+    // call): the parser reports it as a notice, so the missing artifact gets a
+    // cause instead of silence.
+    const snapshot = session.snapshot();
+    const truncated = snapshot.events.some(
+      (event) =>
+        event.type === 'notice' && event.message.includes('лимитом вывода'),
+    );
     let feedback: string | null = null;
     if (status === 'failed') {
       const reason =
         failure instanceof Error ? failure.message : String(failure);
       feedback = `report failed: ${reason}`;
     } else if (!artifacts.html) {
-      feedback = 'report.html отсутствует — доступен только markdown';
+      feedback = truncated
+        ? 'report.html не создан: прогон оборван лимитом вывода модели (maxTokens) — ход закончился на размышлении'
+        : 'report.html отсутствует — доступен только markdown';
     }
-    const snapshot = session.snapshot();
     await persistReportRun(deps.db, stepRunId, {
       status,
       feedback,

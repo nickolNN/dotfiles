@@ -47,7 +47,14 @@ survive has to live in the workspace or the sessions/skills volumes.
 - browser automation: MCP web tools first (websearch/webfetch), then
   `agent-browser` (system Chromium) as the fallback; playwright
   (chromium/firefox/webkit), puppeteer (shares the system Chromium via
-  `PUPPETEER_EXECUTABLE_PATH`)
+  `PUPPETEER_EXECUTABLE_PATH`). Browsers exist only for the Playwright
+  version baked into the image (`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`,
+  plus build-time aliases), so a repo pinning another version fails on
+  `browserType.launch: Executable doesn't exist at /opt/ms-playwright/<…>`.
+  In an issue-resolver workspace, run
+  `bash /home/agent/workspace/issue-resolver/bin/pw-browsers.sh <repo-dir>`
+  (probes a launch through the repo's own Playwright, then installs the
+  missing revision); outside it, `npx playwright install chromium` in the repo.
 - the pi coding agent itself + `pi-lens`, `pi-goal`,
   `pi-agents-talk-to-each-other`, `web-search-mcp`
 - baked remote skills: agent-browser, caveman, clean-code, code-review,
@@ -139,7 +146,7 @@ Warn the user before writing anything important outside the workspace.
 | Add a new skill | drop a `SKILL.md` under `agent-skills/<name>/`; it re-syncs into the container on the next launch (no rebuild needed). A skill added to the **Dockerfile** list instead needs a rebuild — the launch overlay cannot add it, and `check-remote-skills.sh` warns about that on every spawn/attach |
 | Remove a skill | delete it from `agent-skills/` **and** from `~/.agents/skills/` in every running container — the launch sync only adds, it never prunes; a skill baked into the image also needs its Dockerfile entry dropped + a rebuild |
 | Commit but git identity is missing | `git config --global user.name/email`; prefer setting it on the host (mounted read-only) so it persists |
-| Automate a browser / scrape / test a web app | MCP web tools first (websearch/webfetch); fall back to `agent-browser` (see the agent-browser skill) or playwright/puppeteer |
+| Automate a browser / scrape / test a web app | MCP web tools first (websearch/webfetch); fall back to `agent-browser` (see the agent-browser skill) or playwright/puppeteer. Playwright browser binaries: only the image's own version, plus aliases — a repo's other version needs `bin/pw-browsers.sh` (issue-resolver workspace) or `npx playwright install chromium` |
 | Know what version of a tool is installed | run `<tool> --version`; the toolchain above is the reference |
 | Reach an internal/VPN-protected host, or `SELF_SIGNED_CERT_IN_CHAIN` on `yarn`/`npm` | routing already works; the gap is trust. Put the corporate CA in `dotfiles-agent/certs/` (any file names) and rebuild — never disable TLS verification (no `strict-ssl false`, no `curl -k`, no `NODE_TLS_REJECT_UNAUTHORIZED=0`) |
 

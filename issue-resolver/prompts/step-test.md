@@ -30,6 +30,14 @@ insufficient rights, concurrent edit), not only the happy one.
 
 - Drive the real app with Playwright: rendered text, states, navigation, console
   errors — what the user sees, not what the code intends.
+- Use the repo's **own** Playwright. If launching a browser fails with
+  `Executable doesn't exist at /opt/ms-playwright/…`, the image lacks that
+  revision — run from the working folder:
+  `bash /home/agent/workspace/issue-resolver/bin/pw-browsers.sh .`
+  (probes, then installs the missing revision). Never borrow Playwright from
+  another package's `node_modules`: that tests a different version than the
+  project pins. If the helper cannot fix the launch, the verdict is `blocked`
+  (infrastructure), not `fail`.
 - Keep evidence: for each scenario record the exact action and the observed
   result; save screenshots into `screenshots/` at the working-folder root.
 - Each defect becomes a `finding` with severity, what broke, where (page/flow)
