@@ -104,7 +104,6 @@ class FakeEventSource {
   }
 }
 
-/** fetch-мок: merge_requests задаются тестом в данных задачи. */
 function stubFetch(mergeRequests: Issue['merge_requests']) {
   const issue = makeIssue(mergeRequests ? { merge_requests: mergeRequests } : {});
   const iteration = makeIteration();
@@ -156,7 +155,6 @@ describe('TaskDetail — MR-квадратик в строке репозито�
     expect(link).toHaveAttribute('href', 'https://github.com/acme/app/pull/1');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveTextContent('MR');
-    // Серый квадратик не рендерится когда есть синяя ссылка.
     expect(screen.queryByTestId('repo-mr-badge')).toBeNull();
   });
 
@@ -169,9 +167,7 @@ describe('TaskDetail — MR-квадратик в строке репозито�
     const badge = await screen.findByTestId('repo-mr-badge');
     expect(badge).toHaveTextContent('MR');
     expect(badge.tagName).toBe('SPAN');
-    // Серый цвет через Tailwind `#555`.
     expect(badge.className).toContain('text-[#555]');
-    // Синей ссылки нет.
     expect(screen.queryByTestId('repo-mr-link')).toBeNull();
   });
 
@@ -239,7 +235,6 @@ describe('TaskDetail — MR-квадратик в строке репозито�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    // Серый квадратик — MR ожидался, но не создался.
     expect(await screen.findByTestId('repo-mr-badge')).toBeInTheDocument();
     expect(screen.queryByTestId('repo-mr-link')).toBeNull();
   });
@@ -301,7 +296,6 @@ describe('TaskDetail — MR-квадратик в строке репозито�
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    // Одна синяя ссылка и один серый квадратик.
     const links = await screen.findAllByTestId('repo-mr-link');
     expect(links).toHaveLength(1);
     expect(links[0]).toHaveAttribute('href', 'https://github.com/acme/app/pull/1');

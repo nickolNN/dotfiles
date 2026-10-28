@@ -8,7 +8,6 @@ import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
 import { soloRunExcludeTools } from '../pi/tool-policy';
 import { STEP_SYSTEM_APPEND } from './prompts';
 
-/** Cwd-agnostic path to <repo>/prompts/devops.md, resolved from this module. */
 export const DEFAULT_DEVOPS_PROMPT_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '..', '..', '..',
@@ -16,77 +15,44 @@ export const DEFAULT_DEVOPS_PROMPT_PATH = join(
   'devops.md',
 );
 
-/** Имя Markdown-файла с инструкцией по запуску, который пишет DevOps-агент. */
 export const RUN_INSTRUCTIONS_FILE = 'RUN_INSTRUCTIONS.md';
 
-/** Итог DevOps-агента: инструкция по запуску либо причина сбоя. */
 export interface DevOpsResult {
   success: boolean;
-  /** Markdown-инструкция при `success`, иначе null. */
   instructions: string | null;
   error?: string;
 }
 
-/**
- * DevOps: смотрит склонированный проект, пытается поставить зависимости
- * и вернуть Markdown-инструкцию по запуску. `workspaceDir` — рабочая папка
- * задачи, видимая агенту (container-путь в docker-режиме, host-путь в local).
- */
 export interface DevOpsAgent {
   runDevOps(
     workspaceDir: string,
     repoUrl: string,
     repoName: string,
-    /** Порт dev-сервера, выделенный задаче; попадает в промпт как `{{DEV_SERVER_PORT}}`. */
     devServerPort?: number,
   ): Promise<DevOpsResult>;
 }
 
-/** Опции `PiDevOpsAgent`; `pi` уже инжектится в `runIssueIteration`. */
 export interface PiDevOpsAgentOptions {
   pi: PiRunner;
-  /** Имя контейнера задачи (в local-режиме не используется как docker-цель). */
   containerName: string;
-  /** Host-путь рабочей папки задачи: отсюда читается `RUN_INSTRUCTIONS.md`. */
   hostWorkspaceDir: string;
-  /** ID задачи — комната `issue-<issueId>` для интерактивной сессии. */
   issueId?: string;
-  /** ID итерации — адрес сессии в реестре. */
   iterationId?: string;
-  /** stepRunId для регистрации живой сессии. */
   stepRunId?: string;
-  /** Реестр живых сессий для steer/abort. */
   registry?: import('../pi/session-registry').StepSessionRegistry;
-  /**
-   * Тег-инструкции проекта (Markdown): правила запуска всего набора репозиториев
-   * вместе (прокси, порты, переменные окружения). Агент читает их до начала
-   * работы и пишет `WORKSPACE_INSTRUCTIONS.md` в корень рабочей папки.
-   */
   tagInstructions?: string | null;
-  /** Имена всех репозиториев в workspace (через запятую). */
   reposNames?: string | null;
-  /** Имена репозиториев, отмеченных для запуска dev-сервера (через запятую). */
   reposRequireDevServer?: string | null;
-  /** Per-репозиторий инструкции по запуску (Markdown-секция с ###). */
   reposInstructions?: string | null;
-  /** Модель DevOps-агента (по умолчанию — дефолт pi). */
   model?: string;
-  /** Уровень размышления pi (`--thinking`); попадает в аргументы запуска pi. */
   thinkingLevel?: ThinkingLevel;
   timeoutMs?: number;
-  /** Путь к MD-шаблону промпта; по умолчанию корневой `prompts/devops.md`. */
   promptPath?: string;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
   onEvent?: (event: SessionEvent) => void;
 }
 
-/**
- * Подставляет `{{REPO_DIR}}`/`{{REPO_NAME}}`/`{{DEV_SERVER_PORT}}`/
- * `{{TAG_INSTRUCTIONS}}`/`{{REPOS_NAMES}}`/`{{REPOS_REQUIRE_DEV_SERVER}}`/
- * `{{REPOS_INSTRUCTIONS}}` в шаблон промпта DevOps-агента.
- * Без выделенного порта подставляется `AUTO`.
- */
 export function renderDevOpsPrompt(
   template: string,
   repoDir: string,
@@ -128,7 +94,6 @@ export function renderDevOpsPrompt(
     );
 }
 
-/** Читает MD-шаблон промпта DevOps-агента и рендерит его плейсхолдеры. */
 export function loadDevOpsPrompt(
   repoDir: string,
   repoName: string,
@@ -155,7 +120,6 @@ export function loadDevOpsPrompt(
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
-/** Читает и обрезает `RUN_INSTRUCTIONS.md`; нет файла/пусто → null. */
 async function readRunInstructions(path: string): Promise<string | null> {
   try {
     const text = await readFile(path, 'utf8');
@@ -166,11 +130,6 @@ async function readRunInstructions(path: string): Promise<string | null> {
   }
 }
 
-/**
- * Боевой devops поверх `PiRunner`: пишет содержимое в контейнере, читает
- * результат с host-диска. Любая ошибка (spawn/timeout/нет файла) — это
- * `{ success: false }`, а не reject: сбой не должен ронять подготовку.
- */
 export class PiDevOpsAgent implements DevOpsAgent {
   constructor(private readonly options: PiDevOpsAgentOptions) {}
 

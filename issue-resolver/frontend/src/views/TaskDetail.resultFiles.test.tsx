@@ -75,7 +75,6 @@ function textResponse(body: string): Response {
   return { ok: true, status: 200, text: async () => body } as Response;
 }
 
-/** fetch-мок: /result/files отдаёт файлы, остальное — issue/iterations/result. */
 function stubFetch(
   issue: Issue,
   files: WorkspaceFile[],
@@ -131,7 +130,6 @@ describe('TaskDetail — порождённые файлы отчёта', () => 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    // В шапке больше нет списка ссылок — вместо них кнопка-счётчик.
     expect(screen.queryByTestId('result-files')).toBeNull();
     expect(screen.queryByTestId('result-file-download')).toBeNull();
     const open = await screen.findByTestId('open-artifacts');
@@ -190,7 +188,6 @@ describe('TaskDetail — порождённые файлы отчёта', () => 
     expect(screen.queryByTestId('result-files')).toBeNull();
     expect(screen.queryByTestId('result-file-download')).toBeNull();
     expect(screen.queryByTestId('artifacts-modal')).toBeNull();
-    // сама кнопка «Скачать» теперь в модалке отчёта
     fireEvent.click(screen.getByTestId('open-result'));
     const modal = await screen.findByTestId('result-modal');
     expect(within(modal).getByTestId('result-modal-download')).toBeInTheDocument();
@@ -208,7 +205,6 @@ describe('TaskDetail — порождённые файлы отчёта', () => 
       expect(screen.getByTestId('open-artifacts')).toBeEnabled(),
     );
 
-    // Открываем модалку артефактов.
     fireEvent.click(screen.getByTestId('open-artifacts'));
     const modal = await screen.findByTestId('artifacts-modal');
     const archive = within(modal).getByTestId('artifacts-modal-download-archive');
@@ -241,7 +237,6 @@ describe('TaskDetail — порождённые файлы отчёта', () => 
   });
 
   it('пока отчёт не готов — кнопка артефактов задизейблена', async () => {
-    // Итераций нет → resultReady = false.
     stubFetch(makeIssue({ desired_result: 'html' }), [], []);
 
     render(<TaskDetail issueId="issue-1" />);

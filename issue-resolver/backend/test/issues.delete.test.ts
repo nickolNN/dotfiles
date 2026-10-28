@@ -27,13 +27,11 @@ import type { SseHub } from '../src/sse/hub';
 
 const ROUTE_PATH = '/issue-resolver/api/v1/issues';
 
-/** ContainerController-шпион: пишет spawn/remove, реальный Docker не трогает. */
 class SpyContainerController implements ContainerController {
   readonly spawned: string[] = [];
   readonly removed: string[] = [];
   private pendingError: Error | null = null;
 
-  /** Следующая операция (spawn/remove) отклонится этой ошибкой. */
   failNextWith(error: Error): void {
     this.pendingError = error;
   }
@@ -78,7 +76,6 @@ class SpyContainerController implements ContainerController {
   }
 }
 
-/** SseHub-шпион: копит опубликованные события, без живой доставки. */
 class RecordingSseHub implements SseHub {
   readonly events: SSEEvent[] = [];
 
@@ -132,7 +129,6 @@ function makeApp(
   return app;
 }
 
-/** Ждёт, пока предикат станет истинным (фоновый прогон после POST). */
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   timeoutMs = 3000,
@@ -145,7 +141,6 @@ async function waitFor(
   throw new Error('waitFor: timeout');
 }
 
-/** Фазы SSE `issue_deleting` задачи — в порядке публикации. */
 function phasesOf(sse: RecordingSseHub, issueId: string): string[] {
   return sse.events
     .filter(
@@ -154,7 +149,6 @@ function phasesOf(sse: RecordingSseHub, issueId: string): string[] {
     .map((event) => (JSON.parse(event.data) as { phase: string }).phase);
 }
 
-/** Есть ли событие типа `type` по задаче. */
 function hasEvent(
   sse: RecordingSseHub,
   type: SSEEvent['type'],
@@ -165,7 +159,6 @@ function hasEvent(
   );
 }
 
-/** Прямой insert задачи: без POST, который тянет тяжёлый фоновый прогон. */
 function seedIssue(db: Db): string {
   const id = randomUUID();
   const now = new Date().toISOString();
@@ -184,7 +177,6 @@ function seedIssue(db: Db): string {
   return id;
 }
 
-/** better-sqlite3-клиент drizzle — для DDL-триггеров в тестах сбоя БД. */
 function sqliteOf(db: Db): { exec: (sql: string) => void } {
   return (db as unknown as { $client: { exec: (sql: string) => void } })
     .$client;
@@ -210,7 +202,6 @@ describe('DELETE /issues/:id — полная зачистка', () => {
     expect(created.statusCode).toBe(201);
     const issueId = created.json().id as string;
 
-    // Дожидаемся завершения фонового прогона, чтобы DELETE не гонялся с ним.
     await waitFor(async () => {
       const fetched = await app.inject({
         method: 'GET',
@@ -219,7 +210,6 @@ describe('DELETE /issues/:id — полная зачистка', () => {
       return ['completed', 'failed'].includes(fetched.json().status);
     });
 
-    // Дополнительный step_run + step_output для итерации (прямой insert).
     const iteration = db
       .select()
       .from(iterations)
@@ -253,7 +243,6 @@ describe('DELETE /issues/:id — полная зачистка', () => {
       })
       .run();
 
-    // Реальная рабочая подпапка задачи с файлом внутри.
     const issueDir = join(workspaceRoot, issueId);
     mkdirSync(issueDir, { recursive: true });
     writeFileSync(join(issueDir, 'work.txt'), 'artifact');
@@ -265,7 +254,6 @@ describe('DELETE /issues/:id — полная зачистка', () => {
     expect(response.statusCode).toBe(202);
     expect(response.json()).toEqual({ ok: true });
 
-    // Удаление — фоновое: финал — SSE `issue_deleted` (после сноса папки).
     await waitFor(() => hasEvent(sse, 'issue_deleted', issueId));
 
     const fetched = await app.inject({
@@ -283,7 +271,6 @@ describe('DELETE /issues/:id — полная зачистка', () => {
     expect(container.removed).toContain(`issue-resolver-${issueId}`);
     expect(existsSync(issueDir)).toBe(false);
 
-    // Прогресс удаления уходит в SSE фазами, финал — issue_deleted.
     expect(phasesOf(sse, issueId)).toEqual([
       'stopping_processes',
       'removing_db_record',
@@ -323,7 +310,6 @@ describe('DELETE /issues/:id — corner cases', () => {
     mkdirSync(issueDir, { recursive: true });
     writeFileSync(join(issueDir, 'work.txt'), 'artifact');
 
-    // Сбой БД: DELETE по issues всегда падает через RAISE(ABORT).
     sqliteOf(db).exec(
       "CREATE TRIGGER fail_delete BEFORE DELETE ON issues BEGIN SELECT RAISE(ABORT, 'db delete failed'); END;",
     );
@@ -336,7 +322,6 @@ describe('DELETE /issues/:id — corner cases', () => {
 
     await waitFor(() => phasesOf(sse, issueId).includes('error'));
 
-    // Задача цела: запись в БД, папка и контейнер не тронуты.
     const fetched = await app.inject({
       method: 'GET',
       url: `${ROUTE_PATH}/${issueId}`,
@@ -346,7 +331,6 @@ describe('DELETE /issues/:id — corner cases', () => {
     expect(container.removed).toEqual([]);
     expect(hasEvent(sse, 'issue_deleted', issueId)).toBe(false);
 
-    // Фатальный сбой БД: дальше removing_container/workspace не идём.
     expect(phasesOf(sse, issueId)).toEqual([
       'stopping_processes',
       'removing_db_record',
@@ -386,7 +370,6 @@ describe('DELETE /issues/:id — corner cases', () => {
 
     await waitFor(() => hasEvent(sse, 'issue_deleted', issueId));
 
-    // Контейнер не удалился, но это не мешает: запись и папка снесены.
     expect(container.removed).toEqual([]);
     expect(db.select().from(issues).all()).toHaveLength(0);
     expect(existsSync(issueDir)).toBe(false);
@@ -403,7 +386,6 @@ describe('DELETE /issues/:id — corner cases', () => {
     const container = new SpyContainerController();
     const sse = new RecordingSseHub();
     const root = await makeRoot();
-    // workspaceRoot — обычный файл: `rm(<root>/<id>)` упадёт с ENOTDIR.
     const blocker = join(root, 'not-a-dir');
     writeFileSync(blocker, 'x');
     const app = makeApp(db, container, blocker, sse);
@@ -438,7 +420,6 @@ describe('DELETE /issues/:id — corner cases', () => {
     const issueDir = join(workspaceRoot, issueId);
     mkdirSync(issueDir, { recursive: true });
 
-    // Не-Error throwable: проверяем ветку `String(error)` в catch.
     const deleteSpy = vi.spyOn(db, 'delete').mockImplementation(() => {
       throw 'boom';
     });
@@ -485,7 +466,6 @@ describe('DELETE /issues/:id — corner cases', () => {
     expect(response.statusCode).toBe(202);
     expect(response.json()).toEqual({ ok: true });
 
-    // Фоновый прогон спит 500 мс после SIGTERM — финала ещё быть не может.
     expect(hasEvent(sse, 'issue_deleted', issueId)).toBe(false);
 
     await waitFor(() => hasEvent(sse, 'issue_deleted', issueId));

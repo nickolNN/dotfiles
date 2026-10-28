@@ -48,9 +48,6 @@ describe('detectGitHost', () => {
     expect(detectGitHost('git@bitbucket.org:team/repo.git')).toBe('bitbucket');
   });
 
-  // self-hosted Bitbucket Server: хост `b.yadro.com` не содержит 'bitbucket',
-  // а страница PR живёт вне `/scm/`. По одному только URL репозитория такая
-  // инсталляция не опознавалась → fetchComments падал до всякого запроса.
   it('web-URL PR на self-hosted хосте → bitbucket', () => {
     expect(
       detectGitHost(
@@ -124,7 +121,6 @@ describe('FakeMrClient', () => {
 });
 
 describe('HttpMrClient', () => {
-  /** Authorization-заголовок первого вызова stub-нутого fetch. */
   const authHeaderOfFirstCall = (
     fetchMock: ReturnType<typeof vi.fn>,
   ): string => {
@@ -195,16 +191,13 @@ describe('HttpMrClient', () => {
         bitbucket: 'bitbucket-token',
       });
 
-      // per-call токен выигрывает у per-host и общего.
       await client.createMr(bitbucketInput);
       expect(authHeaderOfFirstCall(fetchMock)).toBe('Bearer secret-token');
 
-      // пустой per-call → per-host токен (BITBUCKET_TOKEN).
       fetchMock.mockClear();
       await client.createMr({ ...bitbucketInput, token: '' });
       expect(authHeaderOfFirstCall(fetchMock)).toBe('Bearer bitbucket-token');
 
-      // нет per-host токена → общий token.
       fetchMock.mockClear();
       await new HttpMrClient('default-token').createMr({
         ...bitbucketInput,
@@ -355,16 +348,13 @@ describe('HttpMrClient', () => {
         github: 'github-token',
       });
 
-      // per-call токен выигрывает у per-host и общего.
       await client.createMr(githubInput);
       expect(authHeaderOfFirstCall(fetchMock)).toBe('Bearer secret-token');
 
-      // пустой per-call → per-host токен (GITHUB_TOKEN).
       fetchMock.mockClear();
       await client.createMr({ ...githubInput, token: '' });
       expect(authHeaderOfFirstCall(fetchMock)).toBe('Bearer github-token');
 
-      // нет per-host токена → общий token.
       fetchMock.mockClear();
       await new HttpMrClient('default-token').createMr({
         ...githubInput,
@@ -661,8 +651,6 @@ describe('findOpenMr', () => {
         );
 
         const [url] = fetchMock.mock.calls[0] as [string];
-        // direction=OUTGOING фильтрует PR из ЭТОГО репо;
-        // at=refs/heads/<base> — фильтр по target-ветке.
         expect(url).toContain('direction=OUTGOING');
         expect(url).toContain('at=refs/heads/main');
         expect(url).toContain('state=OPEN');
@@ -706,19 +694,10 @@ describe('findOpenMr', () => {
   });
 });
 
-/**
- * Комментарии Bitbucket Server. Два слоя багов: (1) web-URL PR на self-hosted
- * хосте не опознавался вообще (`unknown git host` — ни 'bitbucket' в хосте, ни
- * `/scm/` в пути), (2) `/comments` в 8.9 требует `?path=<файл>` и без него
- * отвечает 400, поэтому список читается через `/activities`. Плюс safety-net в
- * движке генерировал ссылку без project-ключа — её долечивает repositoryUrl.
- */
 describe('HttpMrClient.fetchComments — bitbucket', () => {
   const repositoryUrl = 'https://b.yadro.com/scm/kos/kc_docs_editor_front.git';
   const canonicalUrl =
     'https://b.yadro.com/projects/KOS/repos/kc_docs_editor_front/pull-requests/218';
-  // Формы ответа /activities: комментарии вложенны в `comment`, даты —
-    // epoch-миллисекунды, файл/строка — в comment.anchors.line.
   const activitiesBody = {
     values: [
       {
@@ -755,7 +734,6 @@ describe('HttpMrClient.fetchComments — bitbucket', () => {
     isLastPage: true,
   };
 
-  /** Один вызов fetch; возвращает mock, чтобы читать URL-а вызовов. */
   const singlePageFetch = (body: unknown = activitiesBody) => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -838,9 +816,6 @@ describe('HttpMrClient.fetchComments — bitbucket', () => {
     }
   });
 
-  // Ни одного реального COMMENT-события в этом Bitbucket не нашлось (40 PR × 4
-  // репо), поэтому обе известные формы привязки закреплены тестом: вложенная
-  // `anchors.line` из /activities и плоский `anchor` из /comments?path=.
   it('плоский anchor и поля на верхнем уровне события тоже мапятся', async () => {
     singlePageFetch({
       values: [
@@ -1071,7 +1046,6 @@ describe('HttpMrClient — web-URL созданного/дубликата PR', 
         mrUrl: 'https://b.yadro.com/projects/KOS/repos/kc_docs_editor_front/pull-requests/218',
         id: '218',
       });
-      // Второй вызов — список открытых PR, фильтрация по fromRef на клиенте.
       expect((fetchMock.mock.calls[1] as [string])[0]).toContain(
         'pull-requests?direction=OUTGOING&at=refs/heads/dev',
       );
@@ -1146,11 +1120,6 @@ describe('HttpMrClient — web-URL созданного/дубликата PR', 
     }
   });
 });
-/**
- * Bitbucket Cloud (`bitbucket.org`) — API 2.0: другие пути, другая пагинация
- * (курсор `next`), другой формат комментария (`content.raw`, `inline`). MR-клиент
- * различал только Server/DC, хотя `repo-resolver` Cloud давно разделяет.
- */
 describe('HttpMrClient — bitbucket Cloud (api.bitbucket.org/2.0)', () => {
   const repositoryUrl = 'https://bitbucket.org/kos/kc_cloud_demo.git';
   const mrUrl = 'https://bitbucket.org/kos/kc_cloud_demo/pull-requests/5';
@@ -1169,7 +1138,6 @@ describe('HttpMrClient — bitbucket Cloud (api.bitbucket.org/2.0)', () => {
         user: { account: 'nickol' },
         created_on: '2026-10-20T11:00:00.000+0000',
       },
-      // удалённый и черновой — не часть ревью
       { content: { raw: 'удалён' }, deleted: { raw: '' } },
       { content: { raw: 'черновик' }, pending: { content: { raw: '' } } },
     ],
@@ -1304,8 +1272,6 @@ describe('HttpMrClient — bitbucket Cloud (api.bitbucket.org/2.0)', () => {
     }
   });
 
-  // Регресс на «body already consumed»: ответ можно читать один раз, поэтому
-  // текст — только в ветке ошибки, иначе успех падал бы на json() после text().
   it('createMr: на успехе тело читается один раз (text() не трогается)', async () => {
     const textSpy = vi.fn(async () => 'should-not-be-read');
     const fetchMock = vi.fn().mockResolvedValue({
@@ -1442,7 +1408,6 @@ describe('HttpMrClient — bitbucket Cloud (api.bitbucket.org/2.0)', () => {
         title: 'new title',
         summary: 'new description',
       });
-      // Cloud не требует предварительного чтения PR (в отличие от Server).
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
@@ -1477,11 +1442,6 @@ describe('HttpMrClient — bitbucket Cloud (api.bitbucket.org/2.0)', () => {
   });
 });
 
-/**
- * Форма запросов `updateMr` по хостам — раньше не тестировалась ни разу,
- * включая обязательный для Bitbucket Server `version` (без него 409
- * VERSION_CONFLICT).
- */
 describe('HttpMrClient.updateMr — Server / GitLab / GitHub', () => {
   const client = new HttpMrClient();
 
@@ -1599,12 +1559,6 @@ describe('HttpMrClient.updateMr — Server / GitLab / GitHub', () => {
   });
 });
 
-/**
- * Пагинация комментариев GitHub/GitLab: страница — массив тел, без `per_page`
- * приходит 30 (GitHub) / 20 (GitLab) заметок, и всё сверх в ревью не попадало.
- * Плюс отказ от молчаливого `if (res.ok)`: сбой эндпоинта должен быть ошибкой,
- * а не пустым списком «код чист».
- */
 describe('HttpMrClient.fetchComments — пагинация GitHub/GitLab', () => {
   const client = new HttpMrClient();
   const page = (n: number, prefix: string) =>
@@ -1614,7 +1568,6 @@ describe('HttpMrClient.fetchComments — пагинация GitHub/GitLab', () =
       created_at: '2026-10-20T10:00:00Z',
     }));
 
-  /** Мок по префиксу URL: полный ответ — сигнал «просить следующую страницу». */
   const stubPages = (
     pick: (url: string) => unknown[],
     fail?: (url: string) => number | undefined,
@@ -1635,7 +1588,7 @@ describe('HttpMrClient.fetchComments — пагинация GitHub/GitLab', () =
       if (url.includes('/pulls/7/comments')) {
         return url.includes('page=2') ? page(2, 'r') : page(100, 'r');
       }
-      return page(3, 'i'); // issue comments — неполная страница
+      return page(3, 'i');
     });
     try {
       const comments = await client.fetchComments({
@@ -1643,7 +1596,7 @@ describe('HttpMrClient.fetchComments — пагинация GitHub/GitLab', () =
         token: 'gh',
         repositoryUrl: 'https://github.com/org/repo.git',
       });
-      expect(comments).toHaveLength(105); // 100 + 2 review + 3 issue
+      expect(comments).toHaveLength(105);
       const urls = fetchMock.mock.calls.map((c) => c[0] as string);
       expect(urls[0]).toBe(
         'https://api.github.com/repos/org/repo/pulls/7/comments?per_page=100&page=1',
@@ -1752,7 +1705,6 @@ describe('HttpMrClient.fetchComments — пагинация GitHub/GitLab', () =
   });
 
   it('капп страниц: сервер, зациклившийся на одной странице, — ошибка', async () => {
-    // Server всегда отвечает «есть ещё» с тем же start: без каппа это вечный цикл.
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,

@@ -12,20 +12,8 @@ import {
 } from '@issue-resolver/shared';
 import type { RepoChangeDigest } from '../git/service';
 
-// ── Prompt file loader ──────────────────────────────────────────────
-
 const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'prompts');
 
-/**
- * Reads a prompt `.md` file, strips the frontmatter `# Prompt: ...` header
- * line, and returns the body text.
- *
- * Кеш инвалидируется по (mtime, size) файла. Это не косметика: каталог
- * `prompts/` лежит ВНЕ `src/`, поэтому `tsx watch` на правку промпта процесс
- * НЕ перезапускает — с кешем «на весь life процесса» сервер до бесконечности
- * отдавал бы промпт, прочитанный на старте, и любая проверка правки промпта
- * молча проверяла бы СТАРЫЙ текст.
- */
 const _cache = new Map<string, { mtimeMs: number; size: number; body: string }>();
 function readPrompt(filename: string): string {
   const path = join(PROMPTS_DIR, filename);
@@ -35,23 +23,11 @@ function readPrompt(filename: string): string {
     return cached.body;
   }
   const raw = readFileSync(path, 'utf-8');
-  // Strip the metadata header line (`# Prompt: ...`) and leading blank.
   const body = raw.replace(/^#\s+Prompt:.*\n\n?/, '');
   _cache.set(filename, { mtimeMs, size, body });
   return body;
 }
 
-/**
- * Форма описания MR живёт ОДИН раз — в оригинальном скилле `pr`
- * (`mattpocock/skills:skills/engineering/pr`, credits Dex Horthy / Humanlayer),
- * который запечён в образ и обновляется вместе с ним. Конвейерный шаг получает
- * его текст целиком: второй версии структуры больше нигде нет (наш форк
- * `agent-skills/pr` удалён — две правки одного контракта расходятся молча).
- *
- * `~/.agents/skills` — то место, куда образ и запуск контейнера кладут скиллы.
- * Если файла нет, инъекция пустая: `step-pr.md` держит названия секций в
- * тексте, поэтому шаг остаётся рабочим, а пропажу ловит pr-skill.test.ts.
- */
 const PR_SKILL_PATHS = [join(homedir(), '.agents', 'skills', 'pr', 'SKILL.md')];
 
 function prSkillBlock(): string {
@@ -64,7 +40,6 @@ function prSkillBlock(): string {
   return '';
 }
 
-/** Подставляет плейсхолдеры `{{NAME}}` (глобально) и чистит пустые строки. */
 function render(template: string, values: Record<string, string>): string {
   let body = template;
   for (const [name, value] of Object.entries(values)) {
@@ -75,9 +50,6 @@ function render(template: string, values: Record<string, string>): string {
     .trim();
 }
 
-// ── Types ───────────────────────────────────────────────────────────
-
-/** Репозиторий глазами шага `pr`: путь рабочей копии, base-ветка, нужен ли MR. */
 export interface PrTarget {
   path: string;
   baseBranch: string;
@@ -98,23 +70,12 @@ export interface StepPromptInput {
   attachmentPaths?: string[];
   previousOutcome?: string | null;
   pipelineSteps?: PipelineStep[];
-  /** Порт уже поднятого системой dev-сервера (null — сервер не поднимали). */
   devServerPort?: number | null;
-  /** Цели публикации для шага `pr` (путь + base-ветка + create_mr). */
   prTargets?: PrTarget[];
-  /** Число параллельных исполнителей для refine-промпта (0/undefined → 1). */
   workerCount?: number;
-  /**
-   * Снимок рабочей копии перед шагом (`git status` + `git diff --stat` по каждому
-   * репозиторию). Движок measure'ит его сам, чтобы агент не тратил ходы на
-   * `git status`/`git diff` ради первоначальной ориентации.
-   */
   stateDigest?: RepoChangeDigest[];
-  /** Число завершённых итераций для report-агента. */
   iterationCount?: number;
-  /** Путь к каталогу narratives для report-агента (видный агенту). */
   iterationNarrativesDir?: string;
-  /** Working folder as the agent sees it (session cwd); stated in the prompt. */
   workingDir?: string;
 }
 
@@ -130,27 +91,16 @@ export interface RoomPromptInput {
   previousOutcome?: string | null;
   attachmentPaths?: string[];
   pipelineSteps?: PipelineStep[];
-  /** Порт уже поднятого системой dev-сервера (null — сервер не поднимали). */
   devServerPort?: number | null;
-  /**
-   * Цели публикации шага `pr` (путь + base-ветка + create_mr). Нужны не только
-   * `pr`: refine/resolve/room тоже должны видеть, в каких репозиториях запрошен
-   * MR, иначе планировщик спрашивает пользователя то, что уже есть в задаче.
-   */
   prTargets?: PrTarget[];
-  /** Снимок рабочей копии перед шагом (см. `StepPromptInput.stateDigest`). */
   stateDigest?: RepoChangeDigest[];
-  /** Working folder as the agent sees it (session cwd); stated in the prompt. */
   workingDir?: string;
 }
 
 export interface WorkerSummary {
-  /** 1-based номер исполнителя, как он подписан в его отчёте. */
   index: number;
   summary: string;
 }
-
-// ── Shared blocks (single source of truth for every prompt) ─────────
 
 function outputContract(workingDir?: string): string {
   const contract = readPrompt('output-contract.md');
@@ -163,7 +113,6 @@ function outputContract(workingDir?: string): string {
   ].join('\n');
 }
 
-/** The agent's cwd: the parent of the clones, never a clone itself. */
 function workingFolderBlock(workingDir?: string): string {
   if (!workingDir) return '';
   return [
@@ -174,7 +123,6 @@ function workingFolderBlock(workingDir?: string): string {
   ].join('\n');
 }
 
-/** Вход задачи: один блок для всех step- и room-промптов. */
 function taskContext(input: {
   issueTitle: string;
   description: string;
@@ -196,14 +144,9 @@ function taskContext(input: {
   return lines.join('\n');
 }
 
-/**
- * Зависимости уже поставлены разовой подготовкой задачи — говорим это
- * исполнителям явно, иначе каждый агент заново гоняет `npm ci`.
- */
 const DEPENDENCIES_PREPARED =
   'Dependencies are already installed by the task preparation — run an install\nonly if you changed a manifest.';
 
-/** Рабочие копии репозиториев + живой dev-сервер (общий блок контекста). */
 function reposBlock(
   repoPaths: string[],
   devServerPort?: number | null,
@@ -216,8 +159,6 @@ function reposBlock(
       'directly into the task working folder.',
     );
   } else {
-    // create_mr — часть входа задачи (чекбоксы pr-секции), а не вывод pr-шага:
-    // показываем флаг каждому шагу, иначе refine спрашивает его у пользователя.
     const createMrByPath = new Map(
       (options.prTargets ?? []).map((target) => [target.path, target.createMr]),
     );
@@ -243,7 +184,6 @@ function reposBlock(
   return lines.join('\n');
 }
 
-/** Куда смотреть шагу `test`, когда система dev-сервер не поднимала. */
 function devServerBlock(devServerPort?: number | null): string {
   if (devServerPort === undefined || devServerPort === null) {
     return [
@@ -259,7 +199,6 @@ function devServerBlock(devServerPort?: number | null): string {
   ].join('\n');
 }
 
-/** Цели публикации шага `pr`: что коммитит бэкенд и в какую ветку. */
 function prTargetsBlock(targets?: PrTarget[]): string {
   if (!targets || targets.length === 0) {
     return 'No repositories in this task — there is nothing to publish.';
@@ -272,12 +211,6 @@ function prTargetsBlock(targets?: PrTarget[]): string {
   ].join('\n');
 }
 
-/**
- * Состояние рабочей копии, которое движок уже померил сам. Без него каждый
- * агент открывает шаг `git status` + `git diff --stat` во всех репозиториях,
- * чтобы понять, что делал предыдущий шаг: в staged-резолве на 9 агентов это
- * десятки одинаковых вызовов на ровном месте.
- */
 function workingStateBlock(digests?: RepoChangeDigest[]): string {
   const useful = (digests ?? []).filter(
     (digest) => digest.changedFiles.length > 0 || digest.diffSummary !== '',
@@ -329,7 +262,6 @@ function previousOutcomeBlock(outcome?: string | null): string {
     : '';
 }
 
-/** Блок narrative-файлов итераций для report-агента. */
 function iterationNarrativesBlock(iterationCount: number): string {
   if (iterationCount <= 0) {
     return '(No iteration narratives available — the pipeline produced no iterations.)';
@@ -351,8 +283,6 @@ function iterationNarrativesBlock(iterationCount: number): string {
   return lines.join('\n');
 }
 
-// ── Pipeline awareness ──────────────────────────────────────────────
-
 const PIPELINE_ORDER: readonly PipelineStep[] = ['refine', 'resolve', 'review', 'test', 'pr', 'report'];
 
 const VERIFICATION_STEPS: ReadonlyArray<{ step: PipelineStep; label: string; description: string }> = [
@@ -368,7 +298,6 @@ function downstreamVerification(pipelineSteps: PipelineStep[] | undefined, step:
   );
 }
 
-/** Общая строка «где я в конвейере» — первая строка любого step-промпта. */
 function pipelineLine(pipelineSteps: PipelineStep[] | undefined): string[] {
   if (!pipelineSteps || pipelineSteps.length === 0) return [];
   return [`Enabled pipeline for this run: ${pipelineSteps.join(' → ')}.`];
@@ -416,7 +345,6 @@ function resolveDownstreamAwareness(pipelineSteps?: PipelineStep[]): string[] {
   ];
 }
 
-/** То же, что и для resolve, но в границах одной подзадачи исполнителя. */
 function workerDownstreamAwareness(pipelineSteps?: PipelineStep[]): string[] {
   const gates = downstreamVerification(pipelineSteps, 'resolve');
   if (gates.length === 0) {
@@ -434,10 +362,6 @@ function workerDownstreamAwareness(pipelineSteps?: PipelineStep[]): string[] {
     'the integrated result.',
   ];
 }
-
-// ── Step bodies (loaded from prompts/*.md) ──────────────────────
-
-// ── Step bodies (loaded from prompts/*.md) ──────────────────────────
 
 type StepBodyBuilder = (input: StepPromptInput) => string;
 
@@ -484,8 +408,6 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
   },
 };
 
-// ── buildStepPrompt ─────────────────────────────────────────────────
-
 export function buildStepPrompt(input: StepPromptInput): string {
   const lines: string[] = [
     `Pipeline step: ${input.step}.`,
@@ -507,7 +429,6 @@ export function buildStepPrompt(input: StepPromptInput): string {
   const working = workingFolderBlock(input.workingDir);
   if (working) lines.push('', working);
 
-  // План refine — вход для следующих шагов; самому refine он не нужен.
   const plan = input.step === 'refine' ? '' : refinedPlanBlock(input.refinedPlan);
   if (plan) lines.push('', plan);
 
@@ -520,9 +441,6 @@ export function buildStepPrompt(input: StepPromptInput): string {
   return withMemoryRules(lines.join('\n'));
 }
 
-// ── Room / staged resolve prompts (loaded from prompts/*.md) ────────
-
-/** Общий набор блоков для всех room/staged-промптов (у них нет preamble). */
 function roomValues(
   input: RoomPromptInput,
   extra: Record<string, string> = {},
@@ -547,7 +465,6 @@ function roomValues(
   };
 }
 
-/** Список итогов исполнителей: номер, файл отчёта и саммари (карта для лида). */
 function workerSummariesBlock(files: (index: number) => string, workers: WorkerSummary[]): string {
   if (workers.length === 0) return '';
   return workers
@@ -555,11 +472,6 @@ function workerSummariesBlock(files: (index: number) => string, workers: WorkerS
     .join('\n');
 }
 
-/**
- * System-prompt addition for every step agent: the deliverable is a file, not a
- * chat answer. Kept out of the user prompt so compaction cannot drop it.
- */
-/** Room/stage prompts carry the same memory vocabulary as step prompts. */
 function withMemoryRules(prompt: string): string {
   return `${prompt}\n\n${readPrompt('memory-rules.md')}`;
 }
@@ -652,12 +564,6 @@ export function buildStageCoordinatorPrompt(
   );
 }
 
-/**
- * Prompt of the single worker of a one-agent stage (`executors: 1`): such a
- * stage has neither siblings nor a coordinator, so the worker does the work and
- * writes the stage file. The coordinator prompt would lie about integrating
- * workers that do not exist.
- */
 export function buildStageSoloPrompt(
   input: RoomPromptInput,
   stage: NormalizedStage,

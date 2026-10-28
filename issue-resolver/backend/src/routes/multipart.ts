@@ -1,22 +1,14 @@
-// Импорт только типов: подтягивает аугментацию FastifyRequest (isMultipart/parts).
 import type {} from '@fastify/multipart';
 import type { FastifyRequest } from 'fastify';
 import type { UploadInput } from '../workspace/attachments';
 
-/** JSON-тело создания задачи/итерации в multipart-запросе. */
 const PAYLOAD_FIELD = 'payload';
-/** Имя файлового поля (повторяется на каждый файл). */
 const FILES_FIELD = 'files';
 
 export type RequestPayload =
   | { ok: true; body: unknown; files: UploadInput[] }
   | { ok: false; error: string };
 
-/**
- * Тело запроса создания: обычный `application/json` отдаётся как есть (файлов
- * нет), а `multipart/form-data` разбирается на JSON-строку в поле `payload` и
- * повторяющиеся файловые поля `files`. JSON-путь не меняет поведение.
- */
 export async function readRequestPayload(
   request: FastifyRequest,
 ): Promise<RequestPayload> {
@@ -28,7 +20,6 @@ export async function readRequestPayload(
   const files: UploadInput[] = [];
   for await (const part of request.parts()) {
     if (part.type === 'file') {
-      // Файловые части дренируем всегда, сохраняем только поле `files`.
       const buffer = await part.toBuffer();
       if (part.fieldname === FILES_FIELD) {
         files.push({

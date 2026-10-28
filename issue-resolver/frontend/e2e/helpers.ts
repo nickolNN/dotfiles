@@ -5,17 +5,11 @@ import {
   type Route,
 } from '@playwright/test';
 
-/** Префикс API, который vite проксирует на e2e-сервер (mock backend). */
 export const API = '/issue-resolver/api/v1';
 
-/**
- * Общий e2e-репозиторий. Валидация и подготовка идут через мок-бэкенд
- * (`backend/test/e2e-server.ts`) — сети и реальных клонов нет.
- */
 export const TEST_REPO_URL = 'https://github.com/octocat/Hello-World';
 export const TEST_REPO_NAME = 'Hello-World';
 
-/** Минимальная форма сохранённого репозитория, нужная хелперам. */
 export interface EnsuredRepo {
   id: string;
   url: string;
@@ -24,15 +18,10 @@ export interface EnsuredRepo {
 
 type Json = Record<string, unknown>;
 
-/** Уникальный заголовок задачи, чтобы не пересекаться с прогонами соседей. */
 export function uniqueTitle(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 }
 
-/**
- * Гарантирует сохранённый e2e-репозиторий: ищет по URL, иначе создаёт через
- * API. `/repositories` валидируется офлайн-резолвером e2e-сервера.
- */
 export async function ensureSavedRepo(
   request: APIRequestContext,
 ): Promise<EnsuredRepo> {
@@ -66,21 +55,12 @@ export async function ensureSavedRepo(
 
 export interface CreateIssueOptions {
   title: string;
-  /** Описание задачи (additional_context). */
   description?: string;
-  /** Галочка «Запустить (установка зависимостей)»; по умолчанию true. */
   bootstrapEnabled?: boolean;
-  /** Явный id сохранённого репозитория; по умолчанию — общий e2e-репозиторий. */
   repoId?: string;
-  /** Включить шаг «Планирование» (refine) перед resolve. */
   refine?: boolean;
 }
 
-/**
- * Проходит форму создания задачи как пользователь: главная → «Создать задачу»
- * → заголовок/описание → репозиторий → тайгл bootstrap → «Запустить». Ждёт
- * открытия детали и возвращает id созданной задачи.
- */
 export async function createIssueViaUI(
   page: Page,
   options: CreateIssueOptions,
@@ -111,7 +91,6 @@ export async function createIssueViaUI(
   await expect(select).toBeEnabled();
   await select.selectOption(repo.id);
 
-  // base_branch выставляется сразу из defaultBranch репозитория.
   await expect(page.getByTestId('repository-branch-0')).not.toHaveValue('');
 
   if (options.bootstrapEnabled === false) {
@@ -131,7 +110,6 @@ export async function createIssueViaUI(
   return decodeURIComponent(match[1]);
 }
 
-/** Ждёт, пока бейдж статуса в детали задачи получит нужный `data-status`. */
 export async function waitForStatus(
   page: Page,
   status: string,
@@ -142,17 +120,12 @@ export async function waitForStatus(
   ).toHaveAttribute('data-status', status, { timeout });
 }
 
-/** Точный GET /issues/:id (без вложенных путей вроде /iterations). */
 export const issueDetailPattern =
   /\/issue-resolver\/api\/v1\/issues\/[0-9a-fA-F-]+$/;
 
-// ─────────────────────────── scenario-мок агента ───────────────────────────
-
-/** Оригин e2e-сервера (mock backend), к которому ходит vite-прокси. */
 export const E2E_API_ORIGIN =
   process.env.E2E_API_ORIGIN ?? 'http://localhost:8095';
 
-/** Тело `POST /e2e/scenarios`: встроенное имя либо inline-шаги. */
 export interface ScenarioRequest {
   scenario?: string;
   steps?: Array<Record<string, unknown>>;
@@ -160,11 +133,6 @@ export interface ScenarioRequest {
   questionTimeoutMs?: number;
 }
 
-/**
- * Задаёт сценарий ответов мок-агента для следующих прогонов. Сценарии живут
- * на e2e-сервере, поэтому запрос идёт напрямую в `E2E_API_ORIGIN` (в обход
- * vite-прокси, который знает только `/issue-resolver/api/v1`).
- */
 export async function setScenario(
   request: APIRequestContext,
   scenario: ScenarioRequest,
@@ -175,7 +143,6 @@ export async function setScenario(
   expect(res.ok(), await res.text()).toBe(true);
 }
 
-/** Сбрасывает сценарий к `all-success`. */
 export async function resetScenario(
   request: APIRequestContext,
 ): Promise<void> {
@@ -183,7 +150,6 @@ export async function resetScenario(
   expect(res.ok(), await res.text()).toBe(true);
 }
 
-/** Поллит REST-статус задачи до терминального (детерминированно, без SSE). */
 export async function pollIssueStatus(
   request: APIRequestContext,
   issueId: string,
@@ -203,18 +169,14 @@ export async function pollIssueStatus(
   throw new Error(`issue ${issueId} status stayed "${last}"`);
 }
 
-// ─────────────────────────────── SSE helpers ───────────────────────────────
-
 type SseEvent = Record<string, unknown>;
 
 const now = () => new Date().toISOString();
 
-/** Сериализует события в тело `text/event-stream`. */
 export function sseBody(events: SseEvent[]): string {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('');
 }
 
-/** `workspace_progress`: шаг разовой подготовки рабочей папки. */
 export function workspaceProgress(
   step: string,
   status: string,
@@ -229,9 +191,6 @@ export function workspaceProgress(
   };
 }
 
-/** `log`: чанк stdout/stderr агента (шаги, DevOps, Report).
- * `stepRunId` у issue-уровневых сессий синтетический: `{issueId}/devops` |
- * `{issueId}/report`; фронт привязывает чанк к SessionView по этому id. */
 export function logChunk(
   stepRunId: string,
   text: string,
@@ -247,7 +206,6 @@ export function logChunk(
   };
 }
 
-/** `iteration_status`: смена живого статуса задачи/итерации. */
 export function iterationStatus(status: string): SseEvent {
   return {
     type: 'iteration_status',
@@ -257,19 +215,6 @@ export function iterationStatus(status: string): SseEvent {
   };
 }
 
-/**
- * Раздаёт SSE-события порциями по переподключениям EventSource. Браузер
- * переподключается примерно раз в 3с, поэтому каждая порция = следующая
- * «волна» событий. Сверх порций отдаётся пустое тело.
- *
- * `batches` — либо готовые порции, либо фабрика `(call, issueId) => SseEvent[]`
- * (issueId берётся из URL потока) — нужна issue-уровневым сессиям, чей
- * `stepRunId` содержит реальный id задачи (`{issueId}/devops`).
- *
- * `onCall(n)` вызывается перед отдачей порции — удобно переключать
- * состояние моков (например, статус GET /issues/:id) перед терминальным
- * событием.
- */
 export async function mockStreamBatches(
   page: Page,
   pattern: string | RegExp,

@@ -14,49 +14,25 @@ type RetryEvent = Extract<
   { type: 'retry_start' | 'retry_end' }
 >;
 
-/** Статус tool-карточки: ждёт запуска / выполняется / есть результат. */
 type ToolStatus = 'running' | 'done' | 'waiting';
 
 interface SessionViewProps {
   events: SessionEvent[];
-  /** Статистика pi-сессии шага (`get_session_stats`) или null. */
   stats?: SessionStats | null;
-  /** Текст пустого состояния. */
   emptyMessage?: string;
-  /** Идёт ли работа шага сейчас (живой «работает…» индикатор). */
   running?: boolean;
-  /** Начало шага (`created_at`) — для счётчика прошедшего времени. */
   startedAt?: string | null;
-  /**
-   * Рендерить ли встроенную строку статистики. В модалке выключено — там
-   * футер закреплён отдельно, вне скролл-области.
-   */
   showFooter?: boolean;
-  /**
-   * Скрыть info-шапку (session_info/thinking_level/queue/statuses/widgets/working).
-   * Для модалки: info рендерится отдельно в футере.
-   */
   hideInfo?: boolean;
-  /**
-   * Показать только info (шапку + виджеты + работающий индикатор + футер
-   * статистики) без списка событий. Для закреплённой панели в футере модалки.
-   * Игнорирует emptyMessage.
-   */
   infoOnly?: boolean;
-  /**
-   * Позволяет «вернуть» текст из очереди steer/follow-up обратно в композер
-   * (append, не перезапись черновика). Без коллбэка кнопки ↩ не рендерятся.
-   */
   onRecallQueued?: (text: string) => void;
 }
 
-/** Виджет расширения: строки над/под логом (placement). */
 interface SessionWidget {
   key: string;
   lines: string[];
 }
 
-/** Служебная «обвязка» сессии: шапка, очередь, статусы, виджеты, заголовок. */
 interface SessionInfo {
   sessionName: string | null;
   thinkingLevel: string | null;
@@ -72,29 +48,13 @@ interface AnalyzedEvents {
   visible: SessionEvent[];
   partialByCallId: Map<string, string>;
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>;
-  /** Ответы пользователя по id вопроса (`question_answered`) — для закрепления
-   * выбранной опции в блоке вопроса. */
   answersByQuestionId: Map<string, string>;
   bashText: string | null;
-  /** Последний `partialText` живого `thinking_update` (финального блока ещё нет). */
   liveThinking: string | null;
-  /** Last `partialText` of a live `text_update` (no final `text` yet). */
   liveText: string | null;
   info: SessionInfo;
 }
 
-/**
- * Чат-рендер структурированных событий прогона шага:
- * `text` → markdown ассистента, `thinking` → сворачиваемый блок размышления,
- * `tool_use` → сворачиваемые args (с живым `tool_update`-дополнением),
- * `tool_result` → сворачиваемый результат (красный акцент при ошибке).
- *
- * Служебные события прозрачности (`usage`, `stats`, `queue`, `thinking_level`,
- * `session_info`, `status`, `widget`, `title`, `tool_update`, `bash`,
- * `editor_text`, `question_answered`) не рисуются «голыми» строками: они
- * собираются в отдельную обвязку (шапка/очередь/статусы/виджеты/футер) или
- * баннеры, а ответы на вопросы — в `Map<questionId, answer>`.
- */
 export default function SessionView({
   events,
   stats,
@@ -128,8 +88,6 @@ export default function SessionView({
     liveText !== null,
   );
   const elapsedMs = running ? workingElapsedMs(now, startedAt) : null;
-  // Live stream blocks: no final `text`/`thinking` yet — render the accumulated
-  // partial and keep it "streaming".
   const liveBlocks = (
     <>
       {running && liveText !== null && (
@@ -176,7 +134,6 @@ export default function SessionView({
     );
   }
 
-  // infoOnly: только обвязка без списка событий.
   if (infoOnly) {
     return (
       <div className="session-view">
@@ -200,8 +157,6 @@ export default function SessionView({
         </>
       )}
       {visible.map((event, index) => (
-        // События сессии — упорядоченный лог без стабильных id; индекс здесь
-        // допустим, список только дополняется в конец.
         <SessionEventItem
           key={index}
           event={event}
@@ -225,11 +180,6 @@ export default function SessionView({
   );
 }
 
-/**
- * Раскладывает поток событий на видимый список и служебную обвязку.
- * `tool_update` не создаёт карточку: его `partialText` мёржится в
- * соответствующий tool-блок по `toolCallId`.
- */
 export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
   const visible: SessionEvent[] = [];
   const partialByCallId = new Map<string, string>();
@@ -255,17 +205,14 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
     switch (event.type) {
       case 'usage':
       case 'stats':
-        // Живут только в футере статистики.
         break;
       case 'question_answered':
-        // Ответ на вопрос: закрепляем в блоке вопроса, отдельной строки нет.
         answersByQuestionId.set(event.questionId, event.answer);
         break;
       case 'tool_update':
         partialByCallId.set(event.toolCallId, event.partialText);
         break;
       case 'tool_result':
-        // Статус tool-карточки (running → done + длительность).
         resultByCallId.set(event.toolCallId, {
           isError: event.isError,
           durationMs: event.durationMs,
@@ -288,7 +235,6 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
         };
         break;
       case 'status':
-        // null снимает статус по ключу.
         if (event.text === null) {
           statuses.delete(event.key);
         } else {
@@ -298,7 +244,6 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
       case 'widget': {
         const target =
           event.placement === 'aboveEditor' ? widgetsAbove : widgetsBelow;
-        // null снимает виджет по ключу.
         if (event.lines === null) {
           target.delete(event.key);
         } else {
@@ -313,22 +258,16 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
         editorText = event.text;
         break;
       case 'thinking_update':
-        // Живой стрим размышления: запоминаем последний partialText для
-        // отдельного live-блока; в `visible` его не пушим (готового блока нет).
         liveThinking = event.partialText;
         break;
       case 'text_update':
-        // Same for prose: one growing line instead of a block per chunk.
         liveText = event.partialText;
         break;
       case 'text':
-        // The final block retires live prose, so it is not rendered twice.
         visible.push(event);
         liveText = null;
         break;
       case 'thinking':
-        // Финальный блок приходит ПОСЛЕ своих update'ов — ретирит live-partial,
-        // чтобы не было дубля.
         visible.push(event);
         liveThinking = null;
         break;
@@ -358,10 +297,6 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
   };
 }
 
-/**
- * Заголовок вкладки из `title`-события. Не трогает `document.title`, пока
- * событие не пришло; на размонтирование возвращает прежний заголовок.
- */
 function useDocumentTitle(title: string | null): void {
   useEffect(() => {
     if (title === null) return;
@@ -373,17 +308,12 @@ function useDocumentTitle(title: string | null): void {
   }, [title]);
 }
 
-/** Фаза работы для живого индикатора «работает». */
 type WorkingPhase =
   | { kind: 'tool'; toolName: string }
   | { kind: 'thinking' }
   | { kind: 'text' }
   | { kind: 'idle' };
 
-/**
- * Фаза по последнему видимому событию лога. Живой `thinking_update` (финального
- * блока ещё нет) имеет приоритет: агент прямо сейчас «думает».
- */
 function workingPhase(
   visible: SessionEvent[],
   resultByCallId: Map<string, { isError: boolean; durationMs: number | null }>,
@@ -415,7 +345,6 @@ function phaseLabel(phase: WorkingPhase): string {
   }
 }
 
-/** Прошедшее с начала шага, если известен `startedAt`. */
 function workingElapsedMs(now: number, startedAt: string | null): number | null {
   if (!startedAt) return null;
   const start = Date.parse(startedAt);
@@ -423,7 +352,6 @@ function workingElapsedMs(now: number, startedAt: string | null): number | null 
   return Math.max(0, now - start);
 }
 
-/** Длительность работы: 45с / 3м 12с / 1ч 2м. */
 function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(total / 3600);
@@ -434,7 +362,6 @@ function formatElapsed(ms: number): string {
   return `${seconds}с`;
 }
 
-/** Живой тик раз в секунду, пока идёт работа. */
 function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -446,10 +373,6 @@ function useNow(active: boolean): number {
   return now;
 }
 
-/**
- * Строка «работает…»: анимированный маркер, фаза по последнему событию и
- * прошедшее время. Стилистически повторяет live-лейбл `session-thinking-live`.
- */
 function SessionWorking({
   phase,
   elapsedMs,
@@ -497,7 +420,6 @@ function SessionEventItem({
   isLast: boolean;
   running?: boolean;
 }) {
-  // Последнее событие считается стримящимся, только если шаг ещё работает.
   const streaming = isLast && running;
   switch (event.type) {
     case 'text':
@@ -590,8 +512,6 @@ function SessionEventItem({
       );
 
     default:
-      // Служебные события (usage/stats/queue/session_info/status/widget/…)
-      // отфильтрованы в обвязку и отдельными строками не рисуются.
       return null;
   }
 }
@@ -604,8 +524,6 @@ function QuestionBlock({
   answer?: string;
 }) {
   const options = event.options ?? [];
-  // Подсвечиваем опцию только если ответ ей точно соответствует; введённый
-  // текст (не совпавший ни с одной опцией) показываем строкой без подсветки.
   const selected =
     answer !== undefined && options.includes(answer) ? answer : null;
 
@@ -673,24 +591,19 @@ function ThinkingBlock({
   const [open, setOpen] = useState(streaming);
   const bodyRef = useRef<HTMLPreElement | null>(null);
 
-  // Когда стрим продолжается — держим открытым, даже если пользователь свернул.
   useEffect(() => {
     if (streaming) setOpen(true);
   }, [streaming]);
 
-  // Во время стрима прижимаем растущий текст ко дну: блок прокручивается
-  // внутри себя, а не распирает карточку и не сдвигает строку статуса снизу.
   useEffect(() => {
     if (streaming && open && bodyRef.current) {
       bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
     }
   }, [thinking, streaming, open]);
 
-  // Свёрнутая строка-превью: во время стрима — хвост, после — первая строка.
   const preview = streaming
     ? thinking.trimEnd().slice(-80)
     : thinking.split('\n')[0].slice(0, 80);
-  // Стримящийся или длинный блок — ограничиваем по высоте и скроллим внутри.
   const bounded = streaming || thinking.length > 960;
 
   return (
@@ -838,7 +751,6 @@ function ToolResultBlock({
   );
 }
 
-/** Шапка/очередь/статусы сессии — собирается из служебных событий. */
 function SessionInfoBar({
   info,
   onRecallQueued,
@@ -1147,7 +1059,6 @@ function CollapsibleHead({
   );
 }
 
-/** Аккуратно печатает args: строку отдаёт как есть, объект — pretty-JSON. */
 function prettyJson(value: unknown): string {
   if (typeof value === 'string') return value;
   try {
@@ -1157,7 +1068,6 @@ function prettyJson(value: unknown): string {
   }
 }
 
-/** "45ms" / "1.2s" / "1m 05s" — длительность выполнения инструмента. */
 function formatDuration(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return '';
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -1168,7 +1078,6 @@ function formatDuration(ms: number | null): string {
   return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
 }
 
-/** Компактный формат токенов для баннера компакции: null → «—». */
 function formatTokens(value: number | null): string {
   if (value === null || !Number.isFinite(value) || value <= 0) return '—';
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;

@@ -24,7 +24,6 @@ interface FakeChild extends EventEmitter {
   kill: (signal?: string) => boolean;
 }
 
-/** Фейковый child process: EventEmitter + ручные stdout/stderr и запись stdin. */
 function makeFakeChild(): FakeChild {
   const writes: string[] = [];
   const child = new EventEmitter() as FakeChild;
@@ -80,7 +79,6 @@ describe('RpcPiRunner — статистика сессии', () => {
     const runner = new RpcPiRunner('resolve', 'local');
     const promise = runner.run('container-1', 'prompt');
 
-    // Промпт ушёл сразу и статистика ещё не запрошена.
     expect(commands(child)[0]).toMatchObject({ type: 'prompt', message: 'prompt' });
     expect(commands(child).some((c) => c.type === 'get_session_stats')).toBe(false);
 
@@ -97,9 +95,7 @@ describe('RpcPiRunner — статистика сессии', () => {
     const result = await promise;
     expect(result.stats).toEqual(STATS);
     expect(result.exitCode).toBe(0);
-    // Финальный ответ также попадает в collected как stats-событие.
     expect(result.events?.at(-1)).toEqual({ type: 'stats', stats: STATS });
-    // После финализации сессию мягко гасим.
     expect(commands(child).at(-1)).toEqual({ type: 'exit' });
     expect(child.kills).toContain('SIGTERM');
   });
@@ -111,7 +107,6 @@ describe('RpcPiRunner — статистика сессии', () => {
     const runner = new RpcPiRunner('resolve', 'local');
     const promise = runner.run('container-1', 'prompt');
 
-    // get_state запрошен сразу после промпта.
     expect(commands(child)).toContainEqual({ type: 'get_state' });
     emit(child, {
       type: 'response',
@@ -170,7 +165,6 @@ describe('RpcPiRunner — статистика сессии', () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(statsCount()).toBe(2);
 
-    // Финализируем, иначе промис останется висеть.
     emit(child, { type: 'agent_settled', aborted: false });
     emit(child, {
       type: 'response',
@@ -239,8 +233,6 @@ describe('RpcPiRunner — статистика сессии', () => {
     emit(child, { type: 'response', command: 'get_session_stats', success: true, data: {} });
 
     const result = await promise;
-    // thinking_delta стримится живым thinking_update; 'thinking' — авторитетный
-    // финал; 'stats' — финальный get_session_stats в конце сессии.
     expect(events).toEqual(['thinking_update', 'thinking', 'stats']);
     expect(chunks).toEqual([]);
     expect(result.stdout).toBe('');
@@ -297,7 +289,6 @@ describe('RpcPiRunner — статистика сессии', () => {
     });
     const result = await promise;
     expect(result.stats).toEqual(STATS);
-    // Ответ уходит тем же путём, что и `question`: live + в collected → персист.
     expect(result.events).toContainEqual({
       type: 'question_answered',
       questionId: 'ui-1',
@@ -341,13 +332,10 @@ describe('RpcPiRunner — статистика сессии', () => {
       iterationId: 'iter-1',
     });
 
-    // Сессия не отвечает на abort-команду (заблокирована на dialog) —
-    // раннер обязан жёстко погасить процесс.
     expect(registry.abort('run-1')).toBe(true);
     expect(commands(child)).toContainEqual({ type: 'abort' });
     expect(child.kills).toContain('SIGKILL');
 
-    // Процесс убит сигналом: close переводит раннер в aborted-результат.
     child.emit('close', null);
     emit(child, {
       type: 'response',
@@ -363,7 +351,6 @@ describe('RpcPiRunner — статистика сессии', () => {
   });
 });
 
-/** Завершает живую сессию: agent_settled + финальный get_session_stats. */
 const settle = (child: FakeChild): void => {
   emit(child, { type: 'agent_settled', aborted: false });
   emit(child, {
@@ -533,8 +520,6 @@ describe('RpcPiRunner — комната агента per-task (PI_AGENT_ROOM)',
     const runner = new RpcPiRunner('resolve', 'local');
     const promise = runner.run('container-1', 'prompt', { cwd: '/tmp' });
 
-    // Env is always passed now — it is what strips the launcher's session
-    // identity (otherwise the step agent resumes the caller's session).
     const options = spawnMock.mock.calls[0][2] as { env?: NodeJS.ProcessEnv };
     expect(options.env).toBeDefined();
     expect(options.env?.PI_SESSION_FILE).toBeUndefined();

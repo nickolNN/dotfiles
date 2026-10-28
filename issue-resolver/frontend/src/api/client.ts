@@ -34,7 +34,6 @@ async function readErrorMessage(response: Response): Promise<string> {
       return data.error;
     }
   } catch {
-    // тело ответа не JSON или пустое — падаем на общий текст ниже
   }
   return `Запрос завершился со статусом ${response.status}`;
 }
@@ -59,13 +58,6 @@ export async function getModels(): Promise<ModelDescriptor[]> {
   return (await response.json()) as ModelDescriptor[];
 }
 
-/**
- * Живая валидация URL репозиториев через API хостинг-платформы
- * (`POST /repos/validate`). Бэкенд отвечает `{ results }`.
- *
- * Возвращает по элементу на каждый URL. Если тело ответа неожиданной формы —
- * `[]`, чтобы вызывающий компонент не падал на `.map`/`.find`.
- */
 export async function validateRepos(
   urls: string[],
 ): Promise<RepoValidationResult[]> {
@@ -85,10 +77,6 @@ export async function validateRepos(
     : [];
 }
 
-/**
- * Живая валидация URL Jira-задачи через Jira API
- * (`POST /issues/validate-jira`). Бэкенд отвечает `{ url, valid, key?, issue?, error? }`.
- */
 export async function validateJiraUrl(
   url: string,
 ): Promise<JiraValidationResult> {
@@ -105,11 +93,6 @@ export async function validateJiraUrl(
   return (await response.json()) as JiraValidationResult;
 }
 
-/**
- * Ответ POST/PUT `/repositories`: 2xx — сама сущность; 422 — репозиторий
- * всё равно сохранён (создан/обновлён), но соединение не ok, поэтому
- * возвращаем его из поля `repository`, а не роняем форму.
- */
 type RepoWriteResponse =
   | SavedRepo
   | { error?: string; repository?: SavedRepo };
@@ -141,11 +124,6 @@ export async function getRepositories(): Promise<SavedRepo[]> {
   return (await response.json()) as SavedRepo[];
 }
 
-/**
- * Создаёт сохранённый репозиторий: бэкенд валидирует URL и сразу сохраняет
- * метаданные. Недоступный репозиторий → 422 (`{ error, repository }`): он
- * всё равно сохранён со статусом `error` и возвращается.
- */
 export async function createRepository(url: string): Promise<SavedRepo> {
   const request: CreateRepoRequest = { url };
   const response = await fetch(`${API_BASE}/repositories`, {
@@ -157,7 +135,6 @@ export async function createRepository(url: string): Promise<SavedRepo> {
   return readRepositoryResponse(response);
 }
 
-/** Меняет URL сохранённого репозитория и перевалидирует его. */
 export async function updateRepository(
   id: string,
   url: string,
@@ -172,7 +149,6 @@ export async function updateRepository(
   return readRepositoryResponse(response);
 }
 
-/** Удаляет сохранённый репозиторий. */
 export async function deleteRepository(id: string): Promise<void> {
   const response = await fetch(`${API_BASE}/repositories/${id}`, {
     method: 'DELETE',
@@ -183,7 +159,6 @@ export async function deleteRepository(id: string): Promise<void> {
   }
 }
 
-/** Перепроверяет соединение с сохранённым репозиторием (live). */
 export async function validateRepository(id: string): Promise<SavedRepo> {
   const response = await fetch(`${API_BASE}/repositories/${id}/validate`, {
     method: 'POST',
@@ -196,7 +171,6 @@ export async function validateRepository(id: string): Promise<SavedRepo> {
   return (await response.json()) as SavedRepo;
 }
 
-/** Живой список веток сохранённого репозитория. */
 export async function getRepositoryBranches(id: string): Promise<string[]> {
   const response = await fetch(`${API_BASE}/repositories/${id}/branches`);
 
@@ -222,7 +196,6 @@ export async function createIssue(request: CreateIssueRequest): Promise<Issue> {
   return (await response.json()) as Issue;
 }
 
-/** Запуск сохранённого черновика: создаёт первую итерацию и запускает конвейер. */
 export async function startIssue(issueId: string): Promise<{ ok: boolean; iterationId: string }> {
   const response = await fetch(`${API_BASE}/issues/${issueId}/start`, {
     method: 'POST',
@@ -235,7 +208,6 @@ export async function startIssue(issueId: string): Promise<{ ok: boolean; iterat
   return (await response.json()) as { ok: boolean; iterationId: string };
 }
 
-/** Редактирование черновика задачи (PUT /issues/:id). */
 export async function updateIssue(
   id: string,
   request: Partial<Pick<Issue, 'title' | 'description' | 'desired_result' | 'jira_issue_url' | 'pipeline_steps' | 'step_models' | 'thinking_level' | 'step_thinking_levels' | 'tag_id' | 'devops_model' | 'devops_thinking_level'> & { worker_count?: number | null; repositories?: Array<{ repo_id?: string; repository_url?: string; base_branch?: string; create_mr?: boolean; bootstrap_enabled?: boolean }> }>,
@@ -285,7 +257,6 @@ export async function getStepRuns(
   return (await response.json()) as StepRunWithEvents[];
 }
 
-/** Минимальная проверка формы `RoomAgent` (защита от мусора в ответе). */
 function isRoomAgent(value: unknown): value is RoomAgent {
   if (!value || typeof value !== 'object') return false;
   const agent = value as Partial<RoomAgent>;
@@ -300,12 +271,6 @@ function isRoomAgent(value: unknown): value is RoomAgent {
   );
 }
 
-/**
- * Живые агенты комнаты итерации (`GET /iterations/:id/agents`).
- * Best-effort: пока бэкенд-роут ещё не дописан (или сеть/не-2xx/битый JSON)
- * деградируем в `[]` — карточка resolve в room-режиме не должна падать,
- * а `RoomAgentTabs` покажет пустое состояние.
- */
 export async function getRoomAgents(
   iterationId: string,
 ): Promise<RoomAgent[]> {
@@ -322,11 +287,6 @@ export async function getRoomAgents(
   }
 }
 
-/**
- * id уже отвеченных вопросов итерации (персистятся на бэкенде).
- * Best-effort: любой сбой парсинга/сети деградирует в пустой список, чтобы
- * тесты и экран не падали из-за отсутствия нового эндпоинта.
- */
 export async function getQuestionAnswers(
   iterationId: string,
 ): Promise<string[]> {
@@ -350,12 +310,6 @@ export async function getQuestionAnswers(
   }
 }
 
-/**
- * Отправляет промпт в живую pi-сессию итерации через управляющий роут.
- * `mode` определяет доставку: `steer` прерывает текущий ход, `followUp`
- * встаёт в очередь; без `mode` — новая инструкция. Best-effort: сеть/
- * не-2xx/битый JSON деградируют в `{ok:false}` без исключения.
- */
 export async function promptIteration(
   iterationId: string,
   message: string,
@@ -371,7 +325,6 @@ export async function promptIteration(
       },
     );
     if (!response.ok) {
-      // Серверный отказ (400/409) — показываем его текст как есть, не выдумывая.
       return {
         ok: false,
         disposition: 'started',
@@ -401,12 +354,6 @@ export async function promptIteration(
   }
 }
 
-/**
- * Снимок управления живой pi-сессией (`state`/`models`/`thinkingLevels`/
- * `commands`). `null` при не-2xx (в т.ч. 409 «no active step session»),
- * сетевом сбое или неожиданной форме ответа — вызывающий просто прячет
- * панель управления.
- */
 export async function getIterationControl(
   iterationId: string,
 ): Promise<SessionControlSnapshot | null> {
@@ -423,10 +370,6 @@ export async function getIterationControl(
   }
 }
 
-/**
- * Управляющая команда живой pi-сессии (модель, thinking-level, compact,
- * clear_queue и т.п.). Best-effort: не-2xx/сеть → `{ok:false, error}`.
- */
 export async function sendIterationCommand(
   iterationId: string,
   command: SessionCommand,
@@ -437,7 +380,6 @@ export async function sendIterationCommand(
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Бэкенд ждёт `{ command: SessionCommand }` (роут валидирует поле).
         body: JSON.stringify({ command }),
       },
     );
@@ -463,7 +405,6 @@ export async function sendIterationCommand(
   }
 }
 
-/** Минимальная проверка формы снимка управления (защита от мусора). */
 function isControlSnapshot(value: unknown): value is SessionControlSnapshot {
   if (!value || typeof value !== 'object') return false;
   const snapshot = value as Partial<SessionControlSnapshot>;
@@ -495,7 +436,6 @@ export async function sendIterationMessage(
   return (await response.json()) as { ok: boolean };
 }
 
-/** Ответ пользователя на интерактивный вопрос расширения pi. */
 export interface UiResponsePayload {
   id: string;
   value?: string;
@@ -503,10 +443,6 @@ export interface UiResponsePayload {
   cancelled?: boolean;
 }
 
-/**
- * Отправляет ответ на интерактивный `question`-запрос живой pi-сессии
- * (extension_ui_request → extension_ui_response).
- */
 export async function sendUiResponse(
   iterationId: string,
   payload: UiResponsePayload,
@@ -571,7 +507,6 @@ export async function repeatIteration(
   return (await response.json()) as Iteration;
 }
 
-/** Перевести черновик в pending (в очередь на выполнение). */
 export async function queueIteration(
   iterationId: string,
 ): Promise<Iteration> {
@@ -587,7 +522,6 @@ export async function queueIteration(
   return (await response.json()) as Iteration;
 }
 
-/** Обновить черновик (context). */
 export async function updateIteration(
   iterationId: string,
   request: { context: string },
@@ -605,7 +539,6 @@ export async function updateIteration(
   return (await response.json()) as Iteration;
 }
 
-/** Комментарий ревью из MR/PR. */
 export interface ReviewCommentEntry {
   repo: string;
   file: string | null;
@@ -614,7 +547,6 @@ export interface ReviewCommentEntry {
   author: string;
 }
 
-/** Получить комментарии ревью из MR/PR. Итерация НЕ создаётся — \n    фронтенд сам решит. */
 export async function fetchReviewComments(
   iterationId: string,
 ): Promise<{ comments: ReviewCommentEntry[]; errors?: string[] }> {
@@ -638,9 +570,6 @@ export async function deleteIssue(id: string): Promise<void> {
     method: 'DELETE',
   });
 
-  // 202 — удаление принято и идёт асинхронно (фазы приходят по SSE до
-  // `issue_deleted`); 204 — задача удалена синхронно. Оба статуса — успех,
-  // поэтому не роняем вызов на «не-JSON» теле ответа.
   if (response.status === 202 || response.status === 204) {
     return;
   }
@@ -649,15 +578,10 @@ export async function deleteIssue(id: string): Promise<void> {
   }
 }
 
-/**
- * Порт dev-сервера задачи (выделяется backend при создании). `null`, если
- * порт ещё/уже не выделен.
- */
 export function devServerPortOf(issue: Issue): number | null {
   return issue.dev_server_port ?? null;
 }
 
-/** Остановить dev-серверы задачи. Backend идемпотентно гасит процессы. */
 export async function stopDevServers(
   issueId: string,
 ): Promise<{ ok: boolean }> {
@@ -673,11 +597,6 @@ export async function stopDevServers(
   return (await response.json()) as { ok: boolean };
 }
 
-/**
- * Живая стата контейнера задачи: CPU/память/PIDs. При отсутствии контейнера
- * (local mode) бэкенд отвечает `{ containerName, error: 'container_not_found' }`
- * — полей с метриками тогда нет.
- */
 export interface ContainerStats {
   containerName: string;
   cpuPercent?: number;
@@ -687,11 +606,6 @@ export interface ContainerStats {
   error?: string;
 }
 
-/**
- * Стата контейнера задачи (`GET /issues/:id/container-stats`). Best-effort:
- * сеть/не-2xx/битый JSON деградируют в `null`, чтобы карточка не падала и
- * строка статистики просто не рендерилась.
- */
 export async function getContainerStats(
   issueId: string,
 ): Promise<ContainerStats | null> {
@@ -706,19 +620,14 @@ export async function getContainerStats(
   }
 }
 
-// ── Загрузка файлов (multipart) ─────────────────────────────────────────
-
-/** URL содержимого файла (inline/download, отдаётся бэкендом). */
 export function fileContentUrl(fileId: string): string {
   return `${API_BASE}/files/${fileId}/content`;
 }
 
-/** URL списка файлов, порождённых агентом в рабочей папке завершённой итерации. */
 export function resultFilesUrl(issueId: string): string {
   return `${API_BASE}/issues/${issueId}/result/files`;
 }
 
-/** URL содержимого порождённого файла (attachment, отдаётся бэкендом). */
 export function resultFileContentUrl(
   issueId: string,
   relPath: string,
@@ -726,7 +635,6 @@ export function resultFileContentUrl(
   return `${API_BASE}/issues/${issueId}/result/files/content?path=${encodeURIComponent(relPath)}`;
 }
 
-/** URL содержимого порождённого файла для предпросмотра (inline). */
 export function resultFilePreviewUrl(
   issueId: string,
   relPath: string,
@@ -734,12 +642,10 @@ export function resultFilePreviewUrl(
   return `${resultFileContentUrl(issueId, relPath)}&inline=1`;
 }
 
-/** URL архива (tar.gz) со всеми порождёнными файлами и результатом. */
 export function resultFilesArchiveUrl(issueId: string): string {
   return `${API_BASE}/issues/${issueId}/result/files/archive`;
 }
 
-/** Список порождённых файлов последней completed-итерации. */
 export async function getResultFiles(
   issueId: string,
 ): Promise<WorkspaceFile[]> {
@@ -750,7 +656,6 @@ export async function getResultFiles(
   return (await response.json()) as WorkspaceFile[];
 }
 
-/** MR из `result.json` — артефакта pr-шага (`{ merge_requests: [...] }`). */
 export interface ResultMergeRequest {
   repository_url: string;
   url: string;
@@ -758,10 +663,6 @@ export interface ResultMergeRequest {
   message?: string;
 }
 
-/**
- * Разбирает `result.json` в список MR. Битый JSON / иная форма → [] (шапка
- * задачи не должна падать из-за артефакта pr-шага). Экспортировано для тестов.
- */
 export function parseResultMergeRequests(
   text: string,
 ): ResultMergeRequest[] {
@@ -795,11 +696,6 @@ export function parseResultMergeRequests(
   });
 }
 
-/**
- * MR-ссылки из `result.json` рабочей папки задачи. Единственный источник,
- * переживающий перезагрузку страницы (SSE-событие `stream: 'mr'` не
- * персистится в step_outputs). Best-effort: нет файла/не-2xx/битый JSON → [].
- */
 export async function getResultMergeRequests(
   issueId: string,
 ): Promise<ResultMergeRequest[]> {
@@ -813,11 +709,6 @@ export async function getResultMergeRequests(
   }
 }
 
-/**
- * `FormData` для multipart-создания: поле `payload` — JSON-строка тела,
- * поле `files` повторяется на каждый файл. `Content-Type` не задаём —
- * браузер сам добавит boundary. Экспортировано для тестов.
- */
 export function buildUploadFormData(
   request: CreateIssueRequest | CreateIterationRequest,
   files: File[],
@@ -847,7 +738,6 @@ async function postMultipart<T>(
   return (await response.json()) as T;
 }
 
-/** Создать задачу с вложениями (multipart). */
 export function createIssueWithFiles(
   request: CreateIssueRequest,
   files: File[],
@@ -855,7 +745,6 @@ export function createIssueWithFiles(
   return postMultipart<Issue>(`${API_BASE}/issues`, request, files);
 }
 
-/** Создать итерацию с вложениями (multipart). */
 export function createIterationWithFiles(
   issueId: string,
   request: CreateIterationRequest,
@@ -878,10 +767,6 @@ function isIssueFile(value: unknown): value is IssueFile {
   );
 }
 
-/**
- * Файлы задачи. Best-effort: сеть/не-2xx/неожиданная форма → `[]`, чтобы
- * карточка не падала из-за нового эндпоинта.
- */
 export async function getIssueFiles(issueId: string): Promise<IssueFile[]> {
   try {
     const response = await fetch(`${API_BASE}/issues/${issueId}/files`);
@@ -894,7 +779,6 @@ export async function getIssueFiles(issueId: string): Promise<IssueFile[]> {
   }
 }
 
-/** Удалить вложение по id (204). */
 export async function deleteIssueFile(fileId: string): Promise<void> {
   const response = await fetch(`${API_BASE}/files/${fileId}`, {
     method: 'DELETE',
@@ -904,8 +788,6 @@ export async function deleteIssueFile(fileId: string): Promise<void> {
     throw new Error(await readErrorMessage(response));
   }
 }
-
-// ── Теги ────────────────────────────────────────────────────────────────
 
 export async function getTags(): Promise<Tag[]> {
   const response = await fetch(`${API_BASE}/tags`);
@@ -994,12 +876,10 @@ export interface CleanupResult {
   orphaned_workspaces: number;
   killed_processes: number;
   deleted_dirs: number;
-  /** Брошенные комнаты задач (`issue-*` без живых агентов). */
   deleted_rooms: number;
   errors: string[];
 }
 
-/** Принудительный запуск report-агента для задачи. */
 export async function runReportAgent(issueId: string, model?: string, thinkingLevel?: string): Promise<{ ok: boolean; reportRunId: string }> {
   const params = new URLSearchParams();
   if (model) params.set('model', model);
@@ -1013,53 +893,26 @@ export async function runReportAgent(issueId: string, model?: string, thinkingLe
   return (await response.json()) as { ok: boolean; reportRunId: string };
 }
 
-/** Артефакт отчёта на диске: наличие, размер и mtime (ISO-Z без мс). */
 export interface ReportArtifactInfo {
   present: boolean;
   bytes: number;
   mtime: string | null;
 }
 
-/**
- * Статус отчёта задачи. `status` выводится из последнего прогона (строка
- * `step_runs` вне итерации), а не из наличия файла: прогон, который ничего не
- * создал, — `failed`, даже если exit code был 0.
- */
 export interface ReportStatus {
   status: 'idle' | 'running' | 'success' | 'failed';
-  /** Идентификатор прогона для `GET /issues/:id/report/run`. */
   runId?: string;
-  /** Статус строки прогона в БД (шире, чем `status`: pending/running/...). */
   runStatus?: string;
-  /** When the run started / was last updated (ISO). */
   startedAt?: string;
   finishedAt?: string;
-  /**
-   * Last activity of the run (heartbeat). Present while `running` too: a run
-   * whose heartbeat stopped is dead, not busy.
-   */
   updatedAt?: string;
-  /** Причина падения или пометка "только markdown". */
   feedback?: string;
-  /** Что реально легло на диск: обе половины отчёта. */
   artifacts?: { md: ReportArtifactInfo; html: ReportArtifactInfo };
-  /** mtime `report.md` — когда отчёт последний раз перезаписан. */
   lastRunAt?: string;
-  /**
-   * Наблюдённая модель прогона (что реально сообщила сессия), а НЕ запрошенная.
-   * Отсутствует после рестарта сервера: значение живёт в памяти процесса и из
-   * артефакта не выводится. Во время прогона его тоже нет.
-   */
   observedModel?: string;
-  /**
-   * Механические предупреждения по артефактам: `model id leaked into <file>`,
-   * `model-like id leaked into <file>`, `anchored on previous report: <path>`.
-   * Слой паттернов считается на чтении, поэтому переживает рестарт.
-   */
   warnings?: string[];
 }
 
-/** Готовность отчёта задачи (`GET /issues/:id/report/status`). */
 export async function getReportStatus(issueId: string): Promise<ReportStatus> {
   const response = await fetch(
     `${API_BASE}/issues/${encodeURIComponent(issueId)}/report/status`,
@@ -1070,10 +923,6 @@ export async function getReportStatus(issueId: string): Promise<ReportStatus> {
   return (await response.json()) as ReportStatus;
 }
 
-/**
- * Последний прогон отчёта с логом сессии (`GET /issues/:id/report/run`).
- * Живёт вне итерации, поэтому у шагового маршрута итерации его нет.
- */
 export async function getReportRun(issueId: string): Promise<StepRunWithLog> {
   const response = await fetch(
     `${API_BASE}/issues/${encodeURIComponent(issueId)}/report/run`,

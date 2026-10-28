@@ -8,16 +8,8 @@ import type {
 } from '@issue-resolver/shared';
 import type { ContainerController, DockerStatsJson } from './controller';
 
-/** Интервал опроса cgroup — совпадает с интервалом docker stats. */
 const CGROUP_POLL_INTERVAL_MS = 1000;
 
-/**
- * Локальный «контроллер контейнеров» без Docker: рабочая папка задачи — это
- * host-директория, а pi запускается прямо в ней (transport 'local').
- *
- * Позволяет прогонять конвейер там, где нет docker CLI/socket (dev-контейнер),
- * сохраняя тот же порт `ContainerController`.
- */
 export class LocalContainerController implements ContainerController {
   private readonly workspaces = new Map<string, string>();
 
@@ -39,11 +31,6 @@ export class LocalContainerController implements ContainerController {
     }
   }
 
-  /**
-   * One-shot метрики в локальном режиме остаются нулями (`cpuPercent: null`),
-   * чтобы роут container-stats работал без падения. Живые метрики этого
-   * контейнера отдаёт `statsStream` через cgroup.
-   */
   async stats(containerName: string): Promise<ContainerStats> {
     return {
       containerName,
@@ -54,11 +41,6 @@ export class LocalContainerController implements ContainerController {
     };
   }
 
-  /**
-   * Поток реальных метрик этого контейнера из Linux cgroup (v2, fallback v1).
-   * Отдаёт NDJSON в формате docker-stats — его разбирает
-   * `toContainerStatsPayload` в роуте `container-stats-stream`.
-   */
   async statsStream(_containerName: string): Promise<NodeJS.ReadableStream> {
     const stream = new PassThrough();
     let prevCpuUsage: number | null = null;
@@ -76,8 +58,6 @@ export class LocalContainerController implements ContainerController {
       const frame: DockerStatsJson = {
         cpu_stats: {
           cpu_usage: { total_usage: cgroup.cpuUsage },
-          // Дельты в тех же единицах (мкс), что и cpu. Множитель numCpus
-          // компенсируется `online_cpus` внутри toContainerStatsPayload.
           system_cpu_usage: systemUsage,
           online_cpus: cgroup.numCpus,
         },
@@ -105,8 +85,6 @@ export class LocalContainerController implements ContainerController {
       }
     };
 
-    // Первый кадр отдаём сразу (память/pids), CPU появится со второго —
-    // дельту для первого кадра считать не от чего.
     try {
       emit();
     } catch (error) {
@@ -135,7 +113,6 @@ export class LocalContainerController implements ContainerController {
 }
 
 interface CgroupStats {
-  /** Накопленное CPU-время cgroup, микросекунды. */
   cpuUsage: number;
   memoryUsage: number;
   memoryLimit: number;
@@ -143,7 +120,6 @@ interface CgroupStats {
   pids: number;
 }
 
-/** Число CPU из cpuset-списка вида `0-3,8` (диапазоны и одиночные id). */
 function countCpus(cpuset: string): number {
   let count = 0;
   for (const part of cpuset.split(',')) {
@@ -164,7 +140,6 @@ function readInt(path: string): number {
   return Number.isFinite(value) ? value : 0;
 }
 
-/** Host memory в байтах — лимит контейнера при cgroup v2 `memory.max=max`. */
 function readHostMemoryLimit(): number {
   try {
     const match = readFileSync('/proc/meminfo', 'utf8').match(
@@ -176,10 +151,6 @@ function readHostMemoryLimit(): number {
   }
 }
 
-/**
- * Читает метрики текущего cgroup: v2 (`/sys/fs/cgroup`, unified) с fallback на
- * v1 (legacy hierarchy). CPU всегда нормализуется в микросекунды.
- */
 function readCgroupStats(): CgroupStats {
   if (existsSync('/sys/fs/cgroup/cpu.stat')) {
     const cpuRaw = readFileSync('/sys/fs/cgroup/cpu.stat', 'utf8');
@@ -205,7 +176,6 @@ function readCgroupStats(): CgroupStats {
     };
   }
 
-  // cgroup v1 (legacy hierarchy).
   return {
     cpuUsage: Math.round(readInt('/sys/fs/cgroup/cpu/cpuacct.usage') / 1000),
     memoryUsage: readInt('/sys/fs/cgroup/memory/memory.usage_in_bytes'),

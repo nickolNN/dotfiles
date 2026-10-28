@@ -38,7 +38,6 @@ describe('buildStepPrompt', () => {
     expect(text.toLowerCase()).toContain('commit');
     expect(text.toLowerCase()).toContain('push');
     expect(text).toContain('/workspaces/issue-1/app');
-    // Самопроверка разрешена, публикация — нет (резолв больше не запрещает build/test/typecheck).
     expect(text).toContain('build/tests/typecheck');
     expect(text).not.toContain(
       'running build, test, commit, or push is forbidden',
@@ -64,8 +63,6 @@ describe('buildStepPrompt', () => {
       expect(text).toContain('- /workspaces/issue-1/lib — create MR: no');
     }
 
-    // Без целей публикации строка репозитория остаётся прежней (фраза
-    // «create MR: yes/no» живёт в брифе refine, но разметки строк нет).
     expect(prompt('refine')).toContain('- /workspaces/issue-1/app');
     expect(prompt('refine')).not.toContain('— create MR:');
   });
@@ -134,7 +131,6 @@ describe('buildStepPrompt', () => {
     expect(text).not.toContain('report.html');
     expect(text).not.toContain('self-contained');
     expect(text).not.toContain('data URIs');
-    // .issue-step-result.json всё ещё обязателен для каждого шага.
     expect(text).toContain('.issue-step-result.json');
   });
 
@@ -146,7 +142,6 @@ describe('buildStepPrompt', () => {
       expect(text).not.toContain('report.html');
       expect(text).not.toContain('self-contained');
       expect(text).not.toContain('data URIs');
-      // resolve пишет .issue-step-result.json и narrative .resolve.md для report-агента.
       expect(text).toContain('.issue-step-result.json');
       expect(text).toContain('.resolve.md');
     }
@@ -360,7 +355,6 @@ describe('refine execution & room prompts', () => {
     expect(text).not.toContain('.issue-worker-result-0.json');
     expect(text).toContain('frontend part');
     expect(text).toContain('Sub-task 1 of 2');
-    // Самопроверка разрешена, публикация — нет.
     expect(text).toContain('build/tests/typecheck');
     expect(text).toContain('Commit/push are FORBIDDEN');
   });
@@ -431,7 +425,6 @@ describe('staged prompts', () => {
     expect(text).toContain('Sub-task 2 of 2: backend');
     expect(text).toContain('.issue-stage-1-worker-2.json');
     expect(text).not.toContain('.issue-step-result.json');
-    // Самопроверка разрешена, публикация — нет.
     expect(text).toContain('build/tests/typecheck');
     expect(text).toContain('Commit/push are FORBIDDEN');
   });
@@ -463,10 +456,8 @@ describe('staged prompts', () => {
     expect(text).toContain('memory_search');
     expect(text).toContain('#decision');
     expect(text).toContain('[[stage-1]]');
-    // Роль координатора/интегратора исполнителей этапу без исполнителей не достаётся.
     expect(text).not.toContain('Role: coordinator');
     expect(text).not.toContain("Integrate the workers' changes");
-    // Финальный отчёт шага — не его: он пишет только исход этапа.
     expect(text).toContain('This is NOT the step result');
   });
 
@@ -483,7 +474,6 @@ describe('staged prompts', () => {
     expect(text).toContain('FINAL');
     expect(text).toContain('stage 1 done');
     expect(text).toContain('stage 2 done');
-    // report.md/report.html генерирует ТОЛЬКО report-шаг, не resolve.
     expect(text).not.toContain('report.md');
     expect(text).not.toContain('report.html');
     expect(text).toContain('.issue-step-result.json');
@@ -673,10 +663,8 @@ describe('buildStepPrompt — report агент (E18–E21)', () => {
   it('report: 0 итераций → пометка «нет narratives» + фолбек на engine summaries', () => {
     const text = prompt('report', { iterationCount: 0 });
 
-    // buildStepPrompt вызывает iterationNarrativesBlock(0): папок нет.
     expect(text.toLowerCase()).toContain('no iteration');
     expect(text).not.toContain('iterations/1/');
-    // Fallback: механические engine-сводки report-<n>.md всё равно описаны.
     expect(text).toContain('report-');
     expect(text).toContain('Engine summaries');
   });
@@ -705,100 +693,73 @@ describe('buildStepPrompt — report агент (E18–E21)', () => {
     }
   });
 
-  it('report: ответ раньше выполнения, HTML-выполнение свёрнуто в <details>', () => {
+  it('report: страницу собирает движок, агент пишет md + json', () => {
     const text = prompt('report', { iterationCount: 1 });
 
-    // Каркас: `## Answer` — первая обязательная секция, метрика — после
-    // заголовка `## Execution details` в конце файла.
     const answerAt = text.indexOf('## Answer');
     const executionAt = text.indexOf('## Execution details');
     expect(answerAt).toBeGreaterThan(-1);
-    expect(executionAt).toBeGreaterThan(-1);
-    expect(answerAt).toBeLessThan(executionAt);
+    expect(executionAt).toBeGreaterThan(answerAt);
 
-    // HTML: выполнение — нативный свёрнутый <details>; JS — только
-    // инлайновый vanilla как progressive enhancement.
-    expect(text).toContain('<details>');
-    expect(text).toContain('<summary>');
-    expect(text).toContain('progressive enhancement');
-    expect(text).toMatch(/allow-scripts/);
-    // Внешние скрипты, CSS-import, CDN и любая сеть запрещены
-    // (self-contained / sandbox без allow-same-origin).
-    expect(text).not.toMatch(/<script[^>]+\bsrc=/i);
-    // «Форма инструкции», а не голый токен: промпт ВПРАВЕ называть
-    // `@import` / `cdn.jsdelivr.net` в списке запретов — ловим реальную
-    // загрузку, а не упоминание (иначе guard диктует текст бана).
-    expect(text).not.toMatch(/@import\s+(url\(|["']https?:)/i);
-    expect(text).not.toMatch(
-      /(src|from)\s*=\s*["']https?:\/\/(cdn\.jsdelivr|unpkg)/i,
-    );
-    // Ссылки-навигация РАЗРЕШЕНЫ (MR/Jira/док), с безопасным target.
-    expect(text).toContain('target="_blank"');
-    expect(text).toContain('rel="noopener"');
-    // Скелет form-by-goal: имена шагов и номера итераций — не заголовки
-    // Answer; Evidence placement вынесен отдельным правилом.
+    expect(text).toMatch(/never authored/i);
+    expect(text).not.toContain('### Iteration timeline');
+    expect(text).not.toContain('### Steps and outcomes');
+    expect(text).toMatch(/No retelling of the run/);
+    expect(text).toContain('Do not write HTML, CSS or base64');
+    expect(text).toContain('`report.json`');
+    expect(text).not.toContain('data-slot');
+    expect(text).not.toContain('base64 <img>');
+    expect(text).not.toContain('partial/<');
     expect(text).not.toMatch(/## Iteration \d+/);
     expect(text).not.toContain('### Plan (refine)');
     expect(text).toContain('Evidence placement');
     expect(text).toContain('ceiling');
-    // Свёрнутый блок Execution details не раскрыт по умолчанию.
-    expect(text).toMatch(/<details>/);
-    expect(text).not.toMatch(/<details[^>]*\sopen\b/i);
-    // Визуальная часть — обязательный инструмент (SVG без библиотек).
-    expect(text).toContain('Visual recipes (no libraries)');
-    expect(text).toContain('Single-file guarantee');
-    // Свёртка не теряет факты выполнения.
+    for (const kind of ['flow', 'bars', 'matrix', 'svg']) {
+      expect(text).toContain(`\`${kind}\``);
+    }
+    expect(text).toMatch(/Never draw the process/);
+    expect(text).not.toMatch(/`timeline` \|/);
     expect(text).toContain('Collapsing loses nothing');
   });
 
-  it('report: существующие артефакты пересобираются, не патчатся + финальный чек-лист', () => {
+  it('report: артефакты пересобираются с нуля, чек-лист не требует ручного html', () => {
     const text = prompt('report', { iterationCount: 1 });
 
-    // Готовая папка с прошлым отчётом не должна соблазнять агента на
-    // точечные edit-правки: оба файла пересобираются целиком.
     expect(text).toContain('Rebuild, never patch');
     expect(text).toMatch(/previous run's draft/);
     expect(text).toMatch(/again, in full, with `write`/);
-    // Generated всегда обновляется — иначе timestamp врёт.
     expect(text).toMatch(/stale timestamp is a bug/);
 
-    // Прошлый отчёт — не источник, где бы он ни лежал: ни архив
-    // (`reports/**`), ни снапшот итерации (`.iteration-results/**`).
     expect(text).toMatch(/previous report is never a source/i);
     expect(text).toMatch(/iteration-results\/\*\*\/report/);
     expect(text).toMatch(/reports\/\*\*/);
-    // …и это закреплено в финальном чек-листе, не только в прозе.
     expect(text).toMatch(/No previous report was read as a source/);
 
-    // Чек-лист в конце файла (модель теряет середину 20 КБ промпта).
     expect(text).toContain('Final self-check');
     const checklistAt = text.indexOf('## Final self-check');
     const outputAt = text.indexOf('## Output: `.issue-step-result.json`');
     expect(checklistAt).toBeGreaterThan(outputAt);
-    // Обязательные пункты самопроверки: безопасные ссылки и хотя бы одна SVG.
-    expect(text).toMatch(/grep -c 'target="_blank"'/);
-    expect(text).toMatch(/at least one inline `<svg>`/);
+    expect(text).toMatch(/Both authored files written from scratch this run/);
+    expect(text).toMatch(/Diagrams declared, never drawn/);
+    expect(text).toMatch(/Screenshots cited where they prove something/);
+    expect(text).not.toMatch(/grep -c 'target="_blank"'/);
+    expect(text).not.toMatch(/Budget respected/);
   });
 
   it('report: одна диаграмма в двух формах — ASCII md / SVG html, glyph-структура', () => {
     const text = prompt('report', { iterationCount: 1 });
 
-    // Структура ответа — glyph, обязательна для обеих форм отчёта.
     expect(text).toContain('`glyph`');
     expect(text).toContain('verdict first');
-    // Одна и та же диаграмма: текстовая в md, SVG в html.
     expect(text).toMatch(/monospace ASCII art or\s+a Markdown table/);
     expect(text).toMatch(/inline `<svg>`, never as an\s+ASCII block/);
-    // Ремесло — из craft-скиллов, но контракт артефакта сильнее.
     expect(text).toContain('`frontend-design`');
     expect(text).toContain('`theme-factory`');
     expect(text).toMatch(/no external\s+fonts/);
-    // Артефакт не подчиняется чат-скиллам краткости, включая варианты.
     expect(text).toMatch(/not governed by `caveman`/);
     expect(text).toContain('ultracave');
     expect(text).toContain('megacave');
     expect(text).toContain('ponytail');
-    // Контракт агент-facing артефактов приезжает из output-contract.md.
     expect(text).toContain('machine-readable Markdown or');
     expect(text).toContain('telegraphic');
   });
@@ -806,12 +767,10 @@ describe('buildStepPrompt — report агент (E18–E21)', () => {
   it('модель/провайдер не называются ни в одном артефакте', () => {
     const text = prompt('report', { iterationCount: 1 });
 
-    // Промпт отчёта вводит запрет и больше не заказывает «model used».
     expect(text).not.toMatch(/model used/i);
     expect(text).toContain('No model or provider name');
     expect(text).not.toContain('**Model:**');
     expect(text).toMatch(/step \+ iteration/);
-    // Тот же запрет приезжает из output-contract.md — он покрывает ВСЕ шаги.
     expect(text).toContain('No model or provider name in an artifact');
     expect(text).toContain('provider/model-id');
     const resolveText = prompt('resolve');
@@ -823,16 +782,12 @@ describe('buildStepPrompt — report агент (E18–E21)', () => {
   it('report: чужой скилл или его пример не тянут CDN в артефакт', () => {
     const text = prompt('report');
 
-    // Контракт обобщён на ЛЮБОЙ установленный скилл и файл, на который он
-    // ссылается, — не только на craft-скиллы.
     expect(text).toMatch(/any installed skill/i);
-    // Покрытие реального upstream-нарушителя
-    // (`improve-codebase-architecture/HTML-REPORT.md`: tailwind CDN + mermaid).
     expect(text).toMatch(/tailwind|jsdelivr|mermaid/i);
     expect(text).toMatch(/CDN|diagram librar/i);
-    // Чек-лист по-прежнему запрещает внешние загрузки.
-    expect(text).toMatch(/no `<script>` tag with a `src`/);
-    expect(text).toMatch(/no CSS `import`/);
+    expect(text).toMatch(/never authored/i);
+    expect(text).toMatch(/self-contained/);
+    expect(text).not.toMatch(/highlight\.js|chart\.js/);
   });
 
   it('каждый шаговый промпт велит писать narrative в iterations/<n>/', () => {

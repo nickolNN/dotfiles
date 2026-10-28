@@ -8,7 +8,6 @@ import {
 } from '@testing-library/react';
 import App from './App';
 
-/** Фейк EventSource: App подписывается на глобальные SSE-потоки. */
 class FakeEventSource {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
@@ -17,11 +16,6 @@ class FakeEventSource {
   constructor(readonly url: string) {}
 }
 
-/**
- * Заголовок вкладки = hostname инстанса (значение из `/settings/hostname`) и
- * не сбрасывается на статичный `Issue Resolver` из index.html при перезагрузке
- * любой страницы.
- */
 function stubFetch(hostname: string) {
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);

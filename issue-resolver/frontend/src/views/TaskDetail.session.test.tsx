@@ -85,7 +85,6 @@ function stubFetch(stepRuns: StepRunWithLog[]) {
   return fetchMock;
 }
 
-/** Минимальный фейк EventSource: отдаёт onmessage вручную. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 

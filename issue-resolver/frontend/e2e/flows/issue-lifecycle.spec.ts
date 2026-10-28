@@ -10,22 +10,11 @@ import {
   workspaceProgress,
 } from '../helpers';
 
-/**
- * Полный жизненный цикл задачи глазами UI: подготовка рабочей папки,
- * шаги `workspace_progress`, переходы статуса preparing → running → failed.
- *
- * Задача создаётся через реальную форму (POST /issues уходит на
- * мок-бэкенд), а событийный поток задачи мокается: так порядок
- * workspace_progress и статусов детерминирован, а не зависит от скорости
- * clone/pi-агента.
- */
 test.describe('issue lifecycle', () => {
   test('подготовка → running → терминальный статус', async ({ page }) => {
     const title = uniqueTitle('e2e-lifecycle');
     let currentStatus = 'preparing';
 
-    // GET /issues/:id отдаём реальный, но с управляемым статусом: начальный
-    // экран должен показать `preparing` ещё до живых событий.
     await page.route(issueDetailPattern, async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as Record<string, unknown>;
@@ -39,7 +28,6 @@ test.describe('issue lifecycle', () => {
       page,
       '**/issues/*/stream',
       [
-        // Волна 1: шаги разовой подготовки.
         [
           workspaceProgress('creating_dirs', 'running'),
           workspaceProgress('creating_dirs', 'done'),
@@ -52,9 +40,7 @@ test.describe('issue lifecycle', () => {
           workspaceProgress('installing', 'running', TEST_REPO_NAME),
           workspaceProgress('installing', 'done', TEST_REPO_NAME),
         ],
-        // Волна 2: подготовка закончилась — задача в running.
         [workspaceProgress('ready', 'done'), iterationStatus('running')],
-        // Волна 3: терминальный сбой; перед этим GET уже отдаёт failed.
         [iterationStatus('failed')],
       ],
       (call) => {
@@ -68,21 +54,17 @@ test.describe('issue lifecycle', () => {
       bootstrapEnabled: true,
     });
 
-    // Панель подготовки видна и подписана репозиторием.
     const panel = page.getByTestId('workspace-progress');
     await expect(panel).toBeVisible();
     await expect(panel).toContainText('Подготовка проектов');
     await expect(panel).toContainText(TEST_REPO_NAME);
 
-    // Все шаги workspace_progress отрисованы.
     for (const step of [
       'cloning',
       'checking_instructions',
       'devops',
       'installing',
     ]) {
-      // checking_instructions приходит и глобально, и на репозиторий — берём
-      // первую из строк шага.
       await expect(
         page
           .locator(`[data-testid="workspace-step"][data-step="${step}"]`)
@@ -95,14 +77,12 @@ test.describe('issue lifecycle', () => {
       ),
     ).toBeVisible();
 
-    // Сводка в шапке обновляется живьём по SSE: после installing — installed.
     const repoRow = page.getByTestId('repo-status-row');
     await expect(repoRow).toHaveAttribute('data-repo', 'octocat/Hello-World');
     await expect(repoRow).toHaveAttribute('data-status', 'installed');
 
     await waitForStatus(page, 'preparing');
     await waitForStatus(page, 'running');
-    // Волна 2 прислала `ready` — индикатор репозитория стал готовым.
     await expect(repoRow).toHaveAttribute('data-status', 'ready');
     await waitForStatus(page, 'failed');
 

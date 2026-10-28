@@ -22,7 +22,6 @@ const STEP_STATUSES: StepRunStatus[] = [
   'skipped',
 ];
 
-/** `aborted` придёт в StepRunStatus после синка shared (-820). */
 const STEP_STATUS_KEYS = [...STEP_STATUSES, 'aborted'];
 
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;

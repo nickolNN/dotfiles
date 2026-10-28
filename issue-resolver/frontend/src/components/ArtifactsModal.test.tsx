@@ -56,7 +56,6 @@ function textResponse(body: string): Response {
   return { ok: true, status: 200, text: async () => body } as Response;
 }
 
-/** fetch-мок: отдаёт разный текст по имени файла в query. */
 function stubFetch(overrides: (url: string) => Response | null = () => null) {
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);

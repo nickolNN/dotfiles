@@ -14,7 +14,6 @@ import type { ContainerController } from '../src/docker/controller';
 
 const ROUTE_PATH = '/issue-resolver/api/v1/issues';
 
-/** ContainerController с управляемым результатом `stats`; Docker не трогается. */
 class StubContainerController implements ContainerController {
   error: (Error & { statusCode?: number }) | null = null;
   readonly stream = new PassThrough();
@@ -53,7 +52,6 @@ afterEach(async () => {
   await Promise.all(openApps.splice(0).map((app) => app.close()));
 });
 
-/** Прямой insert задачи: POST /issues запускает фоновый прогон, он здесь не нужен. */
 function seedIssue(db: Db): string {
   const now = new Date().toISOString();
   const id = randomUUID();

@@ -51,7 +51,6 @@ describe('POST /issues — Jira enrichment', () => {
     expect(response.statusCode).toBe(201);
     const body = response.json();
     expect(body.title).toBe('Курсор');
-    // Creation обогащает title/context; фоновый прогон дополнительно берёт текст для refine.
     expect(jira.calls).toContain('KLA-5672');
   });
 

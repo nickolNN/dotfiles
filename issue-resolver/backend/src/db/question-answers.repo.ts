@@ -11,12 +11,6 @@ export interface RecordQuestionAnswerInput {
   cancelled?: boolean;
 }
 
-/**
- * Идемпотентно фиксирует ответ пользователя на вопрос итерации: повторный
- * ответ на тот же вопрос не создаёт вторую строку и не бросает (UNIQUE +
- * onConflictDoNothing). Значения value/confirmed/cancelled взаимоисключаемы
- * на уровне формы, но в БД хранятся как есть.
- */
 export async function recordQuestionAnswer(
   db: Db,
   input: RecordQuestionAnswerInput,
@@ -39,7 +33,6 @@ export async function recordQuestionAnswer(
     .run();
 }
 
-/** Id вопросов, на которые для итерации сохранён ответ (любого вида). */
 export async function listAnsweredQuestionIds(
   db: Db,
   iterationId: string,
@@ -52,7 +45,6 @@ export async function listAnsweredQuestionIds(
     .map((row) => row.question_id);
 }
 
-/** Есть ли сохранённый ответ на конкретный вопрос итерации. */
 export async function hasQuestionAnswer(
   db: Db,
   iterationId: string,

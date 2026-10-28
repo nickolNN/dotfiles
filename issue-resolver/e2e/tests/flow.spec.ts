@@ -3,15 +3,8 @@ import { createRepo } from '../helpers';
 
 const REPO_URL = 'https://github.com/acme/e2e.git';
 
-// Относительный URL: request-контекст Playwright разрешает его против
-// `use.baseURL` (vite :5196), а vite проксирует на мок-бэкенд.
 const API_BASE = '/issue-resolver/api/v1';
 
-/**
- * Удаляет созданные тестом задачи через API мок-бэкенда (каскадом уходят
- * repositories/iterations/step_runs/step_outputs). Ошибки cleanup не должны
- * ронять тест — только логируются.
- */
 async function cleanupCreatedIssues(
   request: APIRequestContext,
   titles: string[],
@@ -51,10 +44,6 @@ async function cleanupCreatedIssues(
   }
 }
 
-/**
- * Создаёт задачу через реальную форму NewIssue поверх мок-бэкенда:
- * сохраняет репозиторий (страница «Репозитории») и выбирает его в форме.
- */
 async function createIssueThroughUi(page: Page, title: string): Promise<void> {
   await createRepo(page, REPO_URL, 'main');
 
@@ -72,10 +61,6 @@ async function createIssueThroughUi(page: Page, title: string): Promise<void> {
   await expect(page.getByRole('heading', { name: title })).toBeVisible();
 }
 
-/**
- * Первая волна UI-сценариев. Заголовки уникальны через Date.now(),
- * селекторы — по реальным aria-labels/text из NewIssue/TasksList/TaskDetail.
- */
 test.describe('Issue Resolver UI', () => {
   let createdTitles: string[] = [];
 
@@ -94,29 +79,22 @@ test.describe('Issue Resolver UI', () => {
 
     await createIssueThroughUi(page, title);
 
-    // После создания App переключается на деталь новой задачи.
     await expect(page.getByText('Итерация #1')).toBeVisible();
   });
 
   test('деталь + новая итерация', async ({ page }) => {
-    // Мок-агент завершает resolve быстро — ждём settle итерации до клика по
-    // кнопке новой итерации.
     test.setTimeout(120_000);
     const title = `E2E-${Date.now()}`;
     createdTitles.push(title);
 
     await createIssueThroughUi(page, title);
 
-    // Backend автосоздаёт итерацию #1 при создании задачи.
     await expect(page.getByText('Итерация #1')).toBeVisible();
 
-    // Дожидаемся, что итерация #1 больше не running: пока она running,
-    // кнопка «Запустить новую итерацию» disabled (canStartIteration).
     await expect(page.getByTestId('abort-iteration')).toBeHidden({
       timeout: 90_000,
     });
 
-    // Добавляем новую итерацию — список должен вырасти до #2.
     await page.getByLabel('Контекст итерации').fill(`second attempt ${title}`);
     await page
       .getByRole('button', { name: 'Запустить новую итерацию' })

@@ -43,7 +43,6 @@ afterEach(async () => {
 });
 
 describe('GET /issues/:id/result/files/content', () => {
-  /** Минимальное состояние для HTTP-пути: issue + файл в рабочей папке. */
   async function setup() {
     const root = await makeTempDir();
     const db = createDb(':memory:');

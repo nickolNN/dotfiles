@@ -162,7 +162,6 @@ describe('runIssueIteration — статус running', () => {
     const statuses = events
       .filter((event) => event.type === 'iteration_status')
       .map((event) => JSON.parse(event.data).status as string);
-    // Подготовка вынесена в prepareIssueWorkspace: итерация стартует сразу running.
     expect(statuses[0]).toBe('running');
     expect(statuses).toContain('running');
     expect(statuses.at(-1)).toBe('completed');

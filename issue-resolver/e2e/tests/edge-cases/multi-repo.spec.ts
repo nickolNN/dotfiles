@@ -7,15 +7,6 @@ import {
   wsProgress,
 } from '../../helpers';
 
-/**
- * Задача с двумя репозиториями: и форма (оба уходят с bootstrap_enabled),
- * и панель подготовки (обе подписи репо), и живой devops-вывод.
- *
- * SSE отдаём скриптом: реальный DevOps-агент гоняет pi-анализатор на каждый
- * репозиторий (минуты), а контракт «событие → подпись/лог» здесь
- * проверяется детерминированно. Вывод обоих репо идёт одним stepRunId
- * `{issueId}/devops` — это единая issue-уровневая сессия.
- */
 test.describe('edge: подготовка двух репозиториев', () => {
   test('прогресс по каждому репо и общий devops-вывод', async ({
     page,
@@ -38,7 +29,6 @@ test.describe('edge: подготовка двух репозиториев', ()
     await page.getByRole('button', { name: 'Добавить репозиторий' }).click();
     await page.getByTestId('repository-select-1').selectOption({ index: 2 });
 
-    // bootstrap_enabled включён по умолчанию для обеих строк.
     await page
       .getByRole('button', { name: 'Запустить', exact: true })
       .click();
@@ -67,11 +57,9 @@ test.describe('edge: подготовка двух репозиториев', ()
     const progress = page.getByTestId('workspace-progress');
     await expect(progress).toBeVisible({ timeout: 20_000 });
 
-    // подписи обоих репозиториев
     await expect(progress.getByText('Клонирование acme/one')).toBeVisible();
     await expect(progress.getByText('Клонирование acme/two')).toBeVisible();
 
-    // devops и installing отработали по обоим репо
     await expect(
       progress.locator(
         '[data-testid="workspace-step"][data-step="devops"]',
@@ -91,8 +79,6 @@ test.describe('edge: подготовка двух репозиториев', ()
       progress.getByText('Установка зависимостей acme/two'),
     ).toBeVisible();
 
-    // Живой devops-вывод: одна issue-уровневая сессия (`{issueId}/devops`),
-    // без разбивки на блоки по repo — SessionView копит все чанки подряд.
     const session = page.getByTestId('devops-session');
     await expect(session).toBeVisible();
     await expect(session).toContainText('deps installed for one');

@@ -1,20 +1,9 @@
-/**
- * Backend integration/E2E: HTTP-сценарии против выделенного E2E-сервера
- * (`backend/test/e2e-server.ts`) — реальные роуты и движок поверх
- * детерминированных фейков. Файл сам поднимает свой инстанс на свободном порту
- * (общий `playwright.config.ts` стартует мок-стек :8095/:5195), поэтому
- * сценарии не требуют Docker/git/pi, не ходят в сеть и не зависят от чужих
- * серверов. Ответы агента задаются `POST /e2e/scenarios` до создания задачи.
- */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 
-// Каждый прогон — свежий бэкенд на своём порту: переиспользование залежавшегося
-// инстанса ломает детерминизм (в его БД repo уже `run_instructions: generated`,
-// поэтому подготовка не воспроизводится). 8080 занят живым dev-сервером.
 const API_PORT = Number(
   process.env.E2E_API_PORT ?? 20100 + Math.floor(Math.random() * 8000),
 );
@@ -39,11 +28,9 @@ test.beforeAll(async () => {
       ...process.env,
       PORT: String(API_PORT),
       ISSUE_RESOLVER_DATA_DIR: mkdtempSync(join(tmpdir(), 'ir-e2e-')),
-      // Пауза в подготовке: клиент успевает открыть SSE до вопроса агента.
       E2E_BOOTSTRAP_HOLD_MS: '400',
     },
     stdio: 'ignore',
-    // Своя группа процессов: `npx → tsx → node` иначе переживёт kill родителя.
     detached: true,
   });
   const deadline = Date.now() + 60_000;
@@ -59,17 +46,15 @@ test.afterAll(() => {
   e2eServer = null;
   if (!pid) return;
   try {
-    process.kill(-pid, 'SIGTERM'); // вся группа процессов
+    process.kill(-pid, 'SIGTERM');
   } catch {
     try {
       process.kill(pid, 'SIGTERM');
     } catch {
-      // уже мёртв
     }
   }
 });
 
-/** Терминальные статусы задачи. */
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
 interface SseEnvelope {
@@ -84,13 +69,11 @@ interface SseEnvelope {
 
 let repoSeq = 0;
 
-/** Уникальный URL на тест: своя запись `run_instructions`, своя подготовка. */
 function uniqueRepoUrl(): string {
   repoSeq += 1;
   return `https://github.com/e2e/${Date.now().toString(36)}-${repoSeq}.git`;
 }
 
-/** Имя репозитория так же, как его выводит `extractRepoNameFromUrl` на беке. */
 function repoNameOf(url: string): string {
   return url
     .replace(/\/+$/, '')
@@ -127,7 +110,6 @@ async function createIssue(
   return res.json();
 }
 
-/** Задаёт сценарий ответов мок-агента (встроенное имя или inline-шаги). */
 async function setScenario(
   request: APIRequestContext,
   data: Record<string, unknown>,
@@ -136,12 +118,10 @@ async function setScenario(
   expect(res.status(), await res.text()).toBe(200);
 }
 
-/** Возвращает сценарий к `all-success`, чтобы он не протекал между тестами. */
 async function resetScenario(request: APIRequestContext): Promise<void> {
   await request.post(`${API_ORIGIN}/e2e/reset`);
 }
 
-/** Итерации задачи (в порядке создания). */
 async function listIterations(
   request: APIRequestContext,
   issueId: string,
@@ -160,7 +140,6 @@ async function getIssue(
   return res.json();
 }
 
-/** Поллит задачу, пока её статус не удовлетворит предикату. */
 async function waitForIssueStatus(
   request: APIRequestContext,
   id: string,
@@ -177,7 +156,6 @@ async function waitForIssueStatus(
   throw new Error(`issue ${id} status stayed "${last}"`);
 }
 
-/** Открывает SSE-стрим задачи и собирает события до `until` или таймаута. */
 async function collectSse(
   issueId: string,
   timeoutMs: number,
@@ -210,14 +188,12 @@ async function collectSse(
           try {
             events.push(JSON.parse(line.slice('data: '.length)));
           } catch {
-            // сердцебиение/неполный блок — пропускаем
           }
         }
         boundary = buffer.indexOf('\n\n');
       }
     }
   } catch {
-    // abort по таймауту — отдаём то, что успели собрать
   } finally {
     clearTimeout(timer);
     controller.abort();
@@ -228,7 +204,6 @@ async function collectSse(
 const hasType = (events: SseEnvelope[], type: string): boolean =>
   events.some((event) => event.type === type);
 
-/** `iteration_status` с живым статусом `question` (агент ждёт ответа). */
 const isQuestionStatus = (event: SseEnvelope): boolean => {
   if (event.type !== 'iteration_status') return false;
   try {
@@ -304,9 +279,6 @@ test.describe('backend API', () => {
       pipeline_steps: ['resolve'],
     });
 
-    // Живой признак «агент ждёт ответа» — SSE-событие iteration_status
-    // `question`: REST-статус задачи выводится из статуса итерации
-    // (`statusOfIssue`) и во время ожидания остаётся `running`.
     const events = await collectSse(
       issue.id,
       20_000,
@@ -334,7 +306,6 @@ test.describe('backend API', () => {
     expect(answers.ok()).toBe(true);
     expect((await answers.json()).answered_ids).toContain('e2e-question-1');
 
-    // Ответ доходит до мок-агента, и задача завершается.
     expect(
       await waitForIssueStatus(request, issue.id, (status) =>
         TERMINAL.has(status),
@@ -434,8 +405,6 @@ test.describe('backend API', () => {
     expect(hasType(events, 'workspace_progress')).toBe(true);
     expect(hasType(events, 'iteration_status')).toBe(true);
 
-    // DevOps-вывод идёт обычными `log`-событиями с синтетическим stepRunId
-    // `{issueId}/devops`, stream = stdout/stderr (старого `devops_log` нет).
     const logs = events.filter(
       (event) =>
         event.type === 'log' && event.stepRunId === `${issue.id}/devops`,

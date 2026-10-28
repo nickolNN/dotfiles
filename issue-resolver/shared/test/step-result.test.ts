@@ -56,7 +56,6 @@ describe('sumSessionStats', () => {
       cost: 0.03,
       contextUsage: null,
     });
-    // Модель/сессия — свойства конкретного агента, у суммы их нет.
     expect(total).not.toHaveProperty('model');
     expect(total).not.toHaveProperty('sessionId');
     expect(total).not.toHaveProperty('avgTokensPerSecond');
@@ -156,25 +155,21 @@ describe('parseStepReport', () => {
       }),
     );
 
-    // (a) title/detail-форма без description сохранена.
     expect(parsed?.findings?.[0]).toEqual({
       severity: 'info',
       title: 'T',
       detail: 'D',
     });
-    // (b) low + description сохранены.
     expect(parsed?.findings?.[1]).toEqual({
       severity: 'low',
       description: 'X',
     });
-    // (c) expected/actual-форма без status сохранена, status отсутствует.
     expect(parsed?.scenarios?.[0]).toEqual({
       name: 'S',
       expected: 'E',
       actual: 'A',
     });
     expect(parsed?.scenarios?.[0]).not.toHaveProperty('status');
-    // (d) старые формы finding/scenario не регрессируют.
     expect(parsed?.findings?.[2]).toEqual({
       severity: 'minor',
       description: 'legacy',

@@ -4,22 +4,11 @@ import type { ModelDescriptor } from '@issue-resolver/shared';
 
 import { modelDescriptorFromPiModel } from '../models/source';
 
-/**
- * The model list, asked of Pi itself.
- *
- * A static read of `models.json` cannot answer two questions the UI asks: which
- * thinking levels a model really supports, and which models exist when the
- * config directory is not the one we guessed. A short-lived `pi --mode rpc`
- * answers both, and the probe keeps that answer for a while because spawning Pi
- * is not free.
- */
 export interface ModelsProbe {
-  /** Probed models, or `[]` when Pi could not answer (caller falls back). */
   list(): Promise<ModelDescriptor[]>;
 }
 
 export interface ModelsProbeOptions {
-  /** Actual probe; replaceable so tests never spawn a process. */
   run?: () => Promise<ModelDescriptor[]>;
   ttlMs?: number;
   now?: () => number;
@@ -44,8 +33,6 @@ export function createModelsProbe(
       if (pending) return pending;
       pending = run()
         .then((models) => {
-          // An empty answer means "not now", not "no models": caching it would
-          // hide a transient failure for the whole TTL.
           if (models.length > 0) cached = { at: now(), models };
           return models;
         })
@@ -58,13 +45,6 @@ export function createModelsProbe(
   };
 }
 
-/**
- * Spawns a bare `pi --mode rpc` and asks for the model list once.
- *
- * No session, no MCP servers, no extensions: the probe only needs the model
- * catalogue, and every server or extension it would otherwise start shows up as
- * latency inside the timeout. Models come from the catalogue, not from them.
- */
 function probeLiveModels(): Promise<ModelDescriptor[]> {
   return new Promise<ModelDescriptor[]>((resolve) => {
     const child = spawn(
@@ -122,7 +102,6 @@ function probeLiveModels(): Promise<ModelDescriptor[]> {
   });
 }
 
-/** Pi answers with full model objects; we keep only the public projection. */
 export function modelsFromProbeResponse(
   event: Record<string, unknown>,
 ): ModelDescriptor[] {

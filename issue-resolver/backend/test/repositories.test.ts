@@ -28,7 +28,6 @@ interface Controllable {
   failNextWith(err: Error): void;
 }
 
-/** Управляемая фабрика резолверов: смена метаданных/разовая ошибка. */
 function controllable(initial: RepoInfo = GITHUB_INFO): Controllable {
   let info = initial;
   let pending: Error | null = null;
@@ -130,7 +129,6 @@ describe('POST /repositories', () => {
       writeAccess: false,
     });
 
-    // Значение не теряется при чтении списка.
     const list = await app.inject({ method: 'GET', url: ROUTE });
     expect(list.json()[0].writeAccess).toBe(false);
   });
@@ -153,8 +151,6 @@ describe('POST /repositories', () => {
 
   it('платформа не определена (hostless URL) → 422, репо сохранён с status error', async () => {
     const app = makeApp();
-    // `file:///...` проходит z.string().url(), но у него нет хоста →
-    // detectPlatform → 'unknown' → 'Unsupported platform'.
     const url = 'file:///tmp/repo';
 
     const response = await app.inject({
@@ -372,7 +368,6 @@ describe('GET /repositories/:id/branches', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ branches: ['main', 'feature/new'] });
-    // Резолвер вызван заново, а не отдан кеш создания.
     expect(fake.calls).toEqual([GITHUB_URL, GITHUB_URL]);
   });
 

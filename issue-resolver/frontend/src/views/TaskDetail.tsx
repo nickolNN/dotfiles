@@ -134,8 +134,6 @@ const STEP_LABELS: Record<PipelineStep, string> = {
   report: 'Отчёт',
 };
 
-/** Канонический порядок шагов пайплайна: `resolve` не должен идти раньше
- * `refine` (порядок в форме не влияет на порядок запуска). */
 const PIPELINE_ORDER: readonly PipelineStep[] = [
   'refine',
   'resolve',
@@ -144,53 +142,33 @@ const PIPELINE_ORDER: readonly PipelineStep[] = [
   'pr',
 ];
 
-/**
- * Room-режим итерации: ПОСЛЕДНИЙ refine-отчёт (по attempt) рекомендовал
- * комнату. Это ровно то условие, по которому движок запускает `runRoomResolve`
- * (`planExecutionMode(execution) === 'room'`); нет refine/execution → single.
- */
 function isRoomIteration(runs: StepRunWithEvents[]): boolean {
   const latestRefine = runs
     .filter((run) => run.step === 'refine')
     .sort((a, b) => b.attempt - a.attempt)[0];
   const mode = parseStepReport(latestRefine?.report ?? '')?.execution?.mode;
-  // staged-резолв (последовательные этапы) отображается теми же вкладками
-  // комнаты: агенты несут `stage`, порядок/подписи разбирает RoomAgentTabs.
   return mode === 'room' || mode === 'stages';
 }
 
-/** Интерактивный вопрос живой pi-сессии (`extension_ui_request`). */
 type QuestionEvent = Extract<SessionEvent, { type: 'question' }>;
 
-/** Режим отправки сообщения в живую сессию: `prompt` — новая инструкция,
- * `steer` — прервать текущий ход, `followUp` — встать в очередь. */
 type SendMode = 'prompt' | 'steer' | 'followUp';
 
-/** Статус шага подготовки рабочей папки из `workspace_progress`. */
 type WorkspaceStepStatus = 'running' | 'done' | 'warning' | 'error';
 
-/**
- * Один шаг подготовки. Ключ уникален парой step+repo: `cloning` публикуется
- * на каждый репозиторий.
- */
 type WorkspaceProgressStep = {
   key: string;
   step: string;
   repo?: string;
   status: WorkspaceStepStatus;
   message?: string;
-  /** Порт поднятого dev-сервера (шаг `dev_server`). */
   devPort?: number;
 };
 
-/** Накопленный прогресс разовой подготовки одной итерации. */
 type WorkspaceProgress = {
   steps: WorkspaceProgressStep[];
-  /** Пришёл терминальный `ready`/`error` — готовим затухание. */
   finished: boolean;
-  /** Анимация исчезновения уже запущена. */
   fading: boolean;
-  /** Анимация закончилась — панель больше не рендерим. */
   dismissed: boolean;
 };
 
@@ -219,13 +197,11 @@ const WORKSPACE_STEP_COLORS: Record<WorkspaceStepStatus, string> = {
   error: '#FF0033',
 };
 
-/** Подпись шага подготовки: если шаг привязан к репозиторию — дописываем его. */
 function workspaceStepLabel(step: string, repo?: string): string {
   const label = WORKSPACE_STEP_LABELS[step] ?? step;
   return repo ? `${label} ${repo}` : label;
 }
 
-/** Иконка статуса шага: running — ⏳, done — ✓, error — ✕. */
 function workspaceStepMark(status: WorkspaceStepStatus): string {
   switch (status) {
     case 'done':
@@ -239,19 +215,12 @@ function workspaceStepMark(status: WorkspaceStepStatus): string {
   }
 }
 
-/**
- * Статусы, после которых последующие шаги итерации уже не выполнятся:
- * `failed`, `aborted` (появится в StepRunStatus после синка shared, -820),
- * `needs_input` (ждёт ответа). Набор — Set<string>, чтобы не зависеть от
- * момента синка типов.
- */
 const TERMINATED_STATUSES = new Set<string>([
   'failed',
   'aborted',
   'needs_input',
 ]);
 
-/** Короткая пометка статуса шага для чипа итерации. */
 function stepRunMark(status: StepRunStatus | 'aborted'): string {
   switch (status) {
     case 'running':
@@ -281,15 +250,12 @@ const STEP_RUN_STATUSES = new Set<string>([
   'skipped',
 ]);
 
-/** Проверяет, что строка из `step_status` — валидный `StepRunStatus`. */
 function isStepRunStatus(value: string | undefined): value is StepRunStatus {
   return value !== undefined && STEP_RUN_STATUSES.has(value);
 }
 
-/** Harness-файл отчёта шага — не считаем его артефактом изменений агента. */
 const HARNESS_RESULT_FILE = '.issue-step-result.json';
 
-/** Человекочитаемое имя репозитория из git URL. */
 function repoShortName(url: string): string {
   const cleaned = url.replace(/\.git$/, '');
   const sshMatch = /[:/]([^/]+\/[^/]+)$/.exec(cleaned);
@@ -298,7 +264,6 @@ function repoShortName(url: string): string {
   return segments.slice(-2).join('/');
 }
 
-/** Человекочитаемая длительность шага: `45с` / `3м 12с` / `1ч 4м`. */
 export function formatStepDuration(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return '';
   const totalSec = Math.floor(ms / 1000);
@@ -310,10 +275,6 @@ export function formatStepDuration(ms: number | null): string {
   return `${hours}ч ${minutes % 60}м`;
 }
 
-/**
- * Длительность шага: для активного — `now - created_at` (живой тик), для
- * терминального — `updated_at - created_at`.
- */
 function stepDurationMs(
   run: Pick<StepRunWithEvents, 'created_at' | 'updated_at'>,
   live: boolean,
@@ -326,20 +287,14 @@ function stepDurationMs(
   return Math.max(0, end - created);
 }
 
-/** Инструменты, которыми агент изменяет файлы (не `read`). */
 const FILE_CHANGING_TOOLS: ReadonlySet<string> = new Set(['write', 'edit']);
 
-/** Безопасно достаёт `args.path` из tool_use (unknown → только строка). */
 function toolPathOf(args: unknown): string | null {
   if (!args || typeof args !== 'object') return null;
   const path = (args as Record<string, unknown>).path;
   return typeof path === 'string' && path.length > 0 ? path : null;
 }
 
-/**
- * Уникальные файлы, изменённые write/edit (в порядке появления, `read` и
- * harness-маркер исключены). Экспортируется для точечных тестов.
- */
 export function stepChangedFiles(events: SessionEvent[]): string[] {
   const seen = new Set<string>();
   const files: string[] = [];
@@ -355,18 +310,9 @@ export function stepChangedFiles(events: SessionEvent[]): string[] {
   return files;
 }
 
-/** Сегмент workspace-id нужен, чтобы отбросить служебный префикс пути. */
 const UUID_SEGMENT_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/**
- * Компактный путь для карточки шага. Отбрасывает сегмент workspace-uuid
- * вместе с абсолютным префиксом (`…/workspaces/<uuid>/report.html` →
- * `report.html`, `<uuid>/src/app.ts` → `src/app.ts`); после uuid остаётся до
- * двух сегментов, глубже — только basename. Без uuid абсолютный путь
- * сжимается до последних двух сегментов, относительный — как есть.
- * Экспортируется для точечных тестов.
- */
 export function shortPath(path: string): string {
   const segments = path.split('/').filter(Boolean);
   const uuidIndex = segments.findIndex((segment) => UUID_SEGMENT_RE.test(segment));
@@ -380,7 +326,6 @@ export function shortPath(path: string): string {
   return remainder[remainder.length - 1];
 }
 
-/** Живой тик раз в секунду, пока `active`; останавливается на false/unmount. */
 function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -392,7 +337,6 @@ function useNow(active: boolean): number {
   return now;
 }
 
-/** Inline-иконка календаря (дата создания), без внешних зависимостей. */
 function CalendarIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -412,7 +356,6 @@ function CalendarIcon({ className }: { className?: string }) {
   );
 }
 
-/** Inline-иконка «стоп» (квадрат) для гашения dev-серверов. */
 function StopIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -430,7 +373,6 @@ function StopIcon({ className }: { className?: string }) {
   );
 }
 
-/** Inline-иконка обновления (дата последнего изменения). */
 function RefreshIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -454,19 +396,11 @@ const labelClass = FORM_LABEL_CLASS;
 
 interface TaskDetailProps {
   issueId?: string | null;
-  /** Открыть модалку отчёта сразу после загрузки (deep-link `…/result`). */
   autoOpenResult?: boolean;
 }
 
-/** Имя HTML-файла отчёта для атрибута `download`. */
 const RESULT_HTML_FILENAME = 'report.html';
 
-/**
- * Ответ HEAD-проба `/result`: тип содержимого и происхождение артефакта.
- * `source` приходит из `x-artifact-source` (backend/src/routes/issues.ts):
- * `root` — свежий отчёт из корня воркспейса, `iteration-snapshot` — снапшот
- * последней завершённой итерации (то есть ПРЕДЫДУЩАЯ версия).
- */
 type ArtifactMeta = {
   status: number;
   contentType: string;
@@ -474,11 +408,8 @@ type ArtifactMeta = {
   mtime: string | null;
 };
 
-/** Имя MD-файла отчёта для скачивания агентами. */
 const RESULT_MD_FILENAME = 'report.md';
 
-// The stale window is a shared contract, not a copy: a UI that guesses it
-// differently than the server either kills live runs or hides dead ones.
 const REPORT_STALE_MS = SESSION_STALE_MS;
 
 type LoadState =
@@ -495,7 +426,6 @@ type StepRunsState =
 function filterArtifacts(files: IssueFile[]): IssueFile[] {
   return files.filter((file) => {
     const path = file.rel_path;
-    // Skip service directories and lock files.
     if (
       path.startsWith('node_modules/') ||
       path.startsWith('.git/') ||
@@ -526,13 +456,6 @@ export default function TaskDetail(props: TaskDetailProps) {
   );
 }
 
-/**
- * Гарантирует наличие QueryClient. В приложении провайдер ставит `main.tsx`,
- * но компонент (и `App`) в тестах монтируется напрямую — без провайдера любой
- * `useQuery` бросил бы «No QueryClient set». Если провайдер уже есть — просто
- * пробрасываем детей в общий клиент приложения; иначе создаём локальный клиент
- * на время жизни карточки, чтобы тесты не делили кэш между собой.
- */
 function TaskDetailQueryBoundary({ children }: { children: ReactNode }) {
   const existing = useContext(QueryClientContext);
   const [fallbackClient] = useState(() =>
@@ -570,18 +493,13 @@ function TaskDetailView({
   const [context, setContext] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [issueFiles, setIssueFiles] = useState<IssueFile[]>([]);
-  // Файлы, порождённые агентом в рабочей папке последней completed-итерации
-  // (кроме самого артефакта отчёта).
   const [resultFiles, setResultFiles] = useState<WorkspaceFile[]>([]);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [workerCount, setWorkerCount] = useState<number>(1);
-  // Флаг: prRepoIds уже инициализированы из issue.repositories.create_mr.
   const [prRepoIdsSeeded, setPrRepoIdsSeeded] = useState(false);
   const [models, setModels] = useState<ModelDescriptor[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
-  // Шаг/модель/thinking/MR-репозитории модалки итерации — общий хук с формой
-  // задачи (`usePipelineSteps`), чтобы логика не дублировалась.
   const iterationPrRepoDefaults = useMemo(
     () =>
       state.status === 'ready'
@@ -603,7 +521,6 @@ function TaskDetailView({
     togglePrRepo,
   } = usePipelineSteps({
     models,
-    // `resolve` starts checked but can be unchecked — that is the MR-only run.
     initialSteps: ['resolve'],
     prAvailable:
       state.status === 'ready' && state.issue.repositories.length > 0,
@@ -611,15 +528,10 @@ function TaskDetailView({
   });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  // Live-события сессии, разложенные по stepRunId: кладём их в SessionView
-  // соответствующего шага, не дожидаясь следующего GET /step-runs.
   const [liveEventsByRun, setLiveEventsByRun] = useState<
     Record<string, SessionEvent[]>
   >({});
   const [refreshTick, setRefreshTick] = useState(0);
-  // MR-ссылки в шапке задачи: `issue.merge_requests` — персистентные из БД
-  // (переживают перезагрузку), `liveMrUrls` — из живых SSE-событий
-  // `stream: 'mr'` (мгновенно, но без перезагрузки).
   const [liveMrUrls, setLiveMrUrls] = useState<string[]>([]);
   const [message, setMessage] = useState('');
   const [messageSending, setMessageSending] = useState(false);
@@ -638,25 +550,13 @@ function TaskDetailView({
   const [expandedStepRunId, setExpandedStepRunId] = useState<string | null>(
     null,
   );
-  // Модалка вывода issue-уровневого отчёта: у него нет `step_run`, поэтому
-  // раскрывается отдельным флагом, а не через `expandedStepRunId`.
   const [reportExpanded, setReportExpanded] = useState(false);
   const modalScrollRef = useRef<HTMLDivElement | null>(null);
   const modalPinnedRef = useRef(true);
-  /** ID прогона, к которому уже скроллили страницу — не дёргаем повторно. */
   const lastScrolledRunRef = useRef<string | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
-  // Метаданные артефакта отчёта (HEAD /result): откуда он взят и какого типа.
-  // Нужны, чтобы НЕ совать markdown в iframe для HTML и не выдавать прошлый
-  // отчёт за текущий (см. `x-artifact-source` в backend/src/routes/issues.ts).
   const [artifactMeta, setArtifactMeta] = useState<ArtifactMeta | null>(null);
-  // Markdown-артефакт: если html нет, модалка всё равно показывает отчёт —
-  // иначе «сгенерирован» выглядит как пустота (только кнопка скачивания).
   const [resultMd, setResultMd] = useState<string | null>(null);
-  // Механические сигналы по артефактам из `/report/status`: наблюдённая модель
-  // прогона и предупреждения детектов. Это место UI, а не место в артефакте:
-  // имя модели запрещено в report.md/report.html (GLOBAL_AGENTS), но человек
-  // должен видеть, на чём отчёт собран и чем сервер недоволен.
   const [reportMeta, setReportMeta] = useState<{
     observedModel?: string;
     warnings: string[];
@@ -667,16 +567,12 @@ function TaskDetailView({
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(
     null,
   );
-  // id уже отвеченных/отменённых вопросов: гасит повторную модалку.
   const [answeredQuestionIds, setAnsweredQuestionIds] = useState<Set<string>>(
     () => new Set(),
   );
 
   const [stoppingDevServers, setStoppingDevServers] = useState(false);
-  // Задача удаляется (SSE `issue_deleting`): показываем заглушку вместо
-  // карточки, а на `issue_deleted` уходим на список.
   const [deleting, setDeleting] = useState(false);
-  // Предупреждение, если финал удаления не пришёл за `DELETE_TIMEOUT_MS`.
   const [deleteTimeoutError, setDeleteTimeoutError] = useState<string | null>(
     null,
   );
@@ -689,51 +585,29 @@ function TaskDetailView({
 
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [questionError, setQuestionError] = useState<string | null>(null);
-  // Живой статус шага из `step_status`: снапшот `stepRuns` не обновляется во
-  // время работы, поэтому running-статус берём из SSE (ключ — stepRunId).
   const [liveStatusByRun, setLiveStatusByRun] = useState<
     Record<string, StepRunStatus>
   >({});
-  // Прогресс разовой подготовки рабочей папки (`workspace_progress`):
-  // событие issue-уровневое, id итерации в нём нет — панель одна на задачу.
   const [workspaceProgress, setWorkspaceProgress] =
     useState<WorkspaceProgress | null>(null);
-  // Отчёт задачи (`report`-агент): `ready` — `report.md` уже есть,
-  // `running` — генерация идёт сейчас (локальный триггер + опрос статуса).
   const [reportReady, setReportReady] = useState(false);
   const [reportRunning, setReportRunning] = useState(false);
-  /** True only while the report POST is in flight; gates the retry button. */
   const [reportStarting, setReportStarting] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
-  /**
-   * Полный ответ `/report/status`: статус прогона из БД, обе половины артефактов,
-   * причина падения и время старта. Раньше здесь был только булев `ready`, из-за
-   * чего прогон без файлов выглядел «сгенерированным».
-   */
   const [reportStatusInfo, setReportStatusInfo] = useState<ReportStatus | null>(
     null,
   );
-  /** Последний прогон из БД (сессия, stdout, stats) — переживает перезагрузку. */
   const [reportRunLog, setReportRunLog] = useState<StepRunWithLog | null>(null);
-  /** Время старта текущей генерации: старый `report.md` по mtime не засчитываем. */
   const reportStartRef = useRef(0);
-  /** Ref-гарда против гонки: стейт-апдейты асинхронны, ref — мгновенный. */
   const reportRunningRef = useRef(false);
-  /** Force one status poll (used right after a manual POST). */
   const reportPollRef = useRef<() => void>(() => {});
-  /** Модель для ручного запуска отчёта (переопределяет step_models.report). */
   const [reportModel, setReportModel] = useState<string>('');
-  /** Thinking level для ручного запуска отчёта. */
   const [reportThinkingLevel, setReportThinkingLevel] = useState<string>('');
-  // Ошибка подготовки из `iteration_status` (`status: 'failed'`, поле error).
   const [iterationErrors, setIterationErrors] = useState<
     Record<string, string>
   >({});
   const progressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Управление живой pi-сессией (модель/thinking/очередь/компакция). `null`,
-  // пока активного шаг-сеанса нет (409) или роут ещё не ответил — тогда
-  // панель управления просто не рендерится.
   const [controlTick, setControlTick] = useState(0);
   const [controlBusy, setControlBusy] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
@@ -741,14 +615,11 @@ function TaskDetailView({
   const [compactOpen, setCompactOpen] = useState(false);
   const [compactInstructions, setCompactInstructions] = useState('');
   const [paletteIndex, setPaletteIndex] = useState(0);
-  // Мягко подвести список к началу после создания новой итерации.
   const [scrollToIterations, setScrollToIterations] = useState(false);
-  // Модалка новой итерации: открывается по кнопке, закрывается по Escape/клику на фон/сабмиту.
   const [showIterationModal, setShowIterationModal] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const iterationsRef = useRef<HTMLDivElement | null>(null);
 
-  // На входе показываем верх страницы: там же — свежайшая итерация.
   useEffect(() => {
     const panel = panelRef.current;
     if (panel && typeof panel.scrollIntoView === 'function') {
@@ -756,7 +627,6 @@ function TaskDetailView({
     }
   }, [issueId]);
 
-  // Сбрасываем таймер подсветки «Скопировано» при размонтировании.
   useEffect(
     () => () => {
       if (devPortCopiedTimerRef.current) {
@@ -766,8 +636,6 @@ function TaskDetailView({
     [],
   );
 
-  // После успешного создания новой итерации она становится первой в списке;
-  // подводим к нему, не трогая AutoScrollBox живого шага.
   useEffect(() => {
     if (!scrollToIterations) return;
     const section = iterationsRef.current;
@@ -777,27 +645,16 @@ function TaskDetailView({
     setScrollToIterations(false);
   }, [scrollToIterations]);
 
-  /** Статус шага: живой из SSE важнее снапшота `stepRuns`. */
   const statusOf = (
     run: Pick<StepRunWithEvents, 'id' | 'status'>,
   ): StepRunStatus => liveStatusByRun[run.id] ?? run.status;
 
-  /** Шаг активен: ещё не завершён (pending — до старта/в коротком окне). */
   const isActiveStatus = (status: StepRunStatus) =>
     status === 'running' || status === 'pending';
 
-  /**
-   * Шаг, чей неотвеченный вопрос ещё нужно показывать: помимо активных, это
-   * `needs_input` — шаг завершился blocked-отчётом (exit 0 + status blocked)
-   * и ждёт ответа. В карточке шага он не «живой» (там `isActiveStatus`), но
-   * вопрос из его событий обязан всплывать, иначе задача в статусе `question`
-   * при открытии не показывает вопрос.
-   */
   const isQuestionEligibleStatus = (status: StepRunStatus) =>
     isActiveStatus(status) || status === 'needs_input';
 
-  // Сброс per-issue UI-состояния при смене задачи (как в прежнем ручном
-  // эффекте загрузки): вопрос и его ошибка не должны «протекать» на другую задачу.
   useEffect(() => {
     if (!issueId) return;
     setState({ status: 'loading' });
@@ -805,8 +662,6 @@ function TaskDetailView({
     setQuestionError(null);
   }, [issueId]);
 
-  // Гидратация локального `state` из кэша react-query. `state` остаётся
-  // локальным, потому что SSE пишет в него живой статус задачи (см. подписку).
   useEffect(() => {
     if (!issueId) return;
     const error = issueQuery.error ?? iterationsQuery.error;
@@ -825,7 +680,6 @@ function TaskDetailView({
       iterations: [...iterationsQuery.data].sort((a, b) => a.number - b.number),
     });
     setSelectedSteps(issue.pipeline_steps);
-    // Первый раз инициализируем prRepoIds из create_mr флагов репозиториев.
     if (!prRepoIdsSeeded) {
       setPrRepoIds(
         new Set(
@@ -857,7 +711,6 @@ function TaskDetailView({
         setModels(Array.isArray(list) ? list : []);
       })
       .catch(() => {
-        // Ошибка загрузки моделей не должна ронять форму — просто пустой список.
         if (cancelled) return;
         setModels([]);
       })
@@ -879,13 +732,10 @@ function TaskDetailView({
 
   const stepRunsQuery = useStepRuns(activeIterationId);
 
-  // Смена итерации: живой статус предыдущей больше не актуален.
   useEffect(() => {
     setLiveStatusByRun({});
   }, [activeIterationId]);
 
-  // `refreshTick` — сигнал SSE «перечитать прогоны» (новый шаг, терминальный
-  // статус, вопрос): инвалидируем кэш step-runs текущей итерации.
   useEffect(() => {
     if (refreshTick === 0 || !activeIterationId) return;
     void queryClient.invalidateQueries({
@@ -893,9 +743,6 @@ function TaskDetailView({
     });
   }, [refreshTick, activeIterationId, queryClient]);
 
-  // Серверные ответы авторитетны: после reload/на другом устройстве уже
-  // отвеченные вопросы не должны всплывать повторно. Union с локальными
-  // оптимистичными id — сбой запроса деградирует в прежнее поведение.
   useEffect(() => {
     if (!activeIterationId) return;
     let cancelled = false;
@@ -909,7 +756,6 @@ function TaskDetailView({
         });
       })
       .catch(() => {
-        // best-effort: без серверных ответов модалка переспросит.
       });
     return () => {
       cancelled = true;
@@ -935,8 +781,6 @@ function TaskDetailView({
               : [],
           };
 
-  // Вложения задачи. Перезагружаются вместе с refreshTick: терминальный
-  // статус итерации и создание новой итерации (см. handleSubmit).
   useEffect(() => {
     if (!issueId) return;
     let cancelled = false;
@@ -952,7 +796,6 @@ function TaskDetailView({
     };
   }, [issueId, refreshTick]);
 
-  /** Запускает затухание панели прогресса через 3с после `ready`/`error`. */
   const scheduleProgressFade = () => {
     if (progressTimerRef.current) return;
     progressTimerRef.current = setTimeout(() => {
@@ -964,7 +807,6 @@ function TaskDetailView({
     }, 3000);
   };
 
-  /** `onAnimationEnd`: убирает отыгравшую панель из DOM. */
   const dismissProgress = () => {
     setWorkspaceProgress((current) =>
       current ? { ...current, dismissed: true } : current,
@@ -986,13 +828,7 @@ function TaskDetailView({
     setLiveMrUrls([]);
 
     const unsubscribe = subscribeToIssueEvents(issueId, {
-      // MR-ссылка шага pr приходит отдельным log-событием `stream: 'mr'`.
-      // Копим её в state, чтобы показать в шапке сразу после создания MR,
-      // не дожидаясь обновления issue.merge_requests в БД.
       onLog: (event) => {
-        // MR-ссылка шага pr приходит отдельным log-событием `stream: 'mr'`.
-        // Копим её в state, чтобы показать в шапке сразу после создания MR,
-        // не дожидаясь обновления issue.merge_requests в БД.
         if (event.stream === 'mr') {
           const url = event.data.trim();
           if (!url) return;
@@ -1001,12 +837,6 @@ function TaskDetailView({
           );
           return;
         }
-        // DevOps/Report шлют живой stdout/stderr обычными `log`-событиями
-        // с синтетическим stepRunId
-        // (`{issueId}/devops` | `{issueId}/report`). Копим чанки как
-        // `text`-события SessionView, не дожидаясь GET /step-runs.
-        // A chunk is a fragment of one prose stream, so append it to the trailing
-        // `text` block: a block per chunk drew one token per line.
         if (event.stream !== 'stdout' && event.stream !== 'stderr') return;
         const stepRunId = event.stepRunId;
         if (!stepRunId || event.data === '') return;
@@ -1035,33 +865,21 @@ function TaskDetailView({
       },
       onStepStatus: (event) => {
         const stepRunId = event.stepRunId;
-        // `data` — плоская строка статуса ИЛИ JSON `{status, step, model}`
-        // (для status='running'). Разбираем оба варианта, чтобы терминальные
-        // статусы и новый формат одинаково доходили до карточки.
         let status: string = event.data;
         try {
           const parsed = JSON.parse(event.data) as { status?: unknown };
           if (typeof parsed?.status === 'string') status = parsed.status;
         } catch {
-          // старый формат — строка
         }
         if (stepRunId && isStepRunStatus(status)) {
           setLiveStatusByRun((current) => ({
             ...current,
             [stepRunId]: status,
           }));
-          // Снапшот `stepRuns` не знает о новом прогоне (движок создаёт
-          // step_run на каждый шаг: refine→resolve), а `step_status` несёт
-          // только stepRunId без step/attempt — без перечитки карточка
-          // нового шага не отрисуется. Перечитываем и на терминальном
-          // статусе: он же подтягивает отчёт завершившегося шага.
           setRefreshTick((tick) => tick + 1);
         }
       },
       onIterationStatus: (event) => {
-        // data — JSON-строка iteration_status; статус и текст ошибки лежат
-        // внутри, а не в поле самого SSEEvent. Без разбора карточка не
-        // замечает completed/failed и не показывает ошибку подготовки.
         let parsedData: { status?: string; error?: string } = {};
         try {
           parsedData = JSON.parse(event.data) as {
@@ -1082,17 +900,11 @@ function TaskDetailView({
           }));
         }
         if (status === 'question' || status === 'running') {
-          // Живой статус задачи: `question` пока агент ждёт ответа, обратно
-          // в `running` после ответа — без перезагрузки карточки.
           setState((current) =>
             current.status === 'ready'
               ? { ...current, issue: { ...current.issue, status } }
               : current,
           );
-          // Вопрос дозаписывается в `step_runs.events` уже после первичной
-          // загрузки. Перечитываем прогоны, чтобы вопрос, персистентный на
-          // момент перехода в `question`, не терялся (напр. при переподключении
-          // SSE, когда live-событие не пришло).
           if (status === 'question') {
             setRefreshTick((tick) => tick + 1);
           }
@@ -1102,15 +914,10 @@ function TaskDetailView({
           status === 'failed' ||
           status === 'cancelled'
         ) {
-          // На терминальной итерации бэкенд fire-and-forget спавнит
-          // report-агента: показываем «⏳ Генерируется» и опрашиваем статус.
-          // Гарда: если уже идёт ручной прогон — не перезатираем.
           if (reportRunningRef.current) return;
           reportStartRef.current = Date.now();
           reportRunningRef.current = true;
           setReportRunning(true);
-          // Сервер — источник истины для терминального статуса: инвалидируем
-          // issue/iterations, гидратация `state` подхватит свежие данные.
           void queryClient.invalidateQueries({ queryKey: ['issue', issueId] });
           void queryClient.invalidateQueries({
             queryKey: ['iterations', issueId],
@@ -1121,8 +928,6 @@ function TaskDetailView({
       onWorkspaceProgress: (payload) => {
         if (!WORKSPACE_STEP_STATUSES.has(payload.status)) return;
         const status = payload.status as WorkspaceStepStatus;
-        // Первый шаг новой подготовки: прошлая панель уже отыграла —
-        // начинаем с чистого листа (иначе dismissed-панель не вернулась бы).
         const fresh =
           payload.step === 'creating_dirs' && status === 'running';
         if (fresh && progressTimerRef.current) {
@@ -1197,9 +1002,6 @@ function TaskDetailView({
     };
   }, [issueId]);
 
-  // Страховка от «зависшего» удаления: если SSE замолчал и за
-  // `DELETE_TIMEOUT_MS` не пришёл ни `issue_deleted`, ни `phase: 'error'` —
-  // снимаем заглушку и предупреждаем, что задача могла удалиться частично.
   useEffect(() => {
     if (!deleting) return;
     deleteTimeoutRef.current = setTimeout(() => {
@@ -1252,10 +1054,6 @@ function TaskDetailView({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [jiraPreviewOpen]);
 
-  // Deep-link из списка задач: `#/tasks/<id>/result` сразу открывает
-  // модалку отчёта после готовности задачи. `openResult` — function
-  // declaration (hoisted), поэтому доступен здесь. Одноразово: ref гасит
-  // повторные срабатывания на ре-рендерах.
   const autoOpenedResultRef = useRef(false);
   useEffect(() => {
     if (
@@ -1279,8 +1077,6 @@ function TaskDetailView({
       ]
     : [];
 
-  // Issue-level sessions (DevOps/Report) have addresses, not step runs: no
-  // `step_runs` row, so SessionView lives on the live `log` chunks alone.
   const devopsRunId = issueId
     ? SessionAddress.forIssueRun(issueId, 'devops').toString()
     : '';
@@ -1289,8 +1085,6 @@ function TaskDetailView({
     : '';
   const devopsEvents = liveEventsByRun[devopsRunId] ?? [];
   const reportEvents = liveEventsByRun[reportRunId] ?? [];
-  // Статус отчёта — 4 честных состояния из БД. Раньше UI выводил успех из
-  // флагов в памяти, поэтому пустой прогон выглядел «готовым».
   const reportPhase: 'idle' | 'running' | 'failed' | 'success' =
     reportRunning
       ? 'running'
@@ -1298,8 +1092,6 @@ function TaskDetailView({
   const reportHtmlAvailable = reportStatusInfo?.artifacts?.html.present ?? false;
   const reportMdAvailable = reportStatusInfo?.artifacts?.md.present ?? false;
   const reportStartedAt = reportStatusInfo?.startedAt;
-  // Живой буфер SSE + сохранённая сессия прогона из БД: после перезагрузки
-  // страницы панель вывода показывает последний прогон, а не пустоту.
   const reportModalEvents = useMemo(() => {
     const seen = new Set<string>();
     const merged: SessionEvent[] = [];
@@ -1315,14 +1107,6 @@ function TaskDetailView({
     return merged;
   }, [reportRunLog, reportEvents]);
 
-  /**
-   * Цель модалки вывода: прогон шага ИЛИ issue-уровневый `report`-прогон.
-   * У отчёта нет `step_run`, поэтому его поля выводятся из живого буфера
-   * SSE (`reportEvents`) и флага прогона, а адрес управления совпадает с
-   * синтетическим `sessionId` (`{issueId}/report`), под которым сессия
-   * зарегистрирована в реестре. Один и тот же control-роут обслуживает обе
-   * цели — `/iterations/:id/...`.
-   */
   const modalTarget: {
     title: string;
     attempt: number;
@@ -1347,8 +1131,6 @@ function TaskDetailView({
         stderr: expandedStepRun.stderr,
         report: expandedStepRun.report,
         startedAt: expandedStepRun.created_at,
-        // У шага итерация есть всегда; `null` возможен только у прогонов вне
-        // итерации (report), которые в эту ветку не попадают.
         sessionId: expandedStepRun.iteration_id ?? '',
       }
     : reportExpanded
@@ -1374,13 +1156,11 @@ function TaskDetailView({
         }
       : null;
 
-  /** Закрывает модалку вывода для обеих целей (шаг и отчёт). */
   function closeModal() {
     setExpandedStepRunId(null);
     setReportExpanded(false);
   }
 
-  // Модалка вывода: автоскролл вниз только пока пользователь прибит ко дну.
   const handleModalScroll = useCallback(() => {
     const el = modalScrollRef.current;
     if (!el) return;
@@ -1395,10 +1175,6 @@ function TaskDetailView({
     }
   }, [modalTarget?.events]);
 
-  // Question-события активной итерации (персист + live) в порядке появления,
-  // без дублей по id. Учитываем только ещё выполняющиеся шаги: вопрос
-  // завершённого прогона не должен открывать модалку даже без ответа (иначе
-  // персистентные вопросы Refine всплывают при работающем Resolve).
   const questionEvents = useMemo<QuestionEvent[]>(() => {
     if (stepRuns.status !== 'ready') return [];
     const seen = new Set<string>();
@@ -1418,9 +1194,6 @@ function TaskDetailView({
     return questions;
   }, [stepRuns, liveEventsByRun, liveStatusByRun]);
 
-  // Неотвеченные вопросы активной итерации: каждый рисуется баннером, а
-  // `activeQuestionId` определяет, какая модалка открыта. Так закрытая модалка
-  // не прячет вопрос — баннер остаётся кликабельным.
   const unansweredQuestions = useMemo(
     () =>
       questionEvents.filter(
@@ -1429,15 +1202,6 @@ function TaskDetailView({
     [questionEvents, answeredQuestionIds],
   );
 
-
-
-  // Авто-скролл внутри карточки итерации к running-исполнителю.
-  // Когда появляется НОВЫЙ running-шаг — скроллим его карточку в зону
-  // видимости ОДИН раз. После этого пользователь свободно листает страницу.
-  // Сброс: когда running-шагов нет или текущий завершился — следующий
-  // новый running снова получит скролл.
-  // Если есть неотвеченные вопросы — скролл не срабатывает: пользователь
-  // должен видеть вопрос, а не улетать к агенту.
   useEffect(() => {
     if (unansweredQuestions.length > 0) return;
     if (stepRuns.status !== 'ready') return;
@@ -1451,7 +1215,6 @@ function TaskDetailView({
       return;
     }
 
-    // Уже скроллили к этому же прогону — не дёргаем страницу повторно.
     if (lastScrolledRunRef.current === firstRunning.id) return;
     lastScrolledRunRef.current = firstRunning.id;
 
@@ -1466,17 +1229,11 @@ function TaskDetailView({
     return () => clearTimeout(timer);
   }, [stepRuns, liveStatusByRun, unansweredQuestions]);
 
-  // Опрос снимка управления (react-query, refetchInterval 4с) для ЦЕЛИ
-  // модалки: прогон шага адресуется id итерации, отчёт — синтетическим
-  // `{issueId}/report`. При 409/отсутствии живого сеанса `getIterationControl`
-  // отдаёт null → панель скрыта.
   const modalSessionId = modalTarget?.sessionId ?? null;
   const modalRunning = modalTarget?.active ?? false;
   const controlQuery = useIterationControl(modalSessionId, modalRunning);
   const controlSnapshot = modalRunning ? (controlQuery.data ?? null) : null;
 
-  // `controlTick` — сигнал «перечитать снапшот» после управляющей команды
-  // (promptIteration в handleMessageSubmit).
   useEffect(() => {
     if (controlTick === 0 || !modalSessionId) return;
     void queryClient.invalidateQueries({
@@ -1484,7 +1241,6 @@ function TaskDetailView({
     });
   }, [controlTick, modalSessionId, queryClient]);
 
-  // `editor_text` из живой сессии префилит поле ввода (последнее событие).
   const lastEditorText = useMemo(() => {
     let text: string | null = null;
     for (const event of expandedEvents) {
@@ -1499,8 +1255,6 @@ function TaskDetailView({
 
   const canStartNormal =
     state.status === 'ready' ? canStartIteration(state.iterations) : false;
-  // Можно создать черновик: есть активная итерация (running/pending/preparing),
-  // но нет draft/pending.
   const hasActiveIteration =
     state.status === 'ready'
       ? state.iterations.some((it) => isIterationActive(it.status))
@@ -1516,23 +1270,17 @@ function TaskDetailView({
     : hasActiveIteration
       ? 'Создать черновик'
       : 'Запустить новую итерацию';
-  // Новые итерации показываем первыми; сам state не мутируем —
-  // activeIterationId по умолчанию берёт последний (свежайший) элемент.
   const orderedIterations =
     state.status === 'ready'
       ? [...state.iterations].sort((a, b) => b.number - a.number)
       : [];
   const prAvailable =
     state.status === 'ready' && state.issue.repositories.length > 0;
-  // Empty selection is not sent as "use the issue defaults": the run simply
-  // does not start.
   const selectedRunSteps = PIPELINE_ORDER.filter(
     (step) => chosenSteps.has(step) && (step !== 'pr' || prAvailable),
   );
   const hasIterationSteps = selectedRunSteps.length > 0;
   const resultAvailable = state.status === 'ready';
-  // MR-ссылки для шапки: персистентные из issue.merge_requests + живые из SSE,
-  // дедуп по URL (событие и данные задачи дублируют друг друга).
   const mrItems = useMemo(() => {
     const byUrl = new Map<string, { url: string; repositoryUrl: string }>();
     const stored = state.status === 'ready' ? state.issue.merge_requests : null;
@@ -1549,16 +1297,9 @@ function TaskDetailView({
     return [...byUrl.values()];
   }, [state, liveMrUrls]);
 
-
-  // Готов ли отчёт: эндпоинт отдаёт отчёт последней
-  // completed-итерации, а снапшот создаётся в момент её завершения. Значит
-  // готовность = есть хоть одна завершённая итерация (не важно, что лежит
-  // в отчёте resolve-шага).
   const resultReady =
     state.status === 'ready' &&
     state.iterations.some((iteration) => iteration.status === 'completed');
-  // Подготовка завершена: либо пришёл терминальный `ready`, либо задача уже
-  // вышла из фазы подготовки (после перезагрузки SSE-события не реплеятся).
   const workspaceReady =
     workspaceProgress !== null
       ? workspaceProgress.steps.some(
@@ -1567,7 +1308,6 @@ function TaskDetailView({
       : state.status === 'ready' &&
         state.issue.status !== 'pending' &&
         state.issue.status !== 'preparing';
-  // Сводка по репозиториям для шапки: статус — из накопленного прогресса.
   const repoRows =
     state.status === 'ready'
       ? state.issue.repositories.map((repository) => ({
@@ -1587,9 +1327,6 @@ function TaskDetailView({
         }))
       : [];
 
-  // Review results belong to the repository's MR, not to an iteration: the
-  // fetch endpoint still needs one iteration whose `result.json` carries those
-  // MRs, so pick the newest terminal iteration that ran the `pr` step.
   const reviewIteration =
     state.status === 'ready'
       ? ([...state.iterations]
@@ -1603,9 +1340,6 @@ function TaskDetailView({
           .sort((a, b) => b.number - a.number)[0] ?? null)
       : null;
 
-  // HEAD-проб артефакта при открытии модалки. 404 → «отчёта ещё нет»,
-  // не-html → «только markdown», `iteration-snapshot` → бейдж «предыдущая
-  // версия». Ошибку сети молча гасим: показываем iframe, как раньше.
   useEffect(() => {
     if (!resultOpen || !issueId) {
       setArtifactMeta(null);
@@ -1630,9 +1364,6 @@ function TaskDetailView({
     };
   }, [resultOpen, issueId]);
 
-  // HEAD сказал «markdown» — iframe такое не отрисует, поэтому тянем текст и
-  // рендерим его как markdown. Готовность отчёта и наличие html не связаны:
-  // report.md пишется раньше, и его отсутствие в UI — дефект показа, не данных.
   useEffect(() => {
     if (!issueId || !artifactMeta) return;
     const isHtml = artifactMeta.contentType.includes('text/html');
@@ -1654,9 +1385,6 @@ function TaskDetailView({
     };
   }, [artifactMeta, issueId]);
 
-  // Список порождённых файлов. Best-effort: сеть/не-2xx → пустой список,
-  // чтобы шапка не падала. Перезагружается с refreshTick (терминал итерации,
-  // новая итерация) и когда отчёт становится готов.
   useEffect(() => {
     if (!issueId || !resultReady) {
       setResultFiles([]);
@@ -1675,9 +1403,6 @@ function TaskDetailView({
     };
   }, [issueId, resultReady, refreshTick]);
 
-  // Report status comes from the DB, not from a file being present: polling
-  // never gives up (the run is fire-and-forget, with no SSE finale) until a
-  // terminal status arrives. Readiness follows the artifact, html is its own flag.
   useEffect(() => {
     if (!issueId) return;
     let cancelled = false;
@@ -1695,25 +1420,18 @@ function TaskDetailView({
 
     const apply = (next: ReportStatus) => {
       if (cancelled) return;
-      // Response shape is part of the contract: without `artifacts` this is not
-      // a report status, so ignore it instead of deriving `running` from it.
       if (!next || !next.artifacts) return;
       setReportStatusInfo(next);
       setReportMeta({
         observedModel: next.observedModel,
         warnings: next.warnings ?? [],
       });
-      // Readiness follows the artifact, not the run outcome: a run interrupted
-      // after it wrote report.md still leaves a usable report, and hiding its
-      // download behind a red badge was a lie in the other direction.
       setReportReady(
         next.status === 'success' || (next.artifacts?.md.present ?? false),
       );
       const running = next.status === 'running';
       reportRunningRef.current = running;
       setReportRunning(running);
-      // Hydrate the run's session (events/stdout/stats) from the DB; otherwise a
-      // page reload leaves nothing but the badge.
       if (!running) hydrateRun();
     };
 
@@ -1725,8 +1443,6 @@ function TaskDetailView({
     reportPollRef.current = poll;
 
     poll();
-    // No give-up timer: a report run takes tens of minutes, and a truncated
-    // poll used to report "finished" mid-flight.
     timer = setInterval(poll, 4000);
     return () => {
       cancelled = true;
@@ -1734,8 +1450,6 @@ function TaskDetailView({
       if (timer) clearInterval(timer);
     };
   }, [issueId]);
-  // Room mode: the last refine recommended a room, so an active resolve step
-  // shows agent tabs instead of a single session.
   const roomIteration =
     stepRuns.status === 'ready' && isRoomIteration(stepRuns.stepRuns);
   const hint = !hasIterationSteps
@@ -1746,15 +1460,11 @@ function TaskDetailView({
         ? 'После Resolver автоматически запустится Код-ревью.'
         : 'Итерация завершится сразу после работы Resolver.';
 
-  // One shared tick for every step card that shows elapsed time.
   const anyActiveStep =
     stepRuns.status === 'ready' &&
     stepRuns.stepRuns.some((run) => isActiveStatus(statusOf(run)));
   const now = useNow(anyActiveStep || reportPhase === 'running');
 
-  // A run whose heartbeat stopped is dead, whatever the status word says. The
-  // old code trusted `running` alone: a run killed mid-flight left the badge at
-  // «⏳» forever and the retry button disabled forever.
   const reportLastActivity = reportStatusInfo?.updatedAt
     ? Date.parse(reportStatusInfo.updatedAt)
     : null;
@@ -1767,7 +1477,6 @@ function TaskDetailView({
       ? Math.max(1, Math.round((now - reportLastActivity) / 60_000))
       : 0;
 
-  // Slash palette: filter the live session's commands while typing `/…`.
   const slashQuery = message.startsWith('/') ? message.slice(1) : null;
   const commandMatches =
     slashQuery !== null && controlSnapshot
@@ -1786,7 +1495,6 @@ function TaskDetailView({
     commandMatches.length > 0
       ? Math.min(paletteIndex, commandMatches.length - 1)
       : 0;
-  // Заполненная builtin-команда: показываем подсказку аргументов под полем.
   const filledCommand = controlSnapshot?.commands.find(
     (command) =>
       message === `/${command.name} ` ||
@@ -1794,7 +1502,6 @@ function TaskDetailView({
   );
   const commandHint = filledCommand?.argumentHint ?? null;
 
-  // Новый ввод сбрасывает выбор в палитре слэш-команд.
   useEffect(() => {
     setPaletteIndex(0);
   }, [message]);
@@ -1806,10 +1513,8 @@ function TaskDetailView({
 
     const issue = state.status === 'ready' ? state.issue : null;
 
-    // Шаг PR допустим только при наличии хотя бы одного репозитория.
     const effectiveSteps = selectedRunSteps;
 
-    // В тело идут только модели выбранных шагов.
     const activeStepModels = Object.fromEntries(
       Object.entries(stepModels).filter(
         ([step]) =>
@@ -1818,7 +1523,6 @@ function TaskDetailView({
       ),
     ) as StepModels;
 
-    // В тело идут только thinking-уровни выбранных шагов.
     const activeStepThinkingLevels = Object.fromEntries(
       Object.entries(stepThinkingLevels).filter(
         ([step]) =>
@@ -1838,9 +1542,6 @@ function TaskDetailView({
         Object.keys(activeStepThinkingLevels).length > 0
           ? activeStepThinkingLevels
           : undefined,
-      // ID репозиториев для MR. Массив авторитетен: выбран шаг pr → шлём
-      // текущий выбор (возможно пустой — снимает все галочки), не выбран →
-      // пустой массив (сбрасываем create_mr, чтобы `pr` не возвращался).
       pr_repository_ids: selectedSteps.includes('pr') ? [...prRepoIds] : [],
       worker_count: workerCount > 0 ? workerCount : undefined,
     };
@@ -1850,7 +1551,6 @@ function TaskDetailView({
 
     try {
       if (hasDraftIteration) {
-        // Редактируем существующий черновик — обновляем только context.
         const draft = state.status === 'ready'
           ? state.iterations.find((it) => it.status === 'draft')
           : undefined;
@@ -1876,7 +1576,6 @@ function TaskDetailView({
       setWorkerCount(1);
       setScrollToIterations(true);
       setRefreshTick((tick) => tick + 1);
-      // Успешное создание итерации/сохранение черновика закрывает модалку.
       setShowIterationModal(false);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : String(error));
@@ -1892,8 +1591,6 @@ function TaskDetailView({
     setDevServerError(null);
     try {
       await stopDevServers(id);
-      // Backend гасит процессы и обнуляет порт — отражаем это локально, не
-      // дожидаясь следующего GET.
       setState((current) =>
         current.status === 'ready'
           ? {
@@ -1923,8 +1620,6 @@ function TaskDetailView({
         1500,
       );
     } catch {
-      // Clipboard может быть недоступен (нет прав/не secure context) —
-      // порт всё равно виден в индикаторе.
     }
   }
 
@@ -1934,7 +1629,6 @@ function TaskDetailView({
       await deleteIssueFile(fileId);
       setIssueFiles((current) => current.filter((file) => file.id !== fileId));
     } catch {
-      // best-effort: ошибка удаления не должна ронять карточку
     } finally {
       setDeletingFileId(null);
     }
@@ -1949,16 +1643,12 @@ function TaskDetailView({
 
     try {
       if (controlSnapshot) {
-        // Слэш-команды и режим prompt — новая инструкция (без mode);
-        // steer/followUp адресно уходят в живую сессию.
         const mode: PromptMode | undefined =
           trimmed.startsWith('/') || sendMode === 'prompt'
             ? undefined
             : sendMode;
         const result = await promptIteration(iterationId, trimmed, mode);
         if (!result.ok) {
-          // Обработанный, но отвергнутый builtin (напр. `/thinking bogus`):
-          // показываем серверную причину, черновик НЕ чистим.
           setMessageError(
             result.error ?? 'Не удалось отправить сообщение',
           );
@@ -2005,17 +1695,14 @@ function TaskDetailView({
       const { comments, errors } = await fetchReviewComments(iteration.id);
 
       if (comments.length === 0) {
-        // Комментариев нет — код ревью чист.
         setFetchReviewError(null);
         setFetchReviewMessage(
           'Комментариев ревью нет — код чист ✨',
         );
-        // Сообщение исчезнет через 4 секунды.
         setTimeout(() => setFetchReviewMessage(null), 4000);
         return;
       }
 
-      // Формируем текст комментариев как markdown.
       const lines: string[] = [
         `# Review Comments`,
         `> Fetched from MR/PR of iteration #${iteration.number}`,
@@ -2040,7 +1727,6 @@ function TaskDetailView({
       }
       const reviewText = lines.join('\n');
 
-      // Создаём файл с комментариями и предзаполняем поле контекста.
       const reviewFile = new File(
         [reviewText],
         `review-iteration-${iteration.number}.md`,
@@ -2144,7 +1830,6 @@ function TaskDetailView({
     }
   }
 
-
   async function handleQuestionResponse(
     question: QuestionEvent,
     payload: { value?: string; confirmed?: boolean; cancelled?: boolean },
@@ -2162,8 +1847,6 @@ function TaskDetailView({
       setQuestionError(error instanceof Error ? error.message : String(error));
     } finally {
       setQuestionSubmitting(false);
-      // id гасится и при ошибке, чтобы модалка не зацикливалась; текст ошибки
-      // остаётся в баннере задачи.
       setAnsweredQuestionIds((current) => {
         const next = new Set(current);
         next.add(question.id);
@@ -2172,7 +1855,6 @@ function TaskDetailView({
     }
   }
 
-  /** Отправляет управляющую команду живой сессии и обновляет снимок. */
   async function runControlCommand(command: SessionCommand) {
     if (!modalSessionId) return;
     setControlError(null);
@@ -2191,7 +1873,6 @@ function TaskDetailView({
     }
   }
 
-  /** Кодирует пару (provider, modelId) в значение `<option>`. */
   function modelOptionValue(provider: string, id: string): string {
     return `${provider}/${id}`;
   }
@@ -2225,7 +1906,6 @@ function TaskDetailView({
     setCompactInstructions('');
   }
 
-  /** Возврат текста из очереди в композер: append, не перезапись черновика. */
   function recallQueued(text: string) {
     setMessage((current) =>
       current.trim() ? `${current.trimEnd()} ${text}` : text,
@@ -2236,11 +1916,6 @@ function TaskDetailView({
     setResultOpen(true);
   }
 
-  /**
-   * Retry button: re-runs the report agent. The server refuses a second run
-   * with 409, so the button is gated by its own request only — gating it by run
-   * status is what left it disabled on a dead run.
-   */
   async function handleRefreshReport() {
     if (state.status !== 'ready' || reportStarting) return;
     setReportError(null);
@@ -2250,8 +1925,6 @@ function TaskDetailView({
       const modelParam = reportModel || undefined;
       const thinkingParam = reportThinkingLevel || undefined;
       await runReportAgent(state.issue.id, modelParam, thinkingParam);
-      // No optimistic "running": re-read the DB so the badge shows the run that
-      // actually exists (a 409 here means another run is live).
       reportPollRef.current();
     } catch (error) {
       setReportError(
@@ -2857,7 +2530,6 @@ function TaskDetailView({
               type="button"
               data-testid="open-iteration-modal"
               onClick={() => {
-                // Если есть черновик — подгружаем его контекст в редактор.
                 if (hasDraftIteration && state.status === 'ready') {
                   const draft = state.iterations.find((it) => it.status === 'draft');
                   if (draft) setContext(draft.context ?? '');
@@ -3161,9 +2833,6 @@ function TaskDetailView({
                     {iteration.steps.length > 0 && (
                       <ul className="mt-2 flex flex-wrap gap-2">
                         {(() => {
-                          // Терминальность накапливается по порядку шагов:
-                          // после первого failed/aborted/needs_input все
-                          // последующие уже не выполнятся → `skipped`.
                           let terminated = false;
                           return iteration.steps.map((step) => {
                             if (!isSelected) {
@@ -3272,11 +2941,6 @@ function TaskDetailView({
                                   stepDurationMs(run, stepLive, now),
                                 );
                                 const changedFiles = stepChangedFiles(events);
-                                // room/stages-resolve шлёт stats-события каждого
-                                // агента на общий шаг; футер должен показать
-                                // агрегат `run.stats` (тотал шага), а не stats
-                                // последнего координатора — пустые events
-                                // заставляют resolveFooter взять prop.
                                 const isRoomResolve =
                                   roomIteration && run.step === 'resolve';
                                 const footer = resolveFooter(
@@ -4120,9 +3784,6 @@ function TaskDetailView({
   );
 }
 
-/** Inline-вопрос агента: отображается прямо на странице задачи, не в модалке.
- * Тип `method` определяет контрол: select → radio, confirm → Да/Нет,
- * input → строка, editor → textarea. */
 function InlineQuestion({
   question,
   submitting,

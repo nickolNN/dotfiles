@@ -2,10 +2,6 @@ import { expect, test } from '@playwright/test';
 
 const API = '/issue-resolver/api/v1';
 
-/**
- * Валидация форм — здесь мок-бэкенд: 400/422 не создают записей, а проверяется
- * реальный контракт роутов.
- */
 test.describe('edge: валидация форм', () => {
   test('пустой заголовок → серверная ошибка валидации', async ({ page }) => {
     await page.goto('/#/new');
@@ -23,8 +19,6 @@ test.describe('edge: валидация форм', () => {
   test('несуществующий repo_id → 422 Repository not found', async ({
     page,
   }) => {
-    // Реальная форма больше не вводит URL, поэтому чужой repo_id
-    // подставляем в уходящее тело — так проверяем именно серверный 422.
     await page.route(`**${API}/issues`, async (route) => {
       if (route.request().method() !== 'POST') {
         await route.fallback();

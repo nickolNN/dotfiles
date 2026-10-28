@@ -25,13 +25,6 @@ export default function NewIssue(props: NewIssueProps) {
   );
 }
 
-/**
- * Гарантирует наличие QueryClient. В приложении провайдер ставит `main.tsx`,
- * но форма в тестах монтируется напрямую — без провайдера любой `useQuery`
- * бросил бы «No QueryClient set». Если провайдер уже есть — пробрасываем
- * детей в общий клиент приложения; иначе создаём локальный клиент на время
- * жизни формы, чтобы тесты не делили кэш между собой.
- */
 function NewIssueQueryBoundary({ children }: { children: ReactNode }) {
   const existing = useContext(QueryClientContext);
   const [fallbackClient] = useState(() =>
@@ -58,11 +51,6 @@ function NewIssueQueryBoundary({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * Тонкая обёртка создания задачи: вся форма и логика живут в общем
- * `IssueForm`, здесь остаётся только мутация `useCreateIssue` и проброс
- * результата наружу.
- */
 function NewIssueView({ onCreated, onBack }: NewIssueProps) {
   const createMutation = useCreateIssue();
 
@@ -76,11 +64,6 @@ function NewIssueView({ onCreated, onBack }: NewIssueProps) {
   return (
     <IssueForm
       onSubmit={async (payload, files) => {
-        // `mutateAsync` возвращает промис и естественно реджектится при
-        // ошибке — `IssueForm.submitForm` ловит этот reject (файлы при этом
-        // сохраняются), а текст ошибки приходит через проп `error`. Ручная
-        // обёртка `new Promise` + `mutate` могла утекать необработанным
-        // реджектом при размонтировании формы.
         const issue = await createMutation.mutateAsync({
           request: payload,
           files,

@@ -108,7 +108,6 @@ describe('GitHubResolver', () => {
     expect(info).toEqual({
       ...GITHUB_INFO,
       branches: ['main', 'develop'],
-      // В моке нет permissions → право на запись не подтверждено.
       writeAccess: false,
     });
     expect(fetchMock).toHaveBeenCalledWith(
@@ -393,11 +392,9 @@ describe('BitbucketResolver', () => {
       .mockResolvedValueOnce(
         jsonResponse({ values: [{ displayId: 'develop' }, { displayId: 'main' }] }),
       )
-      // POST /branches — тестовая ветка создана.
       .mockResolvedValueOnce(
         jsonResponse({ displayId: '_pi_write_test', id: 'refs/heads/_pi_write_test' }),
       )
-      // DELETE /branches — уборка.
       .mockResolvedValueOnce(jsonResponse({}, 200));
     vi.stubGlobal('fetch', fetchMock);
     return fetchMock;
@@ -432,7 +429,6 @@ describe('BitbucketResolver', () => {
     expect(fetchMock.mock.calls[0][1]).toEqual({
       headers: { Authorization: 'Bearer pat' },
     });
-    // Пробная ветка создаётся от default-ветки и удаляется; username не нужен.
     expect(fetchMock.mock.calls[3][0]).toBe(
       'https://bitbucket.company.com/rest/api/1.0/projects/project/repos/repo/branches',
     );
@@ -476,7 +472,6 @@ describe('BitbucketResolver', () => {
     expect(fetchMock.mock.calls[0][1]).toEqual({
       headers: { Authorization: expected },
     });
-    // Пробная ветка создаётся/удаляется тем же Basic-токеном, без username.
     expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' });
     expect(fetchMock.mock.calls[4][1]).toMatchObject({ method: 'DELETE' });
     expect(info.writeAccess).toBe(true);
@@ -532,7 +527,6 @@ describe('BitbucketResolver', () => {
 
     expect(info.writeAccess).toBe(false);
     expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' });
-    // 4 вызова: metadata, default-branch, branches, неудачный POST — DELETE нет.
     expect(fetchMock.mock.calls).toHaveLength(4);
   });
 
@@ -554,7 +548,6 @@ describe('BitbucketResolver', () => {
 
     expect(info.writeAccess).toBe(false);
     expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' });
-    // 4 вызова: metadata, default-branch, branches, неудачный POST — DELETE нет.
     expect(fetchMock.mock.calls).toHaveLength(4);
   });
 
@@ -576,7 +569,6 @@ describe('BitbucketResolver', () => {
 
     expect(info.writeAccess).toBe(false);
     expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' });
-    // 4 вызова: metadata, default-branch, branches, конфликтный POST — DELETE нет.
     expect(fetchMock.mock.calls).toHaveLength(4);
   });
 
@@ -586,11 +578,9 @@ describe('BitbucketResolver', () => {
       .mockResolvedValueOnce(jsonResponse(REPO_BODY))
       .mockResolvedValueOnce(jsonResponse({ displayId: 'main' }))
       .mockResolvedValueOnce(jsonResponse({ values: [{ displayId: 'main' }] }))
-      // POST /branches — тестовая ветка создана, права подтверждены.
       .mockResolvedValueOnce(
         jsonResponse({ displayId: '_pi_write_test', id: 'refs/heads/_pi_write_test' }),
       )
-      // DELETE /branches — уборка падает по сети, но это best-effort.
       .mockRejectedValueOnce(new Error('network down'));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -610,7 +600,6 @@ describe('BitbucketResolver', () => {
       .mockResolvedValueOnce(jsonResponse(REPO_BODY))
       .mockResolvedValueOnce(jsonResponse({ displayId: 'main' }))
       .mockResolvedValueOnce(jsonResponse({ values: [{ displayId: 'main' }] }))
-      // POST /branches — сеть отвалилась до ответа.
       .mockRejectedValueOnce(new Error('network down'));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -621,7 +610,6 @@ describe('BitbucketResolver', () => {
 
     expect(info.writeAccess).toBe(false);
     expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' });
-    // 4 вызова: metadata, default-branch, branches, упавший POST — DELETE нет.
     expect(fetchMock.mock.calls).toHaveLength(4);
   });
 
@@ -949,7 +937,6 @@ describe('validateRepos', () => {
     );
     expect(denied[0].info?.writeAccess).toBe(false);
 
-    // Старый/самописный резолвер без поля → false, а не undefined.
     const legacy = await validateRepos(
       ['https://github.com/acme/app'],
       {},

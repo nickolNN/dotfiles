@@ -1,8 +1,3 @@
-/**
- * Пакетная валидация URL репозиториев: определяет платформу, резолвит
- * метаданные и не роняет запрос из-за одной ошибки (сеть/404/403 →
- * `valid: false` с сообщением).
- */
 
 import type { RepoValidationResult } from '@issue-resolver/shared';
 import {
@@ -11,15 +6,10 @@ import {
   type RepoResolverFactory,
 } from './resolver';
 
-/** Валидатор URL репозиториев (шов инъекции для роута и тестов). */
 export type ReposValidator = (
   urls: string[],
 ) => Promise<RepoValidationResult[]>;
 
-/**
- * Валидирует список URL. Резолвер выбирается фабрикой (`createRepoResolver`
- * по умолчанию); фабрику можно подменить в тестах.
- */
 export async function validateRepos(
   urls: string[],
   env: NodeJS.ProcessEnv,
@@ -38,7 +28,6 @@ export async function validateRepos(
           url,
           valid: true,
           platform,
-          // Инжектированные/fake-резолверы могут не знать о правах записи.
           info: { ...info, writeAccess: info.writeAccess ?? false },
         };
       } catch (err) {
@@ -53,7 +42,6 @@ export async function validateRepos(
   );
 }
 
-/** Собирает валидатор, замкнутый на env (и, в тестах, на фабрику резолверов). */
 export function createReposValidator(
   env: NodeJS.ProcessEnv,
   factory?: RepoResolverFactory,

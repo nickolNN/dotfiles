@@ -32,10 +32,8 @@ describe('SessionView — события полного pi-паритета (Pha
     ];
     render(<SessionView events={events} />);
 
-    // ровно две карточки инструментов — tool_update не создал третью
     expect(screen.getByTestId('tool-use-bash')).toBeInTheDocument();
     expect(screen.getByTestId('tool-use-read')).toBeInTheDocument();
-    // partialText попал только в свой call-2, не в call-1
     expect(screen.queryByTestId('tool-partial-bash')).toBeNull();
     expect(screen.getByTestId('tool-partial-read')).toHaveTextContent(
       'частичный вывод чтения',
@@ -248,7 +246,6 @@ describe('SessionView — события полного pi-паритета (Pha
     const block = screen.getByTestId('session-bash');
     expect(block).toHaveTextContent('line-1');
     expect(block).toHaveTextContent('line-2');
-    // отдельными строками bash-события не рисуются
     expect(screen.queryByTestId('session-view')).toBeNull();
   });
 
@@ -537,11 +534,9 @@ describe('SessionView — живое размышление (thinking_update)', 
       />,
     );
 
-    // ровно один блок: update'ы не пушатся в visible как отдельные строки
     const blocks = screen.getAllByTestId('session-thinking');
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toHaveAttribute('data-streaming', 'true');
-    // показан последний накопленный partial (открыт, т.к. streaming)
     expect(screen.getByTestId('session-thinking-text')).toHaveTextContent(
       'первая и вторая',
     );
@@ -558,8 +553,6 @@ describe('SessionView — живое размышление (thinking_update)', 
       />,
     );
 
-    // Пока стрим идёт — тело ограничено (max-h + overflow), чтобы растущий
-    // текст прокручивался внутри блока, а не распирал карточку.
     const body = screen.getByTestId('session-thinking-text');
     expect(body.className).toContain('max-h-96');
     expect(body.className).toContain('overflow-auto');
@@ -580,7 +573,6 @@ describe('SessionView — живое размышление (thinking_update)', 
       />,
     );
 
-    // Последнее ВИДИМОЕ событие — text, но агент сейчас думает.
     expect(screen.getByTestId('session-working')).toHaveAttribute(
       'data-phase',
       'thinking',
@@ -614,7 +606,6 @@ describe('SessionView — живое размышление (thinking_update)', 
       />,
     );
 
-    // Один финальный блок, live-partial убран, текста 'partial' больше нет.
     const blocks = screen.getAllByTestId('session-thinking');
     expect(blocks).toHaveLength(1);
     expect(screen.getByTestId('session-thinking-text')).toHaveTextContent(
@@ -668,7 +659,6 @@ describe('SessionView — живая проза (text_update)', () => {
     const blocks = screen.getAllByTestId('session-text-live');
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toHaveTextContent('One bug in the restore section');
-    // updates are not pushed into `visible` as separate rows
     expect(screen.queryAllByTestId('session-text')).toHaveLength(0);
     expect(screen.getByTestId('session-working')).toHaveAttribute(
       'data-phase',

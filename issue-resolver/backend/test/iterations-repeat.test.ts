@@ -22,7 +22,6 @@ interface MultipartFile {
   content: string;
 }
 
-/** multipart/form-data: поле `payload` + повторяющиеся `files`. */
 function multipart(
   fields: Record<string, string>,
   files: MultipartFile[],
@@ -71,7 +70,6 @@ async function waitFor<T>(
   }
 }
 
-/** Ждёт, пока итерация перейдёт в терминальный статус (повтор разрешён). */
 async function waitForTerminalIteration(
   db: ReturnType<typeof createDb>,
   iterationId: string,
@@ -148,8 +146,6 @@ describe('POST /iterations/:id/repeat', () => {
         title: 'Повтор',
         pipeline_steps: ['resolve'],
       });
-      // Ждём завершения итерации #1: при активной итерации новая создалась бы
-      // как draft (см. iteration-queue.test.ts), а тесту нужен запущенный #2.
       await waitFor(() => {
         const first = db
           .select()
@@ -178,7 +174,6 @@ describe('POST /iterations/:id/repeat', () => {
       const source = created.json();
       expect(source.number).toBe(2);
 
-      // Исходная итерация должна завершиться до repeat — повтор активной запрещён.
       await waitForTerminalIteration(db, source.id);
 
       const repeat = await app.inject({
@@ -193,7 +188,6 @@ describe('POST /iterations/:id/repeat', () => {
       expect(copy.issue_id).toBe(issueId);
       expect(copy.number).toBe(3);
       expect(copy.status).toBe('pending');
-      // Параметры/запрос копируются ВЕРБАТИМ (шаги не пересчитываются).
       expect(copy.context).toBe(source.context);
       expect(copy.review_context).toBe('ревью-контекст');
       expect(copy.is_review_need).toBe(true);
@@ -203,7 +197,6 @@ describe('POST /iterations/:id/repeat', () => {
       expect(copy.thinking_level).toBe('high');
       expect(copy.step_thinking_levels).toEqual({ resolve: 'off' });
 
-      // Полная форма Iteration — все поля присутствуют.
       expect(Object.keys(copy).sort()).toEqual(
         [
           'context',
@@ -241,7 +234,6 @@ describe('POST /iterations/:id/repeat', () => {
         title: 'Вложения',
         pipeline_steps: ['resolve'],
       });
-      // Итерация #1 должна завершиться, иначе #2 создалась бы как draft.
       await waitFor(() => {
         const first = db
           .select()
@@ -252,7 +244,6 @@ describe('POST /iterations/:id/repeat', () => {
         return first && first.status === 'completed' ? true : undefined;
       });
 
-      // Итерация #2 с вложением уровня итерации.
       const { payload, headers } = multipart(
         {
           payload: JSON.stringify({
@@ -275,10 +266,8 @@ describe('POST /iterations/:id/repeat', () => {
       expect(sourceFiles).toHaveLength(1);
       expect(sourceFiles[0].rel_path).toBe('attachments/iteration-2/note.txt');
 
-      // Дожидаемся терминального статуса исходной итерации до repeat.
       await waitForTerminalIteration(db, source.id as string);
 
-      // Файл уровня задачи (iteration_id IS NULL) — дублировать нельзя.
       await insertMany(db, [
         {
           issueId,
@@ -305,7 +294,6 @@ describe('POST /iterations/:id/repeat', () => {
       expect(copied[0].size).toBe(sourceFiles[0].size);
       expect(copied[0].mime_type).toBe(sourceFiles[0].mime_type);
 
-      // Исходное вложение не пропало; файл задачи остался ровно один.
       expect(await listByIteration(db, source.id as string)).toHaveLength(1);
       const taskLevel = (await listByIssue(db, issueId)).filter(
         (file) => file.iteration_id === null,

@@ -438,7 +438,6 @@ describe('TaskDetail — статистика карточки шага', () => 
     const speed = within(tokens).getByTestId('step-speed');
     expect(speed).toHaveTextContent('63.5 t/s');
     expect(speed).toHaveTextContent('avg 42 t/s');
-    // Существующие сегменты не сломаны.
     expect(within(tokens).getByTestId('session-token-in')).toHaveTextContent(
       '1.5k',
     );
@@ -446,8 +445,6 @@ describe('TaskDetail — статистика карточки шага', () => 
   });
 
   it('speed только с мгновенной (avg null) → без «avg»', async () => {
-    // Общий тип SessionSpeed требует оба поля, но футер защитно обрабатывает
-    // частичное окно (avg ещё не посчитано) — моделируем null-приведением.
     stubFetch([
       makeStepRun({
         status: 'running',
@@ -486,7 +483,6 @@ describe('TaskDetail — статистика карточки шага', () => 
 
     const tokens = await screen.findByTestId('step-tokens');
     expect(within(tokens).queryByTestId('step-speed')).toBeNull();
-    // Существующие сегменты не сломаны.
     expect(tokens).toHaveTextContent('Claude Sonnet 4');
     expect(within(tokens).getByTestId('session-token-in')).toHaveTextContent(
       '1.2k',
@@ -515,7 +511,6 @@ describe('TaskDetail — статистика карточки шага', () => 
     const resolve = makeStepRun({
       status: 'success',
       stats: makeStats({
-        // Агрегат шага: исполнители + координатор.
         toolCalls: 7,
         tokens: { input: 2400, output: 500, cacheRead: 10, cacheWrite: 5, total: 2915 },
         cost: 0.0123,
@@ -523,7 +518,6 @@ describe('TaskDetail — статистика карточки шага', () => 
       events: [
         {
           type: 'stats',
-          // Stats-событие последнего координатора — НЕ должно попасть в футер.
           stats: makeStats({
             model: 'coordinator-model',
             tokens: { input: 1200, output: 500, cacheRead: 0, cacheWrite: 0, total: 1700 },
@@ -542,7 +536,6 @@ describe('TaskDetail — статистика карточки шага', () => 
       '500',
     );
     expect(tokens).toHaveTextContent('7 вызовов');
-    // Координаторское stats-событие проигнорировано (иначе было бы 1.2k/model).
     expect(tokens).not.toHaveTextContent('coordinator-model');
     expect(within(tokens).getByTestId('session-token-in')).not.toHaveTextContent(
       '1.2k',
@@ -569,7 +562,6 @@ describe('TaskDetail — статистика карточки шага', () => 
     ]);
     render(<TaskDetail issueId="issue-1" />);
 
-    // exec-время шага из created_at/updated_at.
     expect(await screen.findByTestId('step-duration')).toHaveTextContent('1м');
     const tokens = await screen.findByTestId('step-tokens');
     expect(tokens).toHaveTextContent('Claude Sonnet 4');

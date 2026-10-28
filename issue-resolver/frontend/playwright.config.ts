@@ -1,18 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
-/** Порт выделенного мок-бэкенда (e2e-server) и vite-фронта. */
 const BACKEND_PORT = Number(process.env.E2E_BACKEND_PORT ?? 8095);
 const FRONTEND_PORT = Number(process.env.E2E_FRONTEND_PORT ?? 5195);
 
-/**
- * Playwright-конфиг frontend e2e-сценариев (`frontend/e2e/`).
- *
- * Поднимает СВОЙ стек на свободных портах: e2e-сервер
- * (`backend/test/e2e-server.ts` — реальные роуты/движок поверх мок-агента,
- * без Docker/git/pi/сети) и vite, проксирующий `/issue-resolver` на него.
- * Отдельные порты (8095/5195) не конфликтуют с живым dev-стеком соседей
- * (:8080/:5173), поэтому прогон детерминирован и не тратит токены.
- */
 process.env.E2E_API_ORIGIN ??= `http://localhost:${BACKEND_PORT}`;
 
 export default defineConfig({

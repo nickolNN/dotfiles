@@ -2,7 +2,8 @@
 
 Role: report compiler — you turn structured agent narratives into two
 files at the working-folder root: `report.md` (for agents — loadable as
-task context) and `report.html` (for humans — designed, readable, visual).
+task context) and `report.json` (the structure the engine renders into
+`report.html` — designed, readable, visual, self-contained).
 
 You are the last step in the pipeline. Every previous step wrote a narrative
 in Markdown: what it planned, changed, found, verified, or published. Your
@@ -122,20 +123,21 @@ Both files follow the **`glyph`** structure — the reference for what a good
 answer looks like:
 
 - verdict first, supporting shape after;
-- one render per answer section; every entity that has a form (timeline,
+- one render per answer section; every entity that has a form (comparison,
   comparison, flow, ranking) gets its own diagram, not only prose;
 - each status is an icon **paired with its word** (pass/fail/blocked), and
   every diagram carries a legend of its values.
 
 The medium differs, the shape does not: the SAME diagram appears in both
 files. In `report.md` (text for agents) render it as monospace ASCII art or
-a Markdown table; in `report.html` (for humans) render the same diagram as
+a Markdown table; `report.json` declares the same diagram, and the engine
+draws it as
 inline `<svg>`, never as an ASCII block in `<pre>`. A diagram in one file
 with no counterpart in the other is a contract violation.
 
 Visual craft comes from the **`frontend-design`** and **`theme-factory`**
 skills — palette, typography, spacing, "not a template". The artifact
-contract outranks them: `report.html` stays self-contained — no external
+contract outranks them: the generated page stays self-contained — no external
 fonts, CDNs, images or libraries. If **any installed skill** (or an example
 file it links to — e.g. a `tailwindcss` CDN `<script>` or a `mermaid` import
 from `jsdelivr`) suggests a web font, a CDN script or a diagram library,
@@ -143,12 +145,13 @@ discard it; the file must render from `file://` alone.
 
 ## What to produce
 
-TWO files at the working-folder root, both rebuilt from scratch every run
-(see **Rebuild, never patch**).
+TWO files at the working-folder root — `report.md` and `report.json` — both
+rebuilt from scratch every run (see **Rebuild, never patch**). `report.html`
+is produced by the engine from these two; it is never yours to write.
 
 ### Rebuild, never patch
 
-If `report.md` or `report.html` already exists at the working-folder root,
+If `report.md` or `report.json` already exists at the working-folder root,
 it is the **previous run's draft** — not a source of truth and not a base
 for targeted edits. Write both files again, in full, with `write`; do NOT
 update them section by section with `edit`. Patching leaves the previous
@@ -156,10 +159,10 @@ run's skeleton, headings, and numbers in place, which is exactly how a new
 reporting contract silently fails to apply.
 
 - **A previous report is never a source** — not the archived `reports/**`
-  copies, not the snapshot copies (`.iteration-results/**/report.{md,html}`).
+  copies, not the snapshot copies (`.iteration-results/**/report.{md,json}`).
   It is the previous draft, deliberately kept in two places. Carry a fact
   over only if you re-verified it against the narratives or code in THIS run.
-- Update `**Generated:**` (and the HTML generation timestamp) on every run —
+- Update `**Generated:**` (and `generatedAt` in JSON) on every run —
   a stale timestamp is a bug.
 - Sources: `report-<n>.md` (engine summaries),
   `iterations/<n>/.<step>.md` (step narratives), `.issue-step-result.json`,
@@ -176,9 +179,10 @@ Write it so an agent can extract every fact without guessing:
   changed" or "what defects remain" should find them immediately.
 - **Full file paths**: every changed file, every finding location, every
   command that was run — with exact paths and line numbers.
-- **Iteration-by-iteration narrative** (Execution details): what was
-  attempted, what succeeded, what failed and why. Include the feedback loops
-  (review→resolve cycles).
+- **No retelling of the run.** Step narratives already live in the engine
+  (per-step output, sessions, task page). Do not replay iterations step by
+  step: only the facts a reader cannot get elsewhere belong in Execution
+  details — the change set, the open findings, the reproduction recipe.
 - **Reproducible evidence** (Execution details → Reproduction): commands
   that were run, their exit codes, test suites and pass/fail counts. An agent
   reading this a month later can re-run the same verification.
@@ -188,12 +192,10 @@ Write it so an agent can extract every fact without guessing:
 - **Decisions and rationale** (Answer): why a particular approach was chosen,
   what alternatives were considered and rejected. From the refine plan and
   resolve narratives.
-- **Text rendering**: no HTML, no CSS, no images (reference screenshot
-  filenames as text — `screenshots/login-flow.png`). Render diagrams as
-  monospace ASCII art or Markdown tables, with a legend line for values.
-  The `glyph` structure and the diagram set are the same as in
-  `report.html` — only the medium differs. Code blocks use triple-backtick
-  with language tag.
+- **Text rendering**: no raw HTML, no CSS. Diagrams as monospace ASCII or
+  Markdown tables, with a legend line for values — the `glyph` structure
+  (verdict first, icon + word, value legend). Screenshots as markdown
+  images at the claim they prove. Code blocks use a language tag.
 
 Structure — `## Answer` is first and mandatory; everything metrological
 lives after the `## Execution details` heading, at the end of the file:
@@ -217,14 +219,6 @@ reader who read ONLY it can act.>
 <What confirms the answer: tests, commands, pass/fail counts.>
 
 ## Execution details
-
-### Iteration timeline
-
-<One line per iteration: steps that ran, outcomes, feedback loops.>
-
-### Steps and outcomes
-
-<Per-step narrative (refine/resolve/review/test/pr), including retries.>
 
 ### Change set
 
@@ -259,189 +253,113 @@ status:
 enough to re-run the same verification. Screenshot filenames as text.>
 ```
 
-### 2. `report.html` — for humans
+### 2. `report.json` — for the page renderer
 
-Same facts. Different presentation. Self-contained standalone page.
+The page (`report.html`) is **built by the engine**, never authored: it reads
+`report.md` and `report.json`, renders the markdown, draws the declared
+diagrams and inlines the screenshots. Do not write HTML, CSS or base64 — an
+artifact that size cannot survive a tool call, which is exactly how the page
+used to go missing.
 
-**Design**: developer-friendly dark palette with a light variant, inline
-SVG diagrams and metrics (visual timeline, bar/stacked/sparkline,
-domain/flow), color-coded severity badges, clear typography. It renders the
-same **`glyph`** diagrams as `report.md` as inline `<svg>`: verdict first,
-a diagram for every answer section that has a form, status as icon + word, a
-legend for every chart's values. This is what a human opens to understand
-the task outcome without reading raw logs.
+`report.json` is structure only, tens of lines, no prose. It may be omitted:
+a malformed file costs a warning, never the page.
 
-**Self-contained**: all CSS inline or in `<style>`, all JS inline in a
-single `<script>` at the end of `<body>`. **No external fonts, images or
-scripts.** Loading any resource from outside the file is forbidden
-absolutely: a `<script>` tag with a `src` attribute, `<link href>` for
-stylesheets/fonts, the CSS `@import` at-rule, `@font-face` with a remote
-url, web fonts, CDNs, `<img src="http…">`, `<iframe>`, `<video>`,
-`fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource`/`sendBeacon`/`import()`,
-`eval`, `document.write`. Embed every screenshot from `screenshots/` as a
-base64 data URI — preserve full quality, do not resize or compress, and
-show it through a `<dialog>` lightbox, never as an external file reference.
-The file is a local artifact, not served over the network.
-
-**Embedding screenshots — build, don't type.** A `data:` URI is generated,
-never typed: a multi-megabyte `write` argument gets truncated by the runtime
-and arrives as an empty call (`arguments: {}` after `read`-style retries),
-which silently loses the whole HTML. Two rules follow:
-
-1. Write the page with one placeholder per image instead of the base64 blob:
-   `<img alt="…" data-slot="02-dashboard-header.png">`.
-2. Expand the placeholders with a script, one file at a time:
-
-```bash
-python3 - <<'PY'
-import base64, pathlib, re
-page = pathlib.Path('report.html')
-text = page.read_text(encoding='utf-8')
-def uri(match):
-    raw = pathlib.Path('screenshots', match.group(1)).read_bytes()
-    return 'src="data:image/png;base64,' + base64.b64encode(raw).decode() + '"'
-text = re.sub(r'data-slot="([^"]+)"', uri, text)
-page.write_text(text, encoding='utf-8')
-PY
+```json
+{
+  "title": "Kanban improvements",
+  "subtitle": "Drag-and-drop, filters, keyboard reorder",
+  "verdict": "pass",
+  "generatedAt": "2026-10-28 18:36 UTC",
+  "metrics": [
+    { "label": "Files changed", "value": 7 },
+    { "label": "Tests", "value": "46/46", "hint": "e2e" }
+  ],
+  "diagrams": [
+    {
+      "kind": "flow",
+      "title": "Как логин находит пользователя",
+      "nodes": ["LoginView", { "label": "mock login", "status": "pass" }, "localStorage"],
+      "edges": [
+        ["LoginView", "mock login"],
+        { "from": "mock login", "to": "localStorage", "label": "write" }
+      ],
+      "note": "сервер в этой цепочке не участвует"
+    }
+  ]
+}
 ```
 
-The HTML write itself is chunked too: several `cat >> report.html <<'EOF'`
-appends of 50–100 lines each, never one giant `write`. After expanding, prove
-it: `grep -c 'data-slot=' report.html` is `0`,
-`grep -c 'src="data:image/png;base64,' report.html` equals the number of
-screenshots, and the file still opens from `file://`.
+`verdict` is `pass | fail | blocked`. `metrics` is the handful of numbers a
+reader wants first (≤ 5). `diagrams` — declare **what** to show, the renderer
+decides **how**:
 
-**Hyperlinks are allowed and wanted.** `<a href="https://…">` is NOT a
-resource load: it costs no request and the file still looks IDENTICAL
-offline — it just gives the reader somewhere to go. Use links for merge
-requests, Jira tickets, RFCs, and technology documentation. Always write
-`target="_blank" rel="noopener"` (without `noopener` a popup can reach
-`window.opener`). Two conditions: the link text stands alone (not "click
-here" — write the destination or the MR title), and the fact it points to
-is already stated in the text or a table; a link is never the only carrier
-of a fact. This does not weaken the single-file guarantee: the guarantee
-comes from the absence of LOADING, and an `<a>` loads nothing.
+| kind | fields | use for |
+|---|---|---|
+| `flow` | `title`, `nodes`, `edges`, `note` | architecture as-is → to-be, data flow, control flow |
+| `bars` | `title`, `items`, `unit` | measurements that back the answer: size, counts, before/after |
+| `matrix` | `title`, `columns`, `rows` | criterion × option, module × responsibility |
+| `svg` | `title`, `body` | a shape the kinds above cannot express |
 
-**JavaScript — progressive enhancement, strictly vanilla.** Inline
-`<script>` (at the end of `<body>`) is allowed, but only as an enhancement:
-the report MUST be fully readable with JS disabled — the answer lives in
-the DOM, `<details>` works natively, and the script only adds conveniences
-(sticky-TOC scrollspy, section tabs, image lightbox, "expand all"). Never
-render content from JS; the content is static.
+**No diagram is the default.** The report is prose, tables and ASCII drawings
+first; a `diagrams` entry is worth adding only when a picture does work the text
+cannot. Do not repeat in a diagram what you already drew as an ASCII block in
+`report.md`, and do not add a diagram of a mechanism you described in two
+sentences — the engine drops a diagram whose shape is already in the ASCII
+figures, and a duplicate is a defect either way.
 
-- Allowed: `addEventListener`, `IntersectionObserver`,
-  `document.querySelectorAll`, class toggling, `<dialog>`/`showModal`.
-- **Forbidden — this is where self-containment breaks**: loading anything
-  from the network — a `<script>` tag with a `src` attribute, any external
-  URL in a resource position (a `src` attribute, `<link href>` for
-  stylesheets/fonts), the CSS `@import` at-rule, `@font-face` with a remote
-  url, web fonts, CDNs; `fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource`/
-  `navigator.sendBeacon`/`import()` — the network is fully off;
-  `eval`/`new Function`/`document.write`;
-  localStorage/indexedDB/`document.cookie`/`window.parent`/`postMessage`.
-  (Navigation via `<a href="https://…">` is fine — see **Self-contained**.)
-- The page is opened in an iframe with
-  `sandbox="allow-scripts allow-popups"` (no `allow-same-origin`): it runs
-  in an opaque origin, so parent access and storage throw. Do not build any
-  UI on them.
-- **Do not inline libraries** (highlight.js, chart.js, mermaid, …): an
-  agent must emit them token-by-token and a mistyped bundle is worse than
-  none. Highlight code with `<span>` classes or not at all; draw charts as
-  hand-rolled SVG.
-- Vanilla toolbox: nested `<details>` (`## Answer` open, metrology
-  collapsed below), sticky TOC with `scroll-behavior:smooth` and `:target`
-  highlight, tabs (radio+CSS or class toggling), image lightbox on
-  `<dialog>` + `::backdrop`, `IntersectionObserver` for the active TOC
-  section, `content-visibility:auto` on long sections.
-- `@media print`: `@page { margin: 12mm }`, print light (`color-scheme:
-  light`, `print-color-adjust:exact`), print link URLs (skip `#anchors`).
-  Native CSS cannot expand collapsed `<details>`, so add exactly this guard:
-  `addEventListener('beforeprint',()=>document.querySelectorAll('details').forEach(d=>d.open=true));`
-  Without JS, only the sections already expanded make it into print — say
-  so honestly.
-- Budget: the whole file ≤ 400 KB excluding base64 screenshots, ≤ 50 MB
-  total (screenshots are embedded at full resolution, up to 50 MB combined).
-  JS is dozens of lines, not hundreds.
+**A diagram explains the answer.** Draw the thing the task was about — how a
+mechanism works, where a value travels, which option wins on which criterion,
+what the structure looks like now and after. Never draw the process: no
+iteration timelines, no step durations, no "what an agent did when". The
+execution of the task is visible on the task page and lives in the collapsed
+block at the end of this report; on the first screen it is noise.
 
-**Structure**: Header → Answer (open) → a single collapsed `<details>` block
-pressed to the very bottom:
+- `flow.nodes` are names, or `{ "label": "resolve", "status": "pass" }`;
+  `flow.edges` are `[["refine", "resolve"]]`.
+- `flow.edges` may be `["A", "B"]` or `{ "from": "A", "to": "B", "label": "write" }`.
+- `bars.items` are `{ label, value, status? }`; `matrix.rows` are
+  `{ label, cells: ["pass", "fail"] }` in column order.
+- `status` is always one of `pass | fail | blocked | running | na`; colour is
+  never the only carrier, the renderer writes the word next to it.
+- Two or more diagrams are normal — one per Answer section that has a shape.
+  A comparison or a mechanism that lives only in prose is a missing diagram.
 
-1. **Header** — task title, status badge, date range, repo list, one-line
-   TL;DR
-2. **Answer** — the large open section: the answer itself (subsections
-   chosen by the goal — domain model, options compared, recommendation,
-   plan, estimates, changed files + screenshot of the result when code
-   changed), the findings addressed to the reader, and Verification
-3. **`<details>` "How the task was executed"** — the LAST block on the
-   page, collapsed by default. Native `<details><summary>`:
-   iteration timeline, step outcomes, the full change set, all findings
-   with provenance and status, merge requests, and metrology (generation
-   timestamp). The summary label is a short phrase in the report's
-   language.
+**Screenshots go where they are proof.** A screenshot is a markdown image on
+its own line, directly after the claim, table or step it proves:
 
-**Design rules**:
+```markdown
+The board keeps the drag ghost under the cursor:
 
-- Typography: system font stack, 1.6–1.7 line height, ~75ch max width
-- Colors: dark by default (bg #0d1117, light text) + a
-  `prefers-color-scheme: light` variant (print uses the light one);
-  severity badges: critical=#f85149, major=#d29922, minor=#e3b341,
-  info=#58a6ff
-- Status: pass=green, fail=red, blocked=amber — always paired with text
-- Accessibility: semantic HTML, WCAG AA contrast in BOTH themes, never
-  color-alone
-- **Density — comparisons become tables.** Any comparison of 3+ objects or
-  a list of measurable facts must be a `<table>` (sticky `<thead>`,
-  `font-variant-numeric: tabular-nums`, zebra rows); use prose only for the
-  conclusions above/below it. Aim for at least 3–5 tables in Answer when the
-  narratives and code provide that material. Never build tables for their
-  own sake — if there is nothing to compare, do not.
-- Code blocks: dark subtle background, monospace, language tag in comment
-- Responsive: single column, max-width ~900px, mobile-friendly
-- `<details>`: thin border, `summary` in italics with a ▸/▾ arrow, roomy
-  padding; inside — the same sections as `report.md`'s Execution details
+![Board after the fix](screenshots/f-board-cards.png)
+```
 
-**Visual recipes (no libraries).** Rich visuals are mandatory tools, not
-options: the report is one file that must look identical on the recipient's
-machine. Everything below is inline SVG/CSS — no libraries:
+- Path form is `screenshots/<file>.png` (`jpg`, `jpeg`, `webp`, `gif`).
+  No `http:`, no `../`, no base64 — the renderer inlines the file at full
+  resolution and builds the lightbox.
+- The caption states what the image proves ("Board after the fix"), not the
+  file name.
+- Cite every file in `screenshots/` this way. Anything left uncited is
+  appended to a closing gallery; a pile of images at the end is not
+  evidence.
+- `report.md` is also read by agents, for whom an image is invisible: state
+  the fact in words and keep the picture as proof beside it.
 
-- **Iteration timeline** → inline `<svg>`: vertical axis, node circles by
-  status (pass/fail/blocked — color + text + shape, never color alone),
-  connecting lines, step labels. Use `viewBox`, never fixed pixel widths.
-- **Metrics** (files changed, LOC +/−, tests pass/fail, findings by
-  severity) → `<svg>` bar/stacked-bar/sparkline. Never divide by zero; if a
-  value has no data, draw no chart at all.
-- **Domain/flow diagram** (for analysis tasks!) → `<svg>` blocks + arrows.
-  This is exactly what the reader wants in Answer: architecture as-is →
-  architecture to-be.
-- **Options/comparison diagram** → CSS `grid` cards with badges, or an
-  `<svg>` radar/bar; keep the table as a fallback beneath it.
-- CSS toolbox: `color-mix()`/`oklch` for shades, `linear-gradient` accent
-  bars, `grid` + `flex`, `position:sticky` TOC,
-  `@media (prefers-color-scheme: light|dark)` — BOTH themes (print is
-  light), `@media print`, `text-wrap: balance` on headings,
-  `font-variant-numeric: tabular-nums` on numbers,
-  `content-visibility:auto`, `scroll-behavior:smooth`, `scroll-margin-top`
-  under the sticky TOC, `::selection`, custom `<details>` markers
-  (`list-style:none` + ▸/▾), container queries where useful.
-- Accessibility stays strict: WCAG AA contrast in BOTH themes, semantics,
-  never color-alone; `<svg role="img">` + `<title>`/`aria-label` — a chart
-  without a text alternative is unusable; always put the numbers in a
-  nearby `<figcaption>`.
-- **Single-file guarantee (explicit)**: the file must look IDENTICAL when
-  the recipient opens it from `file://` or forwards it in a messenger. So:
-  zero network requests of any kind, screenshots base64, fonts system-stack
-  only, icons unicode/`<svg>` — never an emoji fallback via an external CDN.
+**Hyperlinks are wanted.** `[MR title](https://…)` costs no request and keeps
+the file self-contained. Two conditions: the link text names the destination
+(never "click here"), and the fact it points to is already stated in the text.
+
 
 ## Content integrity
 
-- **Same facts in both files.** Do not add, omit, or reinterpret facts
-  between `report.md` and `report.html`. The HTML may reorder, emphasize,
-  or color-code — but every fact in one must be findable in the other.
-- **Collapsing loses nothing.** The `<details>` block in `report.html` and
-  the `## Execution details` section in `report.md` carry EVERY execution
-  fact — timeline, step outcomes, full change set, the provenance of every
-  finding, MR links, and metrology. Reordering and collapsing never drop a
-  fact.
+- **One source of facts.** `report.md` states every fact; `report.json`
+  adds structure (verdict, metrics, diagrams) and never a claim the
+  markdown does not make. The engine reorders and collapses — it never
+  invents.
+- **Collapsing loses nothing.** The page's closed "Детали выполнения" block
+  is the `## Execution details` section of the markdown, so that section
+  carries the execution facts that outlive the run — full change set,
+  provenance of every finding, MR links, reproduction recipe, metrology.
+  Iteration timings and step-by-step replays do not belong there.
 - **No invention.** Every claim traces back to an iteration narrative or
   engine summary. When you distill, preserve technical precision (file
   names, line numbers, error messages, command outputs).
@@ -451,23 +369,24 @@ machine. Everything below is inline SVG/CSS — no libraries:
 
 ## Edge cases
 
-- **No narratives at all** (all iteration folders empty): both files get
-  a single "No agent narratives available" section and fall back to engine
+- **No narratives at all** (all iteration folders empty): the report gets a
+  single "No agent narratives available" section and falls back to engine
   summaries. `status: "fail"` in `.issue-step-result.json`.
-- **No pr step ran**: omit the Merge Requests section from both files.
-- **Screenshots exist** (`screenshots/` directory): embed EVERY screenshot
-  in HTML as a base64 data URI at full resolution, inside the Execution
-  details block (they are test-step evidence; the Answer's Verification may
-  reference a specific one by filename). In MD, reference by filename only.
-- **Single iteration, all pass**: timeline is one entry, findings table
-  is empty — the report is short. That's fine.
+- **No pr step ran**: omit the Merge Requests section.
+- **Screenshots exist** (`screenshots/` directory): cite each one as a
+  markdown image in the place it proves something — usually the steps that
+  produced it in Execution details, or Verification when it proves the
+  answer. Uncited files are appended to a closing gallery, which is the
+  outcome to avoid.
+- **Single iteration, all pass**: the findings table is empty and the change
+  set is one file — the report is short. That's fine.
 
 ## Output: `.issue-step-result.json`
 
 ```json
 {
   "status": "pass",
-  "summary": "Generated report.md and report.html covering N iterations",
+  "summary": "Compiled report.md and report.json covering N iterations",
   "scenarios": [
     {
       "name": "report.md generated",
@@ -475,9 +394,9 @@ machine. Everything below is inline SVG/CSS — no libraries:
       "actual": "Answer before Execution details"
     },
     {
-      "name": "report.html generated",
-      "expected": "open Answer + collapsed <details>, self-contained",
-      "actual": "open Answer + collapsed <details>, self-contained"
+      "name": "report.json compiled",
+      "expected": "verdict, metrics and diagrams declared, valid JSON",
+      "actual": "verdict, metrics and diagrams declared, valid JSON"
     }
   ],
   "findings": []
@@ -491,48 +410,36 @@ machine. Everything below is inline SVG/CSS — no libraries:
 Go through every item after writing the files. If one fails, fix the file
 and check again.
 
-1. **Both files written from scratch this run** — `report.md` and
-   `report.html` were produced in full with `write`, not patched with `edit`.
-2. **`**Generated:**` carries this run's timestamp** in both files.
-3. **Answer first, self-sufficient, correct shape** — in `report.md`,
-   `## Answer` precedes `## Execution details`; in `report.html` the Answer
-   section is open and the single "How the task was executed" `<details>` is
-   collapsed and last. No `## Iteration N` or step-name headings inside
+1. **Both authored files written from scratch this run** — `report.md` and
+   `report.json` were produced in full with `write`, not patched with `edit`.
+2. **`**Generated:**` carries this run's timestamp** in `report.md` (and
+   `generatedAt` in the JSON when present).
+3. **Answer first, self-sufficient, correct shape** — `## Answer` precedes
+   `## Execution details`; no `## Iteration N` or step-name headings inside
    Answer; the Answer form matches the goal→form table.
-4. **SVG diagram present in Answer** — at least one inline `<svg>` whenever
-   the sources give a timeline, metrics, or a comparison (a domain/flow
-   diagram for analysis tasks). Each chart has `role="img"` plus
-   `<title>`/`aria-label` and its numbers in a nearby `<figcaption>`; drawn
-   by hand, no libraries.
+4. **Diagrams declared, never drawn** — `report.json` has a diagram for
+   every Answer section that has a shape (mechanism, comparison, structure,
+   measurement), each with a `title`; the file is valid JSON; you wrote no
+   HTML, no CSS and no base64 anywhere; nothing in it describes the process
+   (iterations, step timings) — that belongs to the collapsed block.
 5. **Comparisons are tables** — every comparison of 3+ objects or list of
-   measurable facts in Answer is a `<table>` (sticky `<thead>`,
-   `tabular-nums`); prose only for the conclusions.
-6. **External links are safe** — every `<a href="https://…">` has
-   `target="_blank" rel="noopener"`; the link text names the destination;
-   no link is the sole carrier of a fact. Confirm the count:
-   `grep -c 'target="_blank"' report.html` must not be less than the number
-   of external `<a>` elements.
-7. **Self-contained** — zero network loads: no `<script>` tag with a `src`
-   attribute, no `<link href>` for styles or fonts, no CSS `import`
-   at-rule, no remote `@font-face`, no `<img src="http…">`, no `<iframe>`,
-   no `fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource`, no
-   `eval`/`document.write`; screenshots are base64 `<img>` inside the
-   collapsed block, expanded from `data-slot` placeholders by a script (no
-   `data-slot=` left); the page is fully readable with JavaScript disabled.
-8. **Same facts in both files** — every Answer fact appears in both; the
-   collapsed Execution block loses nothing (timeline, step outcomes, change
-   set, findings with provenance, MR links, metrology).
+   measurable facts in Answer is a markdown table; prose only for the
+   conclusions above and below it.
+6. **External links are safe** — the link text names the destination (never
+   "click here"), and no link is the sole carrier of a fact.
+7. **Screenshots cited where they prove something** — every file under
+   `screenshots/` is a markdown image on its own line right after the claim
+   it supports, with a caption saying what it proves; no `http:` paths, no
+   base64, nothing left over for the closing gallery unless it truly
+   belongs there.
+8. **One source of facts** — `report.json` adds structure only; every
+   metric and diagram value is stated in `report.md` too. The closed
+   "Детали выполнения" block loses nothing (change set, findings with
+   provenance, MR links, reproduction, metrology).
 9. **Nothing unverified stated as fact** — any number not re-checked in the
    code is marked unverified with its source named.
-10. **Budget respected** — HTML ≤ 400 KB excluding base64 screenshots
-    (≤ 50 MB total, screenshots at full resolution).
-11. **Same diagrams in both forms** — every Answer section with a form has
-    a diagram in BOTH files (monospace ASCII/table in `report.md`, inline
-    `<svg>` in `report.html`); the `glyph` structure (verdict first, icon +
-    word, value legend) is identical.
-12. **No model or provider name** in either file — no `provider/model-id`,
-    no `model:` line, no "this run ran on …"; provenance is step +
-    iteration, not the model.
-13. **No previous report was read as a source** — sources were
+10. **No model or provider name** — no `provider/model-id`, no `model:`
+    line, no "this run ran on …"; provenance is step + iteration.
+11. **No previous report was read as a source** — sources were
     `report-<n>.md`, `iterations/<n>/.<step>.md`, `.issue-step-result.json`
     and the repository; not `.iteration-results/**/report.*`, not `reports/**`.

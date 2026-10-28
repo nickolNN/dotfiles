@@ -82,7 +82,6 @@ describe('IssueFilesList (inline)', () => {
     expect(onParentClick).not.toHaveBeenCalled();
 
     const download = screen.getByTestId('issue-file-download');
-    // Гасим навигацию jsdom, но проверяем, что клик не всплывает.
     download.addEventListener('click', (event) => event.preventDefault(), {
       capture: true,
     });

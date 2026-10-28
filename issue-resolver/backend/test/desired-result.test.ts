@@ -42,7 +42,6 @@ afterEach(async () => {
 const post = (app: ReturnType<typeof buildApp>, payload: object) =>
   app.inject({ method: 'POST', url: ROUTE_PATH, payload });
 
-/** Прямой insert issue (без HTTP) — фоновая итерация не запускается. */
 function seedIssue(
   db: Db,
   issueId: string,
@@ -64,7 +63,6 @@ function seedIssue(
     .run();
 }
 
-/** Прямой insert итерации с заданным статусом (без HTTP). */
 function seedIterationWithStatus(
   db: Db,
   issueId: string,
@@ -90,7 +88,6 @@ function seedIterationWithStatus(
   return iterationId;
 }
 
-/** Завершённая итерация — именно её снапшот сервится эндпоинтами результата. */
 function seedCompletedIteration(
   db: Db,
   issueId: string,
@@ -99,7 +96,6 @@ function seedCompletedIteration(
   return seedIterationWithStatus(db, issueId, number, 'completed');
 }
 
-/** Снапшот результата итерации: `<root>/<issueId>/.iteration-results/<iterId>/`. */
 async function writeSnapshot(
   root: string,
   issueId: string,
@@ -111,7 +107,6 @@ async function writeSnapshot(
   await writeFile(join(dir, filename), 'x');
 }
 
-/** Минимальное состояние для 200: issue + completed-итерация + снапшот. */
 async function setupResult(
   desiredResult: DesiredResult,
   filename: string,
@@ -233,7 +228,6 @@ describe('GET /issues/:id/result', () => {
 
   it('сервится результат ПОСЛЕДНЕЙ completed-итерации (по номеру)', async () => {
     const { app, db, root } = await setupResult('md', 'report.md');
-    // Вторая completed-итерация — снапшот только у неё.
     const second = seedCompletedIteration(db, 'issue-1', 2);
     await writeSnapshot(root, 'issue-1', second, 'report.md');
 

@@ -19,7 +19,6 @@ import {
 import type { PiRunOptions, PiRunner } from './runner';
 import type { RoomAgentStatus, UiResponsePayload } from './session-registry';
 
-/** Событие протокола pi RPC (поля, которые нам нужны для разбора). */
 interface RpcAssistantMessageEvent {
   type?: string;
   contentIndex?: number;
@@ -42,18 +41,14 @@ interface RpcEvent {
   isError?: boolean;
   durationMs?: number;
   willRetry?: boolean;
-  /** Кумулятивное usage ответа ассистента (`message_update.usage`). */
   usage?: unknown;
-  /** Поля response-записей (`{type:'response', command, id, success, data}`). */
   command?: string;
   id?: string;
   data?: unknown;
   success?: boolean;
   error?: unknown;
-  /** Поля `extension_ui_request` (интерактивный диалог расширения). */
   method?: string;
   title?: string;
-  /** `extension_ui_request.message` (строка) либо полное сообщение `message_start`/`message_end` (объект). */
   message?: unknown;
   options?: string[];
   placeholder?: string;
@@ -65,7 +60,6 @@ interface RpcEvent {
   widgetLines?: unknown;
   widgetPlacement?: unknown;
   text?: unknown;
-  /** Поля событий компакции, ретраев, очереди и статуса сессии. */
   reason?: unknown;
   errorMessage?: unknown;
   source?: unknown;
@@ -80,12 +74,6 @@ interface RpcEvent {
   delta?: unknown;
 }
 
-/**
- * Методы `extension_ui_request`, которые БЛОКИРУЮТ pi до `extension_ui_response`
- * (настоящий интерактивный вопрос). Остальные (`notify`, `setStatus`,
- * `setWidget`, `setTitle`, `set_editor_text`) — fire-and-forget, ответа не ждут
- * и вопросом не являются.
- */
 const DIALOG_METHODS = new Set<SessionQuestion['method']>([
   'select',
   'confirm',
@@ -93,22 +81,15 @@ const DIALOG_METHODS = new Set<SessionQuestion['method']>([
   'editor',
 ]);
 
-/**
- * Live parse callbacks: structured events (including live prose via
- * `text_update`) plus stdout/stderr for non-RPC modes.
- */
 export interface RpcParseHandlers {
   onStdout?: (chunk: string) => void;
   onEvent?: (event: SessionEvent) => void;
-  /** Ответ `get_session_stats` (разобранный и нормализованный). */
   onStats?: (stats: SessionStats) => void;
 }
 
-/** Число из сырого поля usage; всё нечисловое/не-конечное → 0. */
 const num = (value: unknown): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : 0;
 
-/** Нормализация `message_update.usage` в `SessionUsage` (totalTokens → total). */
 const normalizeUsage = (raw: Record<string, unknown>): SessionUsage => {
   const input = num(raw.input);
   const output = num(raw.output);
@@ -119,7 +100,6 @@ const normalizeUsage = (raw: Record<string, unknown>): SessionUsage => {
   return { input, output, cacheRead, cacheWrite, total };
 };
 
-/** Нормализация `message_update.usage.cost`; не-объект → null. */
 const normalizeCost = (raw: unknown): SessionCost | null => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const obj = raw as Record<string, unknown>;
@@ -132,28 +112,21 @@ const normalizeCost = (raw: unknown): SessionCost | null => {
   };
 };
 
-/** Порог средней скорости, мс: раньше оценка нестабильна и не показывается. */
 const SPEED_MIN_ELAPSED_MS = 1000;
-/** Минимальный интервал между выборками мгновенной скорости, мс. */
 const SPEED_MIN_INTERVAL_MS = 250;
-/** Коэффициент экспоненциального сглаживания мгновенной скорости. */
 const SPEED_SMOOTHING_ALPHA = 0.3;
 
-/** Число из необязательного поля события; нечисловое/не-конечное → null. */
 const numberOrNull = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
 
-/** Строка из необязательного поля события; не-строка → null. */
 const stringOrNull = (value: unknown): string | null =>
   typeof value === 'string' ? value : null;
 
-/** Массив строк из необязательного поля события; иное → []. */
 const stringArray = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
     : [];
 
-/** Объект-запись из unknown; массивы/примитивы → null. */
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -165,16 +138,11 @@ const COMPACTION_REASONS: ReadonlySet<string> = new Set([
   'overflow',
 ]);
 
-/** Причина компакции из события; неизвестная/отсутствующая → 'manual'. */
 const compactionReason = (value: unknown): CompactionReason =>
   typeof value === 'string' && COMPACTION_REASONS.has(value)
     ? (value as CompactionReason)
     : 'manual';
 
-/**
- * Текст ответа пользователя для события `question_answered`. select/input/
- * editor шлют `value`; confirm — `confirmed` (Да/Нет), закрытие — `Отменено`.
- */
 const questionAnswerText = (payload: UiResponsePayload): string => {
   if (payload.value !== undefined) return payload.value;
   if (payload.confirmed !== undefined) return payload.confirmed ? 'Да' : 'Нет';
@@ -182,13 +150,11 @@ const questionAnswerText = (payload: UiResponsePayload): string => {
   return '';
 };
 
-/** Финальный статус агента комнаты по результату прогона. */
 const agentStatusFor = (result: StepExecutionResult): RoomAgentStatus => {
   if (result.aborted) return 'aborted';
   return result.exitCode !== 0 ? 'failed' : 'finished';
 };
 
-/** resultText из tool_execution_end: тексты content[] или structuredContent. */
 const toolResultText = (result: unknown): string => {
   if (result && typeof result === 'object') {
     const content = (result as { content?: unknown }).content;
@@ -210,15 +176,6 @@ const toolResultText = (result: unknown): string => {
   return '';
 };
 
-/**
- * Pure parser of the `pi --mode rpc` event stream, by subtype.
- *
- * Prose is authoritative: `text_end.content` fixes the persisted
- * `stdout()`, while `text_delta` feeds live subscribers with cumulative
- * `text_update` events. Tool-call arguments (`toolcall_delta`) never reach
- * prose. Structured events (text blocks, `tool_use`, `tool_result`) are
- * collected in order and handed to `onEvent` as they arrive.
- */
 export class RpcSessionParser {
   private readonly handler: RpcParseHandlers;
   private readonly textByIndex = new Map<number, string>();
@@ -229,21 +186,16 @@ export class RpcSessionParser {
   private readonly emittedThinking = new Set<number>();
   private readonly collected: SessionEvent[] = [];
   private statsValue: SessionStats | null = null;
-  /** Отображаемое имя модели из `get_state` (нет в `get_session_stats`). */
   private modelValue: string | null = null;
   private lastUsageTotal: number | null = null;
-  /** Wall-clock старт сессии: первое ассистентское message_start/usage. */
   private sessionStartMs: number | null = null;
-  /** Последняя подтверждённая выборка output для мгновенной скорости. */
   private speedSample: { output: number; tsMs: number } | null = null;
-  /** Сглаженная мгновенная скорость; null — выборок ещё не было. */
   private smoothedTps: number | null = null;
 
   constructor(handler: RpcParseHandlers = {}) {
     this.handler = handler;
   }
 
-  /** Проза сессии: авторитетные `text_end.content`, а не сырые дельты. */
   stdout(): string {
     return this.textOrder
       .map((index) => this.textByIndex.get(index) ?? '')
@@ -254,25 +206,15 @@ export class RpcSessionParser {
     return this.collected;
   }
 
-  /**
-   * Фиксирует ответ пользователя на вопрос (`extension_ui_request` →
-   * `extension_ui_response`): тем же путём, что и событие `question`, —
-   * уходит живым подписчикам (`onEvent`) и попадает в `collected` →
-   * персистится в step_outputs.events.
-   */
   recordQuestionAnswered(questionId: string, answer: string): void {
     this.push({ type: 'question_answered', questionId, answer });
   }
 
-  /** Последняя разобранная статистика сессии (`get_session_stats`) или null. */
   stats(): SessionStats | null {
     return this.statsValue;
   }
 
-  /** Разбор одного уже распарсенного JSONL-события. */
   handle(event: RpcEvent): void {
-    // Интерактивный запрос расширения (`ctx.ui.*`) — ждёт `extension_ui_response`.
-    // Невалидные (без строковых id/method) игнорируются.
     if (
       event.type === 'extension_ui_request' &&
       typeof event.id === 'string' &&
@@ -300,8 +242,6 @@ export class RpcSessionParser {
       return;
     }
 
-    // Fire-and-forget методы `ctx.ui.*`: pi ответа не ждёт, это не вопрос.
-    // Диалоговые методы перехвачены выше и сюда не доходят.
     if (event.type === 'extension_ui_request' && typeof event.method === 'string') {
       if (event.method === 'notify') {
         this.push({
@@ -362,9 +302,6 @@ export class RpcSessionParser {
       if (event.command === 'get_session_stats') {
         const stats = parseSessionStats(event.data, this.modelValue);
         if (stats) {
-          // Живой футер: каждое обновление статистики уходит событием в SSE
-          // (`message_update.usage` у части провайдеров нулевое до конца стрима).
-          // push до onStats: финальный ответ может сразу финализировать прогон.
           const withSpeed = this.withStatsSpeed(stats, Date.now());
           this.statsValue = withSpeed;
           this.push({ type: 'stats', stats: withSpeed });
@@ -374,12 +311,8 @@ export class RpcSessionParser {
       return;
     }
 
-    // Новое сообщение: `contentIndex` снова начинается с 0, поэтому пер-блочные
-    // аккумуляторы надо очистить. Иначе thinking/text 2..N-го сообщения коллизят
-    // с index 0 первого и `emitThinking`/`emitText` молчат (`emitted*` уже занят).
     if (event.type === 'message_start') {
       const role = asRecord(event.message)?.role;
-      // Не-ассистентское сообщение (user) блоками ассистента не является — пропуск.
       if (typeof role === 'string' && role !== 'assistant') return;
       this.markSessionStart();
       this.flush();
@@ -398,11 +331,6 @@ export class RpcSessionParser {
       return;
     }
 
-    // Truncated response: the provider returned `stopReason: 'length'`. The turn
-    // may end on thinking alone (no tool call) — without an explicit event that
-    // reads as "the agent just stopped". This is exactly how the report step
-    // ended up without `report.html`: the model burned its whole maxTokens
-    // budget on reasoning. The message is user-facing, hence Russian.
     if (event.type === 'message_end') {
       const message = asRecord(event.message);
       if (message?.role === 'assistant' && message.stopReason === 'length') {
@@ -440,7 +368,6 @@ export class RpcSessionParser {
       return;
     }
 
-    // Частичный результат инструмента во время исполнения.
     if (event.type === 'tool_execution_update') {
       this.push({
         type: 'tool_update',
@@ -523,7 +450,6 @@ export class RpcSessionParser {
       });
       return;
     }
-    // summarization_retry_attempt_start намеренно игнорируется.
 
     if (event.type === 'queue_update') {
       this.push({
@@ -555,8 +481,6 @@ export class RpcSessionParser {
       return;
     }
 
-    // Provider/tool failures arrive as their own event type; without this they
-    // only surface as silence, which reads as a stall instead of a cause.
     if (event.type === 'error') {
       this.push({
         type: 'notice',
@@ -574,10 +498,6 @@ export class RpcSessionParser {
     }
   }
 
-  /**
-   * Достаёт имя модели из ответа `get_state` (`data.model`): непустой `name`,
-   * иначе непустой `id`. Модель могла быть выбрана/переключена — берём последнее.
-   */
   private captureModel(data: unknown): void {
     if (!data || typeof data !== 'object' || Array.isArray(data)) return;
     const model = (data as Record<string, unknown>).model;
@@ -592,11 +512,6 @@ export class RpcSessionParser {
     if (label !== null) this.modelValue = label;
   }
 
-  /**
-   * Финализация: если `text_end`/`thinking_end` не пришёл (abort/обрыв),
-   * накопленный текст/размышление всё равно отдаётся событиями `text` /
-   * `thinking` и не теряется.
-   */
   flush(): void {
     for (const index of this.textOrder) {
       if (!this.emittedText.has(index)) {
@@ -624,9 +539,6 @@ export class RpcSessionParser {
       }
       const partialText = `${this.textByIndex.get(index) ?? ''}${message.delta}`;
       this.textByIndex.set(index, partialText);
-      // Live prose arrives as cumulative `text_update`, like thinking: one chunk
-      // per delta made the UI draw a block per token (and duplicate it with the
-      // final `text`). `stdout()` still joins `textByIndex`.
       this.handler.onEvent?.({
         type: 'text_update',
         contentIndex: index,
@@ -656,9 +568,6 @@ export class RpcSessionParser {
       }
       const partialText = `${this.thinkingByIndex.get(index) ?? ''}${message.delta}`;
       this.thinkingByIndex.set(index, partialText);
-      // Живое обновление thinking уходит подписчикам (SSE) сразу, но НЕ
-      // персистится в collected: финальный авторитетный {type:'thinking'}
-      // эмитит thinking_end/flush, как text_end фиксирует {type:'text'}.
       this.handler.onEvent?.({
         type: 'thinking_update',
         contentIndex: index,
@@ -676,25 +585,18 @@ export class RpcSessionParser {
       }
       this.emitThinking(index);
     }
-    // text_start / toolcall_* намеренно игнорируются: JSON аргументов
-    // инструментов не должен попадать в stdout (прозу).
   }
 
-  /** Фиксирует старт сессии для wall-clock (первое ассистентское событие). */
   private markSessionStart(now: number = Date.now()): void {
     if (this.sessionStartMs === null) this.sessionStartMs = now;
   }
 
-  /** Нормализует и эмитит `usage` из `message_update` с дедупом по total. */
   private handleUsage(raw: unknown): void {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
     const obj = raw as Record<string, unknown>;
     const usage = normalizeUsage(obj);
-    // Первое usage-событие могло прийти без message_start — засекаем старт.
     const now = Date.now();
     this.markSessionStart(now);
-    // Кумулятивное usage почти не меняется между дельтами — не дублируем,
-    // пока total не вырос (в т.ч. первый нулевой снапшот пропускаем один раз).
     if (this.lastUsageTotal === usage.total) return;
     this.lastUsageTotal = usage.total;
     const speed = this.computeSpeed(usage, now);
@@ -706,16 +608,9 @@ export class RpcSessionParser {
     });
   }
 
-  /**
-   * Скорость генерации по текущему usage: мгновенная (Δ output / Δt, сглажена
-   * экспоненциально) и средняя (output / wall-clock сессии). null, пока средняя
-   * недостоверна (elapsed < 1s или output = 0) — тогда `speed` не прикладываем.
-   */
   private computeSpeed(usage: SessionUsage, now: number): SessionSpeed | null {
     if (this.sessionStartMs === null) return null;
 
-    // Якорь/пересчёт мгновенной: только на выросшем output и не чаще 250мс,
-    // иначе держим прошлую оценку (без скачка к 0 на коротких ступеньках).
     const sample = this.speedSample;
     if (sample === null) {
       this.speedSample = { output: usage.output, tsMs: now };
@@ -739,7 +634,6 @@ export class RpcSessionParser {
     return { tokensPerSecond: this.smoothedTps ?? avg, avgTokensPerSecond: avg };
   }
 
-  /** Прикладывает среднюю скорость к stats, когда она достоверна. */
   private withStatsSpeed(stats: SessionStats, now: number): SessionStats {
     if (this.sessionStartMs === null) return stats;
     const elapsedMs = now - this.sessionStartMs;
@@ -752,7 +646,6 @@ export class RpcSessionParser {
     };
   }
 
-  /** Авторитетный текст `thinking_end`: ThinkingContent {thinking} или строка. */
   private thinkingText(content: unknown): string | null {
     if (typeof content === 'string') return content;
     if (content && typeof content === 'object') {
@@ -790,12 +683,10 @@ export class RpcSessionParser {
 
 const PROMPT_COMMAND_ID = 'step-1';
 
-/** `1`/`true`/`yes` → on; anything else (incl. unset) → off. */
 function isTruthy(value: string | undefined): boolean {
   return ['1', 'true', 'yes'].includes(value?.trim().toLowerCase() ?? '');
 }
 
-/** Human-readable text of a pi `error` event, whatever shape it arrives in. */
 function errorEventMessage(event: RpcEvent): string {
   const record = asRecord(event);
   const candidates = ['message', 'error', 'reason', 'detail'];
@@ -807,51 +698,19 @@ function errorEventMessage(event: RpcEvent): string {
   return 'pi reported an error';
 }
 
-/** Сколько ждать ответ `get_session_stats` после agent_settled, мс. */
 const STATS_TIMEOUT_MS = 2000;
 
-/** Период опроса `get_session_stats` во время живой сессии, мс. */
 const STATS_POLL_MS = 3000;
 
-/**
- * Steerable pi-раннер: одна `pi --mode rpc` сессия на шаг конвейера вместо
- * one-shot `pi --print`. Команды — JSONL в stdin, события — JSONL из stdout.
- *
- * Транспорт: `docker` (по умолчанию) запускает pi внутри контейнера задачи
- * через `docker exec -i`, `local` — процесс pi прямо на хосте (cwd задачи).
- *
- * Живая проза отдаётся в onStdout/onStderr (SSE), структурированные события
- * сессии (текст/thinking/tool_use/tool_result) — в onEvent; финальный результат
- * шага определяется событием `agent_settled`. После settle раннер запрашивает
- * `get_session_stats` и кладёт `SessionStats` в результат (или null по
- * таймауту). Разбор отчёта (`.issue-step-result.json`) остаётся за
- * контроллером.
- */
-/**
- * Точка инъекции CLI pi: продакшен зовёт `pi` (или `PI_BIN`), тесты — shim.
- * Инъекция не меняет поведение по умолчанию (`piCommand` по умолчанию 'pi').
- */
 const LAUNCHER_ENV_KEYS = [
   'PI_SESSION_FILE',
   'PI_SESSION_ID',
   'PI_SESSION_NAME',
   'PI_MODEL',
   'PI_PROVIDER',
-  // The launcher's room is not the step's room: only `room` decides it.
   'PI_AGENT_ROOM',
 ] as const;
 
-/**
- * Environment for an agent spawned locally (`transport: 'local'`).
- *
- * The backend is often started from a pi session (`bin/service.sh` from an
- * agent shell), so `process.env` carries THAT session's identity. An inherited
- * `PI_SESSION_FILE` makes the step agent resume a foreign session instead of
- * starting its own: the foreign history lands in the step log wholesale (a
- * report run produced 175 MB of events in `step_outputs`), and the launcher's
- * model overrides `--model`. Session identity and model are therefore not
- * inherited — only config (`PI_CODING_AGENT_DIR`) and the agent's own room.
- */
 export function stepAgentEnv(
   base: NodeJS.ProcessEnv,
   room?: string,
@@ -859,9 +718,6 @@ export function stepAgentEnv(
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of LAUNCHER_ENV_KEYS) delete env[key];
   if (room) env.PI_AGENT_ROOM = room;
-  // A step agent has nothing to fetch from pi.dev: the catalog refresh and the
-  // version check are pure latency inside a container, and the run is pinned to
-  // a model we passed explicitly.
   env.PI_OFFLINE = '1';
   env.PI_SKIP_VERSION_CHECK = '1';
   env.PI_TELEMETRY = '0';
@@ -869,9 +725,7 @@ export function stepAgentEnv(
 }
 
 export interface RpcPiRunnerConfig {
-  /** Исполняемый файл pi; по умолчанию env `PI_BIN`, иначе 'pi'. */
   piCommand?: string;
-  /** Доп. аргументы перед `--mode rpc` (напр. путь к node-shim в тестах). */
   piArgs?: string[];
 }
 
@@ -898,8 +752,6 @@ export class RpcPiRunner implements PiRunner {
       ? ['--thinking', options.thinkingLevel]
       : [];
     const sessionId = options.sessionId ?? options.stepRunId;
-    // Our address IS the id of the file Pi will write (see SessionAddress).
-    // Fail here, not inside a log line from Pi, when the address is malformed.
     if (sessionId !== undefined && !isValidPiSessionId(sessionId)) {
       throw new Error(`invalid Pi session id: ${JSON.stringify(sessionId)}`);
     }
@@ -930,12 +782,9 @@ export class RpcPiRunner implements PiRunner {
       ...toolFlags,
       ...verboseFlags,
     ];
-    // Комната агента per-task: `issue-<issueId>`; иначе штатный defaultRoom.
     const room = options.issueId ? `issue-${options.issueId}` : undefined;
 
     return new Promise<StepExecutionResult>((resolve, reject) => {
-      // stdin-пайп держим открытым до финализации: закрытие stdin обрывает pi
-      // до agent_settled.
       const child =
         this.transport === 'local'
           ? spawn(
@@ -979,7 +828,6 @@ export class RpcPiRunner implements PiRunner {
         onStdout: options.onStdout,
         onEvent: (event) => {
           options.onEvent?.(event);
-          // Телеметрия агента комнаты: usage/stats для `listAgents().stats`.
           if (registry && stepRunId) registry.recordEvent(stepRunId, event);
         },
         onStats: () => statsHandler?.(),
@@ -993,7 +841,6 @@ export class RpcPiRunner implements PiRunner {
       let statsPollTimer: NodeJS.Timeout | undefined;
       let pendingResult: StepExecutionResult | null = null;
       let statsRequested = false;
-      // id-коррелированные команды: id → resolver, ждущий `{type:'response', id}`.
       const pending = new Map<
         string,
         { resolve: (result: ControlResult) => void; timer: NodeJS.Timeout }
@@ -1004,7 +851,6 @@ export class RpcPiRunner implements PiRunner {
         if (timer) clearTimeout(timer);
         if (statsTimer) clearTimeout(statsTimer);
         if (statsPollTimer) clearInterval(statsPollTimer);
-        // Незавершённые команды не должны висеть: отдаём им закрытие сессии.
         for (const entry of pending.values()) {
           clearTimeout(entry.timer);
           entry.resolve({ ok: false, error: 'session closed' });
@@ -1013,7 +859,6 @@ export class RpcPiRunner implements PiRunner {
         if (registry && stepRunId) registry.unregister(stepRunId, status);
       };
 
-      /** Финализация: не более одного resolve; мягко гасим сессию. */
       const finish = (result: StepExecutionResult) => {
         if (settled) return;
         settled = true;
@@ -1029,7 +874,6 @@ export class RpcPiRunner implements PiRunner {
             child.stdin.write(`${JSON.stringify({ type: 'exit' })}\n`);
           }
         } catch {
-          // Сессия уже мертва — не мешаем финализации.
         }
         if (!child.killed) child.kill('SIGTERM');
         resolve(finalResult);
@@ -1045,10 +889,6 @@ export class RpcPiRunner implements PiRunner {
         }
       };
 
-      /**
-       * Шлёт команду с уникальным `id` и ждёт ответ `{type:'response', id}`
-       * (перехватывается в `handleLine` до парсера). Таймаут → `ok:false`.
-       */
       const sendCommand = (
         command: Record<string, unknown>,
         timeoutMs = 10000,
@@ -1074,7 +914,6 @@ export class RpcPiRunner implements PiRunner {
         });
       };
 
-      /** Финализация с уже полученной (или таймаутной) статистикой. */
       const finalizeWithStats = () => {
         if (settled || pendingResult === null) return;
         const result = pendingResult;
@@ -1086,17 +925,11 @@ export class RpcPiRunner implements PiRunner {
         finish({ ...result, stats: parser.stats() ?? null });
       };
 
-      /**
-       * Не финализируем сразу: запрашиваем `get_session_stats` и ждём ответ
-       * (`onStats`) либо таймаут — только потом отдаём результат со stats.
-       */
       const requestStatsThenFinish = (result: StepExecutionResult) => {
         if (statsRequested || settled) return;
         statsRequested = true;
         pendingResult = result;
         statsHandler = finalizeWithStats;
-        // Модель — только в `get_state`; запрашиваем перед stats, чтобы
-        // финальный/персистентный `SessionStats` нёс её имя.
         writeCommand({ type: 'get_state' });
         if (!writeCommand({ type: 'get_session_stats' })) {
           finalizeWithStats();
@@ -1105,20 +938,12 @@ export class RpcPiRunner implements PiRunner {
         statsTimer = setTimeout(finalizeWithStats, STATS_TIMEOUT_MS);
       };
 
-      // Абонент управления: реестр адресует steer/abort в живую сессию.
-      // iterationId опционален: issue-уровневые прогоны (отчёт) не привязаны
-      // к итерации — реестр группирует их под их же stepRunId, и control-роут
-      // `/iterations/:id/...` находит сессию по этому адресу.
       if (registry && stepRunId) {
         registry.register(stepRunId, iterationId ?? stepRunId, {
           steer: (text) => writeCommand({ type: 'steer', message: text }),
           abort: () => {
             committedAbort = true;
             writeCommand({ type: 'abort' });
-            // pi может быть заблокирован на интерактивном диалоге (ctx.ui.*)
-            // и проигнорировать RPC abort. Форс-килл гарантирует, что процесс
-            // завершится (close → committedAbort → aborted-результат), иначе
-            // pi.run() зависнет навсегда.
             child.kill('SIGKILL');
           },
           respond: (payload) => {
@@ -1147,9 +972,6 @@ export class RpcPiRunner implements PiRunner {
         }, options.agent);
       }
 
-      // Пока сессия жива, периодически опрашиваем статистику: провайдер может
-      // отдавать нулевое `message_update.usage` до самого конца стрима, а
-      // `get_session_stats` даёт реальные токены/стоимость/контекст по ходу.
       statsPollTimer = setInterval(() => {
         if (settled) return;
         writeCommand({ type: 'get_session_stats' });
@@ -1177,7 +999,6 @@ export class RpcPiRunner implements PiRunner {
         try {
           event = JSON.parse(line) as RpcEvent;
         } catch {
-          // Битые/неполные JSON-строки протокола пропускаем.
           return;
         }
 
@@ -1186,9 +1007,6 @@ export class RpcPiRunner implements PiRunner {
           return;
         }
 
-        // `handled`: an extension command or input handler consumed the prompt,
-        // so no run starts and `agent_settled` never arrives. Waiting for it
-        // would hang the step until its timeout.
         if (
           event.type === 'response' &&
           event.command === 'prompt' &&
@@ -1198,9 +1016,6 @@ export class RpcPiRunner implements PiRunner {
           return;
         }
 
-        // Ответ на нашу id-коррелированную команду: резолвим pending и не
-        // отдаём парсеру. Запросы без id (get_state/get_session_stats) идут
-        // дальше как есть.
         if (event.type === 'response' && typeof event.id === 'string') {
           const pendingEntry = pending.get(event.id);
           if (pendingEntry) {
@@ -1247,8 +1062,6 @@ export class RpcPiRunner implements PiRunner {
       });
 
       child.on('close', (code) => {
-        // Процесс закрылся без agent_settled: отдаём как есть.
-        // Если пользователь успел запросить abort — это явный провал.
         if (settled) return;
         if (committedAbort) {
           requestStatsThenFinish(this.resultFor(true, stderr));
@@ -1263,7 +1076,6 @@ export class RpcPiRunner implements PiRunner {
         });
       });
 
-      // Заключительный перевод строки не приходит — обработаем остаток.
       child.on('end', () => {
         if (buffer.length > 0) {
           handleLine(buffer);
@@ -1276,8 +1088,6 @@ export class RpcPiRunner implements PiRunner {
         type: 'prompt',
         message: prompt,
       });
-      // Имя модели доступно только через `get_state` — спрашиваем сразу после
-      // промпта (до первого опроса stats), далее stats несёт его с собой.
       writeCommand({ type: 'get_state' });
     });
   }

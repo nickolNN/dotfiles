@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "./animations.css";
 
-/* Tailwind v4 preflight не ставит cursor:pointer на <button>, поэтому
    возвращаем его глобально для всех кликабельных элементов. */
 @layer base {
   button:not(:disabled),
@@ -24,7 +23,6 @@
 html {
   height: 100%;
   background-color: #0D0208;
-  /* Safari iOS: не показывать белый фон при overscroll */
   color-scheme: dark;
 }
 
@@ -32,7 +30,6 @@ body {
   height: 100%;
 }
 
-/* Динамический вьюпорт: 100dvh отслеживает реально видимую высоту,
    поэтому оболочка не перестраивается при сворачивании тулбара Safari. */
 #root {
   height: 100vh;
@@ -66,7 +63,6 @@ body {
   text-shadow: 0 0 6px rgba(0, 255, 65, 0.45);
 }
 
-/* Чат-рендер структурированных событий сессии агента (SessionView). */
 .session-view {
   display: flex;
   flex-direction: column;
@@ -173,7 +169,6 @@ body {
   color: #ff9aa8;
 }
 
-/* Сворачиваемый блок размышления агента: приглушённый серо-зелёный курсив. */
 .session-thinking {
   min-width: 0;
   border-left: 2px solid #008f11;
@@ -193,7 +188,6 @@ body {
   color: rgba(0, 255, 65, 0.35);
 }
 
-/* Свёрнутый thinking-блок: разделитель между «thinking» и превью.
    В остальных tool-блоках label идёт без разделителя. */
 .session-thinking .session-tool-label::before {
   content: '·';
@@ -214,7 +208,6 @@ body {
   overflow: auto;
 }
 
-/* Интерактивный вопрос агента: акцентная рамка, чтобы выделяться среди инструментов. */
 .session-question {
   min-width: 0;
   border: 1px solid #00ff41;
@@ -268,7 +261,6 @@ body {
   color: rgba(0, 180, 255, 0.8);
 }
 
-/* Компактный футер статистики сессии. */
 .session-stats {
   display: flex;
   flex-wrap: wrap;
@@ -284,7 +276,6 @@ body {
   color: rgba(0, 143, 17, 0.8);
 }
 
-/* Markdown-рендер вывода агента в Matrix-теме. */
 .agent-markdown {
   min-width: 0;
   font-size: 0.75rem;
@@ -417,7 +408,6 @@ body {
   color: #00ff41;
   background-color: rgba(0, 143, 17, 0.15);
 }
-/* ── Markdown editor (Tiptap) ─────────────────────────────────────────── */
 .markdown-editor:focus-within {
   border-color: #00ff41;
   box-shadow: 0 0 8px rgba(0, 255, 65, 0.35);
@@ -533,44 +523,34 @@ body {
   content: attr(data-placeholder);
 }
 
-/* Фон темы highlight.js не нужен: модалка артефактов уже тёмная (#0d0208). */
 .hljs {
   background: transparent;
 }
 
-/* Панель прогресса подготовки: исчезновение через 3с после ready/error
    (`scheduleProgressFade` навешивает класс, `onAnimationEnd` убирает DOM).
    Использует общий keyframe `fade-out-up` из animations.css. */
 .workspace-progress--fade {
   animation: fade-out-up 0.5s ease forwards;
 }
 
-/* ── Scrollbar — matrix theme, thin ── */
-* {
   scrollbar-width: thin;
   scrollbar-color: #008F1140 #0D0208;
 }
 
-/* webkit (Chrome / Safari / Edge) */
-*::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-*::-webkit-scrollbar-track {
   background: #0D0208;
 }
 
-*::-webkit-scrollbar-thumb {
   background: #008F1140;
   border-radius: 3px;
 }
 
-*::-webkit-scrollbar-thumb:hover {
   background: #00FF4160;
 }
 
-/* ── Кнопка «+» в хедере ── */
 @keyframes spin-fast {
   to { transform: rotate(360deg); }
 }

@@ -22,7 +22,6 @@ interface MultipartFile {
   content: string;
 }
 
-/** Собирает multipart/form-data тело: поле `payload` + повторяющиеся `files`. */
 function multipart(
   fields: Record<string, string>,
   files: MultipartFile[],
@@ -180,8 +179,6 @@ describe('multipart-загрузка файлов', () => {
         title: 'Итерации',
         pipeline_steps: ['resolve'],
       });
-      // Итерация №1 должна завершиться: при активной итерации #2 создалась бы
-      // как draft (см. iteration-queue.test.ts) и не запустилась бы сразу.
       await waitFor(() => {
         const first = db
           .select()
@@ -379,7 +376,6 @@ describe('GET /issues/:id/files и DELETE /files/:fileId', () => {
     const { db, root, app, cleanup } = makeEnv();
     try {
       const issueId = await createIssue(app, { title: 'Traversal content' });
-      // Файл существует, но ВНЕ папки attachments задачи.
       writeFileSync(join(root, 'evil.txt'), 'boom');
       const [row] = await insertMany(db, [
         {

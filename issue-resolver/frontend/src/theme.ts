@@ -1,6 +1,5 @@
 import type { StepRunStatus, TaskStatus } from '@issue-resolver/shared';
 
-/** Базовая палитра «Matrix Code Green». */
 export const MATRIX = {
   bg: '#0D0208',
   panel: '#003B00',
@@ -8,7 +7,6 @@ export const MATRIX = {
   green: '#00FF41',
 } as const;
 
-/** Цвет индикатора статуса задачи (зелёный код + красная/синяя таблетки). */
 export const statusColor: Record<TaskStatus, string> = {
   draft: '#8A8A8A',
   pending: '#008F11',
@@ -17,14 +15,9 @@ export const statusColor: Record<TaskStatus, string> = {
   completed: '#00FF41',
   failed: '#FF0033',
   cancelled: '#8A8A8A',
-  /** Агент ждёт ответа пользователя — янтарный, как и подготовка. */
   question: '#FFB000',
 };
 
-/**
- * Цвет статуса шага конвейера (для строк step-run). `aborted` идёт в наборе
- * заранее — shared добавит его в StepRunStatus после синка (-820).
- */
 export const stepStatusColor: Record<StepRunStatus | 'aborted', string> = {
   pending: '#008F11',
   running: '#00B4FF',

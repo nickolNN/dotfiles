@@ -47,8 +47,6 @@ describe('buildDepsFromEnv', () => {
     expect(deps.jira).toBeInstanceOf(HttpJiraClient);
     expect(deps.control).toBeInstanceOf(InMemoryStepSessionRegistry);
 
-    // SAFETY: Http*Client держат token/baseUrl в private readonly; читаем их
-    // runtime-свойства, чтобы убедиться, что фабрика пробросила env.
     const jira = deps.jira as unknown as { baseUrl: string; token: string };
     expect(jira.baseUrl).toBe('https://jira.example.com');
     expect(jira.token).toBe('jira-token');
@@ -58,7 +56,6 @@ describe('buildDepsFromEnv', () => {
       tokens: Record<string, string | undefined>;
     };
     expect(mr.token).toBe('mr-token');
-    // Per-host токены проброшены из env (Bitbucket-репо ходят со своим).
     expect(mr.tokens).toEqual({
       bitbucket: 'bitbucket-token',
       github: 'github-token',
@@ -79,7 +76,6 @@ describe('buildDepsFromEnv', () => {
     expect(deps.control).toBeInstanceOf(InMemoryStepSessionRegistry);
     expect(deps.local).toBe(true);
     expect(deps.workspaceRoot).toBe('/tmp/issue-workspaces');
-    // Локальный режим тоже прокидывает per-host MR-токены.
     expect(
       (deps.mr as unknown as { tokens: { bitbucket?: string } }).tokens
         .bitbucket,
@@ -99,14 +95,12 @@ describe('buildDepsFromEnv', () => {
     });
     expect(overridden.devopsTimeoutMs).toBe(120_000);
 
-    // Фолбэк на прежнее имя env при отсутствии нового.
     const legacy = buildDepsFromEnv({
       ISSUE_RESOLVER_LOCAL: '1',
       [LEGACY_DEVOPS_TIMEOUT_ENV]: '120000',
     });
     expect(legacy.devopsTimeoutMs).toBe(120_000);
 
-    // Новое имя приоритетнее прежнего.
     const both = buildDepsFromEnv({
       ISSUE_RESOLVER_LOCAL: '1',
       [DEVOPS_TIMEOUT_ENV]: '180000',

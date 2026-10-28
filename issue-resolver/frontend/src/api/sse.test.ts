@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { SSEEvent, SessionEvent } from '@issue-resolver/shared';
 import { parseAgentEventPayload, parseIssueDeletedPayload, parseIssueDeletingPayload, parseStepEventPayload, parseWorkspaceProgressPayload } from './sse';
 
-/** Оборачивает сессионное событие в конверт `step_event` как это делает бэкенд. */
 function envelope(event: unknown): string {
   return JSON.stringify({ stepRunId: 'run-1', event });
 }
@@ -161,7 +160,6 @@ describe('parseWorkspaceProgressPayload — шаг подготовки рабо
       message: 'localhost:5173',
       devPort: 5173,
     });
-    // Некорректный devPort отбрасывается.
     expect(
       parseWorkspaceProgressPayload(
         JSON.stringify({ step: 'dev_server', status: 'done', devPort: 'x' }),

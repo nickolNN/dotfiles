@@ -1,9 +1,3 @@
-// Фейковый pi RPC (JSONL stdin → JSONL stdout) для интеграционных тестов
-// реального RpcPiRunner. Режим передаётся первым аргументом:
-//   normal  — читает prompt, отвечает agent_settled{aborted:false} (+stats)
-//   aborted — читает prompt, отвечает agent_settled{aborted:true}
-//   crash   — падает exit(1) без agent_settled
-//   hang    — молчит, держит stdin/stdout открытыми
 import process from 'node:process';
 
 const mode = process.argv[2] ?? 'normal';

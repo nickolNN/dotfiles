@@ -1,12 +1,3 @@
-/**
- * Контракт шага `pr`: форма описания MR существует ровно в одном месте —
- * оригинальный скилл `pr` (`mattpocock/skills:skills/engineering/pr`, credits
- * Dex Horthy / Humanlayer), запечённый в образ agent-контейнера. Наш форк
- * `agent-skills/pr` удалён: у него была своя структура («What was done / Why /
- * How to verify / Risks») и свои git-команды (`git diff <base>...HEAD`), а в
- * конвейере к моменту шага NOTHING IS COMMITTED — диффа от HEAD там нет, и агент
- * рапортовал бы «пустой change set».
- */
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -81,7 +72,6 @@ describe('pr шаг: форма описания — из оригинально
 
   it('скилл не тянет git-команд, а шаг остаётся working-tree-aware', () => {
     const text = prPrompt();
-    // Команды из diff-ориентированного форка: их в конвейере быть не может.
     expect(text).not.toContain('<base>...HEAD');
     expect(text).toContain('git status --porcelain');
     expect(text).toContain('nothing is committed yet');
@@ -92,7 +82,6 @@ describe('pr шаг: форма описания — из оригинально
     expect(text).toMatch(/One MR description \*\*per repository\*\*/);
     const repoUrls = [...text.matchAll(/"repository_url": "([^"]+)"/g)];
     expect(repoUrls.length).toBeGreaterThanOrEqual(2);
-    // Каждое описание в merge_requests — в форме оригинала.
     const perRepo = [...text.matchAll(/"description": "([^"]+)"/g)]
       .slice(1)
       .map((m) => m[1]);

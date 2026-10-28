@@ -37,13 +37,10 @@ describe('MarkdownEditor', () => {
 
   it('доступные имена тулбара не конфликтуют с внешним label «Заголовок»', () => {
     renderEditor('');
-    // Playwright `getByLabel` — substring-матч, поэтому кнопки заголовков
-    // должны называться H1/H2/H3, а не «Заголовок N».
     expect(screen.queryByLabelText(/Заголовок/)).toBeNull();
     expect(screen.getByRole('button', { name: 'H1' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'H2' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'H3' })).toBeInTheDocument();
-    // Тултипы при этом остаются человекочитаемыми.
     expect(screen.getByRole('button', { name: 'H1' })).toHaveAttribute(
       'title',
       'Заголовок 1',
@@ -89,12 +86,9 @@ describe('MarkdownEditor', () => {
 
     const element = screen.getByLabelText('Текст') as HTMLElement;
     expect(element.querySelector('h1')?.textContent).toBe('two');
-    // Сериализатор заголовка добавляет висячие пустые строки — значение
-    // должно дойти до родителя (канонический markdown), без петли emit.
     await waitFor(() =>
       expect(onChange.mock.calls.at(-1)?.[0]).toContain('# two'),
     );
-    // mount-'' + внешнее значение; внешний setContent не должен зациклиться.
     expect(onChange.mock.calls.length).toBe(2);
   });
 

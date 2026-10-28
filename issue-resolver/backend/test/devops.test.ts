@@ -32,7 +32,6 @@ const spawnMock = vi.mocked(spawn);
 const REPO_URL = 'https://example.com/acme/app.git';
 const repos = [{ repository_url: REPO_URL, base_branch: 'main' }];
 
-/** In-memory-реализация порта `run_instructions*` для тестов хука. */
 class FakeRunInstructionsStore implements RunInstructionsPort {
   readonly statuses = new Map<string, RunInstructionsStatus>();
   readonly instructions = new Map<string, string>();
@@ -59,7 +58,6 @@ class FakeRunInstructionsStore implements RunInstructionsPort {
   }
 }
 
-/** Git-сервис, у которого падает именно install (prepare проходит). */
 class FailingInstallGitService extends FakeGitService {
   override async installDependencies(): Promise<void> {
     throw new Error('install boom');
@@ -74,7 +72,6 @@ const tempRoot = async (): Promise<string> => {
   return root;
 };
 
-/** Фейковый child process: EventEmitter + ручные stdout/stderr и запись stdin. */
 function makeFakeChild(): EventEmitter & {
   stdin: { writable: boolean; write: (chunk: string) => boolean };
   stdout: EventEmitter;
@@ -107,7 +104,6 @@ const emit = (
   child.stdout.emit('data', Buffer.from(`${JSON.stringify(event)}\n`));
 };
 
-/** Закрывает RPC-сессию так, чтобы `run()` резолвился (settle + stats). */
 const settle = (child: EventEmitter & { stdout: EventEmitter }): void => {
   emit(child, { type: 'agent_settled', aborted: false });
   emit(child, {
@@ -182,7 +178,6 @@ describe('prepareWorkspace — анализ run_instructions', () => {
       status: 'done',
       message: 'Инструкции сохранены',
     });
-    // analyzing идёт между clone и install.
     const steps = progress.map((item) => item.step);
     expect(steps.indexOf('devops')).toBeGreaterThan(steps.indexOf('cloning'));
     expect(steps.indexOf('devops')).toBeLessThan(steps.indexOf('installing'));
@@ -291,7 +286,6 @@ describe('prepareWorkspace — анализ run_instructions', () => {
         git: new FakeGitService(),
         workspaceRoot: root,
         devops: (params) => {
-          // Имитируем живой вывод агента через переданные фабрике колбэки.
           params.onStdout?.('installing deps\n');
           params.onStderr?.('warning\n');
           return agent;
@@ -438,9 +432,6 @@ describe('PiDevOpsAgent', () => {
     expect(pi.calls[0].options?.cwd).toBe('/workspaces/issue-1');
   });
 
-  // Последнее звено цепочки thinking effort, которое нельзя доказать типами:
-  // опция агента должна доехать до `pi.run`, а оттуда — до argv
-  // `['--thinking', level]` (явный тест argv — в rpc-runner.test.ts).
   it('пробрасывает thinkingLevel в pi.run', async () => {
     const root = await tempRoot();
     await mkdir(join(root, 'app'), { recursive: true });
@@ -463,8 +454,6 @@ describe('PiDevOpsAgent', () => {
     expect(pi.calls[0].options?.thinkingLevel).toBe('xhigh');
   });
 
-  // Полный путь через боевой RpcPiRunner: опция агента должна оказаться в argv
-  // реального spawn, а не остаться в объекте опций.
   it('thinkingLevel доезжает до argv spawn (--thinking high)', async () => {
     const root = await tempRoot();
     await mkdir(join(root, 'app'), { recursive: true });
@@ -520,8 +509,6 @@ describe('PiDevOpsAgent', () => {
   });
 });
 
-// Регрессия: раньше `devOpsFactoryFor` деструктурировал только 7 имён и молча
-// терял эти пять полей — tsc такое не ловит. Проверяем на боевой фабрике.
 describe('devOpsFactoryFor — проброс полей в pi.run', () => {
   it('issueId/iterationId/stepRunId/registry и tagInstructions не теряются', async () => {
     const root = await tempRoot();
@@ -558,7 +545,6 @@ describe('devOpsFactoryFor — проброс полей в pi.run', () => {
       stepRunId: 'issue.issue-1.devops',
       registry,
     });
-    // tagInstructions не уходит в pi.run — он подставляется в промпт.
     expect(pi.calls[0].prompt).toContain('run proxy on :8081');
   });
 });

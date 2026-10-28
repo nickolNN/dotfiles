@@ -41,8 +41,11 @@ Empty lists = safe. `tsx watch` watches `backend/src/**`, not `prompts/**`.
 
 Post-iteration, fire-and-forget (`spawnReportAgent` in
 `workflow/run-iteration.service.ts`); `POST /api/issues/:id/report` →
-`202 {ok, reportRunId}`. Writes `report.md` + `report.html` at `<task>/`
-root (`report-<n>.md` = engine summaries); SSE `step_status`/`log`/`step_event`
+`202 {ok, reportRunId}`. The agent writes `report.md` + `report.json` at
+`<task>/` root (`report-<n>.md` = engine summaries); **`report.html` is
+rendered by the engine** from those two (`workflow/report-render`) right after
+the agent exits, so the page always exists when the markdown does. SSE
+`step_status`/`log`/`step_event`
 carry `stepRunId = '{issueId}/report'` (`reportRunId` in the POST reply).
 The live section a user watches is fed by those SSE events + the run's
 session jsonl; files (`/result`, snapshot, archive) are the durable copy.
@@ -74,8 +77,51 @@ warning per file (`warningFile` dedupe, exact wins). `/report/status` adds
 `observedModel` (additive, absent after a restart → UI "no telemetry"),
 and a `running` `step_status {model: null}` honestly means "none
 requested, system model" — never the model that actually ran.
-`report.md` precedes `report.html`: mid-run `/result` serves the previous
-HTML (`iteration-snapshot`, `text/html`), md-fallback if none.
+`report.md` precedes the page: mid-run `/result` serves the previous HTML
+(`iteration-snapshot`, `text/html`), md-fallback if none.
+
+**The page is built, never authored.** `renderReportArtifacts(hostDir)` reads
+`report.md`, optional `report.json` (verdict/metrics/diagrams; a broken file
+degrades to a warning, never to a lost page) and `screenshots/`, then writes
+`report.html`: inline CSS with light+dark, markdown rendered through an
+escaping subset (raw HTML stays text, `javascript:` links are neutralized),
+`<dialog>` lightbox.
+
+Composition is code, not authoring (`workflow/report-render/layout.ts`):
+whatever section, metric, diagram or metrology line smells like the run
+(`execution`, `итерац`, `шаг`, `timeline`, `change set`, `findings`,
+`reproduction`) is collected into one collapsed `<details>` at the end, the
+leading `<h1>` and the `Status/Generated/Iterations` line are dropped, merge/
+pull-request links are lifted into the header (the section that mentions them
+stays in the details), and diagrams land after the answer text.
+
+Diagrams are opt-in and drawn from numbers: `flow` (nodes may carry a status,
+edges may carry a label), `bars`, `matrix`, plus a sanitized `svg` escape
+hatch. There is no `timeline` kind — a process chart above the answer hides the
+answer, and iteration timing already lives on the task page. A diagram whose
+title duplicates an ASCII figure in `report.md` is dropped with a warning.
+
+**Screenshots are inlined as the last step.** A screenshot is cited where it
+proves something — a markdown image, or the file name mentioned in a
+paragraph, list or table cell — and rendered as a `<figure>` right there; only
+files nobody cited reach the closing gallery. Every figure carries a
+`data-slot="01-board.png"` placeholder; `bin/embed-screenshots.mjs` (Node,
+no Python) rewrites them into WebP-q85 data URIs at full resolution
+(`--lossless`, `--keep-png` for alternatives; no encoder → original bytes).
+`runReportAgent` renders, then inlines, then re-reads sizes, so the DB keeps
+the final byte counts. Idempotent: no placeholders → no-op, exit 0. Exit 1
+means placeholders or a missing screenshot file survived — that lands in the
+step `feedback` (`report.html без всех скриншотов: …`), not in `failed`.
+`report.md` itself no longer replays the run: `## Execution details` keeps the
+change set, the findings table with provenance, MR links and the reproduction
+recipe — not an iteration timeline nor a step-by-step retelling of narratives.
+
+Base64 in a tool-call argument is the failure mode this replaces: it gets
+truncated, and even when it survives it costs minutes of generation per
+image.
+
+Model-leak detection scans authored files only (`report.md`, `report.json`):
+the page inherits the markdown, so scanning it would report one defect twice.
 
 ## Did the prompt edit reach the agent?
 

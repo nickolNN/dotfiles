@@ -2,28 +2,14 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { RepoInfo, RepoPlatform } from '@issue-resolver/shared';
 import { validateRepos } from '../api/client';
 
-/** Пауза после последнего нажатия, прежде чем дёрнуть API валидации. */
 export const REPO_URL_DEBOUNCE_MS = 600;
 
-/** Схема URL в начале строки (`https://`, `ssh://` и т.п.). */
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
-/** ssh-стиль `git@host:owner/repo` (или `git@host/owner/repo`). */
 const SSH_URL = /^[^@/]+@([^:/]+)[:/](.+)$/;
 
-/**
- * Приводит ввод к абсолютному URL:
- * - без схемы (`github.com/org/repo`) → `https://…`;
- * - ssh-стиль (`git@host:org/repo`) → `https://host/org/repo`;
- * - уже со схемой — как есть.
- *
- * Возвращает `null`, если строку нельзя разобрать как URL (пустая, пробелы
- * в хосте, битая схема). Платформа здесь не учитывается — этим занимается
- * бэкенд (`detectPlatform`).
- */
 export function normalizeRepoUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  // Пробелы внутри строки — заведомо не URL (разбор URL зависит от движка).
   if (/\s/.test(trimmed)) return null;
 
   const sshMatch = SSH_URL.exec(trimmed);
@@ -41,11 +27,6 @@ export function normalizeRepoUrl(value: string): string | null {
   }
 }
 
-/**
- * Похоже ли значение на адрес репозитория: любой хост (не только
- * github/gitlab/bitbucket) и путь минимум из двух сегментов (`owner/repo`).
- * Платформа не важна — неизвестные хосты всё равно уходят на валидацию в API.
- */
 export function isLikelyRepoUrl(value: string): boolean {
   const normalized = normalizeRepoUrl(value);
   if (!normalized) return false;
@@ -67,9 +48,7 @@ type ValidationState =
 
 export interface RepoUrlInputProps {
   value: string;
-  /** Новый URL и (при успехе) метаданные репозитория; `null` — сброс. */
   onChange: (url: string, info?: RepoInfo | null) => void;
-  /** Внешняя ошибка (например, серверная при submit). */
   error?: string;
   disabled?: boolean;
   id?: string;
@@ -88,7 +67,6 @@ export const PLATFORM_LABELS: Record<RepoPlatform, string> = {
   unknown: 'Repo',
 };
 
-/** Цвет чипа под брендинг платформы: Bitbucket — синий/фиолетовый. */
 export const PLATFORM_CHIP_CLASSES: Record<RepoPlatform, string> = {
   github: 'border-[#00FF41] text-[#00FF41]',
   gitlab: 'border-[#00FF41] text-[#00FF41]',
@@ -96,7 +74,6 @@ export const PLATFORM_CHIP_CLASSES: Record<RepoPlatform, string> = {
   unknown: 'border-[#008F11] text-[#00FF41]/70',
 };
 
-/** Карточка enriched-инфо о найденном репозитории. */
 function RepoInfoCard({ info }: { info: RepoInfo }) {
   return (
     <div
@@ -131,11 +108,6 @@ function RepoInfoCard({ info }: { info: RepoInfo }) {
   );
 }
 
-/**
- * Поле ввода URL репозитория с живой валидацией: debounce, индикатор
- * состояния (спиннер/✓/✕), карточка метаданных при успехе и красный текст
- * ошибки при неудаче. Запрос идёт только для похожих на репозиторий URL.
- */
 export default function RepoUrlInput({
   value,
   onChange,
@@ -162,14 +134,12 @@ export default function RepoUrlInput({
       timerRef.current = null;
     }
 
-    // Любое изменение значения сбрасывает прошлый результат.
     setInfo(null);
     setMessage(null);
 
     const trimmed = value.trim();
     const normalized = normalizeRepoUrl(value);
 
-    // Пусто или выключено — ничего не проверяем и не ругаемся.
     if (!trimmed || disabled) {
       setState('idle');
       return () => {
@@ -177,7 +147,6 @@ export default function RepoUrlInput({
       };
     }
 
-    // Строку нельзя разобрать как URL — красный ✕ «Invalid URL», без запроса.
     if (!normalized) {
       setState('invalid');
       setMessage('Invalid URL');
@@ -186,8 +155,6 @@ export default function RepoUrlInput({
       };
     }
 
-    // URL разобран, но не похож на репозиторий (нет пути owner/repo) —
-    // нейтральная подсказка вместо молчания; запрос не шлём.
     if (!isLikelyRepoUrl(value)) {
       setState('invalid-url');
       return () => {
@@ -195,7 +162,6 @@ export default function RepoUrlInput({
       };
     }
 
-    // Спиннер показываем сразу, а запрос шлём только после паузы в вводе.
     setState('checking');
     const url = normalized;
 
@@ -237,8 +203,6 @@ export default function RepoUrlInput({
         timerRef.current = null;
       }
     };
-    // onChange сознательно не в зависимостях: родитель может передавать
-    // инлайн-функцию, и валидация не должна перезапускаться на каждом рендере.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, disabled]);
 

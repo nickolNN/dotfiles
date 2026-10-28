@@ -8,22 +8,14 @@ export const PIPELINE_STEPS = [
   'pr',
 ] as const;
 
-/**
- * Ключи карты пер-шаговых моделей: шаги пайплайна + `report`.
- * `report` — не шаг пайплайна (запускается пост-итерационно движком и
- * роутом force-run), но его модель хранится в той же карте `step_models`.
- */
 const STEP_MODEL_KEYS = [...PIPELINE_STEPS, 'report'] as const;
 
-/** Частичная карта «шаг → id модели»: ключи из PIPELINE_STEPS + `report`. */
 const stepModelsSchema = z.record(z.enum(STEP_MODEL_KEYS), z.string());
 
-/** Non-empty step selection: `[]` means "nothing chosen", not "use defaults". */
 const selectedStepsSchema = z
   .array(z.enum(PIPELINE_STEPS))
   .min(1, 'выберите хотя бы один шаг пайплайна');
 
-/** Уровень размышления pi: словарь CLI-флага `--thinking`. */
 const thinkingLevelSchema = z.enum([
   'off',
   'minimal',
@@ -34,14 +26,8 @@ const thinkingLevelSchema = z.enum([
   'max',
 ]);
 
-/**
- * Ключи карты пер-шаговых уровней мышления: шаги пайплайна + `report`.
- * `report` — не шаг пайплайна, но его thinking хранится в той же карте
- * `step_thinking_levels` (как и модель в `step_models` через STEP_MODEL_KEYS).
- */
 const STEP_THINKING_KEYS = [...PIPELINE_STEPS, 'report'] as const;
 
-/** Частичная карта «шаг → уровень размышления»; ключи из PIPELINE_STEPS + `report`. */
 const stepThinkingLevelsSchema = z
   .record(z.enum(STEP_THINKING_KEYS), thinkingLevelSchema)
   .optional();
@@ -52,10 +38,6 @@ const repoLocationSchema = z
     message: 'repository_url должен быть URL',
   });
 
-/**
- * Схема тела POST /issue-resolver/api/v1/issues.
- * Кросс-полевое правило: title обязателен, если не указан jira_issue_url.
- */
 export const createIssueRequestSchema = z
   .object({
     title: z.string().optional(),
@@ -71,7 +53,6 @@ export const createIssueRequestSchema = z
             bootstrap_enabled: z.boolean().default(true),
           })
           .superRefine((repository, ctx) => {
-            // Приоритет у repo_id, но хотя бы одно из двух должно быть задано.
             if (!repository.repo_id && !repository.repository_url) {
               ctx.addIssue({
                 code: z.ZodIssueCode.custom,
@@ -79,7 +60,6 @@ export const createIssueRequestSchema = z
                 path: ['repo_id'],
               });
             }
-            // base_branch необязателен только при repo_id (берётся defaultBranch).
             if (!repository.repo_id && !repository.base_branch) {
               ctx.addIssue({
                 code: z.ZodIssueCode.custom,
@@ -113,13 +93,11 @@ export const createIssueRequestSchema = z
     },
   );
 
-/** Схема тела POST /issue-resolver/api/v1/issues/:id/iterations. */
 export const createIterationRequestSchema = z.object({
   context: z.string().min(1),
   review_context: z.string().optional(),
   is_review_need: z.boolean().optional(),
   steps: selectedStepsSchema.optional(),
-  /** ID репозиториев, для которых включён create_mr (выбирается из секции pr-шага). */
   pr_repository_ids: z.array(z.string()).optional(),
   model: z.string().optional(),
   step_models: stepModelsSchema.optional(),
@@ -130,22 +108,18 @@ export const createIterationRequestSchema = z.object({
   worker_count: z.number().int().min(0).optional(),
 });
 
-/** Схема тела POST /issue-resolver/api/v1/repos/validate. */
 export const validateReposRequestSchema = z.object({
   urls: z.array(z.string().url()).min(1, 'хотя бы один URL обязателен').max(20),
 });
 
-/** Схема тела POST /issue-resolver/api/v1/issues/validate-jira. */
 export const validateJiraUrlSchema = z.object({
   url: z.string().url('url должен быть валидным URL'),
 });
 
-/** Схема тела POST/PUT /issue-resolver/api/v1/repositories. */
 export const createRepoRequestSchema = z.object({
   url: z.string().trim().url('url должен быть валидным URL'),
 });
 
-/** Схема тела POST /issue-resolver/api/v1/tags. */
 export const createTagRequestSchema = z.object({
   name: z.string().min(1, 'name обязателен'),
   description: z.string().optional(),
@@ -160,12 +134,10 @@ export const createTagRequestSchema = z.object({
     .min(1, 'хотя бы один репозиторий обязателен'),
 });
 
-/** Схема тела PUT /issue-resolver/api/v1/settings/hostname. */
 export const updateHostnameRequestSchema = z.object({
   hostname: z.string().max(100, 'hostname не длиннее 100 символов'),
 });
 
-/** Схема тела PUT /issue-resolver/api/v1/tags/:id. */
 export const updateTagRequestSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),
@@ -180,7 +152,6 @@ export const updateTagRequestSchema = z.object({
     .optional(),
 });
 
-/** Схема тела PUT /issue-resolver/api/v1/issues/:id — редактирование черновика. */
 export const updateIssueRequestSchema = z.object({
   title: z.string().optional(),
   jira_issue_url: z.string().url().optional().nullable(),

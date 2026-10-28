@@ -91,7 +91,6 @@ function jsonResponse(
   } as Response;
 }
 
-/** Различает GET (issue/iterations/step-runs) и POST ui-response. */
 function stubFetch(
   uiResponse: () => Promise<Response> = () =>
     Promise.resolve(jsonResponse({ ok: true })),
@@ -123,7 +122,6 @@ function stubFetch(
   return fetchMock;
 }
 
-/** Минимальный фейк EventSource: ручная доставка onmessage. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -198,7 +196,6 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
     const inline = await screen.findByTestId('inline-question');
     const field = within(inline).getByLabelText('Ответ');
     expect(field).toHaveAttribute('placeholder', 'feature/...');
-    // Пустое значение — «Ответить» заблокировано.
     expect(
       within(inline).getByRole('button', { name: 'Ответить' }),
     ).toBeDisabled();
@@ -337,7 +334,6 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
     expect(inline).toHaveLength(2);
     expect(inline[0]).toHaveTextContent('Первый?');
     expect(inline[1]).toHaveTextContent('Второй?');
-    // Отдельных баннеров по шагам больше нет.
     expect(screen.queryByTestId('step-pending-question')).toBeNull();
   });
 
@@ -357,7 +353,6 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
     const inline = await screen.findAllByTestId('inline-question');
     expect(inline).toHaveLength(2);
 
-    // Гасим первый — второй вопрос остаётся видимым.
     fireEvent.click(
       within(inline[0]).getByRole('button', { name: 'Ответить' }),
     );
@@ -410,7 +405,6 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
-    // Завершённый шаг показывает саммари/заглушку, а не живой вывод.
     await screen.findByText('Результат отсутствует.');
 
     expect(screen.queryByTestId('inline-question')).toBeNull();
@@ -431,7 +425,6 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
-    // Дожидаемся, что серверные ответы реально запрошены и применены.
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([url]) =>
@@ -482,8 +475,6 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
   });
 
   it('неотвеченный вопрос шага needs_input появляется inline при открытии задачи', async () => {
-    // `needs_input` = exit 0 + blocked-отчёт: шаг остановился и ждёт ответа.
-    // Вопрос должен всплывать так же, как у running-шага.
     stubFetch(
       undefined,
       [
@@ -583,7 +574,6 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
 
     const input = (await screen.findByLabelText('Ответ')) as HTMLInputElement;
     await waitFor(() => expect(document.activeElement).toBe(input));
-    // Префилл не оставляет каретку в позиции 0.
     expect(input.value).toBe('feature/');
     expect(input.selectionStart).toBe(input.value.length);
 

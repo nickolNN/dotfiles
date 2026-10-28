@@ -34,28 +34,17 @@ import { resolveAgentTimeoutMs, withAgentTimeout } from './timeout';
 import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
 import { STEP_SYSTEM_APPEND } from './prompts';
 
-/** Вход комнаты resolve: общий prompt-контекст + план и адрес контейнера. */
 export interface RoomResolveInput extends RoomPromptInput {
   containerName: string;
   execution: ExecutionPlan;
-  /** Потолок числа исполнителей; по умолчанию DEFAULT_MAX_ROOM_EXECUTORS. */
   maxExecutors?: number;
 }
 
-/** Опции прогона комнаты: модель/cwd, адрес шага и живые колбэки. */
 export interface RoomResolveOptions {
-  /**
-   * Host-путь рабочей папки задачи. Отсюда движок дочитывает отчёты агентов
-   * (`.issue-worker-result-<n>.json`, `.issue-stage-<i>*.json`) в саммари для
-   * координатора: в docker-режиме `cwd` — путь внутри контейнера и бэкенду
-   * недоступен.
-   */
   hostWorkspaceDir?: string;
   model?: string;
-  /** Уровень размышления pi, общий для работников и координатора. */
   thinkingLevel?: string;
   cwd?: string;
-  /** stepRunId of the resolve STEP; workers address as `<stepRunId>.w<i>`. */
   stepRunId: string;
   iterationId: string;
   issueId?: string;
@@ -63,26 +52,14 @@ export interface RoomResolveOptions {
   onStdout?: (chunk: string, agent: RoomAgentInfo) => void;
   onStderr?: (chunk: string, agent: RoomAgentInfo) => void;
   onEvent?: (event: SessionEvent, agent: RoomAgentInfo) => void;
-  /** Хук логирования старта работника (индекс/подзадача/дескриптор агента). */
   onWorkerStart?: (
     item: RoomWorkItem,
     total: number,
     agent: RoomAgentInfo,
   ) => void;
-  /**
-   * Таймаут одного pi-агента (мс). По умолчанию — env/30 мин (см.
-   * `resolveAgentTimeoutMs`). Явное значение используется как есть и служит
-   * override'ом для коротких прогонов/тестов.
-   */
   timeoutMs?: number;
 }
 
-/**
- * Дескриптор исполнителя: `index` в RoomAgent — 1-based, id — per-agent stepRunId.
- * Со `stage` (staged-режим) id/подпись включают номер этапа, а исполнитель
- * нумеруется 1-based внутри этапа. Единственный исполнитель одиночного этапа
- * (`executors: 1`) — это `index = 0`, т.е. «Этап N · Исполнитель 1».
- */
 const workerAgent = (
   baseStepRunId: string,
   index: number,
@@ -106,11 +83,6 @@ const workerAgent = (
         label: `Исполнитель ${index + 1}`,
       };
 
-/**
- * Дескриптор координатора: без `stage` — финальный lead шага (id = stepRunId);
- * with `stage` — coordinator of a staged run (`<address>.s<i>.lead`),
- * у которого есть исполнители (у одиночного этапа координатора нет — там исполнитель).
- */
 const coordinatorAgent = (
   stepRunId: string,
   stage?: NormalizedStage,
@@ -133,7 +105,6 @@ const coordinatorAgent = (
         label: 'Координатор',
       };
 
-/** Терминальный abort-результат resolve (общий для room и staged). */
 const abortedResolveResult = (): StepExecutionResult => ({
   step: 'resolve',
   exitCode: 1,
@@ -145,18 +116,12 @@ const abortedResolveResult = (): StepExecutionResult => ({
   aborted: true,
 });
 
-/** Описывает один запуск pi-агента комнаты (исполнитель или координатор). */
 interface AgentRun {
   stepRunId: string;
   agent: RoomAgentInfo;
   prompt: string;
 }
 
-/**
- * Запускает pi-агента с прокидкой per-agent стрима/событий в общие колбэки.
- * Если агент не завершился за `timeoutMs`, promise reject'ится (даже когда
- * раннер игнорирует `options.timeoutMs`) — resolve-шаг не висит вечно.
- */
 function runAgent(
   pi: PiRunner,
   input: RoomResolveInput,
@@ -196,17 +161,10 @@ function runAgent(
   );
 }
 
-/** Дескриптор одного исполнителя: дескриптор агента, его id, подзадача и промпт. */
 interface WorkerJob extends AgentRun {
   item: RoomWorkItem;
 }
 
-/**
- * Саммари агента комнаты для промпта координатора: сначала in-memory отчёт
- * раннера, затем файл отчёта в рабочей папке. В реальном прогоне раннер
- * заполняет `report` только при abort, поэтому файл — основной источник;
- * без него координатор получал список «(see …)» вместо содержимого.
- */
 function agentSummary(
   result: StepExecutionResult,
   hostWorkspaceDir: string | undefined,
@@ -226,7 +184,6 @@ function agentSummary(
   }
 }
 
-/** Запускает N исполнителей параллельно, переиспользуется комнатой и этапами. */
 async function runWorkersParallel(
   pi: PiRunner,
   input: RoomResolveInput,
@@ -242,13 +199,6 @@ async function runWorkersParallel(
   );
 }
 
-/**
- * Прогон resolve в режиме комнаты: N работников параллельно решают свои
- * подзадачи, затем ОДИН координатор (старший) интегрирует их и принимает
- * финальное решение шага. Движок вызывает это только при детерминированном
- * planExecutionMode === 'room'; координатор пишет `.issue-step-result.json`,
- * а работники — `.issue-worker-result-<n>.json` (n — 1-based номер подзадачи).
- */
 export async function runRoomResolve(
   pi: PiRunner,
   input: RoomResolveInput,
@@ -272,9 +222,6 @@ export async function runRoomResolve(
 
   const workers = await runWorkersParallel(pi, input, options, jobs, count);
 
-  // Пользователь прервал итерацию (abort идёт broadcast во все сессии):
-  // координатора НЕ запускаем — иначе он допишет отчёт и итерация
-  // завершится `completed` вместо `cancelled`.
   if (workers.some((worker) => worker.aborted === true)) {
     return abortedResolveResult();
   }
@@ -295,8 +242,6 @@ export async function runRoomResolve(
     agent,
     prompt: buildRoomCoordinatorPrompt(input, summaries),
   });
-  // `run.stats` шага — тотал всех агентов (исполнители + координатор), а не
-  // телеметрия только последнего координатора.
   const total = sumSessionStats([
     ...workers.map((worker) => worker.stats),
     result.stats,
@@ -304,15 +249,6 @@ export async function runRoomResolve(
   return { ...result, stats: total };
 }
 
-/**
- * Прогон resolve в режиме последовательных этапов (`mode: 'stages'`). Этапы
- * исполняются СТРОГО по порядку: исполнители этапа (параллельно, если executors
- * >= 2) → координатор этапа, пишущий `.issue-stage-<i>.json`; для executors = 1
- * the whole stage is done by one worker (`<address>.s<i>.w0`) writing the same
- * файл этапа. После всех этапов финальный lead интегрирует их
- * исходы и пишет итоговый `.issue-step-result.json`. Abort на любом этапе
- * немедленно завершает шаг без следующих этапов и финального координатора.
- */
 export async function runStagedResolve(
   pi: PiRunner,
   input: RoomResolveInput,
@@ -322,19 +258,13 @@ export async function runStagedResolve(
     input.execution,
     input.maxExecutors ?? DEFAULT_MAX_ROOM_EXECUTORS,
   );
-  // Самовосстановление после падения этапа: этапы с уже записанным
-  // `.issue-stage-<i>.json` считаются завершёнными и не перезапускаются, а их
-  // исходы уходят финальному координатору. Без hostWorkspaceDir — все этапы.
   const resume = readStageOutcomes(options.hostWorkspaceDir, stages);
   const outcomes: { stage: NormalizedStage; outcome: string }[] = [
     ...resume.completed,
   ];
-  // Копилка телеметрии всех агентов шага (исполнители + координаторы этапов) —
-  // в конце суммируется вместе с финальным координатором.
   const allStats: SessionStats[] = [];
 
   for (const stage of stages) {
-    // Этапы до resumeIndex уже имеют персистентный исход — не повторяем их.
     if (stage.index < resume.resumeIndex) continue;
     if (stage.executors >= 2) {
       const workItems: RoomWorkItem[] = stage.decomposition.map(
@@ -394,9 +324,6 @@ export async function runStagedResolve(
       continue;
     }
 
-    // executors === 1: one worker does the whole stage (`<address>.s<i>.w0`).
-    // Промпт — соло-вариант: координатора этапа нет, интегрировать некому,
-    // файл этапа пишет сам исполнитель.
     const agent = workerAgent(options.stepRunId, 0, stage);
     const result = await runAgent(pi, input, options, {
       stepRunId: agent.id,
@@ -422,7 +349,6 @@ export async function runStagedResolve(
     agent,
     prompt: buildStagedFinalCoordinatorPrompt(input, outcomes),
   });
-  // `run.stats` шага — тотал всех агентов этапов + финального координатора.
   const total = sumSessionStats([...allStats, result.stats]);
   return { ...result, stats: total };
 }

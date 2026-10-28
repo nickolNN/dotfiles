@@ -32,7 +32,6 @@ import { featureBranchName } from '../src/workflow/engine';
 
 const NOW = '2026-01-01T00:00:00.000Z';
 
-/** In-memory-реализация StepRunStore для тестов движка. */
 class InMemoryStepRunStore implements StepRunStore {
   readonly runs: StepRun[] = [];
   readonly outputs: StepOutput[] = [];
@@ -214,7 +213,6 @@ describe('runIteration — один шаг', () => {
     const statuses = events
       .filter((event) => event.type === 'step_status')
       .map((event) => event.data);
-    // running несёт JSON `{ status, step, model }`; прочие статусы — строку.
     const runningPayload = statuses
       .filter((data) => data.startsWith('{'))
       .map((data) => JSON.parse(data) as { status: string })
@@ -225,8 +223,6 @@ describe('runIteration — один шаг', () => {
       events.some((event) => event.type === 'log' && event.stream === 'stdout'),
     ).toBe(true);
 
-    // Подготовка (clone/install) живёт вне движка: runIteration получает
-    // готовые repoWorkspaces и git.prepare сам не вызывает.
     expect(git.prepares).toEqual([]);
     expect(pi.calls[0].containerName).toBe('issue-resolver-issue-1');
   });
@@ -243,10 +239,8 @@ describe('runIteration — один шаг', () => {
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    // В момент исполнения шага прогон в store — running.
     expect(observed).toEqual(['running']);
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // Завершение перезаписывает running финальным статусом.
     expect(trace(store)).toEqual(['resolve#1:success']);
   });
 
@@ -255,7 +249,6 @@ describe('runIteration — один шаг', () => {
     const observed: StepRunStatus[] = [];
     deps.pi = {
       run: async () => {
-        // Все self-retry получают fail — resolve падает 4 раза (1 осн + 3 ретрая).
         observed.push(store.runs[store.runs.length - 1]?.status ?? 'pending');
         return fail('resolve');
       },
@@ -263,9 +256,7 @@ describe('runIteration — один шаг', () => {
 
     await runIteration(deps, makeInput(['resolve']));
 
-    // Первый вызов: видит running (статус установлен перед pi.run).
     expect(observed[0]).toBe('running');
-    // 4 попытки: resolve#1 → failed, self-retry ×3 → все failed.
     expect(trace(store)).toEqual([
       'resolve#1:failed',
       'resolve#2:failed',
@@ -356,7 +347,6 @@ describe('runIteration — один шаг', () => {
     expect(pi.calls[0].prompt).toContain(
       '/workspaces/issue-1/a — base `release-7`, create MR: yes',
     );
-    // Коммит делает бэкенд ПОСЛЕ шага: агент смотрит рабочее дерево, а не HEAD.
     expect(pi.calls[0].prompt).toContain('git status --porcelain');
     expect(pi.calls[0].prompt).not.toContain('<base>...HEAD');
   });
@@ -376,12 +366,10 @@ describe('runIteration — один шаг', () => {
 
   it('resolve fail → после self-retry с defaultSuccess → completed', async () => {
     const { deps, store, pi } = makeDeps();
-    // Одна явная ошибка, затем self-retry получает defaultSuccess (pass).
     pi.enqueue(fail('resolve'));
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    // resolve#1 упал, resolve#2 (self-retry) прошёл → completed.
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(trace(store)).toEqual(['resolve#1:failed', 'resolve#2:success']);
     expect(pi.calls).toHaveLength(2);
@@ -389,7 +377,6 @@ describe('runIteration — один шаг', () => {
 
   it('resolve fail ×4 (исчерпаны self-retry) → iteration failed', async () => {
     const { deps, store, pi } = makeDeps();
-    // 4 отказа подряд — self-retry исчерпаны (3), итерация падает.
     pi.enqueue(fail('resolve'));
     pi.enqueue(fail('resolve'));
     pi.enqueue(fail('resolve'));
@@ -409,12 +396,10 @@ describe('runIteration — один шаг', () => {
 
   it('stdout/stderr прокидываются в createStepOutput (с self-retry)', async () => {
     const { deps, store, pi } = makeDeps();
-    // Первая попытка падает, self-retry с defaultSuccess проходит.
     pi.enqueue(fail('resolve'));
 
     await runIteration(deps, makeInput(['resolve']));
 
-    // Два output: провал + успешный self-retry.
     expect(store.outputs).toHaveLength(2);
     expect(store.outputs[0].stderr).toBe('resolve err');
     expect(store.outputs[1].stdout).toBe('');
@@ -454,7 +439,6 @@ describe('runIteration — один шаг', () => {
       stepRunId: store.runs[0].id,
       event: sessionEvents[0],
     });
-    // thinking — обычный SessionEvent и течёт тем же step_event-каналом.
     expect(JSON.parse(stepEvents[1].data).event).toEqual({
       type: 'thinking',
       thinking: 'размышляю над задачей',
@@ -562,7 +546,6 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  /** Temp workspaceRoot; optionally seeds a pre-written report file. */
   const withWorkspace = async (
     reportContent?: string,
   ): Promise<{ root: string; dir: string }> => {
@@ -576,10 +559,6 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     return { root, dir };
   };
 
-  /**
-   * A step writes its report while it runs; the engine only trusts a file
-   * touched during the run, so pre-writing one would test the old behaviour.
-   */
   const piWritesDuringRun = (
     pi: FakePiRunner,
     writes: () => [string, string][],
@@ -632,7 +611,6 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     const { deps, store, pi } = makeDeps();
     const { root, dir } = await withWorkspace();
     deps.workspaceRoot = root;
-    // The step rewrites its report on every attempt: file wins over result.report.
     piWritesDuringRun(pi, () => [
       [
         join(dir, '.issue-step-result.json'),
@@ -643,7 +621,6 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    // 4 попытки (1 + 3 self-retry) — все неудачные из-за файла.
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
     expect(trace(store)).toEqual([
       'resolve#1:failed',
@@ -800,11 +777,9 @@ describe('runIteration — abort', () => {
 
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
 
-    // Терминальный abort: ни retry (review#2), ни следующих шагов.
     expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
     expect(trace(store)).toEqual(['resolve#1:success', 'review#1:aborted']);
     expect(pi.calls).toHaveLength(2);
-    // Отчёт и output всё равно фиксируются для прерванного шага.
     expect(store.outputs).toHaveLength(2);
     expect(
       events
@@ -832,7 +807,6 @@ describe('runIteration — per-step модели', () => {
       'review-model',
     ]);
 
-    // running-событие каждого шага несёт сам шаг и его модель.
     const runningPayloads = events
       .filter((event) => event.type === 'step_status')
       .map((event) => event.data)
@@ -1000,8 +974,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
 
-    // commit/push: по одному на репозиторий, в уникальную feature-ветку.
-    // base (`main`/`develop`) защищена от прямого push — туда не пушим.
     expect(git.commits).toHaveLength(2);
     const featureBranches = git.commits.map((commit) => commit.branchName);
     for (const branch of featureBranches) {
@@ -1013,8 +985,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       expect(commit.commitMessage).toBe('feat: Fix bug');
     }
 
-    // MR: по одному на репозиторий, source выведен из URL. head — feature-ветка,
-    // base — целевая ветка репозитория; head всегда отличён от base.
     expect(mr.calls).toHaveLength(2);
     expect(mr.calls.map((call) => call.source)).toEqual(['github', 'gitlab']);
     expect(mr.calls.map((call) => call.baseBranch)).toEqual(['main', 'develop']);
@@ -1029,7 +999,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       token: 'dummy-token',
     });
 
-    // log-события о commit (system) и MR (mr) ушли в SSE с честными stream.
     const systemData = events
       .filter((event) => event.type === 'log' && event.stream === 'system')
       .map((event) => event.data);
@@ -1042,7 +1011,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       .map((event) => event.data);
     expect(mrData).toHaveLength(2);
     for (const url of mrData) {
-      // GitHub → /pull/, GitLab → /-/merge_requests
       expect(
         url.includes('merge_requests') || url.includes('/pull/'),
       ).toBe(true);
@@ -1058,13 +1026,10 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // Регрессия: раньше push шёл в `workspace.branch` (= base), что Bitbucket
-    // отвергает на protected-ветке. Теперь push только в feature-ветку.
     expect(git.commits).toHaveLength(2);
     for (const commit of git.commits) {
       expect(commit.branchName).toMatch(/^feature\//);
       expect(commit.branchName).not.toMatch(/^(main|develop)$/);
-      // Сквош: soft-reset до origin/base-ветки (локальная могла сдвинуться)
       expect(commit.squashBase).toMatch(/^origin\/(main|develop)$/);
     }
     for (const call of mr.calls) {
@@ -1090,8 +1055,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
 
-    // Регрессия: молчаливый no-op недопустим. Шаг остаётся success, но в
-    // событиях есть warning с причиной — пользователь видит, что MR не создан.
     const prRun = store.runs.find((run) => run.step === 'pr');
     const prOutput = store.outputs.find(
       (output) => output.step_run_id === prRun?.id,
@@ -1136,10 +1099,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
-    // pr-шаг как таковой был успешен — падение публикации MR не отменяет
-    // итерацию, но и не пропадает: шаг персистентно помечен failed.
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // commit/push первого репо успел пройти, MR не создан (ошибка на createMr).
     expect(git.commits).toHaveLength(1);
     expect(mr.calls).toEqual([]);
 
@@ -1152,7 +1112,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(persisted?.pr_error).toBeDefined();
     expect(persisted?.pr_error).toContain('MR');
     expect(persisted?.pr_error).toContain('mr api 403');
-    // Причина продублирована structured-событием (её рисует SessionView).
     expect(
       prOutput?.events?.some(
         (event) =>
@@ -1161,7 +1120,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
           event.message.includes('mr api 403'),
       ),
     ).toBe(true);
-    // Живой SSE: терминальный failed для шага + notice с причиной.
     expect(
       events.some(
         (event) =>
@@ -1188,7 +1146,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // commit/push упал до записи — ни коммитов, ни MR.
     expect(git.commits).toEqual([]);
     expect(mr.calls).toEqual([]);
 
@@ -1219,7 +1176,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       makePrInput(['resolve', 'pr'], 'dummy-token', repositories),
     );
 
-    // commit/push дошёл до detectGitHost, MR не создан; итерация завершена.
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(git.commits).toHaveLength(1);
     expect(mr.calls).toEqual([]);
@@ -1265,7 +1221,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     );
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // No extra step: the work was already done by the previous iteration.
     expect(trace(store)).toEqual(['pr#1:success']);
     expect(pi.calls).toHaveLength(1);
     expect(git.commits).toHaveLength(1);
@@ -1335,8 +1290,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('pr'));
 
-    // Имитируем существующие MR из предыдущей итерации той же задачи
-    // для обоих репозиториев.
     const existingGhUrl = 'https://github.com/acme/app/pull/42';
     const existingGlUrl =
       'https://gitlab.example.com/team/lib/-/merge_requests/7';
@@ -1359,13 +1312,9 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // commitAndPush — да (push в ту же ветку), MR create — нет (нашли существующие).
     expect(git.commits.length).toBeGreaterThanOrEqual(1);
     expect(mr.calls).toHaveLength(0);
 
-    // Текст существующего MR ОБНОВЛЯЕТСЯ: payload ветки растёт с каждой
-    // итерацией (сквош к origin/<base>), а описание с creation момента осталось
-    // бы от первой итерации.
     expect(mr.updateCalls.map((call) => call.mrId)).toEqual([
       existingGhUrl,
       existingGlUrl,
@@ -1377,7 +1326,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       description: 'pr ok',
     });
 
-    // SSE: mr-события с URL существующих MR + отметки об обновлении текста.
     const mrEvents = events.filter(
       (event) => event.type === 'log' && event.stream === 'mr',
     );
@@ -1388,7 +1336,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       existingGlUrl,
     ]);
 
-    // system-событие подтверждает, что MR уже существовал.
     const systemEvents = events
       .filter(
         (event) => event.type === 'log' && event.stream === 'system',
@@ -1400,9 +1347,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
   });
 
   it('код-шаг принёс title+description → pr-агент всё равно пишет текст сам', async () => {
-    // Текст MR — работа выделенного pr-агента: он читает payload целиком
-    // (`git diff origin/<base>`, т.е. и прошлые итерации). Отчёт resolve про
-    // эти поля не решает: его текст описывает итерацию, а не MR.
     const { deps, pi, mr } = makeDeps();
     pi.enqueue({
       step: 'resolve',
@@ -1459,11 +1403,9 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     const result = await runIteration(deps, makePrInput(['resolve', 'pr']));
 
-    // Сбой текста — не сбой публикации: код запушен, MR жив.
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(git.commits).toHaveLength(2);
     expect(mr.updateCalls).toHaveLength(1);
-    // Второй репозиторий (gitlab) дошёл до создания нового MR.
     expect(mr.calls).toHaveLength(1);
     expect(mr.calls[0].repositoryUrl).toBe('git@gitlab.example.com:team/lib.git');
     expect(
@@ -1475,15 +1417,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
   });
 
   it('второй прогон pr: push в ту же ветку с squashBase → force-push, findOpenMr находит существующий MR, updateMr обновляет описание', async () => {
-    // Баг: без --force push rejected как non-fast-forward, потому что
-    // squashBase (reset --soft origin/<base>) создаёт новый коммит, не
-    // являющийся потомком существующей remote-ветки.
-    // Тест проверяет полный flow второй итерации:
-    //   1. featureBranchName стабилен между итерациями
-    //   2. commitAndPush вызывается с squashBase (сквош к origin/<base>)
-    //   3. findOpenMr находит существующий MR (openMrs заполнен)
-    //   4. createMr НЕ вызывается
-    //   5. updateMr вызывается с новым title/description
     const { deps, pi, git, mr } = makeDeps();
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('pr'));
@@ -1499,7 +1432,6 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       },
     ];
 
-    // Один репозиторий — второй прогон, MR уже открыт.
     const singleRepo = [
       {
         repository_url: 'https://github.com/acme/app.git',
@@ -1532,19 +1464,13 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
 
-    // commitAndPush должен быть вызван даже при существующем MR:
-    // ветка та же, но payload мог вырасти (сквош всех итераций).
     expect(git.commits.length).toBeGreaterThanOrEqual(1);
-    // Все вызовы commitAndPush должны идти с squashBase — это гарантирует
-    // force-push в реальном GitCliService.
     for (const commit of git.commits) {
       expect(commit.squashBase).toBeDefined();
       expect(commit.squashBase).toMatch(/^origin\//);
     }
 
-    // createMr не вызывается — MR уже открыт.
     expect(mr.calls).toHaveLength(0);
-    // updateMr вызывается — описание обновляется до актуального.
     expect(mr.updateCalls).toHaveLength(1);
     expect(mr.updateCalls[0]).toMatchObject({
       mrId: existingUrl,
@@ -1591,38 +1517,32 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
 
-    // refine + 2 workers + coordinator = 4 pi-вызова (3 на resolve-часть).
     expect(pi.calls).toHaveLength(4);
     const resolveRunId = store.runs[1].id;
     expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.w0`);
     expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.w1`);
     expect(pi.calls[3].options?.stepRunId).toBe(resolveRunId);
 
-    // Итоговый report шага — от координатора (единственный решающий).
     expect(JSON.parse(store.outputs[1].report)).toMatchObject({
       status: 'pass',
       summary: 'coordinator',
     });
 
-    // Исполнитель-промпты: своя подзадача, peer не lead; план refine доехал.
     expect(pi.calls[1].prompt).toContain('Sub-task 1 of 2: a');
     expect(pi.calls[2].prompt).toContain('Sub-task 2 of 2: b');
     expect(pi.calls[1].prompt).toContain('NOT the lead');
     expect(pi.calls[1].prompt).toContain('Refined plan');
 
-    // Координатор видит сводки работников и принимает финальное решение.
     expect(pi.calls[3].prompt).toContain('LEAD');
     expect(pi.calls[3].prompt).toContain('worker0');
     expect(pi.calls[3].prompt).toContain('worker1');
 
-    // onWorkerStart публикует system-лог о старте работника.
     const systemData = events
       .filter((event) => event.type === 'log' && event.stream === 'system')
       .map((event) => event.data);
     expect(systemData).toContain('worker 1/2: a');
     expect(systemData).toContain('worker 2/2: b');
 
-    // Реестр отдаёт агентов комнаты в порядке исполнитель1, исполнитель2, координатор.
     expect(control.listAgents('iter-1')).toEqual([
       {
         id: `run.${resolveRunId}.w0`,
@@ -1662,8 +1582,6 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
       },
     ]);
 
-    // Живые step_event агентов комнаты тегированы agentId (по 3 demo-события на
-    // агента), а payload несёт agentId рядом с stepRunId.
     const tagged = events.filter(
       (event) => event.type === 'step_event' && event.agentId !== undefined,
     );
@@ -1700,8 +1618,6 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     });
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // refine + один resolve-агент: комнаты нет, потолку worker_count=1 она
-    // противоречит (planExecutionMode деградирует в single).
     expect(pi.calls).toHaveLength(2);
     expect(pi.calls[1].options?.stepRunId).toBe(store.runs[1].id);
     expect(pi.calls[1].options?.agent).toBeUndefined();
@@ -1727,7 +1643,6 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
       iteration: { ...input.iteration, worker_count: 2 },
     });
 
-    // refine + 2 исполнителя + координатор (а не 4 исполнителя).
     expect(pi.calls).toHaveLength(4);
     expect(pi.calls.map((call) => call.options?.stepRunId).slice(1)).toEqual([
       expect.stringContaining('.w0'),
@@ -1756,7 +1671,6 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
     expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
-    // refine + 2 исполнителя = 3 вызова; координатор после abort не запускался.
     expect(pi.calls).toHaveLength(3);
     const resolveRunId = store.runs[1].id;
     expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.w0`);
@@ -1897,7 +1811,6 @@ describe('runIteration — onIterationTerminal (A1–A5)', () => {
 
     expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
     expect(seen).toHaveLength(1);
-    // У IterationTerminalOutcome нет 'cancelled' — abort маппится на failed.
     expect(seen[0].iterationStatus).toBe('failed');
   });
 
@@ -1914,7 +1827,6 @@ describe('runIteration — onIterationTerminal (A1–A5)', () => {
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: true });
-    // needs_input — не терминальное завершение: отчёт ещё рано собирать.
     expect(seen).toHaveLength(0);
   });
 

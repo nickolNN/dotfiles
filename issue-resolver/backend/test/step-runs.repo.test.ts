@@ -29,7 +29,6 @@ function makeDb(): Db {
   return createDb(':memory:');
 }
 
-/** Прямой insert issue + iteration #1 (без HTTP-слоя). */
 function seedIteration(db: Db, steps: PipelineStep[] = ['resolve', 'review', 'test']): string {
   const now = new Date().toISOString();
   const issueId = randomUUID();
@@ -98,9 +97,6 @@ describe('listStepRunsByIteration', () => {
     const db = makeDb();
     const iterationId = seedIteration(db);
 
-    // Insert in chronological order simulating real flow:
-    // resolve → review (failed) → resolve retry → test.
-    // Use a small delay between inserts so created_at differs.
     const step1 = await createStepRun(db, { iterationId, step: 'resolve', attempt: 1, context: 'r1' });
     await delay(5);
     const step2 = await createStepRun(db, { iterationId, step: 'review', attempt: 1, context: 'v1' });
@@ -298,7 +294,6 @@ describe('createStepOutput', () => {
       .get();
     expect(JSON.parse(stored?.events ?? '[]')).toEqual(events);
 
-    // Битый JSON в колонке не роняет список — отдаётся []
     db.update(stepOutputs)
       .set({ events: '{not-json' })
       .where(eq(stepOutputs.id, output.id))
@@ -469,7 +464,6 @@ describe('listStepRunsWithLog', () => {
     const db = makeDb();
     const iterationId = seedIteration(db);
 
-    // Insert order = chronological (resolve → review fail → resolve retry).
     const resolve1 = await createStepRun(db, {
       iterationId,
       step: 'resolve',
@@ -546,7 +540,6 @@ describe('ensureStepRunIssueColumn (миграция)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ir-step-run-'));
     const file = join(dir, 'legacy.db');
     try {
-      // 1. Современная схема + реальные родители (FK включён).
       createDb(file);
       const seed = new Database(file);
       seed.pragma('foreign_keys = ON');
@@ -561,7 +554,6 @@ describe('ensureStepRunIssueColumn (миграция)', () => {
         )
         .run();
 
-      // 2. Откат к legacy-форме: NOT NULL iteration_id, без issue_id/events.
       seed.pragma('foreign_keys = OFF');
       seed.exec(`
         CREATE TABLE step_runs_legacy (
@@ -582,7 +574,6 @@ describe('ensureStepRunIssueColumn (миграция)', () => {
       `);
       seed.close();
 
-      // 3. Миграция, дважды — идемпотентна.
       createDb(file);
       createDb(file);
 
@@ -599,7 +590,6 @@ describe('ensureStepRunIssueColumn (миграция)', () => {
         )
         .get() as { issue_id: string; iteration_id: string | null; events: string };
 
-      // Прогон вне итерации (report) больше не требует итерации.
       check
         .prepare(
           "INSERT INTO step_runs (id, issue_id, iteration_id, step, attempt, status, context, created_at, updated_at) VALUES ('r2', 'i1', NULL, 'report', 1, 'pending', '', '2026-01-01', '2026-01-01')",
@@ -640,7 +630,7 @@ describe('ensureStepOutputColumns (миграция)', () => {
       raw.close();
 
       createDb(file);
-      createDb(file); // повторный запуск не должен падать
+      createDb(file);
 
       const check = new Database(file);
       const columns = (
@@ -669,7 +659,6 @@ describe('appendStepRunEvent — бюджет лога', () => {
       context: 'seed',
     });
 
-    // 40 events x ~100 KB = ~4 MB, twice the budget.
     for (let index = 0; index < 40; index += 1) {
       await appendStepRunEvent(db, run.id, {
         type: 'text',
@@ -684,11 +673,8 @@ describe('appendStepRunEvent — бюджет лога', () => {
       0,
     );
 
-    // The budget belongs to the store: a caller that forgets it cannot blow the
-    // row up to 175 MB again.
     expect(bytes).toBeLessThanOrEqual(2_000_000 + 10_000);
     expect(events.filter(isTruncationMarker)).toHaveLength(1);
-    // Tail kept: the newest event is there, the oldest is gone.
     expect(JSON.stringify(events.at(-1))).toContain('39:');
   });
 });

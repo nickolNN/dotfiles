@@ -26,29 +26,22 @@ const COMMAND_SOURCES: ReadonlySet<string> = new Set([
   'skill',
 ]);
 
-/** Объект-запись из unknown; массивы/примитивы → null. */
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 
-/** Строка из необязательного поля; не-строка → null. */
 const stringOrNull = (value: unknown): string | null =>
   typeof value === 'string' ? value : null;
 
-/** Boolean из необязательного поля; иное → null. */
 const boolOrNull = (value: unknown): boolean | null =>
   typeof value === 'boolean' ? value : null;
 
-/** Режим очереди из ответа pi; неизвестный → null. */
 const steeringModeOf = (value: unknown): SteeringMode | null =>
   typeof value === 'string' && STEERING_MODES.has(value)
     ? (value as SteeringMode)
     : null;
 
-/**
- * Отображаемая модель из `get_state.data.model`: непустой `name`, иначе `id`.
- */
 function modelLabel(model: Record<string, unknown> | null): string | null {
   const name = stringOrNull(model?.name);
   if (name !== null && name.length > 0) return name;
@@ -56,7 +49,6 @@ function modelLabel(model: Record<string, unknown> | null): string | null {
   return id !== null && id.length > 0 ? id : null;
 }
 
-/** Собирает `SessionControlSnapshot` из четырёх ответов pi (каждый может быть null). */
 function buildSnapshot(
   stateResult: ControlResult | null,
   modelsResult: ControlResult | null,
@@ -74,7 +66,6 @@ function buildSnapshot(
     steeringMode: steeringModeOf(stateData?.steeringMode),
     followUpMode: steeringModeOf(stateData?.followUpMode),
     autoCompactionEnabled: boolOrNull(stateData?.autoCompactionEnabled),
-    // pi не отдаёт флаг auto-retry в get_state — управляется вслепую.
     autoRetryEnabled: null,
     isStreaming: stateData?.isStreaming === true,
     sessionName: stringOrNull(stateData?.sessionName),
@@ -96,9 +87,6 @@ function buildSnapshot(
     (level): level is string => typeof level === 'string',
   );
 
-  // Встроенные команды pi идут первыми (source:'builtin') — они перехватываются
-  // сервером на prompt; `get_commands` их не отдаёт. Имена builtin'ов
-  // приоритетнее: коллизию из get_commands пропускаем (дедуп).
   const commands: SessionCommandInfo[] = BUILTIN_SLASH_COMMANDS.map(
     (command) => ({
       name: command.name,
@@ -134,10 +122,6 @@ function buildSnapshot(
   return { state, models, thinkingLevels, commands };
 }
 
-/**
- * `SessionCommand` → RPC-команда pi. Неизвестный тип или невалидные поля →
- * null (роут отвечает 400).
- */
 function mapCommand(
   raw: Record<string, unknown>,
 ): Record<string, unknown> | null {
@@ -189,10 +173,6 @@ function mapCommand(
   }
 }
 
-/**
- * Резолв модели по подстроке (id/name/provider) через `get_available_models`
- * живой сессии — для встроенной `/model <query>`.
- */
 async function resolveModelByQuery(
   control: StepSessionRegistry,
   iterationId: string,
@@ -222,16 +202,10 @@ async function resolveModelByQuery(
   return null;
 }
 
-/**
- * Управление живой pi-сессией итерации: отправка промпта, снимок состояния
- * (модели/уровни/команды) и произвольные RPC-команды. Back-compat steer
- * остаётся в `POST /iterations/:id/message`.
- */
 export async function controlRoutes(
   app: FastifyInstance,
   control: StepSessionRegistry,
 ): Promise<void> {
-  // Промпт в живую сессию: `steer`/`followUp` задаёт streamingBehavior.
   app.post<{
     Params: { id: string };
     Body: { message?: unknown; mode?: unknown };
@@ -252,9 +226,6 @@ export async function controlRoutes(
       return reply.status(409).send({ error: 'no active step session' });
     }
 
-    // Встроенные интерактивные команды pi (`/model`, `/compact`, ...) RPC-prompt
-    // не исполняет — перехватываем и шлём явную команду, иначе уйдут модели
-    // как обычный текст. Всё остальное (extension/prompt/skill) pi раскрывает сам.
     const slash = parseSlash(message);
     if (slash) {
       const outcome = await handleBuiltinSlash(slash.name, slash.args, {
@@ -290,7 +261,6 @@ export async function controlRoutes(
     return await result;
   });
 
-  // Снимок управления: состояние + доступные модели/уровни/команды.
   app.get<{ Params: { id: string } }>(
     `${CONTROL_PATH}/:id/control`,
     async (request, reply) => {
@@ -317,7 +287,6 @@ export async function controlRoutes(
     },
   );
 
-  // Произвольная команда: смена модели, компакция, режимы, bash и т.п.
   app.post<{ Params: { id: string }; Body: { command?: unknown } }>(
     `${CONTROL_PATH}/:id/control`,
     async (request, reply) => {

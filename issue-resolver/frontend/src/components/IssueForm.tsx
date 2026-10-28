@@ -26,8 +26,6 @@ import QueryBoundary from './QueryBoundary';
 import RepoRow, { type RepoRowData } from './RepoRow';
 import { inputClass, labelClass } from './formStyles';
 
-/** Канонический порядок шагов пайплайна: порядок в форме не должен
- * переставлять `resolve` вперёд `refine` и остальных шагов. */
 const PIPELINE_ORDER: readonly PipelineStep[] = [
   'refine',
   'resolve',
@@ -36,10 +34,8 @@ const PIPELINE_ORDER: readonly PipelineStep[] = [
   'pr',
 ];
 
-/** Репозиторий в начальных данных формы (создание/редактирование). */
 interface InitialRepository {
   repo_id: string;
-  /** URL репозитория — приходит для строк, не найденных среди сохранённых. */
   repository_url?: string;
   base_branch: string;
   bootstrap_enabled?: boolean;
@@ -47,7 +43,6 @@ interface InitialRepository {
 }
 
 export interface IssueFormProps {
-  /** Начальные значения (undefined для создания, заполненные для редактирования). */
   initialData?: {
     title?: string;
     description?: string;
@@ -57,35 +52,20 @@ export interface IssueFormProps {
     stepModels?: StepModels;
     stepThinkingLevels?: StepThinkingLevels;
     devopsModel?: string;
-    /** Thinking effort DevOps-агента («шаг девопса»), как у остальных шагов. */
     devopsThinkingLevel?: ThinkingLevel | null;
-    /** Сохранённое число исполнителей задачи (без него форма всегда начинала с 1). */
     workerCount?: number | null;
   };
-  /** Вызывается при submit. Для NewIssue: createIssue, для edit: updateIssue. */
   onSubmit: (payload: CreateIssueRequest, files: File[]) => Promise<void>;
-  /** Текст на кнопке submit («Запустить»). */
   submitLabel?: string;
-  /** Показать кнопку «Сохранить» (runImmediately=false). */
   showSaveButton?: boolean;
-  /** Показать кнопку «Запустить» (runImmediately=true). */
   showRunButton?: boolean;
-  /** Показать секцию файлов. */
   showFiles?: boolean;
-  /** Внешняя ошибка (от mutation). */
   error?: string | null;
-  /** Флаг отправки. */
   submitting?: boolean;
   onBack?: () => void;
-  /** Режим без обёртки: без внешнего div, header и back-кнопки — для модалок. */
   headerless?: boolean;
 }
 
-/**
- * Общая форма задачи: создание и редактирование. Всё состояние и вся логика
- * живут внутри; наружу отдаётся только собранный payload через `onSubmit`.
- * API-мутации (create/update) подключает вызывающий — форма про них не знает.
- */
 export default function IssueForm(props: IssueFormProps) {
   return (
     <QueryBoundary>
@@ -128,20 +108,15 @@ function IssueFormView({
   const [devOpsModel, setDevOpsModel] = useState(
     initialData?.devopsModel ?? '',
   );
-  // Thinking effort DevOps-агента — отдельное поле, НЕ элемент step-карты:
-  // DevOps не является PipelineStep, и `step_thinking_levels` его не вместиит.
   const [devOpsThinkingLevel, setDevOpsThinkingLevel] = useState<
     ThinkingLevel | ''
   >(initialData?.devopsThinkingLevel ?? '');
   const [models, setModels] = useState<ModelDescriptor[]>([]);
-  // Варианты thinking для DevOps-агента — из той же таблицы моделей, что и
-  // для шагов: набор уровней зависит от выбранной модели.
   const devOpsThinkingLevels = thinkingLevelsFor(
     models.find((model) => model.id === devOpsModel),
   );
   const [modelsLoading, setModelsLoading] = useState(true);
 
-  // Шаги пайплайна, их модели/thinking и репозитории для MR.
   const {
     selectedSteps,
     stepModels,
@@ -158,14 +133,10 @@ function IssueFormView({
     initialStepModels: initialData?.stepModels,
     initialStepThinkingLevels: initialData?.stepThinkingLevels,
     initialPrRepoIds: (initialData?.repositories ?? [])
-      // Пустой `repo_id` = репозиторий задан URL'ом и не найден среди
-      // сохранённых: он не попадёт в список MR-опций, а `''` в множестве
-      // сбивал бы проверку «выбор пуст» и глушил автовыбор по умолчанию.
       .filter((repository) => repository.create_mr && repository.repo_id)
       .map((repository) => repository.repo_id),
   });
 
-  // Серверные данные формы: сохранённые репозитории и теги — через react-query.
   const {
     data: savedRepos = [],
     isLoading: savedReposLoading,
@@ -189,7 +160,6 @@ function IssueFormView({
         setModels(Array.isArray(list) ? list : []);
       })
       .catch(() => {
-        // Ошибка загрузки моделей не должна ронять форму — просто пустой список.
         if (cancelled) return;
         setModels([]);
       })
@@ -203,8 +173,6 @@ function IssueFormView({
     };
   }, []);
 
-  // Ветки для репозиториев, пришедших из initialData, запрашиваются live:
-  // в самом initialData их нет.
   const initialRepositoriesRef = useRef(initialData?.repositories);
   useEffect(() => {
     const initial = initialRepositoriesRef.current ?? [];
@@ -256,7 +224,6 @@ function IssueFormView({
     );
   }
 
-  /** Выбор сохранённого репозитория: defaultBranch + live-загрузка веток. */
   function selectRepository(index: number, repoId: string) {
     const saved = savedRepos.find((repo) => repo.id === repoId);
     setRepositories((current) =>
@@ -299,11 +266,6 @@ function IssueFormView({
       });
   }
 
-  /**
-   * Применяет тег: добавляет все его репозитории строками формы, пропуская
-   * уже выбранные, и подгружает ветки для новых строк. Сброс селекта — чтобы
-   * можно было применить тот же тег ещё раз.
-   */
   function selectTag(tagId: string) {
     setSelectedTagId('');
     const tag = tags.find((item) => item.id === tagId);
@@ -390,8 +352,6 @@ function IssueFormView({
     setRepositories((current) => current.filter((_, i) => i !== index));
   }
 
-  // Репозитории с правом записи среди уже добавленных в форму —
-  // именно для них можно запросить создание MR на шаге pr.
   const mrRepositories = repositories.filter(
     (repository) =>
       repository.repo_id &&
@@ -399,32 +359,20 @@ function IssueFormView({
         ?.writeAccess === true,
   );
 
-  /** Собрать payload и отправить — общая для «Запустить» и «Сохранить». */
   async function submitForm(runImmediately: boolean) {
-    // Empty selection would fall back to the issue defaults server-side.
     if (chosenSteps.size === 0) return;
-    // В тело идут только модели выбранных шагов. `report` — не шаг пайплайна
-    // (отчёт всегда генерируется движком на терминальной итерации), поэтому
-    // его модель сохраняется независимо от набора выбранных шагов.
     const activeStepModels = Object.fromEntries(
       Object.entries(stepModels).filter(
         ([step]) => step === 'report' || chosenSteps.has(step as PipelineStep),
       ),
     ) as StepModels;
 
-    // В тело идут thinking-уровни выбранных шагов. `report` — не шаг
-    // пайплайна, но его уровень сохраняется независимо от набора шагов
-    // (симметрично `report` в `activeStepModels`).
     const activeStepThinkingLevels = Object.fromEntries(
       Object.entries(stepThinkingLevels).filter(
         ([step]) => step === 'report' || chosenSteps.has(step as PipelineStep),
       ),
     ) as StepThinkingLevels;
 
-    // В тело идут только осмысленные строки. Сохранённый репозиторий — как
-    // `repo_id`; репозиторий вне сохранённого списка — явным `repository_url`,
-    // чтобы он не пропал. `create_mr` для URL-строки всегда false: право
-    // записи неизвестно, MR для неё недоступен (и в UI секции MR её нет).
     const activeRepositories: NonNullable<CreateIssueRequest['repositories']> =
       [];
     for (const repository of repositories) {
@@ -470,9 +418,6 @@ function IssueFormView({
       await onSubmit(payload, files);
       setFiles([]);
     } catch {
-      // Ошибку показывает проп `error` (mutation на стороне вызывающего).
-      // Файлы не чистим, чтобы пользователь мог повторить отправку без
-      // повторного выбора вложений.
     }
   }
 
@@ -486,7 +431,6 @@ function IssueFormView({
     void submitForm(false);
   }
 
-  // Common form JSX used by both page and modal variants.
   const formBody = (
     <form className="space-y-6" onSubmit={handleSubmit}>
       <div>

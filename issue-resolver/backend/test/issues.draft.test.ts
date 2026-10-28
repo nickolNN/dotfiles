@@ -12,7 +12,6 @@ import { FakePiRunner } from '../src/pi/runner';
 
 const ROUTE_PATH = '/issue-resolver/api/v1/issues';
 
-/** Собирает multipart/form-data тело: поле `payload` + повторяющиеся `files`. */
 interface MultipartFile {
   name: string;
   content: string;
@@ -111,10 +110,6 @@ function getIssue(db: Db, issueId: string) {
     .all()[0];
 }
 
-// =========================================================================
-// POST /issues — создание черновика
-// =========================================================================
-
 describe('POST /issues — создание черновика (run_immediately: false)', () => {
   it('создаёт задачу со статусом draft и без итераций', async () => {
     const { app, db, cleanup } = makeEnv();
@@ -130,10 +125,8 @@ describe('POST /issues — создание черновика (run_immediately:
     expect(body.status).toBe('draft');
     expect(body.id).toBeDefined();
 
-    // В БД нет итераций.
     expect(countIterations(db, body.id)).toBe(0);
 
-    // GET возвращает draft.
     const getResp = await app.inject({
       method: 'GET',
       url: `${ROUTE_PATH}/${body.id}`,
@@ -219,11 +212,9 @@ describe('POST /issues — создание черновика (run_immediately:
     const body = response.json();
     expect(body.status).toBe('draft');
 
-    // Файлы на диске.
     expect(existsSync(join(root, body.id, 'attachments', 'readme.md'))).toBe(true);
     expect(existsSync(join(root, body.id, 'attachments', 'config.json'))).toBe(true);
 
-    // В БД: iteration_id = null.
     const fileRows = db
       .select()
       .from(issueFiles)
@@ -250,7 +241,6 @@ describe('POST /issues — создание черновика (run_immediately:
     const body = response.json();
     expect(body.status).toBe('pending');
 
-    // Итерация создана.
     expect(countIterations(db, body.id)).toBe(1);
 
     await cleanup();
@@ -301,24 +291,16 @@ describe('POST /issues — создание черновика (run_immediately:
     });
     expect(response.statusCode).toBe(201);
 
-    // FakePiRunner не должен был использоваться для запуска агентов.
-    // В in-memory режиме pi не вызывается без подготовленного workspace —
-    // для черновика пайплайн не стартует.
     expect(pi.calls).toStrictEqual([]);
 
     await cleanup();
   });
 });
 
-// =========================================================================
-// POST /issues/:id/start — запуск черновика
-// =========================================================================
-
 describe('POST /issues/:id/start — запуск черновика', () => {
   it('переводит draft в running/preparing и создаёт iteration #1', async () => {
     const { app, db, cleanup } = makeEnv();
 
-    // Создаём черновик.
     const createResp = await app.inject({
       method: 'POST',
       url: ROUTE_PATH,
@@ -326,7 +308,6 @@ describe('POST /issues/:id/start — запуск черновика', () => {
     });
     const draftId = createResp.json().id;
 
-    // Запускаем.
     const startResp = await app.inject({
       method: 'POST',
       url: `${ROUTE_PATH}/${draftId}/start`,
@@ -336,13 +317,11 @@ describe('POST /issues/:id/start — запуск черновика', () => {
     expect(startBody.ok).toBe(true);
     expect(startBody.iterationId).toBeDefined();
 
-    // В БД: итерация создана, статус задачи != draft.
     const updated = getIssue(db, draftId);
     expect(updated).toBeDefined();
     expect(updated.status).not.toBe('draft');
     expect(countIterations(db, draftId)).toBe(1);
 
-    // GET возвращает не draft.
     const getResp = await app.inject({
       method: 'GET',
       url: `${ROUTE_PATH}/${draftId}`,
@@ -355,7 +334,6 @@ describe('POST /issues/:id/start — запуск черновика', () => {
   it('запуск не-черновика → 409 Conflict', async () => {
     const { app, cleanup } = makeEnv();
 
-    // Обычная задача (run_immediately по умолчанию true).
     const createResp = await app.inject({
       method: 'POST',
       url: ROUTE_PATH,
@@ -388,7 +366,6 @@ describe('POST /issues/:id/start — запуск черновика', () => {
   it('повторный запуск уже стартованного черновика → 409', async () => {
     const { app, cleanup } = makeEnv();
 
-    // Создаём и запускаем.
     const createResp = await app.inject({
       method: 'POST',
       url: ROUTE_PATH,
@@ -401,7 +378,6 @@ describe('POST /issues/:id/start — запуск черновика', () => {
       url: `${ROUTE_PATH}/${draftId}/start`,
     });
 
-    // Повторный запуск.
     const secondStart = await app.inject({
       method: 'POST',
       url: `${ROUTE_PATH}/${draftId}/start`,
@@ -432,10 +408,6 @@ describe('POST /issues/:id/start — запуск черновика', () => {
   });
 });
 
-// =========================================================================
-// DELETE /issues/:id — удаление черновика
-// =========================================================================
-
 describe('DELETE /issues/:id — удаление черновика', () => {
   it('удаляет черновик: 202, запись и workspace удалены', async () => {
     const { app, db, root, cleanup } = makeEnv();
@@ -447,7 +419,6 @@ describe('DELETE /issues/:id — удаление черновика', () => {
     });
     const draftId = createResp.json().id;
 
-    // Удаляем.
     const delResp = await app.inject({
       method: 'DELETE',
       url: `${ROUTE_PATH}/${draftId}`,
@@ -455,19 +426,16 @@ describe('DELETE /issues/:id — удаление черновика', () => {
     expect(delResp.statusCode).toBe(202);
     expect(delResp.json().ok).toBe(true);
 
-    // Ждём завершения фонового удаления (DB + workspace).
     await waitFor(
       () => {
         const row = getIssue(db, draftId);
         if (row !== undefined) return undefined;
-        // DB records gone — give rm a tick to finish.
         return existsSync(join(root, draftId)) ? undefined : true;
       },
       5000,
       100,
     );
 
-    // Двойная проверка.
     const issueRows = db
       .select()
       .from(issues)
@@ -501,7 +469,6 @@ describe('DELETE /issues/:id — удаление черновика', () => {
     const draftId = createResp.json().id;
     expect(existsSync(join(root, draftId, 'attachments', 'secret.txt'))).toBe(true);
 
-    // Удаляем.
     await app.inject({
       method: 'DELETE',
       url: `${ROUTE_PATH}/${draftId}`,
@@ -523,10 +490,6 @@ describe('DELETE /issues/:id — удаление черновика', () => {
   });
 });
 
-// =========================================================================
-// Граничные случаи
-// =========================================================================
-
 describe('Граничные случаи черновиков', () => {
   it('несколько черновиков подряд → разные id, все draft', async () => {
     const { app, cleanup } = makeEnv();
@@ -547,10 +510,8 @@ describe('Граничные случаи черновиков', () => {
       ids.push(body.id);
     }
 
-    // Все id уникальны.
     expect(new Set(ids).size).toBe(3);
 
-    // Все видны в списке.
     const listResp = await app.inject({ method: 'GET', url: ROUTE_PATH });
     const list = listResp.json();
     const drafts = list.filter(
@@ -585,7 +546,6 @@ describe('Граничные случаи черновиков', () => {
   it('быстрое создание → draft → instant-start без гонок', async () => {
     const { app, db, cleanup } = makeEnv();
 
-    // Создаём и сразу запускаем.
     const createResp = await app.inject({
       method: 'POST',
       url: ROUTE_PATH,
@@ -599,7 +559,6 @@ describe('Граничные случаи черновиков', () => {
     });
     expect(startResp.statusCode).toBe(200);
 
-    // Итерация одна (не две).
     expect(countIterations(db, draftId)).toBe(1);
 
     await cleanup();

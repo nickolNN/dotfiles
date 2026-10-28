@@ -11,7 +11,6 @@ import { createTarGz, type ArchiveEntry } from '../src/workspace/archive';
 
 const ROUTE_PATH = '/issue-resolver/api/v1/issues';
 
-/** Разбирает несжатый ustar-тар в список записей (name/prefix + тело). */
 function parseTar(buf: Buffer): Array<{ name: string; body: Buffer }> {
   const out: Array<{ name: string; body: Buffer }> = [];
   let offset = 0;
@@ -113,7 +112,6 @@ describe('createTarGz', () => {
     const gz = await createTarGz(entries);
     const parsed = parseTar(gunzipSync(gz));
 
-    // Детерминированный порядок по relPath.
     expect(parsed.map((entry) => entry.name)).toEqual([
       'b.txt',
       'nested/a.txt',
@@ -141,7 +139,6 @@ describe('GET /issues/:id/result/files/archive', () => {
     await mkdir(join(dir, 'nested'), { recursive: true });
     await writeFile(join(dir, 'index.html'), '<h1>cats</h1>');
     await writeFile(join(dir, 'nested', 'leaf.txt'), 'leaf');
-    // Артефакт результата лежит в снапшоте завершённой итерации.
     const snap = join(dir, '.iteration-results', 'iter-1');
     await mkdir(snap, { recursive: true });
     await writeFile(join(snap, 'report.html'), 'result');

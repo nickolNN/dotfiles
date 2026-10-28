@@ -18,7 +18,6 @@ function stubEmpty() {
   );
 }
 
-/** Фейк EventSource: запоминает URL/закрытие и отдаёт onmessage вручную. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -42,8 +41,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  // Zustand store переживает тесты — сбрасываем containerStats, иначе тест
-  // мобильной строки видит статы, записанные предыдущим тестом SSE.
   useUIStore.getState().setContainerStats(null);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -136,7 +133,6 @@ describe('App', () => {
     fireEvent.click(await screen.findByText('Fix login bug'));
 
     expect(await screen.findByText('Итераций пока нет.')).toBeInTheDocument();
-    // На детали задачи есть текстовая крошка назад к списку.
     expect(screen.getByTestId('task-island')).toBeInTheDocument();
   });
 
@@ -164,7 +160,6 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
 
-    // Блок виден сразу на списке задач: без данных — серые заглушки.
     await screen.findByText('Fix login bug');
     const stats = screen.getByTestId('container-stats');
     expect(stats).toHaveTextContent('CPU —');
@@ -172,7 +167,6 @@ describe('App', () => {
     expect(screen.getByTestId('cpu-health')).toHaveClass('bg-[#00FF41]/20');
     expect(screen.getByTestId('mem-health')).toHaveClass('bg-[#00FF41]/20');
 
-    // Глобальный lifecycle-стрим cgroup открыт без открытой задачи.
     expect(
       FakeEventSource.instances.some((source) =>
         source.url.endsWith('/api/v1/container-stats-stream'),
@@ -204,7 +198,6 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
 
-    // На списке задач глобальный поток уже подключён — эмитим `container_stats`.
     await screen.findByText('Fix login bug');
     const globalStreams = FakeEventSource.instances.filter((source) =>
       source.url.endsWith('/api/v1/stream'),
@@ -227,7 +220,6 @@ describe('App', () => {
       }
     });
 
-    // Живые статы появляются на списке задач, без открытой задачи.
     expect(await screen.findByTestId('container-stats')).toHaveTextContent(
       'CPU 12.4%',
     );
@@ -238,7 +230,6 @@ describe('App', () => {
       backgroundColor: '#00FF41',
     });
 
-    // Открываем задачу и возвращаемся к списку → статы остаются живыми.
     fireEvent.click(screen.getByText('Fix login bug'));
     await screen.findByText('Итераций пока нет.');
     fireEvent.click(
@@ -262,7 +253,6 @@ describe('App', () => {
     render(<App />);
     await screen.findByText('Пока нет ни одной задачи.');
 
-    // Верхняя мобильная строка: статы (без данных — серые заглушки) и «+».
     const topbar = screen.getByTestId('mobile-topbar');
     expect(topbar).toHaveClass('sm:hidden');
     expect(
@@ -271,7 +261,6 @@ describe('App', () => {
     const mobileAction = within(topbar).getByTestId('primary-action-mobile');
     expect(mobileAction).toHaveAttribute('aria-label', 'Создать задачу');
 
-    // Нижняя фиксированная навигация со всеми табами.
     const mobileNav = screen.getByTestId('mobile-nav');
     expect(mobileNav).toHaveAttribute('aria-label', 'Мобильная навигация');
     expect(mobileNav).toHaveClass('fixed', 'bottom-0', 'sm:hidden');
@@ -279,10 +268,8 @@ describe('App', () => {
       within(mobileNav).getByRole('button', { name: 'Теги' }),
     ).toBeInTheDocument();
 
-    // Десктопный хедер скрыт (jsdom не применяет медиазапросы — проверяем класс).
     expect(screen.getByTestId('desktop-header')).toHaveClass('hidden', 'sm:block');
 
-    // «+» в мобильной верхней строке открывает форму создания задачи.
     fireEvent.click(mobileAction);
     expect(screen.getByLabelText('Заголовок')).toBeInTheDocument();
   });

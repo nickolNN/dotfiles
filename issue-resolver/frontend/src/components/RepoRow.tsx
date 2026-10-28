@@ -1,13 +1,10 @@
 import type { SavedRepo } from '@issue-resolver/shared';
 import { inputClass, labelClass } from './formStyles';
 
-/** Строка репозитория в форме задачи: выбранный репозиторий + его ветки. */
 export interface RepoRowData {
   repo_id: string;
-  /** URL репозитория, заданного вне сохранённого списка (когда `repo_id` пуст). */
   repository_url?: string;
   base_branch: string;
-  /** Ставить ли зависимости (DevOps-агента) в этом репозитории. */
   bootstrap_enabled: boolean;
   branches: string[];
   branchesLoading: boolean;
@@ -24,11 +21,6 @@ export interface RepoRowProps {
   onRemove: (index: number) => void;
 }
 
-/**
- * Одна строка формы репозитория: select репозитория → select базовой ветки →
- * «Удалить», URL/ветка по умолчанию и тоггл Dev-сервера. Только UI: состояние
- * и сетевые вызовы держит родитель (`IssueForm`).
- */
 export default function RepoRow({
   repo,
   index,
@@ -40,7 +32,6 @@ export default function RepoRow({
   onRemove,
 }: RepoRowProps) {
   const selectedRepo = savedRepos.find((item) => item.id === repo.repo_id);
-  // Опции веток: данные API, плюс текущее значение, если его нет в списке.
   const branchOptions =
     repo.base_branch.length === 0
       ? []

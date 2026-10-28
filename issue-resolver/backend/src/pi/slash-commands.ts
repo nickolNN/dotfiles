@@ -1,20 +1,10 @@
-// Встроенные интерактивные команды pi. RPC-команда `prompt` их НЕ исполняет
-// (в отличие от CLI-интерпретатора) — без перехвата `/model`, `/compact` и
-// т.п. ушли бы модели обычным текстом. Поэтому сервер обрабатывает их сам и
-// шлёт явную RPC-команду (или глотает клиентские действия).
-// Вдохновлено pi-web-ui (server/slash-commands.ts), но под наш RPC-транспорт.
 
-/** Спецификация встроенной slash-команды для палитры. */
 export interface BuiltinSlashCommand {
   name: string;
   description: string;
   argumentHint?: string;
 }
 
-/**
- * Набор встроенных команд, которые перехватываются сервером (имена без `/`).
- * Держать в синхроне с `handleBuiltinSlash`.
- */
 export const BUILTIN_SLASH_COMMANDS: BuiltinSlashCommand[] = [
   {
     name: 'new',
@@ -78,10 +68,6 @@ const THINKING_LEVELS: ReadonlySet<string> = new Set([
   'max',
 ]);
 
-/**
- * Разбирает текст как `/команда аргументы`. Возвращает null, если это не
- * slash-строка. Аргументы сохраняют пробелы/слэши (`provider/id`).
- */
 export function parseSlash(
   text: string,
 ): { name: string; args: string } | null {
@@ -92,30 +78,21 @@ export function parseSlash(
   return { name: match[1], args: match[2].trim() };
 }
 
-/** Результат обработки slash-команды сервером. */
 export type SlashOutcome =
   | { kind: 'not-builtin' }
   | {
       kind: 'handled';
       ok: boolean;
-      /** RPC-команда pi для отправки; null — перехвачено без запроса. */
       command: Record<string, unknown> | null;
-      /** Человекочитаемая причина отказа (при `ok: false`). */
       error?: string;
     };
 
 export interface SlashDeps {
-  /** Резолв модели по подстроке (id/name/provider) через get_available_models. */
   resolveModel: (
     query: string,
   ) => Promise<{ provider: string; id: string } | null>;
 }
 
-/**
- * Обрабатывает встроенную slash-команду. `not-builtin` — команду обрабатывает
- * сам pi (`prompt`, expansion шаблонов/скиллов); `handled` — сервер исполняет
- * (`command`) либо перехватывает без RPC (`command:null`, `ok:false`).
- */
 export async function handleBuiltinSlash(
   name: string,
   args: string,
@@ -174,7 +151,6 @@ export async function handleBuiltinSlash(
       if (query.length === 0) {
         return { kind: 'handled', ok: true, command: { type: 'cycle_model' } };
       }
-      // Точная форма provider/id — без обращения к списку моделей.
       const slash = query.indexOf('/');
       if (slash > 0 && slash < query.length - 1) {
         const provider = query.slice(0, slash).trim();
@@ -214,9 +190,6 @@ export async function handleBuiltinSlash(
         command: { type: 'new_session' },
       };
 
-    // Клиентские (help/copy) и недоступные в RPC-сессии (cwd/resume/reload)
-    // команды: глотаем (ok:true — это не ошибка), чтобы pi не отправил их
-    // модели как текст; клиент отрисует собственную справку/действие.
     case 'cwd':
     case 'resume':
     case 'reload':

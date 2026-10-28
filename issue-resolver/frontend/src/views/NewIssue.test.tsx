@@ -14,7 +14,6 @@ import type {
 } from '@issue-resolver/shared';
 import NewIssue from './NewIssue';
 
-/** Модели с разными наборами thinking-уровней (m2 не поддерживает 'high'). */
 const thinkingModels: ModelDescriptor[] = [
   { id: 'm1', name: 'Model One', thinkingLevels: ['off', 'low', 'high'] },
   { id: 'm2', name: 'Model Two', thinkingLevels: ['off', 'max'] },
@@ -73,15 +72,11 @@ interface ApiOptions {
   repos?: SavedRepo[];
   branches?: Record<string, string[]>;
   issue?: Issue;
-  /** Текст ошибки POST /issues. */
   issueError?: string;
-  /** Текст ошибки GET /repositories. */
   repositoriesError?: string;
-  /** Ошибка у GET /repositories/:id/branches. */
   branchesError?: boolean;
 }
 
-/** Общий stub API формы: модели, сохранённые репозитории, ветки, POST /issues. */
 function stubApi(options: ApiOptions = {}) {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -127,7 +122,6 @@ function stubApi(options: ApiOptions = {}) {
   return fetchMock;
 }
 
-/** Тело POST именно на /issues (а не на другие роуты). */
 function issuePostBody(
   fetchMock: ReturnType<typeof vi.fn>,
 ): Record<string, unknown> {
@@ -155,7 +149,6 @@ function branchSelect(index = 0): HTMLSelectElement {
   return screen.getAllByLabelText('Базовая ветка')[index] as HTMLSelectElement;
 }
 
-/** Ждёт загрузку сохранённых репозиториев и выбирает один из них. */
 async function selectRepo(repoId: string, index = 0) {
   await waitFor(() => {
     const select = repositorySelect(index);
@@ -182,7 +175,6 @@ describe('NewIssue', () => {
     addRepoRow();
     await selectRepo('repo-1');
 
-    // defaultBranch репозитория выбран в селекторе веток.
     expect(branchSelect().value).toBe('main');
     expect(
       within(branchSelect())
@@ -368,7 +360,6 @@ describe('NewIssue', () => {
     addRepoRow();
     await selectRepo('repo-1');
 
-    // Секция появляется только при выбранном шаге pr.
     expect(
       screen.queryByTestId('pr-repositories-section'),
     ).toBeNull();
@@ -410,7 +401,6 @@ describe('NewIssue', () => {
     expect(
       screen.getByText(/Нет добавленных репозиториев с правом записи/),
     ).toBeInTheDocument();
-    // Строка жива: тогл Dev-сервера на месте.
     expect(
       screen.getByRole('switch', { name: 'Dev сервер' }),
     ).toBeInTheDocument();
@@ -533,7 +523,6 @@ describe('NewIssue', () => {
     fireEvent.click(checkbox);
     expect(checkbox).toBeChecked();
 
-    // Сняли шаг pr — секция исчезает, выбор репозиториев сброшен.
     fireEvent.click(screen.getByLabelText('Merge Request'));
     expect(screen.queryByTestId('pr-repositories-section')).toBeNull();
 

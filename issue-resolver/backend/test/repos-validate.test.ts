@@ -99,8 +99,6 @@ describe('POST /repos/validate', () => {
     const response = await app.inject({
       method: 'POST',
       url: ROUTE,
-      // `file:///...` проходит z.string().url(), но у него нет хоста →
-      // detectPlatform возвращает 'unknown'.
       payload: { urls: ['file:///tmp/repo'] },
     });
 

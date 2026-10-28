@@ -25,7 +25,6 @@ afterEach(async () => {
   );
 });
 
-/** Прямой insert issue (без HTTP) — фоновая итерация не запускается. */
 function seedIssue(db: Db, issueId: string): void {
   const now = new Date().toISOString();
   db.insert(issues)
@@ -43,7 +42,6 @@ function seedIssue(db: Db, issueId: string): void {
     .run();
 }
 
-/** Прямой insert завершённой итерации. */
 function seedCompletedIteration(
   db: Db,
   issueId: string,
@@ -67,7 +65,6 @@ function seedCompletedIteration(
     .run();
 }
 
-/** Снапшот по контракту — путь собирается буквально, без сервисных helper'ов. */
 async function writeSnapshot(
   root: string,
   issueId: string,

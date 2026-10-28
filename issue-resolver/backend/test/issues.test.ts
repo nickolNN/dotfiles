@@ -124,7 +124,6 @@ describe('POST /issues — успешное создание', () => {
     });
 
     expect(response.statusCode).toBe(201);
-    // 'resolve' уже присутствует → позиция сохраняется; дубли убираются.
     expect(response.json().pipeline_steps).toEqual(['review', 'resolve', 'test']);
   });
 
@@ -173,7 +172,6 @@ describe('POST /issues — успешное создание', () => {
       .all();
     expect(iterationRows).toHaveLength(1);
     expect(iterationRows[0].number).toBe(1);
-    // Фоновый прогон стартует сразу после создания → running/completed.
     expect(['running', 'completed']).toContain(iterationRows[0].status);
     expect(iterationRows[0].context).toBe('доп контекст');
     expect(iterationRows[0].steps).toEqual(['review']);
@@ -350,14 +348,6 @@ describe('POST /issues — валидация', () => {
   });
 });
 
-// ===========================================================================
-// D. Report routes (D13–D17)
-// ===========================================================================
-
-/**
- * PiRunner, у которого report-прогон «висит» до явного `releaseRun()` — нужен,
- * чтобы поймать окно «корень заархивирован, отчёта ещё нет».
- */
 class PendingReportPi extends FakePiRunner {
   private release: (() => void) | null = null;
 
@@ -387,7 +377,6 @@ class PendingReportPi extends FakePiRunner {
   }
 }
 
-/** PiRunner, который валит report-прогон: нужен для статуса `failed`. */
 class FailingReportPi extends FakePiRunner {
   override run(
     containerName: string,
@@ -401,10 +390,6 @@ class FailingReportPi extends FakePiRunner {
   }
 }
 
-/**
- * PiRunner, который пишет отчёт с утечкой id модели — нужен, чтобы проверить
- * серверный детект (`warnings` в статусе + `x-artifact-warning`).
- */
 class LeakyReportPi extends FakePiRunner {
   constructor(private readonly model: string) {
     super();
@@ -423,8 +408,8 @@ class LeakyReportPi extends FakePiRunner {
         'utf8',
       );
       writeFileSync(
-        join(options.cwd, 'report.html'),
-        `<html><body><strong>Модель:</strong> ${this.model}</body></html>`,
+        join(options.cwd, 'report.json'),
+        JSON.stringify({ subtitle: this.model }),
         'utf8',
       );
     }
@@ -432,10 +417,6 @@ class LeakyReportPi extends FakePiRunner {
   }
 }
 
-/**
- * PiRunner, который отдаёт `stats.model` (наблюдённая модель сессии) и пишет
- * отчёт с ней — для проверки `observedModel` в `/report/status`.
- */
 class ObservedModelPi extends FakePiRunner {
   constructor(private readonly observed: string) {
     super();
@@ -482,7 +463,6 @@ class ObservedModelPi extends FakePiRunner {
   }
 }
 
-/** PiRunner, читающий прошлый отчёт (архив) — для сторожа якорения. */
 class AnchoringReportPi extends FakePiRunner {
   override run(
     containerName: string,
@@ -497,7 +477,6 @@ class AnchoringReportPi extends FakePiRunner {
         '<html><body>Отчёт</body></html>',
         'utf8',
       );
-      // Реальный раннер эмитит tool_use через onEvent — эмулируем это.
       options.onEvent?.({
         type: 'tool_use',
         toolCallId: 'x1',
@@ -543,9 +522,6 @@ describe('report routes (D13–D18)', () => {
     return response.json().id as string;
   };
 
-  // Прямое заведение задачи: не запускает автоитерацию (в отличие от POST
-  // /issues), поэтому не гоняет фоновый report-прогон, который через общий
-  // `activeReportRuns` затёр бы состояние теста.
   const seedIssueRow = (): string => {
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -597,7 +573,6 @@ describe('report routes (D13–D18)', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe('idle');
-    // Артефактов нет — обе половины отчёта помечены `present: false`.
     expect(body.artifacts.md).toEqual({
       present: false,
       bytes: 0,
@@ -619,7 +594,6 @@ describe('report routes (D13–D18)', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe('success');
-    // ISO-Z без миллисекунд — один формат с заголовком x-artifact-mtime.
     expect(body.lastRunAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   });
 
@@ -658,8 +632,6 @@ describe('report routes (D13–D18)', () => {
     });
 
     const body = response.json();
-    // A row with a dead heartbeat is not "in progress": the UI must be able to
-    // retry instead of holding a disabled button forever.
     expect(body.status).toBe('failed');
     expect(body.feedback).toContain('нет активности');
     expect(body.finishedAt).toBe(staleAt);
@@ -695,7 +667,6 @@ describe('report routes (D13–D18)', () => {
 
     expect(body.status).toBe('running');
     expect(body.runStatus).toBe('running');
-    // `finishedAt` is terminal-only: a heartbeat is not a finish.
     expect(body.finishedAt).toBeUndefined();
     expect(body.updatedAt).toBe(freshAt);
   });
@@ -710,7 +681,6 @@ describe('report routes (D13–D18)', () => {
       url: `${ENDPOINT}/${id}/report`,
     });
     expect(response.statusCode).toBe(202);
-    // Ключ корреляции SSE ↔ HTTP-ответ — тот же reportRunId.
     const reportRunId = response.json().reportRunId as string;
     const statuses = () =>
       events.filter(
@@ -718,14 +688,11 @@ describe('report routes (D13–D18)', () => {
           event.type === 'step_status' && event.stepRunId === reportRunId,
       );
 
-    // Прогон fire-and-forget: терминал публикуется после ответа 202.
     await vi.waitFor(() => expect(statuses()).toHaveLength(2));
     expect(JSON.parse(statuses()[0].data)).toMatchObject({
       status: 'running',
       step: 'report',
     });
-    // Прогон, который не создал report.md, — провал, а не «успех с пустым
-    // отчётом»: именно эта ложь и висела в UI.
     expect(statuses()[1].data).toBe('failed');
     const status = await reportApp.inject({
       method: 'GET',
@@ -747,7 +714,6 @@ describe('report routes (D13–D18)', () => {
     });
     expect(response.statusCode).toBe(202);
 
-    // Архивирование синхронно и случилось ДО ответа 202 / спавна агента.
     const archivedRoot = join(wsDir, 'reports');
     const stamps = readdirSync(archivedRoot);
     expect(stamps).toHaveLength(1);
@@ -756,7 +722,6 @@ describe('report routes (D13–D18)', () => {
     );
     expect(existsSync(join(wsDir, 'report.md'))).toBe(false);
 
-    // Пока новый отчёт не готов, отдача результата — чистый 404, не 500.
     const result = await reportApp.inject({
       method: 'GET',
       url: `${ENDPOINT}/${id}/result`,
@@ -768,7 +733,6 @@ describe('report routes (D13–D18)', () => {
   it('D20: во время прогона /result отдаёт снапшот с x-artifact-source; статус running', async () => {
     const id = seedIssueRow();
     const iterId = randomUUID();
-    // Снапшот последней завершённой итерации: без guard'а /result отдал бы его.
     mkdirSync(join(root, id, '.iteration-results', iterId), { recursive: true });
     writeFileSync(
       join(root, id, '.iteration-results', iterId, 'report.html'),
@@ -797,7 +761,6 @@ describe('report routes (D13–D18)', () => {
       pi,
     });
     try {
-      // Снапшот помечен источником: /result отдаёт его с x-artifact-source.
       const before = await guardApp.inject({
         method: 'GET',
         url: `${ENDPOINT}/${id}/result`,
@@ -807,7 +770,6 @@ describe('report routes (D13–D18)', () => {
       expect(before.headers['x-artifact-mtime']).toBeDefined();
       expect(before.body).toContain('OLD SNAPSHOT');
 
-      // Стартуем прогон: агент «висит», корень заархивирован, отчёта ещё нет.
       const start = await guardApp.inject({
         method: 'POST',
         url: `${ENDPOINT}/${id}/report`,
@@ -815,8 +777,6 @@ describe('report routes (D13–D18)', () => {
       expect(start.statusCode).toBe(202);
       expect(isReportRunActive(id)).toBe(true);
 
-      // Решение (в): это НЕ 404 — тот же снапшот, но с явной пометкой
-      // источника, чтобы UI показал «предыдущая версия от …».
       const during = await guardApp.inject({
         method: 'GET',
         url: `${ENDPOINT}/${id}/result`,
@@ -825,7 +785,6 @@ describe('report routes (D13–D18)', () => {
       expect(during.headers['x-artifact-source']).toBe('iteration-snapshot');
       expect(during.body).toContain('OLD SNAPSHOT');
 
-      // Статус тоже честный: идёт генерация, а не `idle` по пустому корню.
       const statusDuring = await guardApp.inject({
         method: 'GET',
         url: `${ENDPOINT}/${id}/report/status`,
@@ -860,8 +819,6 @@ describe('report routes (D13–D18)', () => {
       const stamps = readdirSync(join(wsDir, 'reports'));
       expect(stamps).toHaveLength(1);
 
-      // Второй POST не архивирует корень повторно и не спавнит агента:
-      // иначе отчёт первого прогона исчез бы из /result.
       const second = await guardApp.inject({
         method: 'POST',
         url: `${ENDPOINT}/${id}/report`,
@@ -870,7 +827,6 @@ describe('report routes (D13–D18)', () => {
       expect(second.json()).toEqual({ error: 'report run already active' });
       expect(readdirSync(join(wsDir, 'reports'))).toEqual(stamps);
 
-      // Отказ не сбрасывает флаг активного прогона.
       expect(isReportRunActive(id)).toBe(true);
       const status = await guardApp.inject({
         method: 'GET',
@@ -898,7 +854,6 @@ describe('report routes (D13–D18)', () => {
     expect(fromRoot.headers['x-artifact-source']).toBe('root');
     expect(fromRoot.body).toContain('Fresh');
 
-    // Нет ни в корне, ни в снапшоте (итерации не завершены) → 404.
     const empty = seedIssueRow();
     const missing = await reportApp.inject({
       method: 'GET',
@@ -937,9 +892,6 @@ describe('report routes (D13–D18)', () => {
   });
 
   it('D23: html нет нигде, md есть только в снапшоте → /result 200 text/markdown + iteration-snapshot', async () => {
-    // Контракт, на который опирается фронт: если html нет нигде, /result отдаёт
-    // md-фолбек и ОБЯЗАН пометить источник. Фронт по content-type решает не
-    // совать это тело в iframe (иначе — белый экран).
     const id = seedIssueRow();
     const iterId = randomUUID();
     mkdirSync(join(root, id, '.iteration-results', iterId), { recursive: true });
@@ -1011,7 +963,7 @@ describe('report routes (D13–D18)', () => {
           lastRunAt: expect.any(String),
           warnings: [
             'model id leaked into report.md',
-            'model id leaked into report.html',
+            'model id leaked into report.json',
           ],
         });
       });
@@ -1021,7 +973,7 @@ describe('report routes (D13–D18)', () => {
         url: `${ENDPOINT}/${id}/result`,
       });
       expect(result.headers['x-artifact-warning']).toBe(
-        'model id leaked into report.md; model id leaked into report.html',
+        'model id leaked into report.md; model id leaked into report.json',
       );
     } finally {
       await leakApp.close();
@@ -1059,7 +1011,6 @@ describe('report routes (D13–D18)', () => {
         ).toBe(true);
       });
 
-      // Мутирующий запрос залогирован строкой method/path/origin/status.
       expect(
         lines().some(
           (line) =>
@@ -1077,7 +1028,6 @@ describe('report routes (D13–D18)', () => {
   it('D26: warnings читаются из файлов — переживают рестарт, не только кэш', async () => {
     const id = seedIssueRow();
     mkdirSync(join(root, id), { recursive: true });
-    // Никакого прогона в этом процессе для id — имитируем рестарт backend.
     writeFileSync(
       join(root, id, 'report.md'),
       '# Отчёт\nПровайдер: provider2/deepseek-x\n',
@@ -1124,7 +1074,6 @@ describe('report routes (D13–D18)', () => {
         });
         const body = status.json();
         expect(body.observedModel).toBe(observed);
-        // Игла точного слоя на чтении — наблюдённая модель, а не паттерн.
         expect(body.warnings).toEqual(['model id leaked into report.md']);
       });
     } finally {

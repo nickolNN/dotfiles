@@ -1,20 +1,3 @@
-/**
- * E2E полного конвейера по всем 4 топологиям resolve.
- *
- * В отличие от `execution-topology-demo.test.ts` (там зовётся только
- * `runRoomResolve`/`runStagedResolve` напрямую) здесь гоняется НАСТОЯЩИЙ
- * pipeline через `runIssueIteration`: refine объявляет `execution`-план,
- * движок ветвится по `planExecutionMode`, и для каждой топологии
- * доказывается, что итерация завершается `completed`, issue — `completed`,
- * а step_run resolve — `success` (никогда `aborted`).
- *
- * Топологии и число pi-вызовов resolve:
- *   1. single            — 1 агент
- *   2. room              — 3 исполнителя ∥ + 1 координатор
- *   3. stages 3×1        — 3 агента-этапа по одному + 1 финальный lead
- *   4. stages-микс 2→1→3 — (2 исполнителя ∥ + координатор) → (1 агент) →
- *                          (3 исполнителя ∥ + координатор) → финальный lead
- */
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,7 +28,6 @@ import {
 const NOW = '2026-06-01T00:00:00.000Z';
 const STEPS: PipelineStep[] = ['refine', 'resolve'];
 
-/** resolve-результат «прошло» для одного pi-агента (исполнитель/координатор/lead). */
 const passResolve = (summary = 'resolve ok'): StepExecutionResult => ({
   step: 'resolve',
   exitCode: 0,
@@ -54,7 +36,6 @@ const passResolve = (summary = 'resolve ok'): StepExecutionResult => ({
   stderr: '',
 });
 
-/** refine-результат с рекомендацией топологии для следующего resolve. */
 const refineWithPlan = (execution: ExecutionPlan): StepExecutionResult => ({
   step: 'refine',
   exitCode: 0,
@@ -121,7 +102,6 @@ function makeDeps(workspaceRoot: string): {
   return { deps, pi, sse };
 }
 
-/** Дескриптор вызовов resolve: роль/stage/index/label (без refine-вызова). */
 interface AgentDescriptor {
   role: string | undefined;
   stage: number | null;
@@ -130,8 +110,6 @@ interface AgentDescriptor {
 }
 
 function resolveAgents(pi: FakePiRunner): AgentDescriptor[] {
-  // calls[0] — refine (без агента), дальше — агенты resolve. Post-iteration
-  // report-агент (нет iterationId) в топологию не входит.
   return pi.calls
     .filter((call) => call.options?.iterationId !== undefined)
     .slice(1)
@@ -157,7 +135,6 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     rmSync(root, { recursive: true, force: true });
   });
 
-  /** Общий прогон: seed → refine с планом → N resolve-результатов → проверки. */
   async function runTopology(
     plan: ExecutionPlan,
     resolveResultCount: number,
@@ -171,7 +148,6 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     const db = createDb(':memory:');
     const seeded = seedIteration(db);
     const { deps, pi, sse } = makeDeps(root);
-    // Подписка ДО прогона: ловим iteration_status running → completed.
     const events: SSEEvent[] = [];
     sse.subscribe(seeded.iterationId, (event) => events.push(event));
 
@@ -200,7 +176,6 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     return { db, pi, events, seeded, result };
   }
 
-  /** Инварианты, общие для всех топологий: completed/success/не aborted. */
   function expectCompleted(
     db: Db,
     seeded: Seeded,
@@ -236,16 +211,12 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     const resolveRun = runs.find((run) => run.step === 'resolve');
     expect(refineRun?.status).toBe('success');
     expect(resolveRun?.status).toBe('success');
-    // resolve НИКОГДА не aborted — иначе итерация была бы `cancelled`.
     expect(resolveRun?.status).not.toBe('aborted');
 
-    // Ровно refine + агенты топологии; ни одного лишнего pi-вызова. Post-iteration
-    // report-агент идёт после конвейера и в счёт шагов не входит (нет iterationId).
     expect(
       pi.calls.filter((call) => call.options?.iterationId !== undefined),
     ).toHaveLength(expectedPiCalls);
 
-    // Последнее iteration_status в SSE — completed, не cancelled.
     const last = events
       .filter((event) => event.type === 'iteration_status')
       .at(-1);
@@ -290,7 +261,6 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
       .where(eq(stepRuns.iteration_id, seeded.iterationId))
       .all()
       .find((run) => run.step === 'resolve');
-    // Исполнители нумеруются 0-based в id, координатор = stepRunId шага.
     expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRun?.id}.w0`);
     expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRun?.id}.w1`);
     expect(pi.calls[3].options?.stepRunId).toBe(`run.${resolveRun?.id}.w2`);
@@ -358,8 +328,6 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     };
     const { db, pi, events, seeded, result } = await runTopology(plan, 9);
 
-    // refine + 2 исполнителя + coord этапа1 + исполнитель этапа2 + 3 исполнителя +
-    // coord этапа3 + финальный lead = 10 pi-вызовов (9 агентов resolve).
     expectCompleted(db, seeded, result, 10, pi, events);
     expect(resolveAgents(pi)).toEqual([
       { role: 'worker', stage: 1, index: 1, label: 'Этап 1 · Исполнитель 1' },

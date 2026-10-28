@@ -251,7 +251,6 @@ describe('TaskDetail — сводка репозиториев в шапке', (
     stubFetch(makeIssue({ status: 'running' }));
     const row = await renderAndGetRow();
 
-    // SSE не реплеится, но задача уже вышла из preparing — показываем ready.
     expect(row).toHaveAttribute('data-status', 'ready');
   });
 

@@ -281,7 +281,6 @@ describe('TaskDetail — шаги выбранной итерации', () => {
     expect(summary).toHaveTextContent('PASS');
     expect(summary).toHaveTextContent('Все проверки прошли');
     expect(summary).not.toHaveTextContent('сырой вывод агента');
-    // Живой session-вывод у завершённого шага не рисуется.
     expect(screen.queryByTestId('step-session')).toBeNull();
     expect(screen.queryByText('Результат отсутствует.')).toBeNull();
   });
@@ -328,7 +327,6 @@ describe('TaskDetail — шаги выбранной итерации', () => {
     const banner = await screen.findByTestId('step-pr-error');
     expect(banner).toHaveTextContent('MR/ветка не созданы');
     expect(banner).toHaveTextContent('403');
-    // Шаг отработал (PASS-саммари на месте), но публикация провалилась.
     expect(screen.getByTestId('step-summary')).toHaveTextContent(
       'PR-описание готово',
     );

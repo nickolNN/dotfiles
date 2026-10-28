@@ -23,12 +23,6 @@ const nullableNum = (value: unknown): number | null =>
 const modelLabel = (value: unknown): string | null =>
   typeof value === 'string' && value.trim().length > 0 ? value : null;
 
-/**
- * Разбор `data` из ответа `get_session_stats` в нормализованный SessionStats.
- * Модель не входит в `get_session_stats` — её отдают вторым аргументом из
- * `get_state`; без аргумента берётся непустой `obj.model`, если он есть
- * (например, при чтении персистентных stats).
- */
 export function parseSessionStats(
   data: unknown,
   model?: string | null,
@@ -78,14 +72,6 @@ export function parseSessionStats(
   };
 }
 
-/**
- * Суммирует статистику нескольких pi-агентов шага (исполнители + координаторы
- * room/stages) в один агрегат для `step_outputs.stats`. Модель/сессия
- * (`model`, `sessionId`, `avgTokensPerSecond`) и `contextUsage` у суммы не
- * задаются — это свойства конкретного агента, а не шага. `cost` суммируется
- * только по не-null значениям; если их нет — null. Все элементы null/undefined
- * → null (нет телеметрии).
- */
 export function sumSessionStats(
   stats: readonly (SessionStats | null | undefined)[],
 ): SessionStats | null {
@@ -117,11 +103,6 @@ export function sumSessionStats(
   };
 }
 
-/**
- * Разбор `.issue-step-result.json`, который пишет шаг конвейера.
- * Возвращает null, если строка пустая, не JSON, не объект, без status
- * или с невалидным status. Поля scenarios/findings опциональны.
- */
 export function parseStepReport(json: string): StepReport | null {
   if (typeof json !== 'string') return null;
 
@@ -187,12 +168,6 @@ export function parseStepReport(json: string): StepReport | null {
   };
 }
 
-/**
- * Маппинг сырого результата шага в StepRunStatus:
- * - exit 0 + blocked → needs_input
- * - exit 0 + (нет отчёта или pass) → success
- * - иначе (ненулевой exit, fail или отчёт без валидного pass) → failed
- */
 export function stepRunStatusFromResult(
   exitCode: number,
   report: StepReport | null,

@@ -270,7 +270,6 @@ describe('GitCliService.installDependencies', () => {
     await service.installDependencies([repo]);
     expect(calls).toEqual(['npm ci']);
 
-    // node_modules уже есть → повторная установка не запускается.
     await mkdir(path.join(repo, 'node_modules'), { recursive: true });
     calls.length = 0;
     await service.installDependencies([repo]);
@@ -391,7 +390,6 @@ describe('GitCliService.commitAndPush — squash + force-push', () => {
       repoPath: repo,
       branchName: 'feature/no-squash',
       commitMessage: 'feat: No squash',
-      // squashBase не задан
     });
 
     const pushCall = execCalls.find(
@@ -427,8 +425,6 @@ describe('GitCliService.commitAndPush — squash + force-push', () => {
 
       const pushCall = execCalls.find((call) => call.args.includes('push'));
       expect(pushCall).toBeDefined();
-      // credential.helper должен быть ДО --force (pushArgs.unshift вставляет
-      // -c перед остальными, а --force добавляется pushArgs.push до unshift).
       expect(pushCall!.args).toContain('--force');
       expect(
         pushCall!.args.some(
@@ -534,7 +530,6 @@ describe('GitCliService.prepare — идемпотентность', () => {
     const calls: { file: string; args: string[] }[] = [];
     const exec: GitExecFile = async (file, args) => {
       calls.push({ file, args });
-      // Фейковый clone рабочей копии создаёт .git; установка — node_modules.
       if (file === 'git' && args[0] === 'clone' && !args.includes('--bare')) {
         await mkdir(path.join(repoPath, '.git'), { recursive: true });
       }
@@ -565,7 +560,6 @@ describe('GitCliService.prepare — идемпотентность', () => {
     ).toBe(true);
     expect(calls.some((call) => call.file === 'npm')).toBe(true);
 
-    // Повтор: .git и node_modules уже на месте — ни clone, ни install.
     calls.length = 0;
     const second = await service.prepare({
       repoUrls: [repoUrl],

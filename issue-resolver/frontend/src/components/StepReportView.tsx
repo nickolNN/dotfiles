@@ -3,7 +3,6 @@ import { parseStepReport } from '@issue-resolver/shared';
 import AgentMarkdown from './AgentMarkdown';
 
 interface StepReportViewProps {
-  /** Сырая строка `.issue-step-result.json` из output-строки шага. */
   raw: string;
 }
 
@@ -28,12 +27,6 @@ const STATUS_META: Record<
   },
 };
 
-/**
- * Локальные расширенные формы: shared-типы StepReportFinding/StepReportScenario
- * могут отставать (их параллельно расширяет backend-агент), а на вход приходят
- * объекты из ненормализованного JSON `.issue-step-result.json`. Рендер опирается
- * на структурный минимум и терпимо относится к дополнительным полям.
- */
 interface FindingInput {
   severity: string;
   title?: string;
@@ -49,11 +42,6 @@ interface ScenarioInput {
   actual?: string;
 }
 
-/**
- * Цвет severity — Partial-словарь, а НЕ `Record<FindingSeverity, string>`:
- * severity — открытая строка (`(string & {})`), неизвестные значения
- * деградируют в серый.
- */
 const SEVERITY_CLASS: Partial<Record<string, string>> = {
   info: 'text-[#8A8A8A]',
   low: 'text-[#00FF41]',
@@ -63,7 +51,6 @@ const SEVERITY_CLASS: Partial<Record<string, string>> = {
 };
 const UNKNOWN_SEVERITY_CLASS = 'text-[#8A8A8A]';
 
-/** Pretty-print JSON, если строка парсится; иначе — как есть. */
 function prettyRaw(raw: string): string {
   try {
     return JSON.stringify(JSON.parse(raw), null, 2);
@@ -165,13 +152,6 @@ function FindingRow({ finding }: { finding: FindingInput }) {
   );
 }
 
-/**
- * Структурированное отображение отчёта шага (`StepReport`).
- *
- * Сырая строка разбирается через `parseStepReport`; если это не валидный
- * отчёт — показывается фолбек `<pre>` (JSON pretty-print, иначе как есть).
- * Иначе: бейдж статуса, summary, execution, scenarios, findings.
- */
 export default function StepReportView({ raw }: StepReportViewProps) {
   const report = parseStepReport(raw);
 

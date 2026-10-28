@@ -1,6 +1,5 @@
 import type { ChangeEvent } from 'react';
 
-/** Человекочитаемый размер файла (Б/КБ/МБ). */
 export function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '—';
   if (bytes < 1024) return `${Math.round(bytes)} Б`;
@@ -20,11 +19,6 @@ export interface FilePickerProps {
 
 const labelClass = 'block text-sm font-medium text-[#00FF41]/80';
 
-/**
- * Выбор файлов перед созданием задачи/итерации: множественный `<input
- * type="file">` плюс чипы с именем/размером и кнопкой удаления. Только UI —
- * что делать с `File[]`, решает вызывающий (multipart при непустом списке).
- */
 export default function FilePicker({
   id,
   files,
@@ -37,8 +31,6 @@ export default function FilePicker({
     if (selected && selected.length > 0) {
       onChange([...files, ...Array.from(selected)]);
     }
-    // Сбрасываем value, чтобы повторный выбор того же файла снова триггерил
-    // change (иначе input считает набор неизменным).
     event.target.value = '';
   }
 

@@ -1,16 +1,3 @@
-/**
- * Регрессия «resolve не висит вечно и не даёт пустой результат».
- *
- * Падение (spawn ENOENT, child error) или зависание pi-агента обязано
- * завершать шаг терминально `failed`, а итерацию — `failed`, а не оставлять
- * их в `running` навсегда. Таймаут прокидывается в раннер и дополнительно
- * страхуется внешним `withAgentTimeout` (см. workflow/timeout.ts).
- *
- * Здесь проверяются все три ветки движка:
- *  - single  → `deps.pi.run`;
- *  - room    → `runRoomResolve` (исполнитель/координатор, параллельно);
- *  - stages  → `runStagedResolve` (агент этапа).
- */
 import { describe, expect, it } from 'vitest';
 import type {
   ExecutionPlan,
@@ -47,7 +34,6 @@ import {
 
 const NOW = '2026-01-01T00:00:00.000Z';
 
-/** In-memory-реализация StepRunStore (как в workflow-engine.test.ts). */
 class InMemoryStepRunStore implements StepRunStore {
   readonly runs: StepRun[] = [];
   readonly outputs: StepOutput[] = [];
@@ -130,8 +116,6 @@ const makeDeps = () => {
     store,
     mr: new FakeMrClient(),
     control: new InMemoryStepSessionRegistry(),
-    // Несуществующий корень: чтение `.issue-step-result.json` всегда null,
-    // тесты не зависят от реальной ФС.
     workspaceRoot: `/tmp/issue-resolver-timeout-test-${process.pid}`,
   };
   return { deps, store };
@@ -167,7 +151,6 @@ const makeInput = (
   ...(agentStallTimeoutMs !== undefined ? { agentStallTimeoutMs } : {}),
 });
 
-/** Скриптованный PiRunner: по одному handler'у на вызов; умеет reject/hang. */
 type Handler = (call: PiRunCall) => Promise<StepExecutionResult>;
 
 class ScriptedPiRunner implements PiRunner {
@@ -228,8 +211,6 @@ const trace = (store: InMemoryStepRunStore): string[] =>
   store.runs.map((run) => `${run.step}#${run.attempt}:${run.status}`);
 
 const resolveOutput = (store: InMemoryStepRunStore): StepOutput => {
-  // С self-retry может быть несколько resolve-прогонов — берём последний
-  // (в нём финальная ошибка).
   const resolveRuns = store.runs.filter((run) => run.step === 'resolve');
   const resolveRun = resolveRuns[resolveRuns.length - 1];
   const output = store.outputs.find(
@@ -291,7 +272,6 @@ describe('resolveDevOpsTimeoutMs — env-таймаут подготовки', (
     try {
       process.env[LEGACY_DEVOPS_TIMEOUT_ENV] = '120000';
       expect(resolveDevOpsTimeoutMs()).toBe(120_000);
-      // Новое имя имеет приоритет над прежним.
       process.env[DEVOPS_TIMEOUT_ENV] = '180000';
       expect(resolveDevOpsTimeoutMs()).toBe(180_000);
     } finally {
@@ -306,7 +286,6 @@ describe('resolveDevOpsTimeoutMs — env-таймаут подготовки', (
 describe('runIteration — падение/зависание pi-агента завершает resolve терминально', () => {
   it('single: зависание (never-resolving) катится до таймаута → 4 попытки, все failed', async () => {
     const { deps, store } = makeDeps();
-    // hang + 3 reject (no handler) = 4 попытки (1 осн + 3 self-retry).
     const pi = new ScriptedPiRunner([hang]);
     deps.pi = pi;
 
@@ -325,10 +304,8 @@ describe('runIteration — падение/зависание pi-агента з�
       status: 'fail',
       summary: 'resolve agent failed/hung',
     });
-    // Первая попытка — таймаут, последующие — no handler.
     expect(output.stderr).toMatch(/timed out|unexpected pi call/);
 
-    // Таймаут прокинут в раннер (RpcPiRunner → reject + SIGKILL).
     expect(pi.calls[0].options?.timeoutMs).toBe(25);
   });
 
@@ -344,7 +321,6 @@ describe('runIteration — падение/зависание pi-агента з�
     const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    // refine успешен, resolve — 4 попытки (1 осн + 3 self-retry), все failed.
     expect(trace(store)).toEqual([
       'refine#1:success',
       'resolve#1:failed',
@@ -359,7 +335,6 @@ describe('runIteration — падение/зависание pi-агента з�
       summary: 'resolve agent failed/hung',
     });
     expect(output.stderr).toMatch(/spawn pi ENOENT|unexpected pi call/);
-    // Первая попытка: refine(1) + worker0(1) + worker1(1) = 3 вызова.
     expect(pi.calls.length).toBeGreaterThanOrEqual(3);
   });
 
@@ -383,7 +358,6 @@ describe('runIteration — падение/зависание pi-агента з�
       'resolve#3:failed',
       'resolve#4:failed',
     ]);
-    // Финальный output содержит ошибку координатора или no-handler.
     expect(resolveOutput(store).stderr).toMatch(/child error|unexpected pi call/);
   });
 
@@ -406,7 +380,6 @@ describe('runIteration — падение/зависание pi-агента з�
       'resolve#3:failed',
       'resolve#4:failed',
     ]);
-    // Первая попытка — таймаут, последующие — no handler.
     expect(resolveOutput(store).stderr).toMatch(/timed out|unexpected pi call/);
     expect(pi.calls[1].options?.timeoutMs).toBe(20);
   });
@@ -437,7 +410,6 @@ describe('runIteration — падение/зависание pi-агента з�
     const { deps, store } = makeDeps();
     deps.pi = new ScriptedPiRunner([hang]);
 
-    // The hard timeout stays at its 3 h default: the watchdog is what kills it.
     const result = await runIteration(
       deps,
       makeInput(['resolve'], DEFAULT_RESOLVE_AGENT_TIMEOUT_MS, 30),
@@ -480,14 +452,12 @@ describe('runIteration — падение/зависание pi-агента з�
     );
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
-    // Ladder: wake the agent up, then compact, and only then kill it.
     expect(seen.slice(0, 4)).toEqual([
       'prompt:followUp',
       'send:compact',
       'send:abort_retry',
       'abort',
     ]);
-    // Each self-retry runs the whole ladder again, never skipping a rung.
     expect(seen.filter((entry) => entry === 'send:abort_retry')).toHaveLength(4);
     expect(store.outputs[0].stderr).toMatch(/tried: nudge, compact/);
   });
@@ -508,7 +478,6 @@ describe('runIteration — падение/зависание pi-агента з�
         }),
     ]);
 
-    // Silence 60 ms < total run ~90 ms: only the activity counter saves it.
     const result = await runIteration(deps, makeInput(['resolve'], 60_000, 60));
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });

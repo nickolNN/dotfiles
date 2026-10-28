@@ -1,7 +1,3 @@
-// Test step — browser verification of the kanban change (Playwright, real Chromium).
-// Verifies: 8px gap, position-aware cross-column drop (above/below/end/empty),
-// persistence after reload, D6-protected behaviors (in-column reorder, quick-add,
-// drop indicator, empty stub), console errors, MSW position 400 guard.
 import { chromium } from 'playwright';
 import fs from 'fs';
 
@@ -33,9 +29,6 @@ async function shot(page, name, clip) {
 }
 
 async function login(page) {
-  // Tolerant: the token is persisted in localStorage (LoginView) and AuthLoader
-  // restores it on first app launch after a reload, so the login form may not
-  // be present. Only log in if the form is actually shown.
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   const email = page.locator('input[type=email]');
   const hasForm = await email.waitFor({ timeout: 8000 }).then(() => true, () => false);
@@ -86,7 +79,6 @@ async function storeState(page) {
 }
 const fmtStore = (s) => s ? Object.entries(s).map(([k, v]) => `${k}=[${v.join(', ')}]`).join(' | ') : 'no store';
 
-/** Drag a card (by column+index) to absolute page point (x, y). */
 async function drag(page, fromCol, fromIdx, toX, toY, midShot, midCheck) {
   console.log(`  drag ${fromCol}#${fromIdx} -> (${toX}, ${toY})`);
   const loc = cardLoc(page, fromCol, fromIdx);
@@ -113,7 +105,7 @@ async function drag(page, fromCol, fromIdx, toX, toY, midShot, midCheck) {
   if (midCheck) console.log(`  mid-drag: ${await midCheck(page)}`);
   if (midShot) await shot(page, midShot);
   await page.mouse.up();
-  await page.waitForTimeout(2000); // let RTK mutations + refetch settle
+  await page.waitForTimeout(2000);
   console.log(`  store after:  ${fmtStore(await storeState(page))}`);
 }
 
@@ -151,7 +143,6 @@ async function main() {
   await shot(page, '01-initial-board.png');
   console.log('initial:', fmt(board));
 
-  // ---------- S1: 8px vertical gap ----------
   {
     const col = COLUMNS.find((c) => board[c].length >= 2);
     if (!col) {
@@ -171,7 +162,6 @@ async function main() {
     }
   }
 
-  // ---------- S2: cross-column drop ABOVE hovered card ----------
   {
     const pick = uniqueTitlePick(board);
     if (!pick) {
@@ -184,7 +174,6 @@ async function main() {
         const b = await cardBox(page, tgt, 1);
         const before = board[tgt].slice();
         const expected = [before[0], pick.title, ...before.slice(1)];
-        // pointer in the 8px gap above card #1 → unambiguous "above" drop
         let midDragClass = '';
         await drag(
           page,
@@ -220,7 +209,6 @@ async function main() {
     }
   }
 
-  // ---------- S3: cross-column drop BELOW hovered card ----------
   {
     const pick = uniqueTitlePick(board);
     if (!pick) {
@@ -233,7 +221,6 @@ async function main() {
         const b = await cardBox(page, tgt, 1);
         const before = board[tgt].slice();
         const expected = [before[0], before[1], pick.title, ...before.slice(2)];
-        // pointer in the 8px gap below card #1 → unambiguous "below" drop
         await drag(page, pick.col, pick.idx, b.x + b.width / 2, b.y + b.height + 4);
         board = await readBoard(page);
   console.log('  board:', fmt(board));
@@ -250,7 +237,6 @@ async function main() {
     }
   }
 
-  // ---------- S4: drop on column background (below last card) → end ----------
   {
     const pick = uniqueTitlePick(board);
     if (!pick) {
@@ -281,9 +267,7 @@ async function main() {
     }
   }
 
-  // ---------- S5: drop into an empty column → index 0 (+ empty stub visible) ----------
   {
-    // Ensure an empty column exists: if none, empty the smallest column.
     let emptyCol = COLUMNS.find((c) => board[c].length === 0);
     if (!emptyCol) {
       const smallest = COLUMNS.reduce((a, b) => (board[a].length <= board[b].length ? a : b));
@@ -325,7 +309,6 @@ async function main() {
     }
   }
 
-  // ---------- S6: persistence across reload ----------
   {
     const before = board;
     let after = null;
@@ -349,7 +332,6 @@ async function main() {
     if (after) await shot(page, '08-after-reload.png');
   }
 
-  // ---------- S6b: DOM order matches store position order (scattered positions safe) ----------
   {
     const store = await storeState(page);
     const dom = await readBoard(page);
@@ -369,9 +351,6 @@ async function main() {
     );
   }
 
-  // ---------- S7: in-column reorder still works (D6) ----------
-  // Uses a freshly quick-added card (unique title by construction) so the
-  // check is unambiguous even when the random seed produces duplicate titles.
   {
     const col = COLUMNS.find((c) => board[c].length >= 3);
     if (!col) {
@@ -392,7 +371,6 @@ async function main() {
       } else {
         const b = await cardBox(page, col, 2);
         const before = board[col].filter((t) => t !== title);
-        // card starts at the end; pointer in the gap above card #2 → lands at index 2 (real move)
         const expected = [...before.slice(0, 2), title, ...before.slice(2)];
         await drag(page, col, fromIdx, b.x + b.width / 2, b.y - 4);
         board = await readBoard(page);
@@ -410,7 +388,6 @@ async function main() {
     }
   }
 
-  // ---------- S8: quick-add still appends at column end (D6) ----------
   {
     const col = COLUMNS.find((c) => board[c].length >= 1) ?? COLUMNS[0];
     const title = `PW-Verify-${Date.now() % 100000}`;
@@ -434,7 +411,6 @@ async function main() {
     await shot(page, '10-quick-add-after.png');
   }
 
-  // ---------- S11: card click still navigates to task detail (D6) ----------
   {
     const pick = uniqueTitlePick(board);
     if (!pick) {
@@ -470,7 +446,6 @@ async function main() {
     }
   }
 
-  // ---------- S12: list view toggle (D6) ----------
   {
     const beforeToggle = board;
     await page.getByRole('button', { name: 'Back to List' }).click();
@@ -506,11 +481,6 @@ async function main() {
     );
   }
 
-  // ---------- S9: persisted positions stay valid after all drops ----------
-  // (The MSW 400 guard in handlers.ts is inert in the running app: setMockMode(true)
-  // routes all API traffic through the RTK interceptor and MSW is never started,
-  // so the guard is not user-reachable. Source columns keep scattered positions
-  // by design (plan D5 renumbers only the target column); order stays correct.)
   {
     const store = await storeState(page);
     let ok = store !== null;
@@ -530,7 +500,6 @@ async function main() {
     );
   }
 
-  // ---------- S10: no console/page errors ----------
   record(
     'S10 no console errors or uncaught page errors during all interactions',
     'zero console.error / pageerror entries',
@@ -541,7 +510,6 @@ async function main() {
 
   await shot(page, '11-final-board.png');
 
-  // ---------- result ----------
   const pass = findings.length === 0;
   const out = {
     status: pass ? 'pass' : 'fail',

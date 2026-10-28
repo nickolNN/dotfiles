@@ -65,7 +65,6 @@ describe('modelSourceFromEnv', () => {
 
     const [model] = await modelSourceFromEnv({ PI_MODELS_PATH: file }).list();
     expect(model.thinkingLevels).toEqual(['off']);
-    // Сырые входные поля наружу не уходят.
     expect(model).not.toHaveProperty('reasoning');
     expect(model).not.toHaveProperty('thinkingLevelMap');
   });
@@ -96,8 +95,6 @@ describe('modelSourceFromEnv', () => {
     );
 
     const [model] = await modelSourceFromEnv({ PI_MODELS_PATH: file }).list();
-    // off/low поддержаны (не null), medium/high не заданы → поддержаны,
-    // minimal=null отсечён, xhigh задан, max не задан → отсечён.
     expect(model.thinkingLevels).toEqual([
       'off',
       'low',

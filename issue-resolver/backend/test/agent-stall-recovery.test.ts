@@ -23,7 +23,6 @@ describe('withAgentStallGuard — восстановление до провал
     let activity = 0;
     let produced: ReturnType<typeof setInterval> | undefined;
     const nudge = vi.fn(() => {
-      // The nudged agent starts producing output again, chunk by chunk.
       produced = setInterval(() => {
         activity += 1;
       }, 5);

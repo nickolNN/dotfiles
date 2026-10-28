@@ -8,14 +8,10 @@ import ModelThinkingSelect from './ModelThinkingSelect';
 import { inputClass } from './formStyles';
 
 export interface StepRowProps {
-  /** Шаг пайплайна: чекбокс + подпись. */
   step: { value: PipelineStep; label: string };
   checked: boolean;
-  /** Disabled step: `pr` without a writable repo. */
   disabled?: boolean;
-  /** Label suffix, e.g. the note shown for a blocked `pr`. */
   labelSuffix?: string;
-  /** Показывать селекторы модели/уровня (шаг выбран). */
   modelEnabled: boolean;
   thinkingLevels: readonly ThinkingLevel[];
   thinkingEnabled: boolean;
@@ -26,15 +22,9 @@ export interface StepRowProps {
   onToggle: (step: PipelineStep) => void;
   onModelChange: (step: PipelineStep, value: string) => void;
   onThinkingChange: (step: PipelineStep, value: string) => void;
-  /** Инлайн-контент под чекбоксом (например, число агентов для refine). */
   hint?: ReactNode;
 }
 
-/**
- * Одна строка формы шага пайплайна: чекбокс шага, его модель и уровень
- * размышления. Для зафиксированного шага (resolve) чекбокс отключён. Только
- * UI: состояние держит родитель (`PipelineStepsSection`).
- */
 export default function StepRow({
   step,
   checked,

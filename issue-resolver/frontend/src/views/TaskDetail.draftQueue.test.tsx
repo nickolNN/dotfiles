@@ -11,7 +11,6 @@ import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 import { getMarkdownEditorValue, setMarkdownEditorValue } from '../test/markdown-editor';
 
-/** Открывает модалку новой итерации кликом по кнопке. */
 async function openIterationModal() {
   fireEvent.click(await screen.findByTestId('open-iteration-modal'));
   await screen.findByTestId('new-iteration-island');
@@ -47,7 +46,6 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
   };
 }
 
-/** Задача с репозиторием и живой MR-ссылкой: кнопка ревью живёт рядом с ней. */
 function makeIssueWithMr(): Issue {
   return makeIssue({
     repositories: [
@@ -90,10 +88,6 @@ interface StubOptions {
   issue?: Issue;
 }
 
-/**
- * Мок fetch в стиле TaskDetail.repeat.test.tsx: POST-эндпоинты черновиков,
- * очереди и ревью перехватываются по URL, остальное отдаёт списком итераций.
- */
 function stubFetch(options: StubOptions) {
   const issue = options.issue ?? makeIssue();
   const fetchMock = vi.fn(
@@ -179,7 +173,6 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     await screen.findByText('Итерация #1');
 
     await openIterationModal();
-    // Есть running → форма предлагает черновик, а не немедленный запуск.
     expect(
       screen.getByRole('button', { name: 'Создать черновик' }),
     ).toBeInTheDocument();
@@ -194,7 +187,6 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     expect(await screen.findByText('Итерация #2')).toBeInTheDocument();
     expect(screen.getByText('draft')).toBeInTheDocument();
 
-    // После успешного создания черновика модалка закрывается.
     await waitFor(() =>
       expect(screen.queryByTestId('new-iteration-island')).toBeNull(),
     );
@@ -222,7 +214,6 @@ describe('TaskDetail — draft-итерации и очередь', () => {
 
     fireEvent.click(queueButton);
 
-    // Статус в шапке карточки (в чипах шагов тоже есть «pending»).
     const header = screen.getByText('Итерация #1').parentElement;
     await waitFor(() =>
       expect(within(header as HTMLElement).getByText('pending')).toBeInTheDocument(),
@@ -247,11 +238,9 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    // При активной итерации без draft — кнопка открытия модалки.
     expect(
       screen.getByRole('button', { name: 'Новая итерация' }),
     ).toBeInTheDocument();
-    // Внутри модалки — submit «Создать черновик», не «Запустить новую итерацию».
     await openIterationModal();
     expect(
       screen.getByRole('button', { name: 'Создать черновик' }),
@@ -284,22 +273,18 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    // Открываем модалку — контекст черновика должен быть предзаполнен.
     await openIterationModal();
     expect(getMarkdownEditorValue('Контекст итерации')).toBe('original context');
 
-    // Меняем контекст и сохраняем.
     setMarkdownEditorValue('Контекст итерации', 'updated context');
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить черновик' }));
 
-    // Должен быть вызван PUT, а не POST (create).
     const putCall = fetchMock.mock.calls.find(
       (call: [RequestInfo | URL, RequestInit?]) => call[1]?.method === 'PUT',
     );
     expect(putCall).toBeTruthy();
     expect(String(putCall?.[0] ?? '')).toContain('/iterations/iter-2');
 
-    // После успешного сохранения черновика модалка закрывается.
     await waitFor(() =>
       expect(screen.queryByTestId('new-iteration-island')).toBeNull(),
     );
@@ -360,17 +345,14 @@ describe('TaskDetail — draft-итерации и очередь', () => {
 
     fireEvent.click(screen.getByTestId('fetch-review'));
 
-    // Комментарии появляются в форме. Открываем модалку чтобы увидеть.
     await openIterationModal();
     expect(await screen.findByText('review-iteration-1.md')).toBeInTheDocument();
-    // И контекст предзаполняется ссылкой на него.
     await waitFor(() =>
       expect(getMarkdownEditorValue('Контекст итерации')).toContain(
         'Review comments from iteration #1',
       ),
     );
 
-    // Итерация НЕ создаётся автоматически.
     expect(createCallTo(fetchMock)).toBeUndefined();
     expect(screen.getAllByText(/^Итерация #/)).toHaveLength(1);
   });
@@ -404,8 +386,6 @@ describe('TaskDetail — draft-итерации и очередь', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    // MR ещё не создан: смотреть нечего, кнопки нет ни в строке репозитория,
-    // ни в списке итераций.
     expect(screen.getByTestId('repo-mr-badge')).toBeInTheDocument();
     expect(screen.queryByTestId('fetch-review')).toBeNull();
   });

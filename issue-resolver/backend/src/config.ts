@@ -11,7 +11,6 @@ export interface BackendConfig {
   JIRA_TOKEN: string;
 }
 
-/** Читает config.json и merge с process.env (env приоритетнее файла). */
 export function loadConfig(): BackendConfig {
   const defaults: BackendConfig = {
     BITBUCKET_TOKEN: '',
@@ -35,7 +34,6 @@ export function loadConfig(): BackendConfig {
       JIRA_TOKEN: process.env.JIRA_TOKEN || file.JIRA_TOKEN || defaults.JIRA_TOKEN,
     };
   } catch {
-    // Файла нет или битый JSON — верни defaults с env-оверрайдами
     return {
       BITBUCKET_TOKEN: process.env.BITBUCKET_TOKEN || defaults.BITBUCKET_TOKEN,
       BITBUCKET_USERNAME: process.env.BITBUCKET_USERNAME || defaults.BITBUCKET_USERNAME,

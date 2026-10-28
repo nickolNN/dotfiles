@@ -11,25 +11,6 @@ import { iterations } from '../src/db/schema';
 import { resetPortAllocator } from '../src/port-allocator';
 import type { DevOpsFactory } from '../src/workflow/engine';
 
-/**
- * Регресс-тест на `devops_thinking_level` в маршрутах, которые ЗАПУСКАЮТ
- * подготовку рабочей папки. Проверяется не персистентность (её тестит
- * `devops.test.ts`/`thinking.test.ts`), а то, что значение доезжает до
- * `prepareDeps` → `DevOpsFactory` → агент.
- *
- * Почему тест нужен именно здесь: `prepareDeps` в маршрутах — выведенная
- * переменная, поэтому excess-property check TypeScript не срабатывает, и
- * пропущенное поле `devopsThinkingLevel` не ловится ни `tsc`, ни zod (в zod
- * нет `strict()`/`passthrough()` → неизвестные ключи молча strip'аются).
- * Единственный надёжный арбитр — наблюдать фабрику агента в рантайме.
- *
- * Покрытые места:
- *  - `POST /issues/:id/iterations` → `routes/issues.ts` (`devopsThinkingLevel`
- *    из тела запроса, `createIterationRequestSchema` должен его принимать);
- *  - `POST /iterations/:id/repeat` → `routes/iterations.ts` (`devopsModel` /
- *    `devopsThinkingLevel` берутся из сохранённой задачи, а не undefined).
- */
-
 const ISSUES = '/issue-resolver/api/v1/issues';
 const ITERATIONS = '/issue-resolver/api/v1/iterations';
 
@@ -54,8 +35,6 @@ const openCleanups: Array<() => Promise<void>> = [];
 function makeEnv(): TestEnv {
   const db = createDb(':memory:');
   const root = mkdtempSync(join(tmpdir(), 'devops-iter-thinking-'));
-  // Фабрика-шпион: запоминает опции, с которыми движок создаёт DevOps-агента.
-  // Возвращённый агент ничего не делает — проверяется только проброс настроек.
   const calls: CapturedDevOpsParams[] = [];
   const devopsFactory: DevOpsFactory = (params) => {
     calls.push({ model: params.model, thinkingLevel: params.thinkingLevel });
@@ -93,7 +72,6 @@ async function waitFor<T>(
   }
 }
 
-/** Ждёт появления хотя бы одного вызова фабрики и отдаёт последний. */
 async function lastDevOpsCall(
   calls: CapturedDevOpsParams[],
 ): Promise<CapturedDevOpsParams> {
@@ -105,8 +83,6 @@ describe('devops_thinking_level доезжает до DevOps-агента', () =
   it('POST /issues/:id/iterations передаёт devops_model/devops_thinking_level из тела', async () => {
     const { app, calls } = makeEnv();
 
-    // Черновик без immediate-запуска: нет активной итерации и не запускается
-    // подготовка преждевременно — фабрика вызовется только на POST /iterations.
     const created = await app.inject({
       method: 'POST',
       url: ISSUES,
@@ -155,7 +131,6 @@ describe('devops_thinking_level доезжает до DevOps-агента', () =
     expect(created.statusCode).toBe(201);
     const issueId = created.json().id as string;
 
-    // Готовая исходная итерация: повтор разрешён (статус не active).
     const now = new Date().toISOString();
     const sourceId = randomUUID();
     db.insert(iterations)
@@ -186,9 +161,6 @@ describe('devops_thinking_level доезжает до DevOps-агента', () =
   it('POST /issues с run_immediately:true передаёт настройки из тела в первый же прогон', async () => {
     const { app, calls } = makeEnv();
 
-    // Самый пользовательский путь: задачу создают и сразу запускают. Типы тут
-    // молчат (объект-литерал теряет excess-property check) — ловится только
-    // фактическим вызовом DevOps-агента.
     const created = await app.inject({
       method: 'POST',
       url: ISSUES,

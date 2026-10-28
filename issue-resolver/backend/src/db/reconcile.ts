@@ -3,21 +3,12 @@ import { and, eq, inArray, or } from 'drizzle-orm';
 import type { Db } from './client';
 import { issues, iterations, stepRuns } from './schema';
 
-/** Шаги, которые после рестарта процесса превращаются в «призраков». */
 const INTERRUPTED_STEP_STATUSES: StepRunStatus[] = [
   'pending',
   'running',
   'needs_input',
 ];
 
-/**
- * Реестр живых pi-сессий (StepSessionRegistry) и сами pi-процессы живут в
- * памяти процесса backend и теряются при его рестарте. Шаг/итерация, оставшиеся
- * в нефинальном статусе в БД, после рестарта становятся «призраком»: БД говорит
- * `running`, а агентов комнаты уже нет (listAgents отдаёт `[]`). Здесь на старте
- * доводим их до терминального состояния, чтобы UI не показывал вечное `running`
- * и разрешал повторный запуск.
- */
 export function reconcileInterruptedRuns(db: Db): void {
   const now = new Date().toISOString();
 
@@ -38,10 +29,6 @@ export function reconcileInterruptedRuns(db: Db): void {
       .run();
   }
 
-  // Итерации, пережившие рестарт в нефинальном статусе: `running`/`preparing`
-  // (процесс мог умереть посреди конвейера) плюс `pending` у задачи в
-  // `preparing` — подготовка началась, но процесс умер до `runIssueIteration`.
-  // Без второго случая пара «задача preparing / итерация pending» висит вечно.
   const interruptedIterations = db
     .select({ id: iterations.id, issueId: iterations.issue_id })
     .from(iterations)
@@ -74,8 +61,6 @@ export function reconcileInterruptedRuns(db: Db): void {
         .where(
           and(
             inArray(issues.id, issueIds),
-            // Задача могла застрять и в `running`, и в `preparing`, и в
-            // `question` (агент ждал ответа): после рестарта все доводим до failed.
             inArray(issues.status, ['running', 'preparing', 'question']),
           ),
         )
@@ -89,9 +74,6 @@ export function reconcileInterruptedRuns(db: Db): void {
     );
   }
 
-  // Задача завершилась (completed/failed), но в очереди есть pending-итерация:
-  // итерации создавались, пока другая задача занимала бэкенд, статус задачи
-  // не учитывает очередь. Возвращаем задачу в pending.
   const stalePending = db
     .select({ issueId: iterations.issue_id })
     .from(iterations)

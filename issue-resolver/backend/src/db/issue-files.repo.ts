@@ -6,16 +6,13 @@ import { issueFiles } from './schema';
 
 export interface NewIssueFile {
   issueId: string;
-  /** null/undefined — общезадачный файл без привязки к итерации. */
   iterationId?: string | null;
   name: string;
-  /** Путь относительно корня рабочей папки задачи (= cwd агента). */
   relPath: string;
   size: number;
   mimeType?: string | null;
 }
 
-/** Вставка пачки файлов одной задачей; возвращает вставленные строки. */
 export async function insertMany(
   db: Db,
   files: NewIssueFile[],
@@ -39,7 +36,6 @@ export async function insertMany(
   return rows;
 }
 
-/** Все файлы задачи (в порядке загрузки; внутри одной секунды — по имени). */
 export async function listByIssue(
   db: Db,
   issueId: string,
@@ -52,7 +48,6 @@ export async function listByIssue(
     .all();
 }
 
-/** Файлы, привязанные к конкретной итерации. */
 export async function listByIteration(
   db: Db,
   iterationId: string,
@@ -65,11 +60,6 @@ export async function listByIteration(
     .all();
 }
 
-/**
- * rel_path файлов, доступных прогону итерации: привязанные к этой итерации
- * плюс общезадачные (`iteration_id IS NULL`). Порядок детерминирован (по
- * created_at/имени) — промпт строится побайтово одинаково.
- */
 export async function listAttachableRelPaths(
   db: Db,
   issueId: string,
@@ -92,7 +82,6 @@ export async function listAttachableRelPaths(
     .map((row) => row.rel_path);
 }
 
-/** Строка файла по id или undefined. */
 export async function getById(
   db: Db,
   fileId: string,
@@ -100,7 +89,6 @@ export async function getById(
   return db.select().from(issueFiles).where(eq(issueFiles.id, fileId)).get();
 }
 
-/** Удаляет строку и возвращает её (для удаления файла с диска); undefined — нет. */
 export async function deleteById(
   db: Db,
   fileId: string,

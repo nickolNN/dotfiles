@@ -8,11 +8,6 @@ import {
   workspaceProgress,
 } from '../helpers';
 
-/**
- * Живой вывод DevOps-агента: SSE `log` с синтетическим stepRunId
- * `{issueId}/devops` рендерится тем же `SessionView`, что и шаги, внутри
- * панели подготовки (`data-testid="devops-session"`).
- */
 test.describe('devops session', () => {
   test('вывод появляется и инкрементально накапливается', async ({ page }) => {
     const title = uniqueTitle('e2e-devops-session');
@@ -40,8 +35,6 @@ test.describe('devops session', () => {
     const session = page.getByTestId('devops-session');
     await expect(session).toBeVisible();
     await expect(session).toContainText('Analyzing repository layout...');
-    // Вторая порция приходит следующим переподключением EventSource (~3с);
-    // под нагрузкой комнаты даём запас.
     await expect(session).toContainText('No package manifests found', {
       timeout: 30_000,
     });

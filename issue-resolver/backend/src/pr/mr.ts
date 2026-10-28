@@ -1,21 +1,11 @@
-/**
- * PR/MR-сервис (Фаза 4): pr-шаг генерирует описание, бэкенд создаёт MR/PR.
- * Хост определяется из формата URL, реальный клиент ходит в REST API
- * GitLab/GitHub через global fetch — без новых зависимостей.
- */
 
 export interface MrCreateInput {
-  /** 'git@gitlab...:project.git' (ssh) или https-URL. */
   repositoryUrl: string;
-  /** Target branch. */
   baseBranch: string;
-  /** Ветка с изменениями. */
   headBranch: string;
   title: string;
   description: string;
-  /** MR-токен (в реальном коде — из secrets/конфига). */
   token: string;
-  /** Выводится из repositoryUrl через detectGitHost. */
   source: 'gitlab' | 'github' | 'bitbucket';
 }
 
@@ -24,17 +14,8 @@ export interface MrCreateResult {
   id: string;
 }
 
-/**
- * Обновление заголовка/описания уже открытого MR. Нужно потому, что ветка
- * публикации стабильна для задачи (`featureBranchName` несёт суффикс `issueId`),
- * а payload MR растёт с каждой итерацией: `commitAndPush` делает `reset --soft
- * origin/<base>`, то есть в MR лежит ВСЯ задача, а не последняя итерация.
- * Пуш обновляет дифф, но не текст — без этого MR второй итерации описывал бы
- * первую.
- */
 export interface MrUpdateInput {
   repositoryUrl: string;
-  /** id из `MrCreateResult`: gitlab `iid`, github `number`, bitbucket `id`. */
   mrId: string;
   title: string;
   description: string;
@@ -42,29 +23,17 @@ export interface MrUpdateInput {
   source: 'gitlab' | 'github' | 'bitbucket';
 }
 
-/** Комментарий ревью из PR/MR. */
 export interface MrComment {
-  /** Файл, к которому относится комментарий (или null для общих). */
   file: string | null;
-  /** Строка в файле (или null для общих комментариев). */
   line: number | null;
-  /** Текст комментария. */
   body: string;
-  /** Автор комментария. */
   author: string;
-  /** ISO-дата создания. */
   created_at: string;
 }
 
 export interface MrFetchCommentsInput {
-  /** Полный URL MR/PR (например https://github.com/owner/repo/pull/42). */
   mrUrl: string;
   token: string;
-  /**
-   * URL репозитория из того же артефакта. Позволяет долечить сохранённые
-   * ссылки без project-ключа (`/projects/repos/x/pull-requests/1`) — их писал
-   * старый safety-net в движке.
-   */
   repositoryUrl?: string;
 }
 
@@ -78,45 +47,26 @@ export interface MrFindInput {
 
 export interface MrClient {
   createMr(input: MrCreateInput): Promise<MrCreateResult>;
-  /** Получить комментарии ревью из MR/PR. */
   fetchComments(input: MrFetchCommentsInput): Promise<MrComment[]>;
-  /**
-   * Найти открытый MR/PR по source-ветке (head). Если MR существует —
-   * возвращает его URL; если нет — null. Используется, чтобы не создавать
-   * дубликат при повторном push в ту же ветку (следующая итерация задачи).
-   */
   findOpenMr(input: MrFindInput): Promise<MrCreateResult | null>;
-  /**
-   * Записать свежие title/description в уже открытый MR (см. `MrUpdateInput`).
-   * Вызывается после push того же head-branch, чтобы описание соответствовало
-   * накопленному payload, а не итерации, на которой MR создавался.
-   */
   updateMr(input: MrUpdateInput): Promise<void>;
 }
 
-/** Ошибка публикации результата pr-шага по конкретному репозиторию. */
 export interface PrPublishError {
   repositoryUrl: string;
-  /** Человекочитаемая причина: фаза (commit/push или MR) + текст ошибки. */
   message: string;
 }
 
-/** Человекочитаемая сводка ошибок публикации для отчёта/UI. */
 export function formatPrPublishErrors(errors: PrPublishError[]): string {
   return errors.map((error) => error.message).join('; ');
 }
 
-/**
- * Токены MR по хостам-источникам. Используются как fallback, когда
- * per-call `input.token` пуст: приоритет `input.token > tokens[source] > token`.
- */
 export interface MrTokens {
   gitlab?: string;
   github?: string;
   bitbucket?: string;
 }
 
-/** Хост из https-URL или ssh-стиля `git@host:path`. */
 export function hostOf(repositoryUrl: string): string {
   const trimmed = repositoryUrl.trim();
   if (!trimmed) throw new Error('unknown git host');
@@ -131,22 +81,6 @@ export function hostOf(repositoryUrl: string): string {
   }
 }
 
-/**
- * Определяет хост по URL/ssh-строке репозитория.
- * - host содержит 'github' → 'github'
- * - host содержит 'gitlab' → 'gitlab'
- * - host содержит 'bitbucket'/'stash', путь `/scm/` (Bitbucket Server) или
- *   web-форма PR `/projects/{P}/repos/{R}/pull-requests/` → 'bitbucket'
- * - иначе → throw Error('unknown git host')
- *
- * ssh-стиль `git@...` обрабатывается так же, как https (сравнение по хосту),
- * поэтому self-hosted `git@gitlab.example.com:files-web.git` → gitlab.
- *
- * Второй аргумент — web-URL MR/PR. Он нужен для self-hosted Bitbucket: хост
- * вроде `b.yadro.com` ни в имени не содержит 'bitbucket', ни пути `/scm/`
- * (клон — `/scm/kos/x.git`, а страница PR — `/projects/KOS/repos/x/pull-requests/1`),
- * поэтому по одному только URL репозитория такие инсталляции не опознать.
- */
 export function detectGitHost(
   repositoryUrl: string,
   mrUrl = '',
@@ -154,8 +88,6 @@ export function detectGitHost(
   const host = hostOf(repositoryUrl);
   if (host.includes('github')) return 'github';
   if (host.includes('gitlab')) return 'gitlab';
-  // Web-форма PR сама по себе опознаёт self-hosted Bitbucket: у хоста нет
-  // узнаваемого имени, а клон и страница PR выглядят по-разному.
   const isBitbucketPrPath = (url: string) =>
     /\/projects\/[^/]+\/repos\/[^/]+\/pull-requests\//.test(
       bitbucketPullPath(url),
@@ -172,18 +104,12 @@ export function detectGitHost(
   throw new Error('unknown git host');
 }
 
-/**
- * In-memory-клиент для тестов: запоминает вызовы, возвращает синтетический
- * MR-URL. `failNextWith` позволяет проверить путь ошибки.
- */
 export class FakeMrClient implements MrClient {
   readonly calls: MrCreateInput[] = [];
   private pendingError: Error | null = null;
 
-  /** Симулированные комментарии ревью; возвращаются вызовом fetchComments. */
   reviewComments: MrComment[] = [];
 
-  /** Следующий createMr отклонится этой ошибкой. */
   failNextWith(err: Error): void {
     this.pendingError = err;
   }
@@ -192,11 +118,6 @@ export class FakeMrClient implements MrClient {
     return [...this.reviewComments];
   }
 
-  /**
-   * Симулированные открытые MR; тесты заполняют этот массив до вызова
-   * `runIteration`. Каждая запись проверяется по `repositoryUrl` и
-   * `headBranch`; при совпадении возвращается её `mrUrl`.
-   */
   openMrs: Array<{
     repositoryUrl: string;
     headBranch: string;
@@ -214,18 +135,14 @@ export class FakeMrClient implements MrClient {
     return found ? { mrUrl: found.mrUrl, id: found.mrUrl } : null;
   }
 
-  /** Обновления открытого MR: тесты сверяют запись вызовов. */
   readonly updateCalls: MrUpdateInput[] = [];
   private pendingUpdateError: Error | null = null;
 
-  /** Следующий `updateMr` отклонится этой ошибкой (путь best-effort). */
   failNextUpdateWith(err: Error): void {
     this.pendingUpdateError = err;
   }
 
   async updateMr(input: MrUpdateInput): Promise<void> {
-    // Попытка записывается до броска: тесты должны видеть, что движок
-    // обращался к API, даже когда сам вызов отклонён.
     this.updateCalls.push(input);
     if (this.pendingUpdateError) {
       const err = this.pendingUpdateError;
@@ -242,7 +159,6 @@ export class FakeMrClient implements MrClient {
     }
     this.calls.push(input);
     const id = `mr-${this.calls.length}`;
-    // Формы web-URL как в реальном API (см. links.self в ответах Bitbucket/GitHub).
     if (input.source === 'bitbucket') {
       const { project, repo } = bitbucketProjectRepo(input.repositoryUrl);
       return {
@@ -280,13 +196,6 @@ interface BitbucketPrResponse {
   links?: { self?: Array<{ href?: string }> };
 }
 
-/**
- * Web-путь Pull Request в Bitbucket Server — `/browse/projects/...` или
- * `/dashboard/projects/...` зависят от того, как пользователь зашёл в PR
- * (ссылка из письма, из дашборда, из списка). Хост и REST-путь от этого не
- * меняются, поэтому для парсинга и конструирования URL нормализуем префикс:
- * ищем `/projects/{PROJECT}/repos/{REPO}/pull-requests/{ID}` в любом месте URL.
- */
 function bitbucketPullPath(mrUrl: string): string {
   try {
     return new URL(mrUrl.trim()).pathname;
@@ -295,11 +204,6 @@ function bitbucketPullPath(mrUrl: string): string {
   }
 }
 
-/**
- * `{project}/{repo}/{id}` из web-URL PR (см. `bitbucketPullPath`). Бросает
- * ошибку с списком подходящих форм — ссылка сохранена в `result.json`, и без
- * неё не понять, какая именно форма была на этот раз.
- */
 function bitbucketProjectRepoFromMrUrl(mrUrl: string): {
   project: string;
   repo: string;
@@ -318,41 +222,13 @@ function bitbucketProjectRepoFromMrUrl(mrUrl: string): {
   return { project: match[1], repo: match[2], id: match[3] };
 }
 
-/**
- * Реальная интеграция через global fetch. Юнит-тестами не покрывается —
- * это интеграционный путь.
- *
- * TODO(§10): токен в реальном коде приходит из secrets-конфига (не env).
- *
- * Парсинг адреса реализован: GitLab — encodeURIComponent полного project path
- * без хоста; GitHub — owner/repo из https- или ssh-URL.
- *
- * GitLab: POST {host}/api/v4/projects/{urlencoded_path}/merge_requests
- *   headers: PRIVATE-TOKEN: <token>
- *   body:    { source_branch, target_branch, title, description }
- * GitHub: POST {host}/api/v3/repos/{owner}/{repo}/pulls (Enterprise:
- *   /api/v3/repos/...; github.com: https://api.github.com/repos/...)
- *   headers: Authorization: Bearer <token>, Accept: application/vnd.github+json
- *   body:    { head, base, title, body }
- * Bitbucket Server: POST {host}/rest/api/1.0/projects/{project}/repos/{repo}/pull-requests
- *   headers: Authorization: Bearer <token>
- *   body:    { title, description, fromRef: { id }, toRef: { id } }
- */
 export class HttpMrClient implements MrClient {
-  /**
-   * `token` — общий дефолт из конфига/фабрики; `tokens` — per-host токены
-   * (`BITBUCKET_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN`). Приоритет:
-   * `input.token` > `tokens[source]` > `token`.
-   */
   constructor(
     private readonly token = '',
     private readonly tokens: MrTokens = {},
   ) {}
 
   async fetchComments(input: MrFetchCommentsInput): Promise<MrComment[]> {
-    // Источник истины — URL репозитория из того же артефакта: web-ссылка PR
-    // на self-hosted Bitbucket (`b.yadro.com/projects/...`) не содержит ни
-    // 'bitbucket' в хосте, ни `/scm/` в пути, и по ней одной хост не опознать.
     const source = detectGitHost(input.repositoryUrl || input.mrUrl, input.mrUrl);
     const token = input.token || this.tokens[source] || this.token;
 
@@ -362,7 +238,6 @@ export class HttpMrClient implements MrClient {
     if (source === 'gitlab') {
       return this.fetchGitLabComments(input.mrUrl, token, input.repositoryUrl);
     }
-    // Bitbucket: comments API
     return this.fetchBitbucketComments(input.mrUrl, token, input.repositoryUrl);
   }
 
@@ -375,8 +250,6 @@ export class HttpMrClient implements MrClient {
     if (input.source === 'github') {
       return this.findGitHubOpenMr(input, token);
     }
-    // Bitbucket: Cloud (`bitbucket.org`, API 2.0) и Server/DC (REST 1.0) —
-    // разные пути и разные фильтры «открытого PR по веткам».
     if (isBitbucketCloudHost(hostOf(input.repositoryUrl))) {
       return this.findBitbucketCloudOpenMr(input, token);
     }
@@ -390,8 +263,6 @@ export class HttpMrClient implements MrClient {
     const { project: workspace, repo } = bitbucketProjectRepo(
       input.repositoryUrl,
     );
-    // У Cloud нет фильтра по парам веток в query — листаем OPEN и сверяем
-    // `source.branch.name`/`destination.branch.name` на клиенте.
     const url = `${BITBUCKET_CLOUD_API}/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(repo)}/pullrequests?state=OPEN&pagelen=${MR_PAGE_SIZE}`;
     const values = await this.collectPagedValues<{
       id?: number;
@@ -437,7 +308,6 @@ export class HttpMrClient implements MrClient {
       host === 'github.com'
         ? 'https://api.github.com'
         : `https://${host}/api/v3`;
-    // GitHub требует head в формате owner:branch.
     const res = await fetch(
       `${apiBase}/repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${input.headBranch}`)}&base=${encodeURIComponent(input.baseBranch)}&state=open&per_page=1`,
       {
@@ -462,9 +332,6 @@ export class HttpMrClient implements MrClient {
   ): Promise<MrCreateResult | null> {
     const { project, repo } = bitbucketProjectRepo(input.repositoryUrl);
     const host = hostOf(input.repositoryUrl);
-    // `at` в Bitbucket Server фильтрует по TARGET-ветке, а не source.
-    // direction=OUTGOING + at=refs/heads/<base> возвращает PR из этого репо
-    // в base-ветку; фильтруем by fromRef.id на клиенте.
     const res = await fetch(
       `https://${host}/rest/api/1.0/projects/${project}/repos/${repo}/pull-requests?direction=OUTGOING&at=refs/heads/${encodeURIComponent(input.baseBranch)}&state=OPEN`,
       { headers: { Authorization: `Bearer ${token}` } },
@@ -482,8 +349,6 @@ export class HttpMrClient implements MrClient {
       (pr) => pr.fromRef?.id === `refs/heads/${input.headBranch}`,
     );
     if (!match) return null;
-    // REST-объект PR несёт `links.self` — canonical web-URL сервера (с
-    // contextPath и портом). Собираем URL сами только как fallback.
     return {
       mrUrl: bitbucketMrWebUrl(
         host,
@@ -507,18 +372,12 @@ export class HttpMrClient implements MrClient {
         ? 'https://api.github.com'
         : `https://${host}/api/v3`;
 
-    // Собираем review comments (на дифф) + issue comments (общие). Обе
-    // выборки — постранично: без `per_page` GitHub отдаёт 30 комментариев,
-    // и всё сверх первой страницы в ревью не попадало.
     const all: MrComment[] = [];
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
     };
 
-    // Review comments (привязаны к файлу/строке). Сбой — ошибка, а не пустой
-    // список: молчаливый `if (res.ok)` превращал 404/500 в «коментариев нет,
-    // код чист».
     const reviewData = await this.collectArrayPages<{
       path?: string;
       line?: number;
@@ -540,7 +399,6 @@ export class HttpMrClient implements MrClient {
       });
     }
 
-    // Issue comments (общие, без привязки к файлу)
     const issueData = await this.collectArrayPages<{
       body?: string;
       user?: { login?: string };
@@ -568,15 +426,11 @@ export class HttpMrClient implements MrClient {
     token: string,
     repositoryUrl?: string,
   ): Promise<MrComment[]> {
-    // mrUrl: https://gitlab.com/group/project/-/merge_requests/IID
-    // или https://gitlab.example.com/group/project/-/merge_requests/IID
     const host = hostOf(repositoryUrl || mrUrl);
     const path = pathOfMrUrl(mrUrl);
     const full = /\/([^/]+(?:\/[^/]+)*)\/-\/merge_requests\/(\d+)/.exec(path);
     let projectPath: string | null = full ? full[1] : null;
     let iid: string | undefined = full?.[2];
-    // Битая/усечённая ссылка без `/-/`: iid берём из пути, путь проекта — из
-    // URL репозитория задачи.
     if (!projectPath && repositoryUrl) {
       const bare = /\/merge_requests\/(\d+)/.exec(path)?.[1];
       if (bare) {
@@ -589,8 +443,6 @@ export class HttpMrClient implements MrClient {
         `cannot parse gitlab mr url: ${mrUrl} — ожидается https://{host}/{group}/{project}/-/merge_requests/{iid}`,
       );
     }
-    // Страницы по `per_page=100`: без параметра GitLab отдаёт 20 заметок, и
-    // длинное обсуждение обрезалось. `sort=asc` — хронологический порядок.
     const data = await this.collectArrayPages<{
       body?: string;
       author?: { name?: string };
@@ -604,7 +456,7 @@ export class HttpMrClient implements MrClient {
     );
 
     return data
-      .filter((c) => !c.system) // исключаем системные заметки (merge, assign, ...)
+      .filter((c) => !c.system)
       .map((c) => ({
         file: c.position?.new_path ?? null,
         line: c.position?.new_line ?? null,
@@ -614,14 +466,6 @@ export class HttpMrClient implements MrClient {
       }));
   }
 
-  /**
-   * Постраничный обход Bitbucket-ответов `{values, ...}`. Server листает
-   * `?start=` по `isLastPage`/`nextPageStart`, Cloud — по абсолютному `next` с
-   * курсором; обе формы обрабатываются здесь, чтобы ни одна страница не
-   * потерялась. Капп — `MR_MAX_PAGES`; если он исчерпан, а продолжение есть,
-   * это ошибка, а не молчаливый partial: «потерянная половина ревью» выглядит
-   * как «ревью чистое».
-   */
   private async collectPagedValues<T>(
     firstUrl: string,
     headers: Record<string, string>,
@@ -660,10 +504,6 @@ export class HttpMrClient implements MrClient {
     return out;
   }
 
-  /**
-   * То же для GitHub/GitLab: страница там — просто массив тел, поэтому
-   * признак «есть ещё» — заполненный `per_page`. Идём до неполной страницы.
-   */
   private async collectArrayPages<T>(
     firstUrl: string,
     headers: Record<string, string>,
@@ -694,11 +534,6 @@ export class HttpMrClient implements MrClient {
     return out;
   }
 
-  /**
-   * `{project, repo, id}` из web-URL PR. Ссылки старой версии safety-net'а
-   * потеряли project-ключ (`/projects/repos/x/pull-requests/1`) — если URL не
-   * разбирается, ключи берём из `repositoryUrl` задачи, PR-номер остаётся тот же.
-   */
   private bitbucketPartsOfMrUrl(
     mrUrl: string,
     repositoryUrl?: string,
@@ -720,38 +555,16 @@ export class HttpMrClient implements MrClient {
     token: string,
     repositoryUrl?: string,
   ): Promise<MrComment[]> {
-    // Any Bitbucket Server web URL: https://host/<prefix>/projects/PROJECT/
-    // repos/REPO/pull-requests/ID[/...]. The prefix (`browse`, `dashboard`, …)
-    // and everything after the ID (`/activity`, `/comments`) are irrelevant to
-    // the REST path, so parse them away instead of requiring one exact shape.
     const { project, repo, id } = this.bitbucketPartsOfMrUrl(
       mrUrl,
       repositoryUrl,
     );
     const host = hostOf(repositoryUrl || mrUrl);
-    // `bitbucket.org` — Cloud с API 2.0 (другие пути, другая пагинация, другой
-    // формат комментария). `repo-resolver` Cloud/Server различает, клиент обязан.
     if (isBitbucketCloudHost(host)) {
       return this.fetchBitbucketCloudComments(mrUrl, token, repositoryUrl);
     }
-    // Project/repo keys come from the URL path and may be percent-encoded
-    // (`~` in personal project keys is legal as-is, spaces are not).
-    //
-    // Эндпоинт — `/activities`, НЕ `/comments`: Bitbucket Server 8.9 отдаёт на
-    // `GET .../pull-requests/{id}/comments` 400 «The path query parameter is
-    // required when retrieving comments» — там комментарии читаются только по
-    // конкретному файлу. Через activity проходят все комментарии PR: и общие,
-    // и привязанные к строке (проверено на b.yadro.com, PR 218).
     const apiPath = `/rest/api/1.0/projects/${encodeURIComponent(project)}/repos/${encodeURIComponent(repo)}/pull-requests/${id}/activities`;
 
-    // Server отдаёт страницы по 25 (потолок `limit` — 500). Без обхода
-    // `nextPageStart` в длинном обсуждении терялись бы все комментарии после
-    // первой страницы.
-    //
-    // Формы привязки к диффу в REST Bitbucket различаются: в `/activities`
-    // строка лежит в `anchors.line`, в `/comments?path=` — плоским `anchor`.
-    // Живого COMMENT-события в этом Bitbucket найти не удалось (40 PR × 4
-    // репо — ни одного), поэтому читаем обе формы вместо ставки на одну.
     type Anchor = {
       path?: string;
       line?: number;
@@ -779,13 +592,9 @@ export class HttpMrClient implements MrClient {
 
     const comments: MrComment[] = [];
     for (const a of activities) {
-      // Только комментарии: удалённые и ещё не опубликованные черновики в
-      // ревью не нужны.
       if (a.action !== 'COMMENT' || a.commentAction === 'DELETED') {
         continue;
       }
-      // Комментарий вложен в `comment`, но отдельные версии кладут поля прямо
-      // в событие.
       const c: RawComment = a.comment ?? a;
       if (c.pending === true) continue;
       const anchor = c.anchors?.line ?? c.anchor;
@@ -800,12 +609,6 @@ export class HttpMrClient implements MrClient {
     return comments;
   }
 
-  /**
-   * Bitbucket Cloud (`bitbucket.org`), API 2.0. комментарий там лежит в
-   * `content.raw`, привязка к диффу — в `inline:{path,from,to}`, пагинация —
-   * курсор в `next`. `deleted`/`pending` — непустые объекты, когда комментарий
-   * удалён или ещё не опубликован: в ревью их нет.
-   */
   private async fetchBitbucketCloudComments(
     mrUrl: string,
     token: string,
@@ -840,12 +643,6 @@ export class HttpMrClient implements MrClient {
     return comments;
   }
 
-  /**
-   * Обновить title/description открытого MR. Bitbucket Server требует
-   * оптимистичную блокировку (`version`), поэтому для него сначала читается
-   * текущая версия PR, затем PUT. Ошибка — reject: вызывающий слой решает,
-   * насколько она критична (для движка это best-effort).
-   */
   async updateMr(input: MrUpdateInput): Promise<void> {
     const token = input.token || this.tokens[input.source] || this.token;
 
@@ -900,12 +697,10 @@ export class HttpMrClient implements MrClient {
       return;
     }
 
-    // Bitbucket Cloud и Server/DC живут на разных API; ниже — Server/DC.
     if (isBitbucketCloudHost(hostOf(input.repositoryUrl))) {
       return this.updateBitbucketCloudMr(input, token);
     }
 
-    // Bitbucket Server: PUT без `version` отвечает 409 VERSION_CONFLICT.
     const { project, repo } = bitbucketProjectRepo(input.repositoryUrl);
     const host = hostOf(input.repositoryUrl);
     const apiBase = `https://${host}/rest/api/1.0/projects/${project}/repos/${repo}/pull-requests/${encodeURIComponent(input.mrId)}`;
@@ -936,10 +731,6 @@ export class HttpMrClient implements MrClient {
     }
   }
 
-  /**
-   * Cloud: `PUT /2.0/repositories/{ws}/{repo}/pullrequests/{id}` с `{title,
-   * summary}` — оптимистичная блокировка `version` как у Server не нужна.
-   */
   private async updateBitbucketCloudMr(
     input: MrUpdateInput,
     token: string,
@@ -965,11 +756,6 @@ export class HttpMrClient implements MrClient {
     }
   }
 
-  /**
-   * Cloud: `POST /2.0/repositories/{ws}/{repo}/pullrequests`. В отличие от
-   * Server, дубликат здесь — не 409, а 400 с текстом «A pull request already
-   * exists», поэтому его разрешаем так же: ищем открытый PR по паре веток.
-   */
   private async createBitbucketCloudMr(
     input: MrCreateInput,
     token: string,
@@ -995,8 +781,6 @@ export class HttpMrClient implements MrClient {
         destination: { branch: { name: input.baseBranch } },
       }),
     });
-    // Тело ответа читается ровно один раз: `text()` до `json()` на успехе
-    // дало бы «body already consumed».
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       if (response.status === 409 || /already exists/i.test(body)) {
@@ -1053,8 +837,6 @@ export class HttpMrClient implements MrClient {
     if (input.source === 'github') {
       const { owner, repo } = githubOwnerRepo(input.repositoryUrl);
       const host = hostOf(input.repositoryUrl);
-      // github.com живёт на api.github.com, GitHub Enterprise Server —
-      // на собственном хосте под /api/v3.
       const apiBase =
         host === 'github.com'
           ? 'https://api.github.com'
@@ -1074,8 +856,6 @@ export class HttpMrClient implements MrClient {
         }),
       });
       if (!response.ok) {
-        // The body carries GitHub's reason ("No commits between …", "Bad
-        // credentials") — without it a 422 is a number nobody can act on.
         const body = await response.text().catch(() => '(body unavailable)');
         throw new Error(
           `github pr failed: ${response.status} — POST /repos/${owner}/${repo}/pulls — ${body.slice(0, 500)}`,
@@ -1085,12 +865,10 @@ export class HttpMrClient implements MrClient {
       return { mrUrl: data.html_url, id: String(data.number) };
     }
 
-    // Bitbucket: Cloud (`bitbucket.org`, API 2.0) или Server/Stash (REST 1.0).
     if (isBitbucketCloudHost(hostOf(input.repositoryUrl))) {
       return this.createBitbucketCloudMr(input, token);
     }
 
-    // Bitbucket Server/Stash: project/repo — из пути `/scm/{project}/{repo}`.
     const { project, repo } = bitbucketProjectRepo(input.repositoryUrl);
     const host = hostOf(input.repositoryUrl);
     const createPath = `/rest/api/1.0/projects/${project}/repos/${repo}/pull-requests`;
@@ -1108,11 +886,6 @@ export class HttpMrClient implements MrClient {
       }),
     });
     if (response.status === 409) {
-      // DuplicatePullRequestException: PR из этих refs уже открыт (findOpenMr
-      // его не нашёл — гонка или фильтр). Это не ошибка публикации: разрешаем
-      // существующий PR здесь, а не в вызывающем коде. Форма web-URL —
-      // ответственность клиента; ручная склейка её в движке как раз и съела
-      // однажды project-ключ.
       const existing = await this.resolveBitbucketDuplicate(
         input,
         token,
@@ -1139,12 +912,6 @@ export class HttpMrClient implements MrClient {
     };
   }
 
-  /**
-   * Найти PR, о котором сообщает 409: сначала по пару refs (тот же запрос, что
-   * и `findOpenMr`), затем по id из тела ошибки (`existingPullRequest.id`).
-   * Возвращает null, если ничего не нашли — вызывающий путь бросит исходную
-   * ошибку с полным телом.
-   */
   private async resolveBitbucketDuplicate(
     input: MrCreateInput,
     token: string,
@@ -1163,8 +930,6 @@ export class HttpMrClient implements MrClient {
       /"pullRequestId"\s*:\s*(\d+)/i.exec(body)?.[1];
     if (!idFromError) return null;
 
-    // Читаем PR через REST ради canonical links.self — его id из текста ошибки
-    // может и не совпадать с id в пути.
     const pr = await fetch(`${base}/${idFromError}`, {
       headers: { Authorization: `Bearer ${token}` },
     }).catch(() => null);
@@ -1183,7 +948,6 @@ export class HttpMrClient implements MrClient {
   }
 }
 
-/** 'group/sub/project' из https- или ssh-URL GitLab. */
 function gitlabProjectPath(repositoryUrl: string): string {
   const trimmed = repositoryUrl.trim().replace(/\.git$/, '');
   const sshMatch = /^[^@/]+@[^:/]+[:/](.+)$/.exec(trimmed);
@@ -1196,7 +960,6 @@ function gitlabProjectPath(repositoryUrl: string): string {
   }
 }
 
-/** owner/repo из https- или ssh-URL GitHub. */
 function githubOwnerRepo(repositoryUrl: string): {
   owner: string;
   repo: string;
@@ -1212,17 +975,13 @@ function githubOwnerRepo(repositoryUrl: string): {
   };
 }
 
-/**
- * epoch-миллисекунды Bitbucket → ISO-строка. Число приходит и в `createdDate`,
- * и в `lastModified`; строку оставляем как есть, пустое — пустая строка.
- */function isoDateOf(value: number | string | undefined): string {
+function isoDateOf(value: number | string | undefined): string {
   if (value === undefined || value === '') return '';
   if (typeof value === 'string' && !/^\d+$/.test(value)) return value;
   const ms = Number(value);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : String(value);
 }
 
-/** pathname web-ссылки без origin/хвостов — по нему разбирают PR все клиенты. */
 function pathOfMrUrl(mrUrl: string): string {
   try {
     return new URL(mrUrl).pathname;
@@ -1231,12 +990,6 @@ function pathOfMrUrl(mrUrl: string): string {
   }
 }
 
-/**
- * `{owner}/{repo}` и номер PR из web-ссылки. Разбор был привязан к
- * `github.com`, поэтому GitHub Enterprise (`github.example.com/o/r/pull/1`)
- * не разбирался вовсе — форма пути у обоих одна и та же. Если ссылка битая,
- * owner/repo берём из `repositoryUrl` задачи.
- */
 function githubPullParts(
   mrUrl: string,
   repositoryUrl?: string,
@@ -1262,12 +1015,6 @@ function githubPullParts(
   );
 }
 
-/**
- * Web-URL PR: серверный `links.self` предпочтителен (он содержит contextPath
- * и порт, которые невозможно вывести из репозитория), наша сборка — fallback.
- * Форма — `/projects/{PROJECT}/repos/{REPO}/pull-requests/{id}`: ровно её
- * отдаёт сам Bitbucket в `links.self` (проверено на b.yadro.com, PR 218).
- */
 function bitbucketMrWebUrl(
   host: string,
   project: string,
@@ -1280,14 +1027,12 @@ function bitbucketMrWebUrl(
   return `https://${host}/projects/${project}/repos/${repo}/pull-requests/${id}`;
 }
 
-/** `{project}/{repo}` из URL Bitbucket Server — `/scm/{project}/{repo}`. */
 function bitbucketProjectRepo(repositoryUrl: string): {
   project: string;
   repo: string;
 } {
   const path = gitlabProjectPath(repositoryUrl);
   const segments = path.split('/').filter((segment) => segment.length > 0);
-  // Клон Bitbucket Server лежит под `/scm/{project}/{repo}` — префикс отбрасываем.
   const cleaned =
     segments[0]?.toLowerCase() === 'scm' ? segments.slice(1) : segments;
   if (cleaned.length < 2) {
@@ -1299,30 +1044,16 @@ function bitbucketProjectRepo(repositoryUrl: string): {
   };
 }
 
-/**
- * Размер страницы для API, где страница — массив тел (GitHub/GitLab `per_page`,
- * Cloud `pagelen`). 100 — потолок и там, и там; раньше запрос шел без
- * параметра, то есть по 20 (GitLab) / 30 (GitHub) заметок, и всё сверх первой
- * страницы в ревью не попадало.
- */
 const MR_PAGE_SIZE = 100;
 
-/** Капп страниц: защита от сервера, зацикливающегося на одной и той же странице. */
 const MR_MAX_PAGES = 50;
 
-/** Bitbucket Cloud (`bitbucket.org`) — API 2.0, не Server/DC REST 1.0. */
 const BITBUCKET_CLOUD_API = 'https://api.bitbucket.org/2.0';
 
-/**
- * Публичное облако Bitbucket отличается от Server/Data Center путями REST и
- * формой ответов, поэтому различать их обязан и MR-клиент (в `repo-resolver`
- * есть те же `isBitbucketCloudHost`/`BitbucketCloudResolver`).
- */
 function isBitbucketCloudHost(host: string): boolean {
   return host === 'bitbucket.org';
 }
 
-/** pathname+search без origin — чтобы в тексте ошибки был видно, куда ходили. */
 function apiPathOf(url: string): string {
   try {
     const u = new URL(url);
@@ -1332,11 +1063,6 @@ function apiPathOf(url: string): string {
   }
 }
 
-/**
- * Следующая страница Server-пагинации (`?start=`) и page-based API
- * (`?page=N+1`). Не разобран URL — явная ошибка с меткой, а не молчаливый
- * повтор первой страницы.
- */
 function setStartParam(url: string, label: string, start: number): string {
   const u = parsePageUrl(url, label);
   u.searchParams.set('start', String(start));
@@ -1358,11 +1084,6 @@ function parsePageUrl(url: string, label: string): URL {
   }
 }
 
-/**
- * `{workspace}/{repo}` и номер PR из Cloud-ссылки
- * `https://bitbucket.org/{workspace}/{repo}/pull-requests/{id}`. Если ссылка
- * битая — ключи берём из `repositoryUrl` (тот же приём, что для Server).
- */
 function bitbucketCloudParts(
   mrUrl: string,
   repositoryUrl?: string,
@@ -1385,7 +1106,6 @@ function bitbucketCloudParts(
   );
 }
 
-/** Web-URL Cloud PR: серверный `html_url` надёжнее нашей сборки. */
 function bitbucketCloudMrWebUrl(
   htmlUrl: string | undefined,
   workspace: string,

@@ -1,9 +1,5 @@
 import type { MockPiScenario } from './types';
 
-/**
- * Первый шаг проходит, второй падает (`resolve` — терминальный: итерация и
- * задача переходят в `failed`, без retry).
- */
 export const stepFailureScenario: MockPiScenario = {
   name: 'step-failure',
   bootstrap: 'success',

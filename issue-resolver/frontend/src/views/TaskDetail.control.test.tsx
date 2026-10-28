@@ -119,7 +119,6 @@ function jsonResponse(
 interface StubOptions {
   snapshot?: SessionControlSnapshot | null;
   stepRun?: Partial<StepRunWithLog>;
-  /** Кастомный ответ POST /prompt (по тексту сообщения). */
   promptResponder?: (message: string) => unknown;
 }
 
@@ -236,11 +235,9 @@ describe('TaskDetail — панель управления живой сесси
     expect(screen.getByTestId('command-palette')).toBeInTheDocument();
     expect(screen.getByTestId('command-option-compact')).toBeInTheDocument();
     expect(screen.getByTestId('command-option-help')).toBeInTheDocument();
-    // источник команды виден в палитре (builtin/extension/prompt/skill)
     expect(screen.getByTestId('command-option-new')).toHaveTextContent(
       'builtin',
     );
-    // подсказка аргументов видна рядом с опцией
     expect(screen.getByTestId('command-option-compact')).toHaveTextContent(
       '[инструкции]',
     );
@@ -497,7 +494,6 @@ describe('TaskDetail — панель управления живой сесси
 
     fireEvent.click(option);
     expect(input).toHaveValue('/new ');
-    // подсказка аргументов показана под полем после заполнения
     expect(screen.getByTestId('command-hint')).toHaveTextContent('/new [текст]');
   });
 
@@ -518,7 +514,6 @@ describe('TaskDetail — панель управления живой сесси
     expect(await screen.findByTestId('message-error')).toHaveTextContent(
       'Неизвестный уровень размышления',
     );
-    // черновик НЕ очищен
     expect(input).toHaveValue('/thinking bogus');
   });
 

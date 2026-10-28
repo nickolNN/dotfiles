@@ -19,12 +19,6 @@ import { DEFAULT_WORKSPACE_ROOT } from './workspace/paths';
 
 const DEFAULT_DOCKER_SOCKET = '/var/run/docker.sock';
 
-/**
- * Продуктовая фабрика агента-анализатора: переиспользует тот же экземпляр
- * `PiRunner`, что и шаги конвейера, и пишет `run_instructions` через порт БД
- * (создаётся в `runIssueIteration`). Без неё анализ не запускается (фейковый
- * дефолт/тесты).
- */
 export function devOpsFactoryFor(
   pi: RpcPiRunner,
   defaultTimeoutMs: number,
@@ -66,32 +60,10 @@ export function devOpsFactoryFor(
     });
 }
 
-/**
- * Дефолтный корень workspace-папок в локальном режиме (без Docker).
- *
- * Лежит на host-bind-mount `/home/agent/workspace` (virtiofs), поэтому
- * артефакты задач (`report.html`/`index.html` и т.п.) переживают
- * пересоздание контейнера/комнаты, и download-эндпоинты не отдают 404.
- *
- * Почему не `/home/agent/.issue-resolver`: этот каталог живёт на
- * эфемерном overlay-слое контейнера и исчезает при рестарте комнаты
- * (durable volume'ами в `.pi` покрыты только memory/rooms/sessions).
- *
- * Переопределяется env `ISSUE_RESOLVER_WORKSPACE_ROOT` (см. buildDepsFromEnv).
- */
 const DEFAULT_LOCAL_WORKSPACE_ROOT =
   '/home/agent/workspace/.issue-resolver/workspaces';
 
-/**
- * Продуктовая фабрика deps. Без `ISSUE_RESOLVER_USE_REAL=1` возвращает пустой
- * объект — buildApp подставит безопасные Fake*-адаптеры (дефолт/тесты). Реальные
- * секреты читаются только из env и пробрасываются в конструкторы клиентов.
- *
- * `ISSUE_RESOLVER_LOCAL=1` включает локальный режим (без Docker): контейнер —
- * просто host-папка задачи, pi запускается локально (`pi --mode rpc`).
- */
 export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
-  // Docker-режим: явный флаг ISSUE_RESOLVER_USE_REAL=1.
   if (env.ISSUE_RESOLVER_USE_REAL === '1') {
     const docker = new Dockerode({
       socketPath: env.DOCKER_SOCKET || DEFAULT_DOCKER_SOCKET,
@@ -123,7 +95,6 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
     };
   }
 
-  // По умолчанию — локальный режим (без Docker).
   const pi = new RpcPiRunner('resolve', 'local');
   const devopsTimeoutMs = resolveDevOpsTimeoutMs(
     env[DEVOPS_TIMEOUT_ENV] ?? env[LEGACY_DEVOPS_TIMEOUT_ENV],

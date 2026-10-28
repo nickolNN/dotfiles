@@ -50,11 +50,9 @@ describe('thinking_level — персистентность', () => {
     });
     expect(created.statusCode).toBe(201);
     const issueId = created.json().id as string;
-    // Ответ создания отдаёт оба поля.
     expect(created.json().thinking_level).toBe('high');
     expect(created.json().step_thinking_levels).toEqual(stepLevels);
 
-    // GET /:id — issue-level поля.
     const detail = await app.inject({
       method: 'GET',
       url: `${ENDPOINT}/${issueId}`,
@@ -62,7 +60,6 @@ describe('thinking_level — персистентность', () => {
     expect(detail.json().thinking_level).toBe('high');
     expect(detail.json().step_thinking_levels).toEqual(stepLevels);
 
-    // GET /:id/iterations — iteration#1 (та же итерация создаётся сразу).
     const list = await app.inject({
       method: 'GET',
       url: `${ENDPOINT}/${issueId}/iterations`,
@@ -256,7 +253,6 @@ describe('thinking_level — runIssueIteration → pi.run', () => {
     );
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // Report-агент добавляет свой pi.run после итерации — считаем шаги пайплайна.
     expect(
       pi.calls
         .filter((call) => call.options?.iterationId !== undefined)

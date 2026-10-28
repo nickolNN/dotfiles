@@ -7,7 +7,6 @@ import {
 import type { CleanupResult } from '../api/client';
 import QueryBoundary from '../components/QueryBoundary';
 
-/** Поле ввода в теме — тот же стиль, что и в форме создания задачи (NewIssue). */
 const FIELD_CLASS =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
 
@@ -63,17 +62,10 @@ function CleanupButton() {
 }
 
 interface SettingsProps {
-  /** Текущий hostname инстанса; App грузит его при старте и держит в состоянии. */
   hostname: string;
-  /** Сообщает App новый hostname — он же обновляет заголовок вкладки. */
   onHostnameChange: (value: string) => void;
 }
 
-/**
- * Страница настроек: единственное поле — hostname инстанса. Значение приходит
- * из App (оно же задаёт заголовок вкладки); сохраняем по кнопке и на 2 секунды
- * показываем «Сохранено».
- */
 export default function Settings(props: SettingsProps) {
   return (
     <QueryBoundary>
@@ -94,14 +86,10 @@ function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
 
   const saving = saveMutation.isPending;
 
-  // App подтягивает hostname асинхронно: если значение пришло уже после
-  // монтирования страницы (в т.ч. при перезагрузке сразу на /settings) —
-  // отражаем его в поле.
   useEffect(() => {
     setDraft(currentHostname);
   }, [currentHostname]);
 
-  // Чистим таймер «Сохранено» при размонтировании.
   useEffect(
     () => () => {
       if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
