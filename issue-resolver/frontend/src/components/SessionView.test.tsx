@@ -35,12 +35,10 @@ function usageEvent(total: number, costTotal: number | null): SessionEvent {
   };
 }
 
-/** Обёртка input-токенов со стрелкой ↑ внутри `session-stats`. */
 function tokenIn(bar: HTMLElement): HTMLElement {
   return within(bar).getByTestId('session-token-in');
 }
 
-/** Обёртка output-токенов со стрелкой ↓ внутри `session-stats`. */
 function tokenOut(bar: HTMLElement): HTMLElement {
   return within(bar).getByTestId('session-token-out');
 }
@@ -149,7 +147,6 @@ describe('SessionView — чат структурированных событи
 
     const block = screen.getByTestId('session-thinking');
     expect(within(block).getByText('thinking')).toBeInTheDocument();
-    // Свёрнутая шапка: «thinking» + превью, без дублирующего «reasoning».
     expect(block).toHaveTextContent('надо проверить кэш');
     expect(block).not.toHaveTextContent('reasoning');
     expect(screen.queryByTestId('session-thinking-text')).toBeNull();
@@ -176,7 +173,6 @@ describe('SessionView — чат структурированных событи
     ];
     render(<SessionView events={events} />);
 
-    // Обычное text-событие рядом продолжает рендериться.
     expect(screen.getByTestId('session-text')).toHaveTextContent(
       'перед вопросом',
     );
@@ -190,7 +186,6 @@ describe('SessionView — чат структурированных событи
     expect(
       within(block).getByTestId('session-question-options'),
     ).toHaveTextContent('вариант-a / вариант-b');
-    // Без ответа строка «Ответ:» не показывается, обе опции нейтральны.
     expect(within(block).queryByTestId('session-question-answer')).toBeNull();
     const optionSpans = within(block).getAllByTestId('session-question-option');
     expect(optionSpans).toHaveLength(2);
@@ -211,7 +206,6 @@ describe('SessionView — чат структурированных событи
     render(<SessionView events={events} />);
 
     const block = screen.getByTestId('session-question');
-    // Событие ответа не создаёт отдельную карточку вопроса.
     expect(screen.getAllByTestId('session-question')).toHaveLength(1);
     expect(
       within(block).getByTestId('session-question-answer'),
@@ -424,7 +418,6 @@ describe('SessionView — чат структурированных событи
     expect(tokenIn(footer)).toHaveTextContent('30k');
     expect(tokenOut(footer)).toHaveTextContent('1k');
     expect(footer).toHaveTextContent('кеш 0');
-    // stats-событие идёт только в футер — плашкой в списке не рисуется.
     expect(screen.getAllByTestId('session-text')).toHaveLength(1);
   });
 

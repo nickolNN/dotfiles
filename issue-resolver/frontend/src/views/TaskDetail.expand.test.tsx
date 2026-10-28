@@ -177,7 +177,6 @@ describe('TaskDetail — полноэкранный вид шага', () => {
     const pinned = scroll.parentElement?.querySelector(
       '[data-testid="session-stats"]',
     );
-    // SessionView внутри скролл-области отдаёт футер наружу (showFooter=false).
     expect(within(scroll).queryByTestId('session-stats')).toBeNull();
     expect(pinned).not.toBeNull();
     expect(within(pinned as HTMLElement).getByTestId('session-token-in')).toHaveTextContent(

@@ -61,7 +61,6 @@ function insertStepRun(
   attempt: number,
 ): string {
   const id = newId();
-  // issue_id обязателен и для прогонов в итерации: FK на issues.
   const issueId =
     db
       .select({ issue_id: iterations.issue_id })
@@ -109,8 +108,6 @@ describe('reconcileInterruptedRuns', () => {
     expect(interrupted).toHaveLength(3);
     expect(interrupted.every((row) => row.status === 'failed')).toBe(true);
 
-    // Завершённые шаги не трогаются: 'success' остаётся, пре-существующий
-    // 'failed' не получает feedback о рестарте.
     const success = runStatuses.find((row) => row.status === 'success');
     expect(success?.feedback).toBeNull();
     const preexistingFailed = runStatuses.filter(
@@ -252,7 +249,6 @@ describe('reconcileInterruptedRuns', () => {
     expect(
       db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
     ).toBe('pending');
-    // Итерация остаётся pending.
     const iteration = db
       .select()
       .from(iterations)

@@ -18,7 +18,6 @@ const btnPrimary =
 const btnSecondary =
   'min-h-12 rounded-none border border-[#008F11] px-4 py-2 text-sm font-medium text-[#00FF41]/80 hover:bg-[#008F11]/20 hover:text-[#00FF41] disabled:opacity-50';
 
-/** Карандаш для действия «редактировать» (как в Repositories.tsx). */
 function PencilIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -37,7 +36,6 @@ function PencilIcon({ className }: { className?: string }) {
   );
 }
 
-/** Корзина для действия «удалить» (как в Repositories.tsx). */
 function TrashIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -58,13 +56,11 @@ function TrashIcon({ className }: { className?: string }) {
   );
 }
 
-/** Один выбранный репозиторий внутри черновика тега. */
 interface TagRepoDraft {
   repository_id: string;
   bootstrap_enabled: boolean;
 }
 
-/** Черновик формы тега (общий для создания и редактирования). */
 interface TagDraft {
   name: string;
   description: string;
@@ -78,14 +74,9 @@ type FormState =
   | null;
 
 interface TagsProps {
-  /**
-   * Внешний триггер открытия формы создания (значение растёт при клике «+»
-   * в хедере, когда активен таб «Теги»).
-   */
   createSignal?: number;
 }
 
-/** Переключатель в неоновом стиле (как в форме задачи). */
 function Toggle({
   checked,
   label,
@@ -143,10 +134,6 @@ interface TagFormProps {
   onSubmit: (draft: TagDraft) => void;
 }
 
-/**
- * Форма тега: имя, описание и выбор репозиториев (чекбоксы + per-repo
- * переключатель bootstrap_enabled).
- */
 function TagForm({
   initial,
   savedRepos,
@@ -309,7 +296,6 @@ function TagForm({
   );
 }
 
-/** Страница управления тегами (CRUD + список репозиториев тега). */
 export default function Tags(props: TagsProps) {
   return (
     <QueryBoundary>

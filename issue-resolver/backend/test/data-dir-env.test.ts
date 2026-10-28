@@ -64,7 +64,6 @@ describe('buildDepsFromEnv — ISSUE_RESOLVER_DATA_DIR', () => {
     });
 
     expect(deps.workspaceRoot).toBe('/tmp/ws');
-    // originals по-прежнему выводится из DATA_DIR
     expect(originalsRootOf(deps.git)).toBe(join('/data/ir', 'originals'));
   });
 

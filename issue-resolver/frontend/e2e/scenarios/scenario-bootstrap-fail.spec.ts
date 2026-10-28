@@ -8,11 +8,6 @@ import {
   waitForStatus,
 } from '../helpers';
 
-/**
- * Сценарный прогон «подготовка рабочей папки падает»: анализатор не выдаёт
- * инструкции, install зависимостей бросает ошибку — задача уходит из
- * `preparing` в терминальный `failed`, конвейер не стартует.
- */
 test.describe('scenario: bootstrap failure', () => {
   test.afterEach(async ({ request }) => {
     await resetScenario(request);

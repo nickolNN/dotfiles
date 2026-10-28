@@ -79,10 +79,6 @@ function textResponse(
   } as Response;
 }
 
-/** fetch-мок: /result отдаёт resultResponse, остальное — issue/iterations/
- * step-runs. Готовность отчёта определяется статусом итерации (снапшот
- * создаётся на completed), поэтому тесты неготового отчёта передают
- * свой список итераций; по умолчанию одна completed-итерация. */
 function stubFetch(
   issue: Issue,
   resultResponse: () => Promise<Response> | Response,
@@ -106,7 +102,6 @@ function stubFetch(
   return fetchMock;
 }
 
-/** Ждёт, пока step-runs загрузятся и гейт включит кнопку, затем кликает. */
 async function clickOpenResult(): Promise<void> {
   const button = screen.getByTestId('open-result');
   await waitFor(() => expect(button).toBeEnabled());
@@ -131,7 +126,6 @@ describe('TaskDetail — просмотр отчёта', () => {
     expect(screen.getByTestId('open-result')).toHaveTextContent(
       'Показать отчёт',
     );
-    // Кнопка «Скачать» теперь в модалке — открываем её.
     fireEvent.click(screen.getByTestId('open-result'));
     const modal = await screen.findByTestId('result-modal');
     const download = within(modal).getByTestId('result-modal-download');

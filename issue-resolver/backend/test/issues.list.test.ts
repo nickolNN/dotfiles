@@ -116,7 +116,6 @@ describe('GET /issues — список', () => {
     expect(issue.id).toBe(createdBody.id);
     expect(issue.title).toBe('Полная задача');
     expect(issue.jira_issue_url).toBeNull();
-    // Фоновый прогон стартует сразу после создания → running/completed.
     expect(['running', 'completed']).toContain(issue.status);
     expect(issue.pipeline_steps).toEqual(['refine', 'resolve']);
     expect(issue.repositories).toHaveLength(1);

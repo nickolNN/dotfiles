@@ -1,9 +1,7 @@
 import type { ExecutionPlan, ExecutionStage } from './types';
 
-/** Дефолтный потолок числа исполнителей комнаты (защита от «20 агентов»). */
 export const DEFAULT_MAX_ROOM_EXECUTORS = 4;
 
-/** Валидный ли этап staged-плана: объект с целым `index` и `executors` (>=1). */
 function isExecutionStage(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false;
@@ -24,7 +22,6 @@ function isExecutionStage(value: unknown): value is Record<string, unknown> {
   return true;
 }
 
-/** Разбор `stages` из ненадёжного JSON: валидные объекты, поля — по типу. */
 function parseStages(value: unknown): ExecutionStage[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const stages: ExecutionStage[] = [];
@@ -59,10 +56,6 @@ function parseStages(value: unknown): ExecutionStage[] | undefined {
   return stages;
 }
 
-/**
- * Разбор/нормализация `execution` из ненадёжного JSON поля отчёта refine.
- * Любая невалидность → null (движок деградирует в `single`).
- */
 export function parseExecutionPlan(value: unknown): ExecutionPlan | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
@@ -97,7 +90,6 @@ export function parseExecutionPlan(value: unknown): ExecutionPlan | null {
   };
 }
 
-/** Целое число исполнителей, если оно валидно (>= 2); иначе 0. */
 function executorCount(executors: number | undefined): number {
   return typeof executors === 'number' &&
     Number.isInteger(executors) &&
@@ -106,16 +98,6 @@ function executorCount(executors: number | undefined): number {
     : 0;
 }
 
-/**
- * Потолок параллельности из `worker_count` задачи/итерации.
- *
- * `worker_count` — единственная ручка пользователя на параллельность, поэтому
- * она обязана доходить до движка, а не только до текста промпта refine:
- * 0/undefined/отрицательное/невалидное («без ограничений») → системный потолок
- * `DEFAULT_MAX_ROOM_EXECUTORS`, иначе — значение, зажатое сверху тем же
- * потолком. Минимум 1: room-топология дополнительно требует >= 2 (иначе
- * `planExecutionMode` деградирует в `single`).
- */
 export function maxExecutorsFor(
   workerCount: number | null | undefined,
 ): number {
@@ -129,18 +111,6 @@ export function maxExecutorsFor(
   return Math.min(workerCount, DEFAULT_MAX_ROOM_EXECUTORS);
 }
 
-/**
- * Детерминированное решение о топологии исполнения resolve:
- * - `room` — только при явном `mode: room`, валидном числе исполнителей >= 2 и
- *   потолке `max` >= 2 (иначе параллельности нет — один агент);
- * - `stages` — только при `mode: stages` и 2+ валидных этапах (после
- *   нормализации, см. planExecutionStages);
- * - во всех остальных случаях (нет рекомендации, битая, `single`) — один агент.
- * Это точка, где «модель предлагает, движок распоряжается».
- *
- * `max` — потолок исполнителей из `worker_count` (см. `maxExecutorsFor`);
- * дефолт — системные `DEFAULT_MAX_ROOM_EXECUTORS`.
- */
 export function planExecutionMode(
   execution: ExecutionPlan | null | undefined,
   max: number = DEFAULT_MAX_ROOM_EXECUTORS,
@@ -156,7 +126,6 @@ export function planExecutionMode(
   return 'single';
 }
 
-/** Число исполнителей, зажатое в [2..max]. Вызывать только для room. */
 export function clampExecutors(
   execution: ExecutionPlan,
   max: number = DEFAULT_MAX_ROOM_EXECUTORS,
@@ -164,21 +133,14 @@ export function clampExecutors(
   return Math.min(Math.max(2, executorCount(execution.executors)), max);
 }
 
-/** Нормализованный этап staged-плана: готов к запуску исполнителей/координатора. */
 export interface NormalizedStage {
-  /** 1-based порядок исполнения (перенумерован подряд 1..N). */
   index: number;
-  /** Имя этапа; фолбек — `Этап ${index}`. */
   name: string;
-  /** Задача этапа; фолбек — `Stage ${index}`. */
   task: string;
-  /** Число параллельных исполнителей этапа, зажатое в [1..max]. */
   executors: number;
-  /** Ровно `executors` подзадач; добор — `Sub-task N`. */
   decomposition: string[];
 }
 
-/** Число исполнителей этапа, зажатое в [1..max] (дефолт 1). */
 function clampStageExecutors(
   executors: number | undefined,
   max: number,
@@ -190,12 +152,6 @@ function clampStageExecutors(
   return Math.min(Math.max(1, raw), Math.max(1, max));
 }
 
-/**
- * Нормализация staged-плана: валидные этапы (целый `index`, `executors` >= 1
- * при наличии) перенумеровываются подряд 1..N, исполнители зажимаются в
- * [1..max], а `decomposition` добивается до ровно `executors` пунктов.
- * Возвращает [] вне `mode: 'stages'` либо при менее чем 2 валидных этапах.
- */
 export function planExecutionStages(
   execution: ExecutionPlan | null | undefined,
   max: number = DEFAULT_MAX_ROOM_EXECUTORS,
@@ -237,10 +193,6 @@ export interface RoomWorkItem {
   task: string;
 }
 
-/**
- * Детерминированная декомпозиция комнаты: ровно `count` пунктов.
- * Фолбек без `decomposition` — нумерованные generic-подзадачи.
- */
 export function planRoomWorkItems(
   execution: ExecutionPlan,
   count: number,

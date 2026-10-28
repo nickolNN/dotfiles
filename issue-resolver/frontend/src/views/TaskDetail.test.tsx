@@ -15,7 +15,6 @@ import {
   setMarkdownEditorValue,
 } from '../test/markdown-editor';
 
-/** Открывает модалку новой итерации кликом по кнопке. */
 async function openIterationModal() {
   fireEvent.click(await screen.findByTestId('open-iteration-modal'));
   await screen.findByTestId('new-iteration-island');
@@ -73,7 +72,6 @@ function makeStepRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** Модели с разными наборами thinking-уровней (m2 не поддерживает 'high'). */
 const thinkingModels: ModelDescriptor[] = [
   { id: 'm1', name: 'Model One', thinkingLevels: ['off', 'low', 'high'] },
   { id: 'm2', name: 'Model Two', thinkingLevels: ['off', 'max'] },
@@ -130,8 +128,6 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              // Завершённая — чтобы форма (canStart) осталась видимой и можно
-              // было проверить сброс контекста после отправки.
               status: 'completed',
               context: 'new attempt',
             });
@@ -164,8 +160,6 @@ describe('TaskDetail', () => {
     expect(String(url).endsWith('/iterations')).toBe(true);
     expect(JSON.parse(String(init.body)).context).toBe('new attempt');
 
-    // После успешного запуска модалка закрывается, а контекст сброшен:
-    // при повторном открытии поле пустое.
     await waitFor(() =>
       expect(screen.queryByTestId('new-iteration-island')).toBeNull(),
     );
@@ -232,7 +226,6 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    // running → можно поставить в план только черновик, форму не скрываем.
     await openIterationModal();
     expect(screen.getByLabelText('Контекст итерации')).toBeInTheDocument();
     expect(
@@ -282,8 +275,6 @@ describe('TaskDetail', () => {
     await openIterationModal();
     await screen.findByLabelText('Контекст итерации');
 
-    // Поле живёт внутри строки шага Refine (заголовок шага «Планирование»),
-    // одной компактной строкой — отдельного блока под шагами больше нет.
     const refineHint = screen.getAllByTestId('refine-planner-hint');
     expect(refineHint).toHaveLength(1);
     const input = within(refineHint[0]).getByTestId('worker-count-input');
@@ -293,7 +284,6 @@ describe('TaskDetail', () => {
     expect(refineHint[0]).toHaveTextContent(
       'Макс. число параллельных агентов',
     );
-    // Ровно один input на форме — дубля-строки больше нет.
     expect(screen.getAllByTestId('worker-count-input')).toHaveLength(1);
   });
 
@@ -326,7 +316,6 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #1');
 
-    // Дубль тогла ревью убран из формы.
     await openIterationModal();
     expect(screen.queryByRole('switch')).toBeNull();
     expect(screen.queryByLabelText('Контекст для Reviewer')).toBeNull();
@@ -437,7 +426,6 @@ describe('TaskDetail', () => {
     await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    // Resolve отмечен всегда → селектор виден; снятый Refine → селектора нет.
     await openIterationModal();
     expect(screen.getByLabelText('Модель для шага Исполнение')).toBeEnabled();
     expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
@@ -497,7 +485,6 @@ describe('TaskDetail', () => {
     await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    // Отмечаем Код-ревью, но модель оставляем «По умолчанию».
     await openIterationModal();
     fireEvent.click(screen.getByLabelText('Код-ревью'));
     setMarkdownEditorValue('Контекст итерации', 'ctx');
@@ -613,7 +600,6 @@ describe('TaskDetail', () => {
         String((postCall as [string, RequestInit])[1].body),
       );
       expect(body.step_thinking_levels).toEqual({ refine: 'high' });
-      // Глобальный thinking_level формой не отправляется.
       expect(body.thinking_level).toBeUndefined();
     });
   });
@@ -646,7 +632,6 @@ describe('TaskDetail', () => {
     fireEvent.change(levelSelect, { target: { value: 'high' } });
     expect(levelSelect.value).toBe('high');
 
-    // m2 не поддерживает 'high' → уровень сбрасывается, опции — уровни m2.
     fireEvent.change(modelSelect, { target: { value: 'm2' } });
     expect(levelSelect.value).toBe('');
     expect(
@@ -688,7 +673,6 @@ describe('TaskDetail', () => {
     await openIterationModal();
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    // Отмечаем Refine, выбираем модель и уровень, затем снимаем шаг.
     await openIterationModal();
     fireEvent.click(screen.getByLabelText('Планирование'));
     fireEvent.change(screen.getByLabelText('Модель для шага Планирование'), {
@@ -776,14 +760,11 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #2');
 
-    // Заглушка-строка удалена целиком.
     expect(screen.queryByTestId('iteration-reviewer')).toBeNull();
     expect(screen.queryByText('Reviewer включён')).toBeNull();
     expect(screen.queryByText('Reviewer не запускался')).toBeNull();
     expect(screen.queryByText('проверь UI')).toBeNull();
 
-    // Активна последняя итерация (iter-2, pending) — чипы без статуса.
-    // Переключаемся на running-итерацию: её step-runs дают статус чипам.
     fireEvent.click(screen.getByText('Итерация #1'));
     await waitFor(() => {
       expect(screen.getByTestId('step-chip-review')).toHaveAttribute(
@@ -1169,7 +1150,6 @@ describe('TaskDetail', () => {
       issue.updated_at,
     );
 
-    // Даты больше не дублируются отдельной карточкой с текстом.
     expect(screen.queryByText(/Создана:/)).toBeNull();
     expect(screen.queryByText(/Обновлена:/)).toBeNull();
   });
@@ -1221,8 +1201,6 @@ describe('TaskDetail', () => {
 
     await openIterationModal();
     const form = screen.getByRole('heading', { name: 'Новая итерация' });
-    // Секция итераций больше не обёрнута в отдельный остров с заголовком
-    // «Итерации»; список — это <ul>, карточки — <li role="button">.
     const list = screen.getByText('Итерация #1');
     expect(
       form.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -1250,12 +1228,10 @@ describe('TaskDetail', () => {
     const task = screen.getByTestId('task-island');
     await openIterationModal();
     const newIteration = screen.getByTestId('new-iteration-island');
-    // Островок итераций — теперь сама карточка-<li> (у списка нет своей рамки).
     const iterations = screen
       .getByText('Итерация #1')
       .closest('li') as HTMLElement;
 
-    // Три прозрачные карточки в одном стиле, без чёрного фона внутри.
     for (const island of [task, newIteration, iterations]) {
       expect(island.className).toContain('rounded-none');
       expect(island.className).toContain('border-[#008F11]');
@@ -1263,17 +1239,14 @@ describe('TaskDetail', () => {
       expect(island.className).not.toContain('bg-[#000200]');
     }
 
-    // Корневая обёртка — без `.panel` (внешняя зелёная обёртка убрана).
     const root = task.closest('div.mx-auto') as HTMLElement;
     expect(root).not.toBeNull();
     expect(root.className).not.toContain('panel');
 
-    // Заголовок задачи и служебный ряд — внутри первого островка.
     expect(
       screen.getByText('Fix login bug').closest('[data-testid="task-island"]'),
     ).not.toBeNull();
 
-    // Порядок: задача → новая итерация → итерации.
     expect(
       task.compareDocumentPosition(newIteration) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -1376,7 +1349,6 @@ describe('TaskDetail', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Итерация #2');
 
-    // Отдельного блока «Файлы задачи» больше нет.
     expect(screen.queryByTestId('issue-files')).toBeNull();
 
     const iter2Card = screen
@@ -1385,14 +1357,12 @@ describe('TaskDetail', () => {
     expect(iter2Card).not.toBeNull();
     const ctx = within(iter2Card).getByText('ctx 2');
     const inline = within(iter2Card).getByTestId('issue-files-inline');
-    // Файл идёт сразу после промпта итерации.
     expect(
       ctx.compareDocumentPosition(inline) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(within(iter2Card).getByText('log.txt')).toBeInTheDocument();
     expect(within(iter2Card).queryByText('spec.md')).toBeNull();
 
-    // Общезадачный файл — в шапке, вне кликабельной карточки итерации.
     const spec = screen.getByText('spec.md');
     expect(spec.closest('li[role="button"]')).toBeNull();
     expect(spec.closest('header')).not.toBeNull();
@@ -1512,7 +1482,6 @@ describe('TaskDetail', () => {
 });
 
 describe('TaskDetail — фоновое удаление', () => {
-  /** Фейк EventSource: запоминает URL/закрытие и отдаёт onmessage вручную. */
   class FakeEventSource {
     static instances: FakeEventSource[] = [];
 

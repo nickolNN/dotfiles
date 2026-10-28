@@ -30,19 +30,11 @@ const API_PATH = '/issue-resolver/api/v1';
 const REPOSITORIES_PATH = `${API_PATH}/repositories`;
 
 export interface ReposRoutesDeps {
-  /** Валидатор батча URL для POST /repos/validate; по умолчанию — сеть. */
   validate?: ReposValidator;
-  /** Фабрика резолверов для CRUD; по умолчанию — сетевые резолверы. */
   resolverFactory?: RepoResolverFactory;
-  /** Окружение для резолверов (токены платформ); по умолчанию process.env. */
   env?: NodeJS.ProcessEnv;
 }
 
-/**
- * Результат валидации → записываемые поля. Успех — метаданные + status 'ok';
- * ошибка — метаданные обнуляются, status 'error' (URL сохраняется, чтобы
- * пользователь видел проблемный репозиторий и мог перевалидировать).
- */
 function writeFromResult(
   url: string,
   result: RepoValidationResult,
@@ -82,11 +74,6 @@ function writeFromResult(
   };
 }
 
-/**
- * Роуты репозиториев: батч-валидация (`/repos/validate`) и CRUD сохранённых
- * репозиториев (`/repositories`). Валидация идёт через существующие резолверы
- * (`validateRepos` → `createRepoResolver`), без дублирования сетевой логики.
- */
 export async function reposRoutes(
   app: FastifyInstance,
   db: Db,
@@ -110,10 +97,8 @@ export async function reposRoutes(
     return { results };
   });
 
-  // GET /repositories — список всех сохранённых.
   app.get(REPOSITORIES_PATH, async () => listRepositories(db));
 
-  // POST /repositories — создать: валидировать URL и сохранить результат.
   app.post(REPOSITORIES_PATH, async (request, reply) => {
     const parsed = createRepoRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -130,7 +115,6 @@ export async function reposRoutes(
     return reply.status(201).send(saved);
   });
 
-  // PUT /repositories/:id — заменить URL и перевалидировать.
   app.put<{ Params: { id: string } }>(
     `${REPOSITORIES_PATH}/:id`,
     async (request, reply) => {
@@ -157,7 +141,6 @@ export async function reposRoutes(
     },
   );
 
-  // DELETE /repositories/:id — удалить.
   app.delete<{ Params: { id: string } }>(
     `${REPOSITORIES_PATH}/:id`,
     async (request, reply) => {
@@ -168,7 +151,6 @@ export async function reposRoutes(
     },
   );
 
-  // POST /repositories/:id/validate — перепроверить соединение (live).
   app.post<{ Params: { id: string } }>(
     `${REPOSITORIES_PATH}/:id/validate`,
     async (request, reply) => {
@@ -185,13 +167,10 @@ export async function reposRoutes(
       if (!saved) {
         return reply.status(404).send({ error: 'repository not found' });
       }
-      // Статус соединения — в теле ответа; 200 и при 'error', чтобы UI мог
-      // отрисовать сохранённую сущность с пометкой проблемы.
       return reply.status(200).send(saved);
     },
   );
 
-  // GET /repositories/:id/branches — ветки live через резолвер (не из кеша).
   app.get<{ Params: { id: string } }>(
     `${REPOSITORIES_PATH}/:id/branches`,
     async (request, reply) => {

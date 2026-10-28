@@ -21,7 +21,6 @@ type View =
   | 'tags'
   | 'settings';
 
-/** Верхние табы-разделы (форма создания задачи и деталь — под табом «Задачи»). */
 type Tab = 'tasks' | 'repositories' | 'tags' | 'settings';
 
 interface Route {
@@ -53,7 +52,6 @@ function parseHash(hash: string = window.location.hash): Route {
   if (parts[0] === 'settings') {
     return { view: 'settings', issueId: null };
   }
-  // Пустой или неизвестный hash → главная страница со списком задач.
   return { view: 'tasks', issueId: null };
 }
 
@@ -69,7 +67,6 @@ const TAB_PATHS: Record<Exclude<Tab, 'settings'>, string> = {
   tags: '/tags',
 };
 
-/** Inline-иконка «плюс» для основной кнопки действия, без внешних зависимостей. */
 function PlusIcon() {
   return (
     <svg
@@ -86,12 +83,6 @@ function PlusIcon() {
   );
 }
 
-/**
- * Блок живой статистики контейнера (CPU/память). Используется дважды: в
- * десктопном хедере (`suffix=""`) и в мобильной верхней строке
- * (`suffix="-mobile"`). Суффикс разводит data-testid'ы, иначе jsdom-mount
- * (без медиазапросов) давал бы дубли и `getByTestId` падал бы.
- */
 function ContainerStatsBlock({
   stats,
   suffix,
@@ -160,13 +151,8 @@ function ContainerStatsBlock({
 
 export default function App() {
   const [route, setRoute] = useState<Route>(() => parseHash());
-  // Растёт при клике «+» на табе «Репозитории» → Repositories открывает модалку.
   const [repoCreateSignal, setRepoCreateSignal] = useState(0);
-  // Растёт при клике «+» на табе «Теги» → Tags открывает форму создания.
   const [tagCreateSignal, setTagCreateSignal] = useState(0);
-  // Hostname и containerStats живут в общем UI-сторе Zustand (а не в
-  // локальном useState): заголовок и стата контейнера должны переживать
-  // перезагрузку страницы и работать на всех view.
   const hostname = useUIStore((state) => state.hostname);
   const setHostname = useUIStore((state) => state.setHostname);
   const loadHostname = useUIStore((state) => state.loadHostname);
@@ -188,25 +174,12 @@ export default function App() {
 
   const selectedIssueId = route.issueId;
 
-  // Глобальная подписка на `container_stats`: в local-режиме cgroup-метрики
-  // читаются с хост-контейнера независимо от задачи, поэтому статы в хедере
-  // живут на ВСЕХ страницах (список/репозитории/теги/форма), а не только на
-  // детали задачи. Бэкенд публикует их с `issueId: '__global__'` через общий
-  // `/stream`; фильтровать по issueId не нужно — в local-режиме метрики
-  // одинаковы для любого источника (читается хост-контейнер).
-  // Глобальная подписка на container_stats пишет в Zustand store, а не в
-  // локальный useState: store доступен вне React-дерева, SSE-колбэк не
-  // привязан к жизненному циклу компонента.
   useEffect(() => {
     return subscribeToGlobalStream({
       onContainerStats: (payload) => setContainerStats(payload),
     });
   }, [setContainerStats]);
 
-  // Отдельный EventSource на глобальный `/container-stats-stream` управляет
-  // жизненным циклом cgroup-потока: подключился клиент → бэкенд стартует
-  // поток, отключился → останавливает. Данные из этого соединения не
-  // читаются — события `container_stats` приходят через глобальный `/stream`.
   useEffect(() => {
     const EventSourceCtor = globalThis.EventSource;
     if (!EventSourceCtor) return;
@@ -217,7 +190,6 @@ export default function App() {
   const view: View =
     route.view === 'task-detail' && !selectedIssueId ? 'tasks' : route.view;
 
-  // «Репозитории»/«Теги» — отдельные табы; всё остальное (список, форма, деталь) — «Задачи».
   const activeTab: Tab =
     view === 'repositories'
       ? 'repositories'

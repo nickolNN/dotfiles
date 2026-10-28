@@ -1,12 +1,3 @@
-/**
- * Step selection contract: the checkbox list is authoritative.
- *  - an empty selection is rejected (400) instead of silently falling back to
- *    the issue defaults, which would run steps nobody picked;
- *  - `resolve` is not injected, so an "MR only" issue/iteration really holds a
- *    single step;
- *  - with `create_mr` on a repository `pr` is appended last;
- *  - duplicates collapse, user order is kept.
- */
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
 import { createDb } from '../src/db/client';

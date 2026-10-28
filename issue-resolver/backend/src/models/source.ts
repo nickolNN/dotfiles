@@ -8,7 +8,6 @@ export interface ModelSource {
   list(): Promise<ModelDescriptor[]>;
 }
 
-/** Канонический порядок уровней размышления pi. */
 const EXTENDED_THINKING_LEVELS: readonly ThinkingLevel[] = [
   'off',
   'minimal',
@@ -21,26 +20,18 @@ const EXTENDED_THINKING_LEVELS: readonly ThinkingLevel[] = [
 
 const THINKING_LEVELS: ReadonlySet<string> = new Set(EXTENDED_THINKING_LEVELS);
 
-/** Строка → ThinkingLevel, если это валидный уровень; иначе null. */
 function toThinkingLevel(value: unknown): ThinkingLevel | null {
   return typeof value === 'string' && THINKING_LEVELS.has(value)
     ? (value as ThinkingLevel)
     : null;
 }
 
-/** Объект-карта из unknown; массивы/примитивы → undefined. */
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
 }
 
-/**
- * Авторитетная формула pi `getSupportedThinkingLevels`:
- * не-думающая модель → ['off']; иначе EXTENDED-фильтр, где level с `null`
- * отсекается, `xhigh`/`max` поддержаны только при непустом маппинге, остальные
- * (не заданные/строковые) — поддержаны. Возвращает только валидные ThinkingLevel.
- */
 function supportedThinkingLevels(
   record: Record<string, unknown>,
 ): ThinkingLevel[] {
@@ -62,10 +53,6 @@ export class ConfigModelSource implements ModelSource {
   }
 }
 
-/**
- * Пропускает только публичные поля ModelDescriptor. Любые ключи/токены из
- * входного JSON отбрасываются и никогда не покидают этот модуль.
- */
 function sanitizeModels(input: unknown): ModelDescriptor[] {
   if (!Array.isArray(input)) return [];
 
@@ -81,8 +68,6 @@ function sanitizeModels(input: unknown): ModelDescriptor[] {
     if (typeof record.contextWindow === 'number') {
       model.contextWindow = record.contextWindow;
     }
-    // Плоская форма может быть уже-дескрипторной: прокидываем только валидные
-    // ThinkingLevel, не раскрывая сырые reasoning/thinkingLevelMap.
     if (Array.isArray(record.thinkingLevels)) {
       model.thinkingLevels = record.thinkingLevels
         .map(toThinkingLevel)
@@ -93,10 +78,6 @@ function sanitizeModels(input: unknown): ModelDescriptor[] {
   return models;
 }
 
-/**
- * One pi `Model` object → public descriptor. Shared with the live probe so the
- * thinking-level rule has exactly one implementation.
- */
 export function modelDescriptorFromPiModel(
   record: Record<string, unknown>,
   provider?: string,
@@ -114,7 +95,6 @@ export function modelDescriptorFromPiModel(
   return model;
 }
 
-/** Расплющивает pi-формат `{ providers: { <name>: { models: [...] } } }`. */
 function modelsFromPiConfig(input: unknown): ModelDescriptor[] {
   if (typeof input !== 'object' || input === null) return [];
   const providers = (input as Record<string, unknown>).providers;
@@ -138,8 +118,6 @@ function modelsFromPiConfig(input: unknown): ModelDescriptor[] {
       if (typeof record.contextWindow === 'number') {
         model.contextWindow = record.contextWindow;
       }
-      // reasoning/thinkingLevelMap остаются сырыми входными полями и наружу не
-      // отдаются — только производный набор поддерживаемых уровней.
       model.thinkingLevels = supportedThinkingLevels(record);
       out.push(model);
     }
@@ -147,11 +125,6 @@ function modelsFromPiConfig(input: unknown): ModelDescriptor[] {
   return out;
 }
 
-/**
- * Читает пи-конфиг моделей (тот же файл, что читает `pi --list-models`).
- * Порядок: явный `PI_MODELS_PATH`, затем `~/.pi/agent/models.json`,
- * затем `~/.config/pi/models.json`. Не получилось — пустой список.
- */
 function readPiModelsFile(env: NodeJS.ProcessEnv): ModelDescriptor[] {
   const candidates = env.PI_MODELS_PATH
     ? [env.PI_MODELS_PATH]
@@ -167,19 +140,11 @@ function readPiModelsFile(env: NodeJS.ProcessEnv): ModelDescriptor[] {
       const models = modelsFromPiConfig(parsed);
       if (models.length > 0) return models;
     } catch {
-      // нечитаемо/невалидно → пробуем следующий
     }
   }
   return [];
 }
 
-/**
- * Источник моделей:
- * 1. `MODELS_JSON` (плоский массив ModelDescriptor[]) — для тестов/оверрайдов.
- * 2. Файл пи-конфига моделей (`PI_MODELS_PATH` или дефолтные пути).
- * 3. Пустой список (НЕ выдуманный `user-default`, который pi не знает и
- *    который ломал прогон: `--model user-default` → «model not found»).
- */
 export function modelSourceFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ModelSource {
@@ -189,7 +154,6 @@ export function modelSourceFromEnv(
       const models = sanitizeModels(JSON.parse(raw));
       if (models.length > 0) return new ConfigModelSource(models);
     } catch {
-      // невалидный JSON → ниже
     }
   }
 

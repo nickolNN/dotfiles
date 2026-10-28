@@ -33,7 +33,6 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    // Подготовка рабочей папки идёт именно в статусе `preparing`.
     status: 'preparing',
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
@@ -45,7 +44,6 @@ function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response;
 }
 
-/** Минимальный фейк EventSource: ручная отдача onmessage. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -83,7 +81,6 @@ function stubFetch() {
   return { fetchMock };
 }
 
-/** Публикует `workspace_progress` от бэкенда. */
 function emitProgress(
   step: string,
   status: string,
@@ -138,8 +135,6 @@ describe('TaskDetail — прогресс подготовки воркспей�
       within(panel).getByText('Установка зависимостей'),
     ).toBeInTheDocument();
 
-    // Панель — отдельный блок перед списком итераций: рендерится ровно
-    // один раз и стоит до первой карточки итерации.
     const firstCard = screen.getByText(/Итерация #1/);
     expect(
       panel.compareDocumentPosition(firstCard) &
@@ -196,8 +191,6 @@ describe('TaskDetail — прогресс подготовки воркспей�
     emitLog('added 42 packages\n');
     emitLog('npm warn deprecated\n', 'stderr');
 
-    // Синтетический stepRunId `{issueId}/devops` — сессия над панелью
-    // подготовки; чанки stdout/stderr копятся как text-события.
     const session = await screen.findByTestId('devops-session');
     expect(session).toHaveTextContent('npm ci');
     expect(session).toHaveTextContent('added 42 packages');

@@ -23,7 +23,6 @@ function makeDb(): Db {
   return createDb(':memory:');
 }
 
-/** Строка `repositories` с уже сгенерированной инструкцией (статус по умолчанию). */
 function seedRepo(
   db: Db,
   url: string,
@@ -44,7 +43,6 @@ function seedRepo(
   return id;
 }
 
-/** Строка `repositories` как её видит движок: статус + текст. */
 function repoRunInstructions(db: Db, id: string) {
   const row = db
     .select({
@@ -87,7 +85,6 @@ describe('updateTag — смена тег-инструкций инвалиди�
       instructions: null,
       status: 'unknown',
     });
-    // Репозиторий вне тега не тронут.
     expect(repoRunInstructions(db, outside)).toMatchObject({
       status: 'generated',
     });
@@ -133,7 +130,6 @@ describe('updateTag — смена тег-инструкций инвалиди�
       instructions: null,
       status: 'unknown',
     });
-    // Отсоединённый репозиторий остаётся как был.
     expect(repoRunInstructions(db, removed)).toMatchObject({
       status: 'generated',
     });

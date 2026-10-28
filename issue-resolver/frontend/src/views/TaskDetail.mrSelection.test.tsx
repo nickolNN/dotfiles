@@ -4,7 +4,6 @@ import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 import { setMarkdownEditorValue } from '../test/markdown-editor';
 
-/** Открывает модалку новой итерации кликом по кнопке. */
 async function openIterationModal() {
   fireEvent.click(await screen.findByTestId('open-iteration-modal'));
   await screen.findByTestId('new-iteration-island');
@@ -101,7 +100,6 @@ describe('TaskDetail — выбор репозиториев для MR', () => {
     render(<TaskDetail issueId="issue-1" />);
 
     await openIterationModal();
-    // Шаг PR выбран из pipeline_steps, репозиторий A — с create_mr.
     const prCheckbox = (await screen.findByLabelText('PR')) as HTMLInputElement;
     expect(prCheckbox.checked).toBe(true);
     expect(
@@ -152,7 +150,6 @@ describe('TaskDetail — выбор репозиториев для MR', () => {
     await openIterationModal();
     await screen.findByLabelText('PR');
 
-    // Снимаем единственный выбранный репо, шаг PR остаётся выбранным.
     fireEvent.click(screen.getByTestId('pr-repo-repo-a'));
     expect(
       (screen.getByTestId('pr-repo-repo-a') as HTMLInputElement).checked,
@@ -175,7 +172,6 @@ describe('TaskDetail — выбор репозиториев для MR', () => {
   });
 });
 
-/** Iteration modal over an issue with the given step set. */
 async function setupIterationForm(issue: Issue) {
   const iteration = makeIteration();
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {

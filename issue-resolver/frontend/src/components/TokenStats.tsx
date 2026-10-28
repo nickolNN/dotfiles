@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 
-/** Иконка рециклинга (circular arrows) — кеш-токены. */
 export function CacheIcon() {
   return (
     <svg
@@ -21,7 +20,6 @@ export function CacheIcon() {
   );
 }
 
-/** Пара иконка-значение: ↑ 1.2k / ↓ 500 / кеш 1M */
 function TokenSpan({
   icon,
   label,
@@ -39,7 +37,6 @@ function TokenSpan({
   );
 }
 
-/** Маленькая стрелка вверх — отправленные (input) токены. */
 export function TokenUpIcon() {
   return (
     <svg
@@ -57,7 +54,6 @@ export function TokenUpIcon() {
   );
 }
 
-/** Маленькая стрелка вниз — полученные (output) токены. */
 export function TokenDownIcon() {
   return (
     <svg
@@ -75,7 +71,6 @@ export function TokenDownIcon() {
   );
 }
 
-/** Компактный формат: 950 → "950", 105000 → "105k", 1200000 → "1.2M". */
 export function formatTokens(total: number): string {
   if (!Number.isFinite(total) || total <= 0) return '0';
   if (total >= 1_000_000) return `${trimDecimal(total / 1_000_000)}M`;
@@ -87,54 +82,35 @@ function trimDecimal(value: number): string {
   return value.toFixed(1).replace(/\.0$/, '');
 }
 
-/** Мгновенная скорость: один знак после запятой (63.5 → "63.5"). */
 export function formatInstantSpeed(value: number): string {
   return value.toFixed(1);
 }
 
-/** Средняя скорость: округление до целого (63.5 → "64"). */
 export function formatAvgSpeed(value: number): string {
   return String(Math.round(value));
 }
 
-/** Compact cost: `$0` / `$0.0123` / `$1.5`; null/NaN/≤0 → `$0`. */
 export function formatCost(total: number): string {
   if (!Number.isFinite(total) || total <= 0) return '$0';
   return `$${total.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
 }
 
 export interface TokenStatsData {
-  /** ↑ Отправленные токены. */
   input: number;
-  /** ↓ Полученные токены. */
   output: number;
-  /** Кеш-токены (read + write). */
   cached: number;
 }
 
 export interface TokenStatsProps {
   data: TokenStatsData;
-  /** Модель (опционально). */
   model?: string | null;
-  /** CTX процент использования (опционально). */
   contextPercent?: number | null;
-  /** Число вызовов инструментов (опционально). */
   toolCalls?: number;
-  /** Мгновенная скорость t/s (опционально). */
   tokensPerSecond?: number | null;
-  /** Средняя скорость t/s (опционально). */
   avgTokensPerSecond?: number | null;
-  /** data-testid для span-обёртки. */
   testId?: string;
 }
 
-/**
- * Унифицированная строка токенов: модель · CTX% · ↑ input · ↓ output · кеш
- * cached · N вызовов · скорость t/s.
- *
- * Каждый сегмент опционален и рендерится только при наличии значения (не
- * null/undefined; число 0 рендерится как «0»).
- */
 export default function TokenStats({
   data,
   model,

@@ -11,7 +11,6 @@ import {
   type UiResponsePayload,
 } from '../src/pi/session-registry';
 
-/** Прямой insert issue + iteration с заданным id (FK для question_answers). */
 function seedIteration(db: ReturnType<typeof createDb>, id: string): void {
   const now = new Date().toISOString();
   db.insert(issues)
@@ -40,7 +39,6 @@ function seedIteration(db: ReturnType<typeof createDb>, id: string): void {
     .run();
 }
 
-/** Шпион-control: фиксирует steer/abort/respond/prompt/send без процесса. */
 function spyControl(): {
   control: StepSessionControl;
   steers: string[];
@@ -136,7 +134,6 @@ describe('InMemoryStepSessionRegistry', () => {
     expect(registry.steerByIteration('iter-1', 'all')).toBe(true);
     expect(registry.abortByIteration('iter-1')).toBe(true);
 
-    // Broadcast: обе сессии итерации получили и steer, и abort.
     expect(first.steers).toEqual(['all']);
     expect(second.steers).toEqual(['all']);
     expect(first.aborts).toHaveLength(1);
@@ -167,7 +164,6 @@ describe('InMemoryStepSessionRegistry', () => {
     await registry.send(iterationTarget('iter-1'), { type: 'get_state' });
     registry.respondByIteration('iter-1', { id: 'ui-1', value: 'y' });
 
-    // Anchor = последняя зарегистрированная (в фазе room — координатор).
     expect(second.prompts).toEqual([{ message: 'anchor' }]);
     expect(second.commands).toEqual([{ type: 'get_state' }]);
     expect(second.responses).toEqual([{ id: 'ui-1', value: 'y' }]);
@@ -261,7 +257,6 @@ describe('InMemoryStepSessionRegistry', () => {
     ]);
 
     registry.unregister('base.w0', 'failed');
-    // Вкладка завершённого агента остаётся, но живой сессии уже нет.
     expect(registry.listAgents('iter-1')[0].status).toBe('failed');
     expect(registry.steer('base.w0', 'x')).toBe(false);
     expect(registry.listAgents('iter-1')).toHaveLength(3);
@@ -349,7 +344,6 @@ describe('InMemoryStepSessionRegistry', () => {
       label: 'Исполнитель 1',
     });
 
-    // До событий — тайминг есть, телеметрии нет.
     const before = registry.listAgents('iter-3')[0];
     expect(before.startedAt).toEqual(expect.any(String));
     expect(before.stats).toBeNull();
@@ -386,7 +380,6 @@ describe('InMemoryStepSessionRegistry', () => {
       label: 'Исполнитель 1',
     });
 
-    // Ответ 1: total растёт 50 → 100 (кумулятив) — берём последний снапшот.
     registry.recordEvent('base.w0', {
       type: 'usage',
       usage: { input: 40, output: 10, cacheRead: 0, cacheWrite: 0, total: 50 },
@@ -397,7 +390,6 @@ describe('InMemoryStepSessionRegistry', () => {
       usage: { input: 80, output: 20, cacheRead: 0, cacheWrite: 0, total: 100 },
       cost: null,
     });
-    // Ответ 2: total упал → новая граница, предыдущий ответ суммируется.
     registry.recordEvent('base.w0', {
       type: 'usage',
       usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, total: 5 },
@@ -566,7 +558,6 @@ describe('InMemoryStepSessionRegistry', () => {
     expect(worker.prompts).toHaveLength(1);
     expect(coordinator.prompts).toHaveLength(0);
 
-    // The anchor is the last registered one — that is what iterationTarget hits.
     await registry.prompt(iterationTarget('iter-1'), 'координатору');
     expect(worker.prompts).toHaveLength(1);
     expect(coordinator.prompts).toHaveLength(1);
@@ -654,7 +645,6 @@ describe('POST /iterations/:id/abort', () => {
     const app = buildApp(db, { control });
 
     try {
-      // Нет активной сессии — не 409, а гарантированный terminal (200).
       const inactive = await app.inject({
         method: 'POST',
         url: '/issue-resolver/api/v1/iterations/it1/abort',

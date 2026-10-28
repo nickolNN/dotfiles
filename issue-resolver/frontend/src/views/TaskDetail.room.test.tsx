@@ -66,7 +66,6 @@ function makeStepRun(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog {
   };
 }
 
-/** refine-прогон с отчётом, несущим план исполнения. */
 function makeRefineRun(mode: 'single' | 'room'): StepRunWithLog {
   return makeStepRun({
     id: 'run-refine',
@@ -139,7 +138,6 @@ function stubFetch(stepRuns: StepRunWithLog[]) {
   return fetchMock;
 }
 
-/** Фейк EventSource: запоминает URL/закрытие и отдаёт onmessage вручную. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -172,14 +170,12 @@ describe('TaskDetail — вкладки агентов комнаты (room-ре
 
     const container = await screen.findByTestId('room-agents');
     expect(container).toBeInTheDocument();
-    // Одиночная сессия resolve не рендерится — её место занимают вкладки.
     expect(screen.queryByTestId('step-session')).toBeNull();
 
     const tabs = screen.getAllByTestId('room-agent-tab');
     expect(tabs).toHaveLength(2);
     expect(tabs[0]).toHaveTextContent('Исполнитель 1');
 
-    // Открыт per-agent SSE, а не общий поток шага.
     const agentSource = FakeEventSource.instances.find((source) =>
       source.url.includes('/agents/stream'),
     );

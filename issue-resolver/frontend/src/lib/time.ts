@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 
-/** Живой тик раз в секунду, пока `active`; останавливается на false/unmount. */
 export function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -12,19 +11,12 @@ export function useNow(active: boolean): number {
   return now;
 }
 
-/** Минимум, нужный для подсчёта времени работы по одному step-run. */
 export interface WorkTimeStepRun {
   status: string;
   created_at: string;
   updated_at: string;
 }
 
-/**
- * Чистое время работы агентов — сумма длительностей step-runs:
- * `updated_at - created_at` у завершённых прогонов, `now - created_at` у
- * текущего running. Простой задачи между итерациями не учитывается.
- * `null`, если step-runs ещё не загружены (нет данных для таймера).
- */
 export function sumStepRunWorkMs(
   runs: readonly WorkTimeStepRun[] | null,
   now: number,
@@ -42,7 +34,6 @@ export function sumStepRunWorkMs(
   return total;
 }
 
-/** Человекочитаемая длительность: `45с` / `3м 12с` / `1ч 4м`. */
 export function formatDuration(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return '';
   const totalSec = Math.floor(ms / 1000);

@@ -11,8 +11,6 @@ import {
 import { LocalContainerController } from '../src/docker/local-controller';
 import { FakeGitService, GitCliService } from '../src/git/service';
 
-// fs мокается только точечно (existsSync/readFileSync); остальное — настоящее,
-// чтобы не ломать импортируемые dockerode/git-модули.
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return {
@@ -210,7 +208,6 @@ describe('DockerodeContainerController — Binds (workspace + общая пам�
 });
 
 describe('DockerodeContainerController.stats', () => {
-  /** docker-клиент, чей контейнер отдаёт заданный stats-JSON. */
   function statsDocker(data: unknown): Dockerode {
     return {
       getContainer: () => ({ stats: async () => data }),
@@ -322,7 +319,6 @@ describe('LocalContainerController.statsStream', () => {
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(chunks).toHaveLength(2);
-    // Первый кадр отдаётся сразу (память/pids), CPU без дельты — null.
     const first = toContainerStatsPayload(JSON.parse(chunks[0]));
     expect(first).toEqual({
       cpuPercent: null,
@@ -330,7 +326,6 @@ describe('LocalContainerController.statsStream', () => {
       memoryLimitBytes: 2097152,
       pids: 3,
     });
-    // 0.5 ядра за секунду (usage +0.5s) при 2 online_cpus → 50%.
     const second = toContainerStatsPayload(JSON.parse(chunks[1]));
     expect(second).toEqual({
       cpuPercent: 50,

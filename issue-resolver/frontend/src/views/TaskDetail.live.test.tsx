@@ -45,7 +45,6 @@ function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response;
 }
 
-/** Минимальный фейк EventSource: запоминает URL, закрытие и отдаёт onmessage вручную. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -248,8 +247,6 @@ describe('TaskDetail — live SSE', () => {
     expect(await steps.findByText('Планирование')).toBeInTheDocument();
     expect(steps.queryByText('Исполнение')).toBeNull();
 
-    // Движок создал новый прогон resolve и опубликовал `running` (только
-    // stepRunId, без step/attempt) — без перечитки списка его не отрисовать.
     runs = [refineRun, resolveRun];
     act(() => {
       FakeEventSource.instances[0].emit({
@@ -316,7 +313,7 @@ describe('TaskDetail — live SSE', () => {
       configurable: true,
       value: 300,
     });
-    scroll.scrollTop = 477; // у дна: 777 - 477 - 300 = 0
+    scroll.scrollTop = 477;
 
     act(() => {
       FakeEventSource.instances[0].emit({
@@ -381,7 +378,7 @@ describe('TaskDetail — live SSE', () => {
       configurable: true,
       value: 300,
     });
-    scroll.scrollTop = 477; // у дна: 777 - 477 - 300 = 0
+    scroll.scrollTop = 477;
 
     act(() => {
       FakeEventSource.instances[0].emit({
@@ -457,8 +454,6 @@ describe('TaskDetail — live SSE', () => {
     await screen.findByText('Fix login bug');
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
 
-    // Снапшот pending: шаг уже активен → карточка рендерит SessionView,
-    // а вопрос виден inline на странице задачи.
     expect(screen.getByTestId('step-session')).toBeInTheDocument();
     expect(screen.getByTestId('inline-question')).toHaveTextContent(
       'Какой подход выбрать?',
@@ -528,12 +523,10 @@ describe('TaskDetail — live SSE', () => {
     await screen.findByText('Fix login bug');
     fireEvent.click(await screen.findByTestId('step-expand'));
 
-    // Вопрос больше не рисуется внутри развёрнутой модалки шага.
     const scroll = screen.getByTestId('step-log-scroll');
     expect(within(scroll).getByTestId('modal-session')).toBeInTheDocument();
     expect(within(scroll).queryByTestId('inline-question')).toBeNull();
 
-    // Он виден inline на странице задачи.
     expect(screen.getByTestId('inline-question')).toHaveTextContent(
       'Какой подход выбрать?',
     );

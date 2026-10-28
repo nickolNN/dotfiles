@@ -1,12 +1,3 @@
-/**
- * Демо 4 топологий исполнения resolve: single, room (параллельно),
- * stages (последовательно) и stages-сложный (параллель × последовательность).
- *
- * Тест документирует ФАКТИЧЕСКОЕ поведение `runRoomResolve`/`runStagedResolve`
- * (backend/src/workflow/room.ts) точным порядком pi-вызовов и печатает
- * человекочитаемый трейс (∥ — исполнители одной параллельной фазы, `---` — смена
- * этапа/секции). Трейс нужен для отчёта, ассерты на него не опираются.
- */
 import { describe, expect, it } from 'vitest';
 import type {
   ExecutionPlan,
@@ -60,7 +51,6 @@ const pass = (summary: string): StepExecutionResult => ({
   stderr: '',
 });
 
-/** Секция трейса: этап staged-плана, «комната» (room) или финальный lead. */
 function sectionOf(id: string, finalId: string): string {
   const stage = /\/stage\/(\d+)\//.exec(id);
   if (stage) return `этап ${stage[1]}`;
@@ -68,10 +58,6 @@ function sectionOf(id: string, finalId: string): string {
   return 'комната';
 }
 
-/**
- * Печатает и возвращает читаемый трейс порядка запуска агентов:
- * исполнители одной параллельной фазы помечаются `∥`, смена секции — `---`.
- */
 function traceTopology(
   title: string,
   pi: FakePiRunner,
@@ -88,7 +74,6 @@ function traceTopology(
     };
   });
 
-  // Исполнитель параллелен, если рядом с ним в той же секции есть другой исполнитель.
   const parallel = entries.map((entry, i) => {
     if (!entry.worker) return false;
     const sameWorkerRun = (other?: (typeof entries)[number]): boolean =>
@@ -115,9 +100,6 @@ function traceTopology(
 
 describe('топологии исполнения resolve — демо-примеры', () => {
   it('single: движок решает «один агент» (без комнаты/этапов)', () => {
-    // single движок исполняет прямым `pi.run`, а не room.ts — поэтому здесь
-    // фиксируем детерминированное решение `planExecutionMode` (развилка
-    // engine.ts). Остальные три топологии прогоняются по-настоящему ниже.
     expect(planExecutionMode(SINGLE_PLAN)).toBe('single');
     expect(planExecutionMode(ROOM_PLAN)).toBe('room');
     expect(planExecutionMode(SEQUENTIAL_STAGES_PLAN)).toBe('stages');
@@ -140,7 +122,6 @@ describe('топологии исполнения resolve — демо-прим�
 
     traceTopology('room — параллельно', pi, 'run-1');
 
-    // 3 исполнителя (0-based id в room-режиме) → 1 координатор.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
       'run.run-1.w0',
       'run.run-1.w1',
@@ -158,7 +139,6 @@ describe('топологии исполнения resolve — демо-прим�
       index: null,
       label: 'Координатор',
     });
-    // Итог шага — отчёт координатора.
     expect(result.report?.summary).toBe('room-coord');
   });
 
@@ -177,7 +157,6 @@ describe('топологии исполнения resolve — демо-прим�
 
     traceTopology('stages 3×1 — последовательно', pi, 'run-1');
 
-    // executors=1 → один исполнитель этапа (`/stage/<i>/worker/1`), затем финал.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
       'run.run-1.s1.w0',
       'run.run-1.s2.w0',
@@ -195,18 +174,14 @@ describe('топологии исполнения resolve — демо-прим�
 
   it('stages-сложный 2→1→3: параллель, последовательность, параллель, финал', async () => {
     const pi = new FakePiRunner();
-    // этап 1: 2 исполнителя ∥ + координатор
     pi.enqueue(pass('s1-be'));
     pi.enqueue(pass('s1-fe'));
     pi.enqueue(pass('s1-coord'));
-    // этап 2: 1 исполнитель
     pi.enqueue(pass('s2'));
-    // этап 3: 3 исполнителя ∥ + координатор
     pi.enqueue(pass('s3-tests'));
     pi.enqueue(pass('s3-docs'));
     pi.enqueue(pass('s3-review'));
     pi.enqueue(pass('s3-coord'));
-    // финальный lead
     pi.enqueue(pass('complex-final'));
 
     const result = await runStagedResolve(
@@ -217,8 +192,6 @@ describe('топологии исполнения resolve — демо-прим�
 
     traceTopology('stages-сложный 2→1→3', pi, 'run-1');
 
-    // Строгий порядок: этап1 (исполнители ∥ → координатор) → этап2 (1 исполнитель) →
-    // этап3 (исполнители ∥ → координатор) → финальный lead.
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
       'run.run-1.s1.w0',
       'run.run-1.s1.w1',
@@ -230,7 +203,6 @@ describe('топологии исполнения resolve — демо-прим�
       'run.run-1.s3.lead',
       'run-1',
     ]);
-    // Финальный lead регистрируется со stage=null (фолбек координатора шага).
     expect(pi.calls[8].options?.agent?.stage).toBeUndefined();
     expect(pi.calls[8].options?.agent?.label).toBe('Координатор');
     expect(result.report?.summary).toBe('complex-final');

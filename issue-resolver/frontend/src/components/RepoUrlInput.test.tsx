@@ -37,7 +37,6 @@ function invalidResult(url: string, error = 'Repository not found'): RepoValidat
   return { url, valid: false, platform: 'github', error };
 }
 
-/** Заглушка fetch с заданным телом ответа `{ results }` на `/repos/validate`. */
 function stubValidateFetch(results: RepoValidationResult[]) {
   const fetchMock = vi.fn().mockResolvedValue({
     ok: true,
@@ -48,7 +47,6 @@ function stubValidateFetch(results: RepoValidationResult[]) {
   return fetchMock;
 }
 
-/** Обёртка с поднятым состоянием: RepoUrlInput — controlled-компонент. */
 function Harness({
   initial = '',
   onChange,
@@ -88,7 +86,6 @@ describe('RepoUrlInput', () => {
     render(<Harness onChange={onChange} />);
     typeUrl(GITHUB_URL);
 
-    // Запрос ещё не улетел (debounce), но идёт «проверка» — виден спиннер.
     expect(screen.getByTestId('repo-url-spinner')).toBeInTheDocument();
 
     await waitFor(
@@ -99,7 +96,6 @@ describe('RepoUrlInput', () => {
     expect(screen.queryByTestId('repo-url-spinner')).toBeNull();
     expect(screen.queryByTestId('repo-url-invalid')).toBeNull();
 
-    // Enriched-карточка: платформа, язык, звёзды, default branch.
     const card = screen.getByTestId('repo-info-card');
     expect(card).toBeInTheDocument();
     expect(within(card).getByText('facebook/react')).toBeInTheDocument();
@@ -108,7 +104,6 @@ describe('RepoUrlInput', () => {
     expect(screen.getByTestId('repo-stars')).toHaveTextContent('230000');
     expect(screen.getByTestId('repo-branch')).toHaveTextContent('main');
 
-    // Родитель получает URL вместе с метаданными.
     expect(onChange).toHaveBeenCalledWith(GITHUB_URL, reactInfo);
   });
 
@@ -138,7 +133,6 @@ describe('RepoUrlInput', () => {
     typeUrl('https://example.com');
     typeUrl('https://example.com/one-segment');
 
-    // Даём debounce заведомо истечь — запрос так и не должен уйти.
     await new Promise((resolve) => setTimeout(resolve, 800));
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -170,7 +164,6 @@ describe('RepoUrlInput', () => {
     expect(JSON.parse(String(init.body))).toEqual({
       urls: ['https://github.com/facebook/react'],
     });
-    // Родителю уходит исходный ввод (как в поле), метаданные — от бэкенда.
     expect(onChange).toHaveBeenCalledWith(
       'github.com/facebook/react',
       reactInfo,
@@ -346,11 +339,9 @@ describe('isLikelyRepoUrl', () => {
     ['https://bitbucket.company.com/scm/proj/app.git', true],
     ['git@stash.internal.ru:proj/app.git', true],
     ['https://stash.internal.ru/scm/proj/app.git', true],
-    // Любой хост с путём owner/repo — платформу определит бэкенд.
     ['https://example.com/org/repo', true],
     ['https://example.org/org/repo', true],
     ['github.com/org/repo', true],
-    // Не репозиторий: нет двух сегментов пути / битый URL.
     ['https://example.com', false],
     ['https://example.com/one-segment', false],
     ['https://github.com/facebook', false],

@@ -1,14 +1,3 @@
-/**
- * Бизнес-логика «одна итерация за раз»:
- *  1. итерации задачи выполняются строго по одной (running → draft/pending →
- *     очередь после завершения);
- *  2. шаги внутри итерации идут строго последовательно;
- *  3. агенты внутри одного шага room-режима могут бежать параллельно;
- *  4. максимум один draft и максимум один pending на задачу.
- *
- * Тесты смешивают HTTP-слой (buildApp) и прямой вызов движка
- * (runIssueIteration / runRoomResolve) — там, где бизнес-правило живёт.
- */
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,10 +37,6 @@ import {
 const ISSUES = '/issue-resolver/api/v1/issues';
 const ITERATIONS = '/issue-resolver/api/v1/iterations';
 
-// ---------------------------------------------------------------------------
-// Общие хелперы
-// ---------------------------------------------------------------------------
-
 const cleanups: Array<() => Promise<void> | void> = [];
 
 afterEach(async () => {
@@ -80,7 +65,6 @@ function tempRoot(prefix = 'issue-resolver-queue-'): string {
   return root;
 }
 
-/** Прямой insert задачи без HTTP-слоя — нужен полный контроль над состоянием. */
 function seedIssue(db: Db, steps: PipelineStep[] = ['resolve']): string {
   const id = randomUUID();
   const now = new Date().toISOString();
@@ -99,7 +83,6 @@ function seedIssue(db: Db, steps: PipelineStep[] = ['resolve']): string {
   return id;
 }
 
-/** Прямой insert итерации в заданном статусе. */
 function seedIteration(
   db: Db,
   issueId: string,
@@ -154,10 +137,6 @@ async function waitFor<T>(
 const flush = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 30));
 
-// ---------------------------------------------------------------------------
-// ProbeRunner: параллельность раннера
-// ---------------------------------------------------------------------------
-
 interface ProbeCall {
   id: string;
   iterationId?: string;
@@ -165,11 +144,6 @@ interface ProbeCall {
   endedAt?: number;
 }
 
-/**
- * PiRunner, который (а) считает одновременные вызовы и (б) либо сам завершается
- * через паузу (auto), либо ждёт явного `releaseAll()` (ручной режим). Позволяет
- * доказать и параллельность исполнителей, и последовательность шагов/итераций.
- */
 class ProbeRunner implements PiRunner {
   active = 0;
   maxActive = 0;
@@ -194,9 +168,6 @@ class ProbeRunner implements PiRunner {
       stdout: '',
       stderr: '',
     };
-    // Post-iteration report-агент запускается fire-and-forget ПОСЛЕ конвейера:
-    // он не часть последовательности шагов/итераций, поэтому не участвует
-    // в учёте одновременных агентов (см. инвариант «один агент за раз»).
     if (options?.stepRunId?.endsWith('.report')) {
       return Promise.resolve(result);
     }
@@ -265,10 +236,6 @@ function issueInput(id: string, steps: PipelineStep[]) {
   };
 }
 
-// ===========================================================================
-// 1. POST /issues/:id/iterations — при running новая итерация = draft
-// ===========================================================================
-
 describe('POST /issues/:id/iterations — одна активная итерация за раз', () => {
   it('при running-итерации создаёт draft, а не авто-стартует', async () => {
     const { db, pi, app } = makeEnv();
@@ -294,7 +261,6 @@ describe('POST /issues/:id/iterations — одна активная итерац
       .get();
     expect(row?.status).toBe('draft');
 
-    // draft НЕ запускает пайплайн.
     await flush();
     expect(pi.calls).toHaveLength(0);
   });
@@ -316,7 +282,6 @@ describe('POST /issues/:id/iterations — одна активная итерац
     expect(res.json()).toEqual({
       error: 'A draft iteration already exists — edit or delete it first',
     });
-    // Откат не оставляет «висящую» итерацию: число строк не изменилось.
     expect(iterationRows(db, issueId)).toHaveLength(before);
     expect(pi.calls).toHaveLength(0);
   });
@@ -348,8 +313,6 @@ describe('POST /issues/:id/iterations — одна активная итерац
     seedIteration(db, issueId, { number: 1, status: 'failed' });
     seedIteration(db, issueId, { number: 2, status: 'pending' });
 
-    // The check used to live under `hasRunning`: an idle issue accepted a
-    // second pending row and execution order drifted away from the numbers.
     const before = iterationRows(db, issueId).length;
     const res = await app.inject({
       method: 'POST',
@@ -401,7 +364,6 @@ describe('POST /issues/:id/iterations — одна активная итерац
     expect(res.statusCode).toBe(201);
     expect(res.json().status).toBe('pending');
 
-    // Фоновый прогон реально стартует и завершается.
     await waitFor(() => (pi.calls.length >= 1 ? true : undefined));
     const status = await waitFor(() => {
       const row = db
@@ -414,10 +376,6 @@ describe('POST /issues/:id/iterations — одна активная итерац
     expect(status).toBe('completed');
   });
 });
-
-// ===========================================================================
-// 2. POST /iterations/:id/queue — draft → pending
-// ===========================================================================
 
 describe('POST /iterations/:id/queue — постановка draft в очередь', () => {
   it('переводит draft → pending (200)', async () => {
@@ -490,10 +448,6 @@ describe('POST /iterations/:id/queue — постановка draft в очер�
   });
 });
 
-// ===========================================================================
-// 3. POST /iterations/:id/repeat — та же draft-логика
-// ===========================================================================
-
 describe('POST /iterations/:id/repeat — та же draft-логика', () => {
   it('при running-итерации задача repeat создаёт draft', async () => {
     const { db, app } = makeEnv();
@@ -552,10 +506,6 @@ describe('POST /iterations/:id/repeat — та же draft-логика', () => {
   });
 });
 
-// ===========================================================================
-// 4. startNextPendingIteration — pending стартует после running
-// ===========================================================================
-
 describe('очередь: pending стартует после завершения running', () => {
   it('после running запускается ровно одна pending, агенты не пересекаются', async () => {
     const db = createDb(':memory:');
@@ -582,7 +532,6 @@ describe('очередь: pending стартует после завершени
     });
     expect(result.iterationStatus).toBe('completed');
 
-    // #2 подхватывается fire-and-forget после завершения #1.
     const secondStatus = await waitFor(() => {
       const row = db
         .select()
@@ -599,15 +548,10 @@ describe('очередь: pending стартует после завершени
     const secondCalls = pi.calls.filter((call) => call.iterationId === secondId);
     expect(firstCalls).toHaveLength(1);
     expect(secondCalls).toHaveLength(1);
-    // #1 закончился до старта #2, одновременных агентов не было.
     expect(firstCalls[0].endedAt).toBeLessThanOrEqual(secondCalls[0].startedAt as number);
     expect(pi.maxActive).toBe(1);
   });
 });
-
-// ===========================================================================
-// 5. Шаги внутри итерации — строго последовательно
-// ===========================================================================
 
 describe('шаги итерации выполняются последовательно', () => {
   it('resolve → review идут один за другим; параллельных агентов нет', async () => {
@@ -639,7 +583,6 @@ describe('шаги итерации выполняются последоват�
 
     expect(result.iterationStatus).toBe('completed');
     expect(pi.calls).toHaveLength(2);
-    // Ключевое: за всё время ни один вызов не пересекался с другим.
     expect(pi.maxActive).toBe(1);
 
     const runRows = db
@@ -654,10 +597,6 @@ describe('шаги итерации выполняются последоват�
     ]);
   });
 });
-
-// ===========================================================================
-// 6. Room-режим: агенты одного шага параллельны
-// ===========================================================================
 
 const ROOM_PLAN: ExecutionPlan = {
   mode: 'room',
@@ -694,7 +633,6 @@ describe('room-режим: исполнители одного шага бегу
     const pi = new ProbeRunner(false);
     const promise = runRoomResolve(pi, roomInput(ROOM_PLAN), roomOptions);
 
-    // Все три исполнителя уже в полёте — без ожидания их завершения.
     await waitFor(() => (pi.active >= 3 ? true : undefined));
     expect(pi.active).toBe(3);
     expect(pi.maxActive).toBe(3);
@@ -703,10 +641,8 @@ describe('room-режим: исполнители одного шага бегу
       'run.run-1.w1',
       'run.run-1.w2',
     ]);
-    // Пока исполнители живы, координатор (id = stepRunId) ещё не стартовал.
     expect(pi.calls.some((call) => call.id === 'run-1')).toBe(false);
 
-    // Отпускаем исполнителей — теперь запускается ровно один координатор.
     pi.releaseAll();
     await waitFor(() => (pi.calls.some((call) => call.id === 'run-1') ? true : undefined));
     expect(pi.active).toBe(1);
@@ -739,10 +675,6 @@ describe('worker_count доезжает до refine-промпта', () => {
   });
 });
 
-// ===========================================================================
-// 7. Статус задачи учитывает pending-итерации в очереди
-// ===========================================================================
-
 describe('статус задачи при наличии pending-итерации в очереди', () => {
   it('после completed-итерации задача остаётся pending, если очередь не пуста', async () => {
     const db = createDb(':memory:');
@@ -768,17 +700,11 @@ describe('статус задачи при наличии pending-итераци
       repoWorkspaces: [],
     });
 
-    // Итерация завершилась.
     expect(result.iterationStatus).toBe('completed');
 
-    // Пока pending-итерация не стартовала — задача pending.
-    // После старта — running. В любом случае не completed.
-    // (startNextPendingIteration стартует асинхронно, поэтому проверяем
-    // что статус либо pending, либо уже running — но не completed.)
     const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
     expect(['pending', 'running']).toContain(issue?.status);
 
-    // Дожидаемся, пока очередь разгребётся — задача станет completed.
     await waitFor(() => {
       const row = db
         .select()
@@ -787,7 +713,6 @@ describe('статус задачи при наличии pending-итераци
         .get();
       return row?.status === 'completed' ? true : undefined;
     });
-    // Итерация #2 тоже должна завершиться.
     const secondStatus = await waitFor(() => {
       const row = db
         .select()
@@ -834,7 +759,6 @@ describe('статус задачи при наличии pending-итераци
     const { db, app } = makeEnv();
     const issueId = seedIssue(db);
 
-    // Задача вручную помечена completed, но имеет draft-итерацию.
     db.update(issues).set({ status: 'completed' }).where(eq(issues.id, issueId)).run();
     const draftId = seedIteration(db, issueId, { number: 1, status: 'draft' });
 
@@ -846,7 +770,6 @@ describe('статус задачи при наличии pending-итераци
     expect(res.statusCode).toBe(200);
     expect(res.json().status).toBe('pending');
 
-    // Задача теперь pending, а не completed.
     const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
     expect(issue?.status).toBe('pending');
   });

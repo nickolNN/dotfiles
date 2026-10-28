@@ -1,19 +1,10 @@
-/**
- * Валидация репозиториев через API хостинг-платформы
- * (GitHub/GitLab/Bitbucket Server). Реальные резолверы ходят в REST API через
- * global fetch (Node 24) — без новых зависимостей. Токены опциональны: без них
- * запрос работает, но упирается в rate limit; 404/401/403 маппятся в понятные
- * ошибки.
- */
 
 import type { RepoInfo, RepoPlatform } from '@issue-resolver/shared';
 
 export interface RepoResolver {
-  /** Проверяет существование репозитория и возвращает его метаданные. */
   resolve(url: string): Promise<RepoInfo>;
 }
 
-/** Фабрика резолверов: по URL и env выбирает реализацию (шов инъекции в тестах). */
 export type RepoResolverFactory = (
   url: string,
   env: NodeJS.ProcessEnv,
@@ -23,7 +14,6 @@ const DEFAULT_GITHUB_HOST = 'github.com';
 const DEFAULT_GITLAB_HOST = 'gitlab.com';
 const DEFAULT_BITBUCKET_HOST = 'bitbucket.org';
 
-/** Хост из https-URL или ssh-стиля `git@host:path` ('' — не распознан). */
 function hostOf(url: string): string {
   const trimmed = url.trim();
   const sshMatch = /^[^@/]+@([^:/]+)[:/]/.exec(trimmed);
@@ -37,7 +27,6 @@ function hostOf(url: string): string {
   }
 }
 
-/** Путь репозитория без хоста и хвоста `.git` (для https и ssh-стиля). */
 function repoPathOf(url: string): string {
   const trimmed = url.trim().replace(/\.git$/, '');
   const sshMatch = /^[^@/]+@[^:/]+[:/](.+)$/.exec(trimmed);
@@ -51,7 +40,6 @@ function repoPathOf(url: string): string {
   }
 }
 
-/** `owner/repo` из https- или ssh-URL GitHub. */
 function githubOwnerRepo(url: string): { owner: string; repo: string } {
   const segments = repoPathOf(url)
     .split('/')
@@ -62,19 +50,10 @@ function githubOwnerRepo(url: string): { owner: string; repo: string } {
   return { owner: segments[0], repo: segments[1] };
 }
 
-/** Cloud-хост Bitbucket (публичное облако, API 2.0) в отличие от Server/DC. */
 function isBitbucketCloudHost(host: string): boolean {
   return host === 'bitbucket.org';
 }
 
-/**
- * `project`/`repo` из URL Bitbucket Server/Data Center или Bitbucket Cloud.
- * Cloud (`bitbucket.org`): `/<owner>/<repo>` — первые два сегмента пути.
- * Server/DC поддержаны:
- * - `https://<host>/projects/<PROJECT>/repos/<REPO>/browse`
- * - `https://<host>/scm/<project>/<repo>.git`
- * - http clone URL `https://<host>/scm/<project>/<repo>.git`
- */
 function bitbucketProjectRepo(url: string): { project: string; repo: string } {
   const segments = repoPathOf(url)
     .split('/')
@@ -108,8 +87,6 @@ function bitbucketProjectRepo(url: string): { project: string; repo: string } {
     };
   }
 
-  // Self-hosted SSH URL: `ssh://host:port/<project>/<repo>.git`
-  // — два сегмента пути без scm/projects-префикса.
   if (segments.length >= 2) {
     return { project: segments[0], repo: segments[1] };
   }
@@ -117,7 +94,6 @@ function bitbucketProjectRepo(url: string): { project: string; repo: string } {
   throw new Error(`cannot parse bitbucket repository: ${url}`);
 }
 
-/** Определяет платформу по URL репозитория. */
 export function detectPlatform(url: string): RepoPlatform {
   const host = hostOf(url);
   if (!host) {
@@ -132,16 +108,12 @@ export function detectPlatform(url: string): RepoPlatform {
   if (host.includes('bitbucket')) {
     return 'bitbucket';
   }
-  // Bitbucket Server ранее назывался Stash; self-hosted инстансы часто
-  // живут на `stash.*` — это та же REST API Bitbucket Server.
   if (host.includes('stash')) {
     return 'bitbucket';
   }
-  // Известные публичные SaaS-хосты — не Bitbucket.
   if (host === 'github.com' || host === 'gitlab.com' || host === 'bitbucket.org') {
     return 'unknown';
   }
-  // Self-hosted/частный хост — по умолчанию Bitbucket Server.
   return 'bitbucket';
 }
 
@@ -153,22 +125,15 @@ interface GitHubRepoResponse {
   stargazers_count: number;
   private: boolean;
   clone_url: string;
-  /** Отдаётся только для аутентифицированных запросов. */
   permissions?: { push?: boolean };
 }
 
-/**
- * GitHub / GitHub Enterprise Server.
- * - `github.com`: `GET https://api.github.com/repos/:owner/:repo`
- * - GHES (self-hosted): `GET https://<host>/api/v3/repos/:owner/:repo`
- */
 export class GitHubResolver implements RepoResolver {
   constructor(
     private readonly token = '',
     private readonly host = DEFAULT_GITHUB_HOST,
   ) {}
 
-  /** Базовый URL REST API: cloud — `api.github.com`, GHES — `<host>/api/v3`. */
   private apiBase(): string {
     return this.host === DEFAULT_GITHUB_HOST
       ? 'https://api.github.com'
@@ -218,7 +183,6 @@ export class GitHubResolver implements RepoResolver {
         branches = list.map((b) => b.name);
       }
     } catch {
-      // fallback to default branch only
     }
 
     return {
@@ -248,7 +212,6 @@ interface GitLabRepoResponse {
     project_access?: { access_level?: number } | null;
   } | null;
 }
-/** GitLab: `GET https://<host>/api/v4/projects/:encodeURIComponent(path)`. */
 export class GitLabResolver implements RepoResolver {
   constructor(
     private readonly token = '',
@@ -293,7 +256,6 @@ export class GitLabResolver implements RepoResolver {
         branches = list.map((b) => b.name);
       }
     } catch {
-      // fallback to default branch only
     }
 
     return {
@@ -306,7 +268,6 @@ export class GitLabResolver implements RepoResolver {
       stars: data.star_count,
       isPrivate: data.visibility !== 'public',
       cloneUrl: data.http_url_to_repo,
-      // Developer+ (30) в GitLab даёт право создавать MR; ниже — только чтение.
       writeAccess: (data.permissions?.project_access?.access_level ?? 0) >= 30,
     };
   }
@@ -330,7 +291,6 @@ interface BitbucketBranchResponse {
   displayId: string;
 }
 
-/** Authorization Bitbucket: Bearer (PAT), иначе Basic (app password). */
 function bitbucketAuthHeaders(
   token: string,
   username: string,
@@ -346,15 +306,6 @@ function bitbucketAuthHeaders(
   return {};
 }
 
-/**
- * Bitbucket Server / Data Center:
- * - `GET https://<host>/rest/api/1.0/projects/<project>/repos/<repo>`
- * - `GET https://<host>/rest/api/1.0/projects/<project>/repos/<repo>/branches/default`
- *
- * Авторизация: Bearer (Personal Access Token) при заданном `token`, иначе
- * Basic (App Password) при заданных username/password.
- * `language` и `stars` в Server API не отдаются → `null` и `0`.
- */
 export class BitbucketResolver implements RepoResolver {
   constructor(
     private readonly token = '',
@@ -367,13 +318,6 @@ export class BitbucketResolver implements RepoResolver {
     return bitbucketAuthHeaders(this.token, this.username, this.password);
   }
 
-  /**
-   * Право на запись токена в репозиторий. Bitbucket Server не отдаёт это в
-   * метаданных, поэтому проверяем пробной операцией: создать временную ветку
-   * от default-ветки и сразу её удалить. Токен (Bearer PAT / Basic app
-   * password) сам аутентифицирует пользователя — `BITBUCKET_USERNAME` не нужен.
-   * Не-2xx (в т.ч. 401/403) или сбой сети → false, валидацию не роняем.
-   */
   private async hasWriteAccess(
     project: string,
     repo: string,
@@ -389,7 +333,6 @@ export class BitbucketResolver implements RepoResolver {
         body: JSON.stringify({ name: testBranch, startPoint }),
       });
       if (!createResp.ok) return false;
-      // Best-effort уборка тестовой ветки; её результат не влияет на ответ.
       try {
         await fetch(`${base}/branches`, {
           method: 'DELETE',
@@ -397,7 +340,6 @@ export class BitbucketResolver implements RepoResolver {
           body: JSON.stringify({ name: `refs/heads/${testBranch}` }),
         });
       } catch {
-        // уборка не удалась — это не признак отсутствия прав
       }
       return true;
     } catch {
@@ -406,7 +348,6 @@ export class BitbucketResolver implements RepoResolver {
   }
 
   async resolve(url: string): Promise<RepoInfo> {
-    // `bitbucket.org` — Cloud с API 2.0; `this.host` — Server/DC REST 1.0.
     if (isBitbucketCloudHost(hostOf(url) || this.host)) {
       return new BitbucketCloudResolver(
         this.token,
@@ -455,7 +396,6 @@ export class BitbucketResolver implements RepoResolver {
         }
       }
     } catch {
-      // fallback to default branch only
     }
 
     const defaultBranch = branch?.displayId ?? 'main';
@@ -489,14 +429,6 @@ interface BitbucketCloudRepoResponse {
   links?: { clone?: BitbucketCloneLink[] };
 }
 
-/**
- * Bitbucket Cloud (`bitbucket.org`) — API 2.0 (не Server/DC):
- * - `GET https://api.bitbucket.org/2.0/repositories/<owner>/<repo>`
- * - `GET https://api.bitbucket.org/2.0/repositories/<owner>/<repo>/refs/branches?pagelen=100`
- *
- * Авторизация: Bearer (PAT) или Basic (app password). `stars` в базовом
- * ответе нет (отдельный эндпоинт) → `0`.
- */
 export class BitbucketCloudResolver implements RepoResolver {
   constructor(
     private readonly token = '',
@@ -541,7 +473,6 @@ export class BitbucketCloudResolver implements RepoResolver {
         }
       }
     } catch {
-      // fallback to default branch only
     }
 
     const httpsClone = data.links?.clone?.find(
@@ -559,13 +490,11 @@ export class BitbucketCloudResolver implements RepoResolver {
       isPrivate: data.is_private,
       cloneUrl:
         httpsClone?.href ?? `https://bitbucket.org/${owner}/${repo}.git`,
-      // Cloud в базовом ответе прав не отдаёт — считаем права отсутствующими.
       writeAccess: false,
     };
   }
 }
 
-/** Фабрика: по `detectPlatform(url)` возвращает нужный резолвер. */
 export function createRepoResolver(
   url: string,
   env: NodeJS.ProcessEnv,
@@ -594,17 +523,12 @@ export function createRepoResolver(
   throw new Error('Unsupported platform');
 }
 
-/**
- * In-memory-резолвер для тестов: запоминает вызовы, отдаёт заданные
- * метаданные. `failNextWith` позволяет проверить путь ошибки.
- */
 export class FakeRepoResolver implements RepoResolver {
   readonly calls: string[] = [];
   private pendingError: Error | null = null;
 
   constructor(private readonly info: RepoInfo) {}
 
-  /** Следующий resolve отклонится этой ошибкой. */
   failNextWith(err: Error): void {
     this.pendingError = err;
   }
@@ -616,7 +540,6 @@ export class FakeRepoResolver implements RepoResolver {
       this.pendingError = null;
       throw err;
     }
-    // Fake-резолвер по умолчанию считает, что право на запись есть.
     return { ...this.info, writeAccess: this.info.writeAccess ?? true };
   }
 }

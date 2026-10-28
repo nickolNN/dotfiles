@@ -44,10 +44,6 @@ function jsonResponse(
   } as Response;
 }
 
-/**
- * Стаб fetch по образцу `TaskDetail.abort.test.tsx`: GET итераций отдаёт
- * `iterations()`, POST .../repeat — результат `repeat`.
- */
 function stubFetch(
   iterations: () => Iteration[],
   repeat: (url: string, init?: RequestInit) => Promise<Response>,
@@ -114,7 +110,6 @@ describe('TaskDetail — кнопка «↻ Повторить»', () => {
       'repeat-iteration',
     );
     expect(buttons).toHaveLength(3);
-    // Список сортируется свежая-сначала: #3 pending, #2 running, #1 completed.
     expect(buttons[0]).toBeDisabled();
     expect(buttons[1]).toBeDisabled();
     expect(buttons[2]).not.toBeDisabled();
@@ -144,7 +139,6 @@ describe('TaskDetail — кнопка «↻ Повторить»', () => {
         );
       });
       expect(repeatCall).toBeTruthy();
-      // Без тела — только метод.
       expect(repeatCall?.[1]?.body).toBeUndefined();
     });
 

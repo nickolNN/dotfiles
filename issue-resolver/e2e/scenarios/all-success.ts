@@ -1,10 +1,5 @@
 import type { MockPiScenario } from './types';
 
-/**
- * Все шаги конвейера завершаются успешно с валидным отчётом.
- * Курсор раннера отдаёт по одному `success` на шаг; лишние шаги безопасно
- * деградируют до успеха, поэтому список короткий.
- */
 export const allSuccessScenario: MockPiScenario = {
   name: 'all-success',
   bootstrap: 'success',

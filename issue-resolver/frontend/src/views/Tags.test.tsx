@@ -109,7 +109,6 @@ describe('Tags', () => {
 
     const toggle = screen.getByTestId('tag-repositories-toggle');
     expect(toggle).toHaveTextContent('Репозитории (2)');
-    // Текстовая строка «N репозиториев» из карточки убрана — счётчик только в кнопке.
     expect(screen.queryByText(/^\d+ репозитори/)).toBeNull();
 
     fireEvent.click(toggle);
@@ -138,7 +137,6 @@ describe('Tags', () => {
     expect(del).toHaveAttribute('aria-label', 'Удалить тег');
     expect(edit.querySelector('svg')).toBeTruthy();
     expect(del.querySelector('svg')).toBeTruthy();
-    // Раньше были текстовые ссылки — теперь текста нет.
     expect(screen.queryByText('Редактировать')).toBeNull();
     expect(screen.queryByText('Удалить')).toBeNull();
   });

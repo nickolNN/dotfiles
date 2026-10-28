@@ -1,11 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { FakeApi, pollIterationStatus } from '../../helpers';
 
-/**
- * Повтор итерации: вторая итерация стартует, а результат первой продолжает
- * открываться. Первую итерацию сеем завершённой — иначе кнопка «Повторить»
- * задизейблена (`isIterationActive`).
- */
 test.describe('edge: повтор итерации', () => {
   test('#2 стартует, результат #1 остаётся доступным', async ({ page }) => {
     const api = new FakeApi();
@@ -32,7 +27,6 @@ test.describe('edge: повтор итерации', () => {
     });
     await pollIterationStatus(page, 'running');
 
-    // результат первой итерации всё ещё доступен
     const openResult = page.getByTestId('open-result');
     await expect(openResult).toBeEnabled();
     await openResult.click();

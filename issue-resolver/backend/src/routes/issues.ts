@@ -73,11 +73,6 @@ const API_PATH = '/issue-resolver/api/v1';
 const ROUTE_PATH = `${API_PATH}/issues`;
 const DEFAULT_STEPS: readonly PipelineStep[] = ['refine', 'resolve'];
 
-/**
- * Заголовок `x-artifact-warning` для артефактных ответов: пусто, если по
- * отчёту задачи нет предупреждений (напр. утечка id модели). Пустой заголовок
- * не ставим, чтобы не шуметь.
- */
 function artifactWarningHeaders(
   issueId: string,
   workspaceRoot?: string,
@@ -92,11 +87,6 @@ function artifactWarningHeaders(
     : {};
 }
 
-/**
- * Steps as the user selected them (deduped; empty → DEFAULT_STEPS) with `pr`
- * appended when createMr. `resolve` is not injected — the checkbox is
- * authoritative, otherwise "MR only" was impossible.
- */
 function resolvePipelineSteps(
   input: PipelineStep[] | undefined,
   createMr: boolean,
@@ -105,10 +95,6 @@ function resolvePipelineSteps(
   return combineSteps([...new Set(steps)], createMr);
 }
 
-/**
- * Шаги итерации: без принудительного 'resolve' (сохраняем override), но то же
- * правило комбинирования pr.
- */
 function combineIterationSteps(
   input: PipelineStep[],
   createMr: boolean,
@@ -116,7 +102,6 @@ function combineIterationSteps(
   return combineSteps([...new Set(input)], createMr);
 }
 
-/** Общее правило: pr в конец при createMr; набор шагов не переписывается. */
 function combineSteps(
   input: PipelineStep[],
   createMr: boolean,
@@ -128,16 +113,13 @@ function combineSteps(
   return steps;
 }
 
-/** Нормализованный репозиторий задачи: URL + ветка (repo_id → url/defaultBranch). */
 interface ResolvedIssueRepository {
   repository_url: string;
   base_branch: string;
   create_mr: boolean;
-  /** false — репозиторий клонируется, но install/анализ запуска пропускаются. */
   bootstrap_enabled: boolean;
 }
 
-/** Строка БД → Iteration: 0/1 → boolean, review_context с дефолтом ''. */
 function toIteration(row: typeof iterations.$inferSelect): Iteration {
   return {
     id: row.id,
@@ -158,10 +140,6 @@ function toIteration(row: typeof iterations.$inferSelect): Iteration {
   };
 }
 
-/**
- * Сохраняет загруженные файлы в папку задачи/итерации и пишет строки в БД.
- * Вызывать до `runIssueIteration`, чтобы файлы уже лежали в cwd агента.
- */
 async function saveAttachments(
   db: Db,
   deps: IterationRunDeps,
@@ -189,7 +167,6 @@ async function saveAttachments(
   await insertMany(db, saved);
 }
 
-/** RFC 5987-энкодер для `filename*` (encodeURIComponent + reserved attr-chars). */
 function rfc5987(value: string): string {
   return encodeURIComponent(value).replace(
     /['()!*]/g,
@@ -197,10 +174,6 @@ function rfc5987(value: string): string {
   );
 }
 
-/**
- * Артефакты отчёта на диске: наличие, размер и mtime.
- * `mtime` — ISO-Z без миллисекунд (один формат с `x-artifact-mtime`).
- */
 async function reportArtifactsOnDisk(hostDir: string): Promise<{
   md: { present: boolean; bytes: number; mtime: string | null };
   html: { present: boolean; bytes: number; mtime: string | null };
@@ -221,10 +194,6 @@ async function reportArtifactsOnDisk(hostDir: string): Promise<{
   return { md: await read('report.md'), html: await read('report.html') };
 }
 
-/**
- * `Content-Disposition: attachment` с ASCII-фолбеком (кавычки/слэши/переводы
- * строк → `_`) и `filename*` (UTF-8) для не-ASCII имён.
- */
 function attachmentDisposition(name: string): string {
   const ascii =
     name.replace(/["\\\r\n]/g, '_').replace(/[^\x20-\x7e]/g, '_') || 'file';
@@ -240,7 +209,6 @@ export async function issuesRoutes(
 ): Promise<void> {
   const config = service.resolveConfig(deps);
 
-  /** Собирает человекочитаемый Markdown из полных данных Jira. */
   function buildJiraMarkdown(full: JiraIssueFull): string {
     const issue = full.issue;
     const raw = issue.raw as Record<string, unknown> | undefined;
@@ -252,7 +220,6 @@ export async function issuesRoutes(
       `**Ключ:** ${issue.key}`,
     ];
 
-    // Статус, приоритет, исполнитель
     if (fields) {
       const status = (fields.status as { name?: string } | undefined)?.name;
       const priority = (fields.priority as { name?: string } | undefined)?.name;
@@ -265,10 +232,8 @@ export async function issuesRoutes(
       }
     }
 
-    // Описание
     parts.push('', '## Описание', '', issue.summary || '_Описания нет_');
 
-    // Комментарии
     if (full.comments.length > 0) {
       parts.push('', '## Комментарии', '');
       for (const c of full.comments) {
@@ -277,7 +242,6 @@ export async function issuesRoutes(
       }
     }
 
-    // История изменений (последние 30 записей)
     if (full.changelog.length > 0) {
       parts.push('', '## История изменений', '');
       const recent = full.changelog.slice(0, 30);
@@ -308,11 +272,6 @@ export async function issuesRoutes(
     },
   );
 
-  /**
-   * Живая статистика контейнера задачи (CPU/память/pids). Контейнера нет
-   * (Dockerode отвечает 404) → `{ containerName, error: 'container_not_found' }`;
-   * прочие сбои не роняем — отдаём `ContainerStats` с null/нулевыми полями.
-   */
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/container-stats`,
     async (request, reply) => {
@@ -356,8 +315,6 @@ export async function issuesRoutes(
           .where(eq(issues.id, id))
           .get()?.dev_server_pid ?? null;
       if (pid) {
-        // Процесс запущен detached — это лидер группы, поэтому SIGTERM/SIGKILL
-        // шлём группе (-pid), а при её отсутствии — самому PID.
         const signal = (sig: NodeJS.Signals): void => {
           try {
             process.kill(-pid, sig);
@@ -365,7 +322,6 @@ export async function issuesRoutes(
             try {
               process.kill(pid, sig);
             } catch {
-              // Процесс уже мёртв — это нормально.
             }
           }
         };
@@ -422,9 +378,6 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      // Идёт report-прогон или корень пуст: `getResultArtifact` сам решает по
-      // состоянию и вернёт прошлый HTML из снапшота с пометкой `x-artifact-source`.
-      // Немаркированного прошлого отчёта не отдаём —(в).
       const result = await service.getResultArtifact(db, config, id);
       if (!result) {
         return reply.status(404).send({ error: 'result not found' });
@@ -465,7 +418,6 @@ export async function issuesRoutes(
     },
   );
 
-  // MD-артефакт (report.md) — для скачивания агентами.
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/result/md`,
     async (request, reply) => {
@@ -573,7 +525,6 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      // Guard: inside the task workspace only (path traversal).
       const path = workspaceFilePathFor(
         deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
         id,
@@ -594,7 +545,6 @@ export async function issuesRoutes(
       }
 
       const name = basename(path);
-      // `inline=1` serves a preview (iframe/img); otherwise a download.
       const disposition =
         request.query.inline === '1'
           ? 'inline'
@@ -606,9 +556,6 @@ export async function issuesRoutes(
     },
   );
 
-  // ── Report routes ────────────────────────────────────────────────
-
-  // POST /issues/:id/report — force-run report agent
   app.post<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/report`,
     async (request, reply) => {
@@ -618,8 +565,6 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      // A second run would archive the root the active run is still writing
-      // into, so the finished report would vanish from /result.
       if (isReportRunActive(id)) {
         return reply.status(409).send({ error: 'report run already active' });
       }
@@ -653,26 +598,19 @@ export async function issuesRoutes(
           feedback: null,
           repoPaths: repoWorkspaces,
           iterationCount,
-          // The report agent writes at this path; a clone path is not it.
           workingDir: deps.local ? hostDir : workspaceContainerDirFor(id),
         });
 
-        // Archiving lives inside `runReportAgent`: one point for both the
-        // post-iteration and this route.
         void runReportAgent({ ...deps, db }, {
           issueId: id,
           containerName,
           hostDir,
           prompt,
-          // Report model: a manual query param overrides step_models.report,
-          // which overrides the last finished iteration's model.
           model: (request.query as Record<string, string>).model || reportModelFor(db, id),
           thinkingLevel: (request.query as Record<string, string>).thinking as ThinkingLevel | undefined,
-          // Attribution: a manual run and its Origin show up in the server log.
           trigger: 'manual',
           origin: request.headers.origin ?? null,
         }).then(() =>
-          // Report written: refresh the snapshot that GET /result reads.
           refreshLatestResultSnapshot(db, deps.workspaceRoot, id).catch(
             (error) => console.error('refresh report snapshot failed', error),
           ),
@@ -686,7 +624,6 @@ export async function issuesRoutes(
     },
   );
 
-  // GET /issues/:id/report/status
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/report/status`,
     async (request, reply) => {
@@ -695,19 +632,12 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      // The in-memory active run outranks the DB row: the root is archived
-      // while the agent works, so `idle` from an empty root would be a lie.
       const wsRoot = deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
       const hostDir = workspaceHostDirFor(wsRoot, id);
       const artifacts = await reportArtifactsOnDisk(hostDir);
       const run = await getLatestStepRunForIssue(db, id, 'report');
       const now = Date.now();
 
-      // A `running` row with no live process is not "in progress", it is dead:
-      // the run lives in process memory, and its death used to leave the row in
-      // `running` forever (UI held «⏳» and blocked «Обновить»). A live run bumps
-      // `updated_at` every heartbeat, so a row that missed the stale window is
-      // honestly driven to `failed`.
       if (
         run &&
         run.status === 'running' &&
@@ -726,12 +656,8 @@ export async function issuesRoutes(
       else if (run) {
         if (run.status === 'success') status = 'success';
         else if (run.status === 'failed') status = 'failed';
-        // `pending`/`running` with no in-memory run was interrupted by a
-        // restart; reconcileInterruptedRuns drives those rows to `failed`.
         else status = 'running';
       } else if (artifacts.md.present) {
-        // Artifact present but no run row (fresh DB): the report really is
-        // there, and `idle` would be the opposite lie.
         status = 'success';
       } else {
         status = lastReportFailed(id) ? 'failed' : 'idle';
@@ -741,37 +667,26 @@ export async function issuesRoutes(
       const observedModel = observedModelFor(id);
       return {
         status,
-        // Outcome from the DB: time, reason, and what actually hit the disk.
-        // Status used to be derived from report.md existing at all, so a run
-        // that produced nothing looked successful.
         ...(run
           ? {
               runId: run.id,
               runStatus: run.status,
               startedAt: run.created_at,
-              // `finishedAt` only for a terminal row: a live run bumps
-              // `updated_at` too, but that is a heartbeat, not a finish.
               ...(run.status === 'success' || run.status === 'failed'
                 ? { finishedAt: run.updated_at }
                 : {}),
-              // Last activity — the UI tells a live run from a hung one by this
-              // instead of trusting the word `running`.
               updatedAt: run.updated_at,
               ...(run.feedback ? { feedback: run.feedback } : {}),
             }
           : {}),
         artifacts,
         ...(artifacts.md.mtime ? { lastRunAt: artifacts.md.mtime } : {}),
-        // The observed (not requested) model: additive, missing after a
-        // restart, so the UI shows "no telemetry" rather than a guess.
         ...(observedModel ? { observedModel } : {}),
         ...(warnings.length > 0 ? { warnings } : {}),
       };
     },
   );
 
-  // GET /issues/:id/report/run — latest report run with its session log. It
-  // lives outside any iteration (iteration_id = NULL), hence its own route.
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/report/run`,
     async (request, reply) => {
@@ -788,8 +703,6 @@ export async function issuesRoutes(
       return withLog;
     },
   );
-
-  // ── Iterations ───────────────────────────────────────────────────
 
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/iterations`,
@@ -829,8 +742,6 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'issue not found' });
       }
 
-      // Удаление — фоновая операция: сразу отвечаем 202, а прогресс/финал
-      // уходят в SSE (`issue_deleting` → `issue_deleted`).
       void service.deleteIssue(db, config, id);
       return reply.code(202).send({ ok: true });
     },
@@ -844,7 +755,6 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'file not found' });
       }
 
-      // Файл — best-effort; guard не даёт выйти за папку attachments задачи.
       const path = attachmentsFilePathFor(
         deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
         row.issue_id,
@@ -870,7 +780,6 @@ export async function issuesRoutes(
         return reply.status(404).send({ error: 'file not found' });
       }
 
-      // Guard: только внутри папки attachments задачи (защита от traversal).
       const path = attachmentsFilePathFor(
         deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
         row.issue_id,
@@ -935,19 +844,12 @@ export async function issuesRoutes(
           bootstrap_enabled: repository.bootstrap_enabled ?? true,
         }));
 
-      // Если в запросе присутствует pr_repository_ids — обновляем create_mr
-      // флаги в таблице репозиториев задачи ДО чтения. Так шаг pr видит
-      // актуальный per-repo выбор из UI итерации. Пустой массив — тоже
-      // авторитетен (снимаем все галочки), иначе снятие выбора не долетало бы
-      // до БД и `pr` возвращался бы в шаги из старых флагов.
       if (body.pr_repository_ids !== undefined) {
         const prIdSet = new Set(body.pr_repository_ids);
-        // Сбрасываем create_mr у всех репозиториев этой задачи.
         db.update(issueRepositories)
           .set({ create_mr: false, updated_at: new Date().toISOString() })
           .where(eq(issueRepositories.issue_id, id))
           .run();
-        // Включаем create_mr только у выбранных.
         for (const repoId of prIdSet) {
           db.update(issueRepositories)
             .set({ create_mr: true, updated_at: new Date().toISOString() })
@@ -959,7 +861,6 @@ export async function issuesRoutes(
             )
             .run();
         }
-        // Перечитываем репозитории после обновления create_mr.
         repositories.length = 0;
         const updated = db
           .select()
@@ -1008,9 +909,6 @@ export async function issuesRoutes(
         updated_at: now,
       };
 
-      // Принцип: только одна активная + максимум одна запланированная итерация.
-      // Проверяем ДО вставки новой итерации: иначе при отказе (409) только что
-      // созданная строка оставалась бы в БД «фантомной» итерацией.
       const hasRunning = db
         .select({ id: iterations.id })
         .from(iterations)
@@ -1022,10 +920,6 @@ export async function issuesRoutes(
         )
         .get();
 
-      // Queue slots are per issue and do not depend on a running iteration: with
-      // these checks nested under `hasRunning`, an idle issue accepted a second
-      // pending row and execution order drifted away from the numbers
-      // (#2 → #4 → #3 in a real run).
       const hasPlanned = db
         .select({ id: iterations.id })
         .from(iterations)
@@ -1076,7 +970,6 @@ export async function issuesRoutes(
         workspaceRoot: deps.workspaceRoot,
       };
       if (hasRunning) {
-        // Создаём черновик.
         db.update(iterations)
           .set({ status: 'draft', updated_at: now })
           .where(eq(iterations.id, iterationId))
@@ -1085,8 +978,6 @@ export async function issuesRoutes(
         return reply.status(201).send({ ...iteration, status: 'draft' });
       }
 
-      // Нет активной итерации — создаём pending и запускаем.
-      // Подготовка + конвейер — фоновый прогон.
       void (async () => {
         try {
           const ws = await prepareIssueWorkspace(db, prepareDeps, {
@@ -1129,8 +1020,6 @@ export async function issuesRoutes(
     },
   );
 
-  // POST /issues/validate-jira — живая проверка ссылки на Jira:
-  // извлекает ключ из URL, дёргает Jira API и возвращает данные задачи.
   app.post(`${ROUTE_PATH}/validate-jira`, async (request, reply) => {
     const parsed = validateJiraUrlSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -1174,13 +1063,9 @@ export async function issuesRoutes(
 
     let title = explicitTitle ?? '';
     let additionalContext = body.additional_context ?? '';
-    // Описание задачи — исходный additional_context (до Jira-обогащения).
     const description = body.additional_context ?? '';
-    // Данные Jira для сохранения в workspace (подтягиваются один раз).
     let jiraFull: JiraIssueFull | null = null;
 
-    // Фаза 6: jira_issue_url без явного title — обогащаемся из Jira.
-    // Любая ошибка Jira деградирует до title = ключ, запрос не падает.
     if (!explicitTitle && jiraIssueUrl) {
       const key = extractIssueKeyFromUrl(jiraIssueUrl);
       if (key) {
@@ -1199,14 +1084,12 @@ export async function issuesRoutes(
       }
     }
 
-    // Даже если title задан явно, подтягиваем данные Jira для сохранения в workspace.
     if (!jiraFull && jiraIssueUrl) {
       const key = extractIssueKeyFromUrl(jiraIssueUrl);
       if (key) {
         try {
           jiraFull = await jira.fetchIssueFull(key);
         } catch {
-          // Jira недоступна — задача создаётся без файла.
         }
       }
     }
@@ -1221,9 +1104,6 @@ export async function issuesRoutes(
     const isReviewNeed = body.is_review_need ?? false;
     const reviewContext = body.review_context ?? '';
     const desiredResult: DesiredResult = body.desired_result ?? 'md';
-    // Репозитории адресуются либо ссылкой на сохранённый (`repo_id`, приоритет),
-    // либо явным URL (старый формат). Нормализуем оба варианта в пару
-    // (url, base_branch) до записи в БД.
     const repositories: ResolvedIssueRepository[] = [];
     for (const repository of body.repositories ?? []) {
       const repoId = 'repo_id' in repository ? repository.repo_id : undefined;
@@ -1332,7 +1212,6 @@ export async function issuesRoutes(
       }
     });
 
-    // Файлы сохраняются всегда (и для черновика, и для immediate-запуска).
     await saveAttachments(db, deps, issueId, iterationId, 1, requestPayload.files);
 
     if (runImmediately) {
@@ -1349,12 +1228,8 @@ export async function issuesRoutes(
         devopsTimeoutMs: deps.devopsTimeoutMs,
         workspaceRoot: deps.workspaceRoot,
       };
-      // Подготовка + конвейер — фоновый прогон. HTTP-ответ возвращается
-      // немедленно; прогресс и статус идут через SSE.
       void (async () => {
         try {
-          // Сохраняем данные Jira в workspace-папку задачи ДО подготовки
-          // репозиториев — агенты видят их как файлы, к Jira API доступа нет.
           if (jiraFull) {
             const wsDir = workspaceHostDirFor(
               deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
@@ -1362,7 +1237,6 @@ export async function issuesRoutes(
             );
             mkdirSync(join(wsDir, 'jira'), { recursive: true });
 
-            // Полный JSON: issue.raw + comments + changelog.
             const fullRaw = {
               issue: jiraFull.issue.raw ?? jiraFull.issue,
               comments: jiraFull.comments,
@@ -1374,7 +1248,6 @@ export async function issuesRoutes(
               'utf8',
             );
 
-            // Расширенный .md: заголовок, статус, описание, комментарии, история.
             const issue = jiraFull.issue;
             const md = buildJiraMarkdown(jiraFull);
             writeFileSync(
@@ -1439,7 +1312,6 @@ export async function issuesRoutes(
     });
   });
 
-  // POST /issues/:id/start — запуск сохранённого черновика.
   app.post<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/start`,
     async (request, reply) => {
@@ -1455,7 +1327,6 @@ export async function issuesRoutes(
           .send({ error: 'only draft issues can be started' });
       }
 
-      // Проверяем, что итераций нет (черновик не запускался).
       const existingIteration = db
         .select({ id: iterations.id })
         .from(iterations)
@@ -1576,7 +1447,6 @@ export async function issuesRoutes(
     },
   );
 
-  // PUT /issues/:id — редактирование черновика.
   app.put<{
     Params: { id: string };
     Body: Record<string, unknown>;
@@ -1595,7 +1465,6 @@ export async function issuesRoutes(
           .send({ error: 'only draft issues can be edited' });
       }
 
-      // Проверяем, что итераций нет (черновик не запускался).
       const existingIteration = db
         .select({ id: iterations.id })
         .from(iterations)
@@ -1616,7 +1485,6 @@ export async function issuesRoutes(
       const now = new Date().toISOString();
 
       db.transaction((tx) => {
-        // Обновляем поля задачи — только те, что переданы.
         const setData: Record<string, unknown> = { updated_at: now };
         if (body.title !== undefined) setData.title = body.title;
         if (body.description !== undefined) setData.description = body.description;
@@ -1646,14 +1514,12 @@ export async function issuesRoutes(
           .where(eq(issues.id, id))
           .run();
 
-        // Репозитории: если переданы — заменяем весь список.
         if (body.repositories !== undefined) {
           tx.delete(issueRepositories)
             .where(eq(issueRepositories.issue_id, id))
             .run();
 
           const repoRows = body.repositories.map((repo) => {
-            // Поддерживаем и явный URL, и repo_id.
             const repoId =
               'repo_id' in repo ? repo.repo_id : undefined;
             let repositoryUrl: string | undefined =
@@ -1698,7 +1564,6 @@ export async function issuesRoutes(
         }
       });
 
-      // Возвращаем обновлённую задачу.
       const updated = service.getIssue(db, config, id);
       return reply.status(200).send(updated);
     },

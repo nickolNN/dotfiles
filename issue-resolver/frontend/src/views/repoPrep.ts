@@ -1,9 +1,3 @@
-/**
- * Сводка подготовки репозиториев для шапки задачи: чистые функции поверх
- * накопленных SSE-событий `workspace_progress`. Отдельный модуль, чтобы
- * статусную логику можно было тестировать без рендера `TaskDetail`.
- */
-/** Итоговый индикатор подготовки одного репозитория. */
 export type RepoPrepStatus =
   | 'pending'
   | 'cloning'
@@ -15,17 +9,14 @@ export type RepoPrepStatus =
   | 'skipped'
   | 'failed';
 
-/** Минимальная форма шага `workspace_progress`, нужная для вывода статуса. */
 export interface RepoPrepStep {
   step: string;
   repo?: string;
   status: 'running' | 'done' | 'warning' | 'error';
   message?: string;
-  /** Порт dev-сервера (шаг `dev_server`). */
   devPort?: number;
 }
 
-/** Человекочитаемая подпись статуса. */
 export const REPO_PREP_LABELS: Record<RepoPrepStatus, string> = {
   pending: 'в очереди',
   cloning: 'клонирование',
@@ -38,7 +29,6 @@ export const REPO_PREP_LABELS: Record<RepoPrepStatus, string> = {
   failed: 'ошибка',
 };
 
-/** Маркер статуса (совпадает с легендой шапки). */
 export const REPO_PREP_MARKS: Record<RepoPrepStatus, string> = {
   pending: '🟡',
   cloning: '🔵',
@@ -51,7 +41,6 @@ export const REPO_PREP_MARKS: Record<RepoPrepStatus, string> = {
   failed: '❌',
 };
 
-/** Цвет маркера в матричной палитре UI. */
 export const REPO_PREP_COLORS: Record<RepoPrepStatus, string> = {
   pending: '#FFB000',
   cloning: '#00B4FF',
@@ -64,13 +53,6 @@ export const REPO_PREP_COLORS: Record<RepoPrepStatus, string> = {
   failed: '#FF0033',
 };
 
-/**
- * Имя репозитория для показа: `owner/repo` из https- или ssh-URL.
- *
- * `extractRepoNameFromUrl` (shared) отдаёт только последний сегмент — его
- * TaskDetail использует как ключ сопоставления с SSE-полем `repo`, а здесь
- * показываем пару «владелец/репозиторий».
- */
 export function repoFullNameFromUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, '');
   const withoutGit = trimmed.replace(/\.git$/i, '');
@@ -89,15 +71,6 @@ function lastStep(
   return undefined;
 }
 
-/**
- * Последний статус подготовки репозитория по накопленным `workspace_progress`.
- *
- * @param repoKey ключ из SSE (`extractRepoNameFromUrl`)
- * @param bootstrapEnabled флаг репозитория: false → install/анализ пропущены
- * @param steps накопленные шаги подготовки
- * @param workspaceReady пришёл терминальный `ready` (или задача уже не в фазе
- *   подготовки после перезагрузки)
- */
 export function repoPrepStatus(
   repoKey: string,
   bootstrapEnabled: boolean,
@@ -113,8 +86,6 @@ export function repoPrepStatus(
   const devServer = lastStep(own, 'dev_server');
   if (devServer) {
     if (skipped) return 'skipped';
-    // Пока dev-сервер поднимается — отдельный статус; `warning` (не поднялся)
-    // не переводит репозиторий в `failed`, откатываемся к «зависимости есть».
     if (devServer.status === 'running') return 'dev_server';
     return 'installed';
   }
@@ -131,10 +102,6 @@ export function repoPrepStatus(
   return 'pending';
 }
 
-/**
- * Порт dev-сервера репозитория из последнего шага `dev_server` со статусом
- * `done`. Нет порта/шага → undefined.
- */
 export function repoDevPort(
   repoKey: string,
   steps: readonly RepoPrepStep[],

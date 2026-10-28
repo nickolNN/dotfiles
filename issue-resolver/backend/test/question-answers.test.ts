@@ -19,7 +19,6 @@ afterEach(async () => {
   await Promise.all(openApps.splice(0).map((app) => app.close()));
 });
 
-/** Прямой insert issue + iteration #1 (в обход фонового прогона). */
 function seedIteration(db: Db): string {
   const now = new Date().toISOString();
   const issueId = randomUUID();

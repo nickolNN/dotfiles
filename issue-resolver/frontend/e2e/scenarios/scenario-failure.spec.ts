@@ -8,10 +8,6 @@ import {
   waitForStatus,
 } from '../helpers';
 
-/**
- * Сценарный прогон «шаг падает»: refine проходит, resolve падает (`step #2`),
- * итерация и задача → `failed`. Мок-агент, без Docker/pi/сети.
- */
 test.describe('scenario: step failure', () => {
   test.afterEach(async ({ request }) => {
     await resetScenario(request);
@@ -21,7 +17,6 @@ test.describe('scenario: step failure', () => {
     await setScenario(request, { scenario: 'step-failure' });
     const title = uniqueTitle('e2e-scenario-failure');
 
-    // refine включаем, чтобы прогон состоял из двух шагов и падал именно #2.
     const issueId = await createIssueViaUI(page, { title, refine: true });
 
     const final = await pollIssueStatus(request, issueId, (status) =>

@@ -45,9 +45,6 @@ describe('RpcSessionParser', () => {
       assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'Hello world' },
     });
 
-    // Live prose is one growing event per delta; deltas no longer reach the
-    // stdout channel (frontend log chunks) — that drew a block per token and
-    // duplicated it with the final `text`.
     expect(out).toEqual([]);
     expect(events).toEqual([
       { type: 'text_update', contentIndex: 0, partialText: 'Hello ' },
@@ -169,14 +166,11 @@ describe('RpcSessionParser', () => {
 
     expect(out).toEqual([]);
     expect(parser.stdout()).toBe('');
-    // Живой стрим: thinking_update на каждую дельту, авторитетный thinking — на end.
     expect(events).toEqual([
       { type: 'thinking_update', contentIndex: 0, partialText: 'думаю ' },
       { type: 'thinking_update', contentIndex: 0, partialText: 'думаю над этим' },
       { type: 'thinking', thinking: 'думаю над этим' },
     ]);
-    // thinking_update НЕ персистится: в collected только финальный thinking,
-    // поэтому step_outputs.events остаётся bounded.
     expect(parser.events()).toEqual([{ type: 'thinking', thinking: 'думаю над этим' }]);
     expect(parser.events().some((event) => event.type === 'thinking_update')).toBe(false);
     expect(parser.events().filter((event) => event.type === 'thinking')).toHaveLength(1);
@@ -208,7 +202,6 @@ describe('RpcSessionParser', () => {
       { type: 'thinking_update', contentIndex: 2, partialText: 'abc' },
       { type: 'thinking', thinking: 'abc' },
     ]);
-    // Финальный thinking — ровно один, thinking_update в collected отсутствует.
     expect(parser.events()).toEqual([{ type: 'thinking', thinking: 'abc' }]);
   });
 
@@ -268,13 +261,10 @@ describe('RpcSessionParser', () => {
     assistantMessage('M2');
     assistantMessage('M3');
 
-    // Live updates (thinking_update/text_update) are filtered out: this asserts
-    // the persisted blocks only.
     const events = emitted.filter(
       (event) => event.type !== 'thinking_update' && event.type !== 'text_update',
     );
 
-    // Регрессия: раньше был ровно 1 thinking + 1 text на всю сессию.
     expect(emitted.filter((event) => event.type === 'thinking_update')).toHaveLength(3);
     expect(emitted.filter((event) => event.type === 'text_update')).toHaveLength(3);
     expect(events.map((event) => event.type)).toEqual([
@@ -305,13 +295,11 @@ describe('RpcSessionParser', () => {
       type: 'message_update',
       assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'a' },
     });
-    // user-сообщение не является блоком ассистента — аккумулятоp не трогаем.
     parser.handle({ type: 'message_start', message: { role: 'user' } });
     parser.handle({
       type: 'message_update',
       assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'b' },
     });
-    // message_start без role — новый блок ассистента: flush + сброс.
     parser.handle({ type: 'message_start' });
     parser.handle({
       type: 'message_update',
@@ -355,7 +343,6 @@ describe('RpcSessionParser', () => {
         usage: { input: 100, output: 1, cacheRead: 2, cacheWrite: 3, total: 106 },
         cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 },
       },
-      // Live prose arrives alongside usage and is not rendered as its own block.
       { type: 'text_update', contentIndex: 0, partialText: 'Hi ' },
     ]);
   });
@@ -368,9 +355,9 @@ describe('RpcSessionParser', () => {
       parser.handle({ type: 'message_update', usage });
 
     emit({ input: 1, totalTokens: 5, cost: 'nope' });
-    emit({ input: 2, totalTokens: 5 }); // тот же total — дубль
-    emit({ input: 'x', output: 2, totalTokens: 7 }); // total вырос → эмит
-    emit({ input: 3 }); // без totalTokens: total = сумма чисел
+    emit({ input: 2, totalTokens: 5 });
+    emit({ input: 'x', output: 2, totalTokens: 7 });
+    emit({ input: 3 });
 
     expect(events).toEqual([
       {
@@ -575,7 +562,6 @@ describe('RpcSessionParser', () => {
 
   it('extension_ui_request с невалидным id/method игнорируется', () => {
     const parser = new RpcSessionParser();
-    // Сырой JSON: id/method не-строки должны отсекаться на рантайме.
     const raw = (event: Record<string, unknown>): void =>
       parser.handle(event as never);
 
@@ -899,9 +885,6 @@ describe('RpcSessionParser — обрыв ответа по лимиту выв�
       message: { role: 'assistant', stopReason: 'length' },
     });
 
-    // Truncation is surfaced, not swallowed: a turn that died on thinking has
-    // no tool call to explain the missing artifact. Live updates are not
-    // persisted, so `parser.events()` holds only the final thinking block.
     expect(events.map((event) => event.type)).toEqual([
       'thinking_update',
       'thinking',
@@ -946,9 +929,9 @@ describe('RpcSessionParser — скорость генерации (speed)', () 
     const events: SessionEvent[] = [];
     const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
 
-    usage(parser, 10, 10); // якорь мгновенной, elapsed 0 → speed нет
+    usage(parser, 10, 10);
     vi.advanceTimersByTime(1000);
-    usage(parser, 30, 40); // Δ20/1s, средняя 30/1s
+    usage(parser, 30, 40);
 
     expect(events.at(-1)).toEqual({
       type: 'usage',
@@ -964,9 +947,9 @@ describe('RpcSessionParser — скорость генерации (speed)', () 
     const events: SessionEvent[] = [];
     const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
 
-    usage(parser, 0, 5); // output = 0
+    usage(parser, 0, 5);
     vi.advanceTimersByTime(500);
-    usage(parser, 10, 15); // elapsed 500мс < 1s
+    usage(parser, 10, 15);
 
     expect(events[0]).not.toHaveProperty('speed');
     expect(events[1]).not.toHaveProperty('speed');
@@ -981,7 +964,7 @@ describe('RpcSessionParser — скорость генерации (speed)', () 
     usage(parser, 10, 10);
     vi.advanceTimersByTime(1500);
     usage(parser, 20, 30);
-    usage(parser, 20, 30); // тот же total — дубль
+    usage(parser, 20, 30);
 
     expect(events).toHaveLength(2);
     expect(events.at(-1)).toMatchObject({ speed: { avgTokensPerSecond: 20 / 1.5 } });
@@ -997,7 +980,7 @@ describe('RpcSessionParser — скорость генерации (speed)', () 
       onEvent: (event) => events.push(event),
     });
 
-    usage(parser, 10, 10); // старт сессии
+    usage(parser, 10, 10);
     vi.advanceTimersByTime(2000);
     parser.handle({
       type: 'response',

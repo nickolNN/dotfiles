@@ -10,10 +10,8 @@ import {
 import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 
-/** Neither report half on disk. */
 const noArtifact = { present: false, bytes: 0, mtime: null };
 
-/** A live report run: fresh heartbeat, nothing written yet. */
 const runningStatus = () =>
   jsonResponse({
     status: 'running',
@@ -60,10 +58,6 @@ function textResponse(body: string): Response {
   return { ok: true, status: 200, text: async () => body } as Response;
 }
 
-/**
- * Ответ HEAD-проба `/result`: только статус и заголовки, без тела.
- * По умолчанию — свежий HTML из корня воркспейса.
- */
 function headResponse(artifact: {
   status?: number;
   contentType?: string;
@@ -86,7 +80,6 @@ function headResponse(artifact: {
   } as unknown as Response;
 }
 
-/** Минимальный фейк EventSource: ручная отдача onmessage. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -109,11 +102,8 @@ function stubFetch(options: {
   reportStatus?: () => Response;
   onReportPost?: () => Response;
   artifact?: Parameters<typeof headResponse>[0];
-  /** Тело GET /result; по умолчанию — html-заглушка. */
   resultBody?: string;
-  /** Последний прогон отчёта (`GET /report/run`); по умолчанию — 404. */
   reportRun?: unknown;
-  /** Снапшот GET /iterations/:id/control (по умолчанию — нет сессии). */
   controlSnapshot?: unknown;
 } = {}) {
   const issue = makeIssue();
@@ -139,7 +129,6 @@ function stubFetch(options: {
       return Promise.resolve(jsonResponse({ ok: true, data: {} }));
     }
     if (url.endsWith('/control')) {
-      // Нет снапшота → форма не проходит `isControlSnapshot` → панель скрыта.
       return Promise.resolve(
         jsonResponse(options.controlSnapshot ?? { error: 'no session' }),
       );
@@ -176,7 +165,6 @@ function stubFetch(options: {
   return fetchMock;
 }
 
-/** Публикует `log`-чанк report-агента (синтетический stepRunId). */
 function emitReportLog(text: string, stream: 'stdout' | 'stderr' = 'stdout') {
   act(() => {
     FakeEventSource.instances[0].emit({
@@ -201,10 +189,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/**
- * Открывает модалку отчёта кнопкой «Показать отчёт»: кнопка активна только
- * когда есть completed-итерация, поэтому сначала ждём снятия disabled.
- */
 async function clickOpenReport(): Promise<void> {
   const button = await screen.findByTestId('open-result');
   await waitFor(() => expect(button).toBeEnabled());
@@ -234,19 +218,15 @@ describe('TaskDetail — секция «Отчёт»', () => {
     await waitFor(() =>
       expect(screen.getByTestId('report-generating')).toBeInTheDocument(),
     );
-    // A live run does not lock the retry button: the server answers 409 and the
-    // user keeps the ability to retry a run that silently died.
     await waitFor(() =>
       expect(screen.getByTestId('refresh-report')).toBeEnabled(),
     );
 
-    // POST ушёл на report-роут.
     const posted = fetchMock.mock.calls.some(
       ([input]) => String(input).endsWith('/issues/issue-1/report'),
     );
     expect(posted).toBe(true);
 
-    // Живые stdout-чанки попадают в SessionView как text-события.
     emitReportLog('Collecting iteration narratives...\n');
     emitReportLog('report.md written\n');
     const session = await screen.findByTestId('report-session');
@@ -285,7 +265,6 @@ describe('TaskDetail — секция «Отчёт»', () => {
         jsonResponse({
           status: 'running',
           startedAt: new Date(Date.now() - 30 * 60_000).toISOString(),
-          // Heartbeat stopped 5 minutes ago: the run is dead, not busy.
           updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
           artifacts: { md: noArtifact, html: noArtifact },
         }),
@@ -494,7 +473,6 @@ describe('TaskDetail — секция «Отчёт»', () => {
   });
 });
 
-/** Снапшот управления report-сессией: панель контроля в модалке отчёта. */
 function makeControlSnapshot() {
   return {
     state: {
@@ -517,7 +495,6 @@ function makeControlSnapshot() {
   };
 }
 
-/** Публикует `stats`-эмит report-сессии (конверт `step_event`). */
 function emitReportStats() {
   act(() => {
     FakeEventSource.instances[0].emit({
@@ -587,17 +564,11 @@ describe('TaskDetail — контроль и статистика report-аге�
     expect(await screen.findByTestId('modal-session')).toHaveTextContent(
       'building report…',
     );
-    // Тот же контроль, что у шагов: модель/thinking/compact.
     expect(await screen.findByTestId('live-controls')).toBeInTheDocument();
     expect(screen.getByTestId('control-model')).toBeInTheDocument();
     expect(screen.getByTestId('control-thinking')).toBeInTheDocument();
   });
 });
-/**
- * Исход прогона отчёта — из БД (`/report/status` + `/report/run`), а не из
- * флагов в памяти. Каждый кейс ловит ровно ту ложь, что висела в UI: «успех по
- * умолчанию», «готово без html» и «сессия пуста после перезагрузки».
- */
 describe('TaskDetail — исход прогона отчёта', () => {
   const absent = { present: false, bytes: 0, mtime: null };
 
@@ -656,8 +627,6 @@ describe('TaskDetail — исход прогона отчёта', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    // The run died, but the artifact outlives it: a red "failed" badge plus a
-    // hidden download would hide a perfectly usable report.
     expect(await screen.findByTestId('report-failed-with-artifacts')).toHaveTextContent(
       'Отчёт есть',
     );
@@ -699,7 +668,6 @@ describe('TaskDetail — исход прогона отчёта', () => {
 
     const session = await screen.findByTestId('report-session');
     expect(session).toHaveTextContent('строка из сохранённой сессии');
-    // Кнопка «Вывод» есть и после прогона, а не только во время него.
     expect(await screen.findByTestId('report-expand')).toBeInTheDocument();
   });
 });

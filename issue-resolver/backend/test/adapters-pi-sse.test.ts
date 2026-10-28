@@ -171,7 +171,6 @@ describe('FakePiRunner', () => {
     const runner = new FakePiRunner();
     const registry = new InMemoryStepSessionRegistry();
 
-    // Issue-уровневый отчёт: итерации нет, адрес = синтетический stepRunId.
     await runner.run('c', 'p', { registry, stepRunId: 'issue.issue-1.report' });
 
     expect(registry.hasByIteration('issue.issue-1.report')).toBe(true);

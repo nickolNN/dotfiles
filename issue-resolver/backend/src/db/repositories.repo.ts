@@ -9,11 +9,6 @@ import { asc, eq, sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { repositories } from './schema';
 
-/**
- * Записываемые поля валидации репозитория. `run_instructions`/
- * `run_instructions_status` сюда не входят: их пишет отдельный процесс
- * (агент-анализатор), а не валидация.
- */
 export interface RepositoryWrite {
   url: string;
   platform: RepoPlatform | null;
@@ -65,20 +60,15 @@ export function toSavedRepo(row: typeof repositories.$inferSelect): SavedRepo {
   };
 }
 
-/** Все сохранённые репозитории в порядке добавления. */
 export function listRepositories(db: Db): SavedRepo[] {
   return db
     .select()
     .from(repositories)
-    // `rowid` — стабильный тайбрейк для «порядка добавления»: `created_at`
-    // имеет миллисекундную точность, поэтому два репо в одну мс иначе
-    // сортировались бы случайным `id` (флейки в регрессии).
     .orderBy(asc(repositories.created_at), asc(sql`rowid`))
     .all()
     .map(toSavedRepo);
 }
 
-/** Репозиторий по id или undefined. */
 export function getRepository(db: Db, id: string): SavedRepo | undefined {
   const row = db
     .select()
@@ -88,7 +78,6 @@ export function getRepository(db: Db, id: string): SavedRepo | undefined {
   return row ? toSavedRepo(row) : undefined;
 }
 
-/** Создаёт репозиторий; `run_instructions` стартует пустым ('unknown'). */
 export function insertRepository(db: Db, write: RepositoryWrite): SavedRepo {
   const now = new Date().toISOString();
   const id = randomUUID();
@@ -112,7 +101,6 @@ export function insertRepository(db: Db, write: RepositoryWrite): SavedRepo {
   };
 }
 
-/** Обновляет поля валидации; `run_instructions*` не трогает. undefined — нет id. */
 export function updateRepository(
   db: Db,
   id: string,
@@ -130,7 +118,6 @@ export function updateRepository(
   return getRepository(db, id);
 }
 
-/** Репозиторий по URL (первый совпавший) или undefined. */
 export function getRepositoryByUrl(
   db: Db,
   url: string,
@@ -143,11 +130,6 @@ export function getRepositoryByUrl(
   return row ? toSavedRepo(row) : undefined;
 }
 
-/**
- * Записывает результат работы агента-анализатора: Markdown-инструкцию и её
- * статус. `instructions: null` очищает поле (статус `failed` — инструкция
- * устарела/не сгенерирована). Валидацию не трогает.
- */
 export function updateRepositoryRunInstructions(
   db: Db,
   url: string,
@@ -163,7 +145,6 @@ export function updateRepositoryRunInstructions(
     .run();
 }
 
-/** Удаляет репозиторий; false — строки не было. */
 export function deleteRepository(db: Db, id: string): boolean {
   const result = db.delete(repositories).where(eq(repositories.id, id)).run();
   return result.changes > 0;

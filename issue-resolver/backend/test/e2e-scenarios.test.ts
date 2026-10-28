@@ -78,7 +78,6 @@ describe('ScenarioPiRunner', () => {
       run(runner, 'resolve', 'it-a'),
       run(runner, 'resolve', 'it-b'),
     ]);
-    // Обе итерации берут шаг #0 (success), а не делят один курсор.
     expect(firstA.exitCode).toBe(0);
     expect(firstB.exitCode).toBe(0);
     const [secondA, secondB] = await Promise.all([

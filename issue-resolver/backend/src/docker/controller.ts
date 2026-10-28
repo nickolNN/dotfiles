@@ -7,24 +7,13 @@ import type {
   SpawnContainerResult,
 } from '@issue-resolver/shared';
 
-/**
- * Управление контейнерами прогона. Реализации: in-memory fake для юнит-тестов
- * и тонкая обёртка над dockerode (клиент инъецируется снаружи — DI).
- */
 export interface ContainerController {
   spawn(spec: ContainerSpec): Promise<SpawnContainerResult>;
   remove(containerName: string): Promise<void>;
-  /** Живая статистика контейнера (CPU/память/pids). */
   stats(containerName: string): Promise<ContainerStats>;
-  /**
-   * Поток сырой статистики docker (`stats` с `stream: true`): NDJSON, по
-   * одному объекту метрик в строке. Fake/Local-реализации отдают пустой
-   * поток (реального Docker нет).
-   */
   statsStream(containerName: string): Promise<NodeJS.ReadableStream>;
 }
 
-/** Сырой JSON одной метрики docker-stats (все поля опциональны). */
 export interface DockerStatsJson {
   cpu_stats?: {
     cpu_usage?: { total_usage?: number };
@@ -39,10 +28,6 @@ export interface DockerStatsJson {
   pids_stats?: { current?: number };
 }
 
-/**
- * Приводит сырой JSON docker-stats к payload события `container_stats`.
- * Общий для one-shot `stats()` и SSE-потока, чтобы расчёт CPU не разъезжался.
- */
 export function toContainerStatsPayload(
   data: DockerStatsJson,
 ): ContainerStatsPayload {
@@ -64,15 +49,10 @@ export function toContainerStatsPayload(
   };
 }
 
-/**
- * In-memory-реализация для тестов: контейнеры живут в Map, реальный Docker
- * не трогается. `failNextWith` (см. ниже) позволяет проверить путь ошибки.
- */
 export class FakeContainerController implements ContainerController {
   private readonly containers = new Map<string, string>();
   private pendingError: Error | null = null;
 
-  /** Следующая операция (spawn/remove) отклонится этой ошибкой. */
   failNextWith(err: Error): void {
     this.pendingError = err;
   }
@@ -90,7 +70,6 @@ export class FakeContainerController implements ContainerController {
 
   async remove(containerName: string): Promise<void> {
     this.throwIfPending();
-    // Map.delete идемпотентен: повторный remove не падает.
     this.containers.delete(containerName);
   }
 
@@ -119,13 +98,6 @@ export class FakeContainerController implements ContainerController {
   }
 }
 
-/**
- * Реальная обёртка над `dockerode`. Клиент передаётся снаружи (DI), чтобы
- * фабрика подставила сокет, а юнит-тесты — фейк. Реальные вызовы в юнит-тестах
- * не выполняются — это интеграционный путь.
- *
- * TODO(§5): проброс stdout/stderr контейнера (attach) в SSE-шину прогона.
- */
 export class DockerodeContainerController implements ContainerController {
   constructor(private readonly docker: Dockerode) {}
 

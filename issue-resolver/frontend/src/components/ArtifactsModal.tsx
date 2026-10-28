@@ -16,7 +16,6 @@ interface ArtifactsModalProps {
   archiveUrl: string;
 }
 
-/** Вид предпросмотра, выведенный из mime/расширения файла. */
 type PreviewKind =
   | 'image'
   | 'html'
@@ -26,7 +25,6 @@ type PreviewKind =
   | 'text'
   | 'unsupported';
 
-/** Расширения, которые рендерим как текст, даже если mime не `text/*` (js). */
 const TEXT_EXTENSIONS = new Set([
   'css',
   'js',
@@ -49,7 +47,6 @@ function extensionOf(name: string): string {
   return dot === -1 ? '' : name.slice(dot + 1).toLowerCase();
 }
 
-/** Классифицирует файл для предпросмотра (mime приоритетнее расширения). */
 function previewKind(file: WorkspaceFile): PreviewKind {
   const mime = file.mime_type ?? '';
   const ext = extensionOf(file.name) || extensionOf(file.rel_path);
@@ -70,7 +67,6 @@ interface TextState {
   text: string;
 }
 
-/** Панель предпросмотра выбранного файла; `key` по rel_path сбрасывает state. */
 function ArtifactPreview({
   issueId,
   file,
@@ -181,7 +177,6 @@ function ArtifactPreview({
     );
   }
 
-  // json и текстовые файлы: pretty-JSON с фолбеком на сырой текст.
   let body = state.text;
   if (kind === 'json') {
     try {
@@ -190,7 +185,6 @@ function ArtifactPreview({
       body = state.text;
     }
   }
-  // Подсветка синтаксиса; неизвестный язык → сырой <pre> с дефолтным цветом.
   const lang =
     kind === 'json'
       ? 'json'
@@ -204,7 +198,6 @@ function ArtifactPreview({
       >
         <code
           className="hljs"
-          // pi-lens-ignore: dangerously-set-inner-html -- highlight.js escapes the source (only <span class="hljs-*"> + text), no user HTML is injected
           dangerouslySetInnerHTML={{ __html: highlighted }}
         />
       </pre>
@@ -220,7 +213,6 @@ function ArtifactPreview({
   );
 }
 
-/** Модалка со списком артефактов задачи и предпросмотром выбранного файла. */
 export default function ArtifactsModal({
   issueId,
   files,
@@ -230,7 +222,6 @@ export default function ArtifactsModal({
 }: ArtifactsModalProps) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
-  // Сброс выбора при закрытии: следующее открытие начнётся с первого файла.
   useEffect(() => {
     if (!open) setSelectedPath(null);
   }, [open]);

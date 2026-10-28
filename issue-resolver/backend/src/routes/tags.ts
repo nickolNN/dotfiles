@@ -17,18 +17,12 @@ import {
 const API_PATH = '/issue-resolver/api/v1';
 const TAGS_PATH = `${API_PATH}/tags`;
 
-/**
- * Роуты тегов: CRUD именованных наборов сохранённых репозиториев. Тело
- * валидируется zod-схемами, ответы — shared-типы `Tag`/`CreateTagRequest`.
- */
 export async function tagsRoutes(
   app: FastifyInstance,
   db: Db,
 ): Promise<void> {
-  // GET /tags — список всех тегов с репозиториями.
   app.get(TAGS_PATH, async () => listTags(db));
 
-  // POST /tags — создать тег вместе со связями репозиториев.
   app.post(TAGS_PATH, async (request, reply) => {
     const parsed = createTagRequestSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -38,7 +32,6 @@ export async function tagsRoutes(
     return reply.status(201).send(insertTag(db, input));
   });
 
-  // GET /tags/:id — один тег с репозиториями.
   app.get<{ Params: { id: string } }>(
     `${TAGS_PATH}/:id`,
     async (request, reply) => {
@@ -50,7 +43,6 @@ export async function tagsRoutes(
     },
   );
 
-  // PUT /tags/:id — обновить имя/описание и/или заменить список репозиториев.
   app.put<{ Params: { id: string } }>(
     `${TAGS_PATH}/:id`,
     async (request, reply) => {
@@ -67,7 +59,6 @@ export async function tagsRoutes(
     },
   );
 
-  // DELETE /tags/:id — удалить тег; связи снимаются каскадом.
   app.delete<{ Params: { id: string } }>(
     `${TAGS_PATH}/:id`,
     async (request, reply) => {

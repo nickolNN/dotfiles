@@ -1,25 +1,3 @@
-/**
- * Регрессия на ЛОЖНЫЙ abort resolve-шага.
- *
- * Живой кейс: refine выбрал `{mode:'single'}`, а шаг остался `aborted` с пустым
- * step_output (report null, событий нет). Аудит `workflow/room.ts` и
- * `workflow/engine.ts` показал, что нормальный прогон пометить aborted НЕ может:
- *
- *  - `runRoomResolve`/`runStagedResolve` возвращают `abortedResolveResult()`
- *    ровно тогда, когда хотя бы один результат агента несёт
- *    `aborted === true` (строгое сравнение), иначе отдают отчёт последнего
- *    координатора как есть;
- *  - `engine.ts` переводит шаг в `aborted` только при `result.aborted`, а
- *    `stepRunStatusFromResult(exitCode, report)` для pass-результата даёт
- *    `success`.
- *
- * `aborted: true` в StepExecutionResult выставляет только rpc-runner — при
- * явном abort-подписчике (`committedAbort`) или `agent_settled{aborted:true}`.
- * Нормальный `exitCode 0` + pass-отчёт туда не попадает.
- *
- * Этот тест фиксирует инвариант: если ВСЕ агенты комнаты/этапов вернули pass,
- * resolve-результат не aborted, а его step-статус — `success`.
- */
 import { describe, expect, it } from 'vitest';
 import type {
   ExecutionPlan,
@@ -71,10 +49,6 @@ const pass = (summary: string): StepExecutionResult => ({
   stderr: '',
 });
 
-/**
- * Общие проверки нормального (не-abort) resolve-результата:
- * флага abort нет, exit 0, отчёт pass, движковая свёртка → success.
- */
 function expectSuccessfulResolve(result: StepExecutionResult): void {
   expect(result.aborted).toBeUndefined();
   expect(Object.prototype.hasOwnProperty.call(result, 'aborted')).toBe(false);
@@ -88,7 +62,6 @@ function expectSuccessfulResolve(result: StepExecutionResult): void {
 describe('resolve не становится aborted, когда все агенты вернули pass', () => {
   it('room: все исполнители и координатор pass → результат pass/success, не aborted', async () => {
     const pi = new FakePiRunner();
-    // ROOM_PLAN: executors=3 → 3 исполнителя ∥ + 1 координатор.
     for (const summary of ['w1', 'w2', 'w3', 'coord']) {
       pi.enqueue(pass(summary));
     }
@@ -96,9 +69,7 @@ describe('resolve не становится aborted, когда все аген�
     const result = await runRoomResolve(pi, input(ROOM_PLAN), options());
 
     expectSuccessfulResolve(result);
-    // Итог шага — отчёт финального координатора (не исполнителя).
     expect(result.report?.summary).toBe('coord');
-    // Координатор действительно запускался последним.
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
       'run.run-1.w0',
       'run.run-1.w1',
@@ -147,13 +118,10 @@ describe('resolve не становится aborted, когда все аген�
 
     expectSuccessfulResolve(result);
     expect(result.report?.summary).toBe('complex-final');
-    // Ни один вызванный агент не получил abort-команду.
     expect(pi.controlCalls).toEqual([]);
   });
 
   it('контроль: aborted появляется ТОЛЬКО когда раннер сам отдал aborted:true', async () => {
-    // Негативный контроль к трём сценариям выше: единственный источник флага —
-    // явный aborted-результат агента, а не нормальный pass.
     const pi = new FakePiRunner();
     pi.enqueue({
       step: STEP,

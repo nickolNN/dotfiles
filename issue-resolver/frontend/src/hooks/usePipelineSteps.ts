@@ -15,20 +15,12 @@ import type {
 import { thinkingLevelsFor } from '../constants/thinking-levels';
 
 export interface UsePipelineStepsOptions {
-  /** Каталог моделей: нужен, чтобы сбросить несовместимый thinking-уровень. */
   models: ModelDescriptor[];
-  /** Блокирует шаг pr (модалка итерации: нет репозитория с правом записи). */
   prAvailable?: boolean;
-  /** Стартовые отмеченные шаги (в форме — из initialData). */
   initialSteps?: PipelineStep[];
   initialStepModels?: StepModels;
   initialStepThinkingLevels?: StepThinkingLevels;
-  /** Стартовый выбор репозиториев для MR. */
   initialPrRepoIds?: Iterable<string>;
-  /**
-   * id, которые выбираются при включении шага pr, если выбор ещё пуст
-   * (модалка итерации: все репозитории задачи). По умолчанию — ничего.
-   */
   defaultPrRepoIds?: ReadonlyArray<string>;
 }
 
@@ -36,7 +28,6 @@ export interface UsePipelineStepsResult {
   selectedSteps: PipelineStep[];
   stepModels: StepModels;
   stepThinkingLevels: StepThinkingLevels;
-  /** Selected steps; payload models/steps are filtered by this set. */
   chosenSteps: Set<PipelineStep>;
   prRepoIds: Set<string>;
   toggleStep: (step: PipelineStep) => void;
@@ -49,12 +40,6 @@ export interface UsePipelineStepsResult {
   setPrRepoIds: Dispatch<SetStateAction<Set<string>>>;
 }
 
-/**
- * Единственный источник step-стейта формы задачи и модалки итерации:
- * отмеченные шаги, их модели/thinking-уровни и выбор репозиториев для MR.
- * Логика при переключении шага pr и сбросе несовместимого thinking-уровня
- * живёт здесь — раньше дублировалась в `IssueForm` и `TaskDetail`.
- */
 export function usePipelineSteps({
   models,
   prAvailable = true,
@@ -89,12 +74,10 @@ export function usePipelineSteps({
 
       if (step === 'pr') {
         if (willEnable) {
-          // Включили pr — если ничего не выбрано, берём набор по умолчанию.
           setPrRepoIds((current) =>
             current.size === 0 ? new Set(defaultPrRepoIds ?? []) : current,
           );
         } else {
-          // Сняли pr — сбрасываем выбор репозиториев для MR.
           setPrRepoIds(new Set());
         }
       }
@@ -114,7 +97,6 @@ export function usePipelineSteps({
         return next;
       });
 
-      // Смена модели сбрасывает уровень, несовместимый с её thinkingLevels.
       const allowed = value
         ? thinkingLevelsFor(models.find((model) => model.id === value))
         : [];

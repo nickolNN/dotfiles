@@ -5,7 +5,6 @@ interface AgentMarkdownProps {
   children: string;
 }
 
-/** Markdown-рендер вывода агента (GFM), стилизованный под Matrix-тему. */
 export default function AgentMarkdown({ children }: AgentMarkdownProps) {
   return (
     <div className="agent-markdown">

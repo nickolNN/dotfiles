@@ -22,7 +22,6 @@ const ISSUE_B = 'issue-22222222-2222-2222-2222-222222222222';
 const ISSUE_LIVE = 'issue-33333333-3333-3333-3333-333333333333';
 const ISSUE_STALE = 'issue-44444444-4444-4444-4444-444444444444';
 
-/** Комната с одной записью агента (или без каталога `agents/` вовсе). */
 function makeRoom(
   root: string,
   name: string,
@@ -70,17 +69,13 @@ describe('cleanupAbandonedIssueRooms', () => {
     const root = makeTmpRoot('ir-rooms-');
     const now = Date.now();
 
-    // Брошенные: offline-агент и комната вовсе без агентов.
     makeRoom(root, ISSUE_A, { status: 'offline', lastSeen: now });
     makeRoom(root, ISSUE_B);
-    // Живой агент (свежий heartbeat) — защищён.
     makeRoom(root, ISSUE_LIVE, { status: 'idle', lastSeen: now });
-    // Запись есть, но heartbeat протух — тоже брошена.
     makeRoom(root, ISSUE_STALE, {
       status: 'idle',
       lastSeen: now - ROOM_LIVE_TTL_MS - 1,
     });
-    // Проектные комнаты не в скоупе уборки.
     makeRoom(root, 'kc_front');
     mkdirSync(join(root, 'control'), { recursive: true });
     writeFileSync(join(root, 'config.json'), '{"defaultRoom":".config"}');

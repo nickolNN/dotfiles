@@ -6,10 +6,6 @@ import { allowedOriginsFromEnv, isAllowedOrigin } from '../src/http/origin';
 const ACAO = 'access-control-allow-origin';
 const ISSUES_PATH = '/issue-resolver/api/v1/issues';
 
-// =========================================================================
-// Unit: isAllowedOrigin
-// =========================================================================
-
 describe('isAllowedOrigin', () => {
   const previous = process.env.ISSUE_RESOLVER_ALLOWED_ORIGINS;
 
@@ -35,7 +31,6 @@ describe('isAllowedOrigin', () => {
   it('чужие домены, null и не-http схемы запрещены', () => {
     expect(isAllowedOrigin('http://evil.com')).toBe(false);
     expect(isAllowedOrigin('https://attacker.test')).toBe(false);
-    // file:// и sandboxed iframe без allow-same-origin: Origin === 'null'.
     expect(isAllowedOrigin('null')).toBe(false);
     expect(isAllowedOrigin('file://')).toBe(false);
     expect(isAllowedOrigin('chrome-extension://abcdef')).toBe(false);
@@ -90,10 +85,6 @@ describe('isAllowedOrigin', () => {
     });
   });
 });
-
-// =========================================================================
-// HTTP: часть A — чтение (access-control-allow-origin)
-// =========================================================================
 
 describe('CORS: часть A — allow-list чтения', () => {
   const app = buildApp(createDb(':memory:'));
@@ -157,10 +148,6 @@ describe('CORS: часть A — allow-list чтения', () => {
     expect(blocked.headers[ACAO]).toBeUndefined();
   });
 });
-
-// =========================================================================
-// HTTP: часть B — mutating-роуты (403 до обработчика)
-// =========================================================================
 
 describe('CORS: часть B — Origin на мутирующих методах', () => {
   const DRAFT = {

@@ -41,10 +41,8 @@ declare module 'fastify' {
 const MIN_HTTP_STATUS = 400;
 const MAX_HTTP_STATUS = 599;
 
-/** Методы, меняющие состояние: для них Origin проверяем независимо от CORS. */
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-/** Лимиты multipart-загрузок: до 10 файлов по 25 МБ. */
 const MAX_UPLOAD_FILE_SIZE = 25 * 1024 * 1024;
 const MAX_UPLOAD_FILES = 10;
 
@@ -60,10 +58,6 @@ function resolveStatusCode(error: FastifyError): number {
   return 500;
 }
 
-/**
- * Безопасные дефолты: фейковые адаптеры, никаких реальных docker/git/pi и не
- * разделяемая шина. Продовый wiring подставляет настоящие реализации через deps.
- */
 function defaultRunDeps(): IterationRunDeps {
   return {
     container: new FakeContainerController(),
@@ -78,16 +72,9 @@ function defaultRunDeps(): IterationRunDeps {
 }
 
 export interface AppDeps extends Partial<IterationRunDeps> {
-  /** Jira-клиент для обогащения задачи (Фаза 6); по умолчанию — фейк. */
   jira?: JiraClient;
-  /** Валидатор репозиториев для POST /repos/validate; по умолчанию — сеть. */
   repos?: ReposValidator;
-  /** Фабрика резолверов для CRUD /repositories; по умолчанию — сеть. */
   repoResolverFactory?: RepoResolverFactory;
-  /**
-   * Корень комнат pi-агентов для уборки в `POST /admin/cleanup-orphans`;
-   * по умолчанию — `<agentDir>/rooms` (`PI_CODING_AGENT_DIR` или `~/.pi/agent`).
-   */
   roomsRoot?: string;
 }
 
@@ -105,7 +92,6 @@ export function buildApp(
   const runDeps: IterationRunDeps = { ...defaultRunDeps(), ...runOverrides };
   const app = Fastify({ logger: false });
 
-  // Доступ к deps для роутов и тестов (заодно виден из Fastify-инстанса).
   app.decorate('iterationRunDeps', runDeps);
 
   app.register(cors, {
@@ -113,9 +99,6 @@ export function buildApp(
       callback(null, isAllowedOrigin(requestOrigin ?? '')),
   });
 
-  // CORS защищает только чтение ответа: простой POST улетает и без него.
-  // Поэтому тот же allow-list применяем к мутирующим методам на уровне
-  // preHandler — чужой origin получает 403 ещё до обработчика.
   app.addHook('preHandler', async (request, reply) => {
     if (!MUTATING_METHODS.has(request.method)) return;
     const origin = request.headers.origin;
@@ -124,9 +107,6 @@ export function buildApp(
     }
   });
 
-  // Одна строка на каждую мутацию (method/path/origin/status) — чтобы авторство
-  // изменений восстанавливалось из лога без полного request-логирования.
-  // Тела/заголовки кроме Origin не пишем.
   app.addHook('onResponse', async (request, reply) => {
     if (!MUTATING_METHODS.has(request.method)) return;
     console.log(

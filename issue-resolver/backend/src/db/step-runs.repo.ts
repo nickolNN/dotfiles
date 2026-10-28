@@ -18,10 +18,6 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-/**
- * Owner issue of the iteration, so in-iteration runs do not make every caller
- * duplicate `issue_id`.
- */
 function issueIdOfIteration(db: Db, iterationId: string): string | null {
   const row = db
     .select({ issue_id: iterations.issue_id })
@@ -32,12 +28,7 @@ function issueIdOfIteration(db: Db, iterationId: string): string | null {
 }
 
 export interface CreateStepRunInput {
-  /**
-   * Owner issue: derived from the iteration when one is given, required for
-   * runs outside an iteration.
-   */
   issueId?: string;
-  /** null for runs outside an iteration (report, manually started step). */
   iterationId: string | null;
   step: PipelineStep;
   attempt: number;
@@ -59,7 +50,6 @@ export interface CreateStepOutputInput {
   stats?: SessionStats | null;
 }
 
-/** Corrupt or empty event JSON degrades to [] instead of failing the run. */
 function parseEvents(raw: string | null): SessionEvent[] {
   if (!raw) return [];
   try {
@@ -70,11 +60,6 @@ function parseEvents(raw: string | null): SessionEvent[] {
   }
 }
 
-/**
- * Run events: until the output row exists the incrementally appended
- * `step_runs.events` is the source (questions first); once it does, the full
- * set in `step_outputs` wins.
- */
 function pickStepRunEvents(
   outputEvents: string | null,
   runEvents: SessionEvent[] | null | undefined,
@@ -85,7 +70,6 @@ function pickStepRunEvents(
   return Array.isArray(runEvents) ? runEvents : [];
 }
 
-/** Corrupt or empty stats JSON degrades to null. */
 function parseStats(raw: string | null): SessionStats | null {
   if (!raw) return null;
   try {
@@ -95,7 +79,6 @@ function parseStats(raw: string | null): SessionStats | null {
   }
 }
 
-/** New run row: status 'pending', no feedback, ISO timestamps. */
 export async function createStepRun(
   db: Db,
   input: CreateStepRunInput,
@@ -126,7 +109,6 @@ export async function createStepRun(
   return row;
 }
 
-/** Partial update of a run; always moves `updated_at`. */
 export async function updateStepRun(
   db: Db,
   id: string,
@@ -145,12 +127,6 @@ export async function updateStepRun(
   return updated;
 }
 
-/**
- * Appends one session event to a run. Used while the step is still working and
- * no `step_outputs` row exists: an agent question has to survive a page reload
- * even though the full event set is written only when the step finishes.
- * Read-modify-write is synchronous (better-sqlite3).
- */
 export async function appendStepRunEvent(
   db: Db,
   stepRunId: string,
@@ -165,18 +141,12 @@ export async function appendStepRunEvent(
   const currentEvents: SessionEvent[] = existing?.events ?? [];
   currentEvents.push(event);
 
-  // The budget is a property of the stored log, not of any one caller: the
-  // 175 MB log was written by a path that appended without a limit.
   db.update(stepRuns)
     .set({ events: capSessionEvents(currentEvents), updated_at: nowIso() })
     .where(eq(stepRuns.id, stepRunId))
     .run();
 }
 
-/**
- * Runs of one iteration: pipeline order (refine→resolve→review→test→pr), then
- * attempt ASC within a step.
- */
 export async function listStepRunsByIteration(
   db: Db,
   iterationId: string,
@@ -193,10 +163,6 @@ export async function getStepRun(db: Db, id: string): Promise<StepRun | null> {
   return db.select().from(stepRuns).where(eq(stepRuns.id, id)).get() ?? null;
 }
 
-/**
- * Runs of one issue across iterations, including runs outside an iteration
- * (`iteration_id = NULL`, e.g. report), ordered by creation time.
- */
 export async function listStepRunsByIssue(
   db: Db,
   issueId: string,
@@ -209,7 +175,6 @@ export async function listStepRunsByIssue(
     .all();
 }
 
-/** Latest run of a step in an issue (including outside an iteration). */
 export async function getLatestStepRunForIssue(
   db: Db,
   issueId: string,
@@ -225,7 +190,6 @@ export async function getLatestStepRunForIssue(
   );
 }
 
-/** Step report; UNIQUE(step_run_id) forbids a second report per run. */
 export async function createStepOutput(
   db: Db,
   input: CreateStepOutputInput,
@@ -253,11 +217,6 @@ export async function createStepOutput(
   return { ...row, events, stats };
 }
 
-/**
- * Iteration runs joined with their output row: a run without one reports ''
- * stdout/stderr and null report/screenshots_dir. Same order as
- * listStepRunsByIteration.
- */
 export async function listStepRunsWithLog(
   db: Db,
   iterationId: string,
@@ -267,8 +226,6 @@ export async function listStepRunsWithLog(
       ...getTableColumns(stepRuns),
       stdout: stepOutputs.stdout,
       stderr: stepOutputs.stderr,
-      // Output events use a distinct alias: `step_runs` also has an `events`
-      // column now (incremental appends before the run finishes).
       outputEvents: stepOutputs.events,
       stats: stepOutputs.stats,
       report: stepOutputs.report,
@@ -291,10 +248,6 @@ export async function listStepRunsWithLog(
   }));
 }
 
-/**
- * One run with its log, for runs outside an iteration (report): they have no
- * `iteration_id`, so the iteration-scoped list route cannot reach them.
- */
 export async function getStepRunWithLog(
   db: Db,
   stepRunId: string,
@@ -320,9 +273,6 @@ export async function getStepRunWithLog(
     ...rest,
     stdout: rest.stdout ?? '',
     stderr: rest.stderr ?? '',
-    // The cap is mandatory on read as well: the DB still holds rows written
-    // before the limit existed (one of them is 175 MB of events), and shipping
-    // one to the browser freezes the tab on the first output view.
     events: capSessionEvents(pickStepRunEvents(outputEvents, rest.events)),
     stats: parseStats(rest.stats ?? null),
     report: rest.report ?? null,

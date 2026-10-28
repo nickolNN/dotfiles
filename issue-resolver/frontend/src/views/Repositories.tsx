@@ -26,7 +26,6 @@ const btnPrimary =
 const btnSecondary =
   'min-h-12 rounded-none border border-[#008F11] px-4 py-2 text-sm font-medium text-[#00FF41]/80 hover:bg-[#008F11]/20 hover:text-[#00FF41] disabled:opacity-50';
 
-/** Staggered-классы появления карточек (d1…d8, дальше — без задержки). */
 const CARD_ANIMATIONS = [
   'animate-fade-in-up-d1',
   'animate-fade-in-up-d2',
@@ -51,7 +50,6 @@ const STATUS_META: Record<
   unknown: { color: '#8A8A8A', label: 'Не проверялось' },
 };
 
-/** Цветной кружок статуса соединения с tooltip. */
 function StatusDot({ status }: { status: RepoConnectionStatus }) {
   const meta = STATUS_META[status];
   return (
@@ -90,7 +88,6 @@ function validatedLabel(repo: SavedRepo): string {
   return formatRelativeTime(repo.lastValidatedAt);
 }
 
-/** Inline-иконки действий карточки, без внешних зависимостей. */
 function RefreshIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -176,10 +173,6 @@ interface RepoFormDialogProps {
   onSubmit: (url: string) => void;
 }
 
-/**
- * Модалка добавления/редактирования: URL валидируется как в форме задачи
- * (`RepoUrlInput`), «Сохранить» доступна только после успешной проверки.
- */
 function RepoFormDialog({
   title,
   initialUrl,
@@ -253,14 +246,9 @@ function RepoFormDialog({
 type DialogState = { mode: 'create' } | { mode: 'edit'; repo: SavedRepo };
 
 interface RepositoriesProps {
-  /**
-   * Внешний триггер открытия диалога добавления (значение растёт при клике
-   * «+» в хедере, когда активен таб «Репозитории»).
-   */
   createSignal?: number;
 }
 
-/** Страница управления сохранёнными репозиториями (CRUD + live-валидация). */
 export default function Repositories(props: RepositoriesProps) {
   return (
     <QueryBoundary>

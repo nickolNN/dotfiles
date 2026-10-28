@@ -1,16 +1,3 @@
-/**
- * F22–F25: интеграционные и контрактные тесты report-агента.
- *
- * Реальный report-агент — это pi/LLM: он читает narratives итераций и пишет
- * `report.md` (для агентов) и `report.html` (для людей). В тестах мы подменяем
- * его детерминированной заглушкой-раннером, которая пишет оба файла, и
- * проверяем то, что контролирует бэкенд:
- *   - спавн происходит, файлы попадают в рабочую папку и в снапшот итерации;
- *   - промпт несёт fallback на engine-сводки `report-<n>.md` при пустых
- *     narratives и перечисляет доступные шаговые narrative-файлы;
- *   - промпт перечисляет ВСЕ итерации;
- *   - контракт self-contained `report.html` (никаких внешних ресурсов).
- */
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
@@ -66,7 +53,6 @@ const pass = (step: PipelineStep): StepExecutionResult => ({
   stderr: '',
 });
 
-/** Пример «правильного» self-contained report.html: инлайн CSS + data-URI. */
 const SELF_CONTAINED_HTML = [
   '<!doctype html>',
   '<html lang="ru"><head><meta charset="utf-8">',
@@ -77,10 +63,6 @@ const SELF_CONTAINED_HTML = [
   '</body></html>',
 ].join('\n');
 
-/**
- * Раннер-заглушка report-агента: на вызов с `stepRunId='<issueId>/report'`
- * записывает заданные файлы в рабочую папку задачи (эмулируя pi-агента).
- */
 class ReportStubPi extends FakePiRunner {
   constructor(
     private readonly root: string,
@@ -106,7 +88,6 @@ class ReportStubPi extends FakePiRunner {
   }
 }
 
-/** Раннер, который отдаёт `stats.model` (наблюдённая модель сессии). */
 class ObservedModelReportPi extends ReportStubPi {
   constructor(
     root: string,
@@ -138,7 +119,6 @@ class ObservedModelReportPi extends ReportStubPi {
   }
 }
 
-/** Ищет внешние ссылки (шрифты/скрипты/CDN) в HTML. */
 function externalReferences(html: string): string[] {
   const found: string[] = [];
   const patterns: RegExp[] = [
@@ -254,17 +234,13 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
     const call = reportCall(pi, issueId);
     expect(call).toBeDefined();
-    // Промпт знает про фолбек на механические engine-сводки.
     expect(call!.prompt).toContain('Engine summaries');
     expect(call!.prompt).toContain('report-');
-    // Папка итерации существует, но пуста — промпт всё равно указывает на неё.
     expect(call!.prompt).toContain('iterations/1/');
 
-    // Оба артефакта на месте.
     const wsDir = join(root, issueId);
     expect(existsSync(join(wsDir, 'report.md'))).toBe(true);
     expect(existsSync(join(wsDir, 'report.html'))).toBe(true);
-    // Fallback-источник тоже есть: engine написал report-<n>.md.
     expect(existsSync(join(wsDir, 'report-1.md'))).toBe(true);
   });
 
@@ -272,7 +248,6 @@ describe('report-агент — интеграция (F22–F25)', () => {
     const root = tempRoot();
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
-    // Итерация упала на середине: есть только .refine.md, .resolve.md нет.
     const narrativesDir = join(root, issueId, 'iterations', '1');
     mkdirSync(narrativesDir, { recursive: true });
     writeFileSync(join(narrativesDir, '.refine.md'), '# Plan\n', 'utf8');
@@ -286,14 +261,11 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
     const call = reportCall(pi, issueId);
     expect(call).toBeDefined();
-    // Папка итерации перечислена, шаговые файлы названы по именам — агент
-    // читает то, что реально есть, и не падает на отсутствующем .resolve.md.
     expect(call!.prompt).toContain('iterations/1/');
     expect(call!.prompt).toContain('.refine.md');
     expect(call!.prompt).toContain('.resolve.md');
 
     expect(existsSync(join(root, issueId, 'report.md'))).toBe(true);
-    // Частичный narrative не перетёрт.
     expect(existsSync(join(narrativesDir, '.refine.md'))).toBe(true);
   });
 
@@ -312,42 +284,54 @@ describe('report-агент — интеграция (F22–F25)', () => {
     expect(text).toContain('iterations/1/');
     expect(text).toContain('iterations/2/');
     expect(text).toContain('iterations/3/');
-    // Секции отчёта — по одной на итерацию.
-    expect(text).toContain('Iteration-by-iteration narrative');
+    expect(text).toMatch(/No retelling of the run/);
   });
 
-  it('F25: report.html — self-contained контракт, внешних ресурсов нет', async () => {
-    // Контракт в промпте: инлайн, без внешних шрифтов/скриптов, data-URI.
-    const prompt = buildStepPrompt({
-      step: 'report',
-      issueTitle: 'Self-contained',
-      description: '',
-      jiraText: null,
-      context: 'Task completed.',
-      feedback: null,
-      repoPaths: [],
-      iterationCount: 1,
-    });
-    expect(prompt).toContain('No external fonts');
-    expect(prompt).toContain('data URI');
-    expect(prompt).toContain('Self-contained');
-
-    // Артефакт, который пишет report-агент, не должен ссылаться наружу.
+  it('F25: страница самодостаточна даже при враждебном markdown', async () => {
     const root = tempRoot();
     const db = createDb(':memory:');
-    const { issueId, iteration } = seedIteration(db, ['resolve']);
-    const pi = new ReportStubPi(root, { 'report.html': SELF_CONTAINED_HTML });
-    const deps = makeDeps(pi);
-    deps.workspaceRoot = root;
+    const { issueId } = seedIteration(db);
+    mkdirSync(join(root, issueId), { recursive: true });
+    const hostile = [
+      '# Отчёт',
+      '',
+      '![внешняя](https://cdn.example.com/x.png)',
+      '',
+      '[payload](javascript:alert(1))',
+      '',
+      '<script src="https://cdn.example.com/x.js"></script>',
+      '',
+      '![своя](screenshots/shot.png)',
+    ].join('\n');
+    const pi = new ReportStubPi(root, {
+      'report.md': hostile,
+      'report.json': JSON.stringify({ verdict: 'pass', title: 'Отчёт' }),
+    });
     pi.enqueue(pass('resolve'));
 
-    await runOnce(db, deps, issueId, iteration);
+    await runReportAgent(
+      {
+        pi,
+        sse: new InMemorySseHub(),
+        control: new InMemoryStepSessionRegistry(),
+        workspaceRoot: root,
+        db,
+      },
+      {
+        issueId,
+        containerName: 'c',
+        hostDir: join(root, issueId),
+        prompt: 'p',
+      },
+    );
 
     const html = readFileSync(join(root, issueId, 'report.html'), 'utf8');
     expect(html).toContain('<style>');
-    expect(html).toContain('data:image/png;base64,');
+    expect(html).toContain('class="shot"');
+    expect(html).not.toContain('javascript:');
+    expect(html).not.toContain('<script src');
+    expect(html).not.toContain('src="https:');
     expect(externalReferences(html)).toEqual([]);
-    // Санity: сканер действительно ловит внешнюю ссылку.
     expect(
       externalReferences('<script src="https://cdn.example.com/x.js"></script>'),
     ).toHaveLength(1);
@@ -358,7 +342,6 @@ describe('report-агент — интеграция (F22–F25)', () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
 
-    // Прошлый (плохой) отчёт уже лежит в корне рабочей папки.
     const wsDir = join(root, issueId);
     mkdirSync(wsDir, { recursive: true });
     writeFileSync(join(wsDir, 'report.md'), '# СТАРЫЙ\n', 'utf8');
@@ -374,12 +357,10 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
     await runOnce(db, deps, issueId, iteration);
 
-    // В корне — только новые файлы: агент не мог «дописать» старые.
     expect(readFileSync(join(wsDir, 'report.md'), 'utf8')).toBe('# НОВЫЙ\n');
     expect(readFileSync(join(wsDir, 'report.html'), 'utf8')).toBe(
       SELF_CONTAINED_HTML,
     );
-    // История сохранена в reports/<ISO-ts>/.
     const stamps = readdirSync(join(wsDir, 'reports'));
     expect(stamps).toHaveLength(1);
     const archived = join(wsDir, 'reports', stamps[0]);
@@ -397,7 +378,7 @@ describe('report-агент — интеграция (F22–F25)', () => {
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
       'report.md': `# Отчёт\nМодель: ${model}\n`,
-      'report.html': `<html><body><strong>Модель:</strong> ${model}</body></html>`,
+      'report.json': JSON.stringify({ subtitle: model }),
     });
     pi.enqueue(pass('resolve'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -421,13 +402,12 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
     expect(reportWarningsFor(issueId)).toEqual([
       'model id leaked into report.md',
-      'model id leaked into report.html',
+      'model id leaked into report.json',
     ]);
     expect(warn).toHaveBeenCalledWith(
       'model id leaked into report artifacts',
       expect.objectContaining({ issueId }),
     );
-    // Артефакт чужой — сервер только детектит, файл не переписывает.
     expect(readFileSync(join(root, issueId, 'report.md'), 'utf8')).toContain(
       model,
     );
@@ -472,11 +452,10 @@ describe('report-агент — интеграция (F22–F25)', () => {
     mkdirSync(join(root, issueId), { recursive: true });
     const pi = new ReportStubPi(root, {
       'report.md': '# Отчёт\nПровайдер: provider2/deepseek-x\n',
-      'report.html': `${SELF_CONTAINED_HTML}\n<!-- provider2/deepseek-x -->`,
+      'report.json': JSON.stringify({ verdict: 'pass' }),
     });
     pi.enqueue(pass('resolve'));
 
-    // Модель текущего прогона НЕ передаём — слой 2 должен ловить сам.
     await runReportAgent(
       {
         pi,
@@ -495,7 +474,6 @@ describe('report-агент — интеграция (F22–F25)', () => {
 
     expect(reportWarningsFor(issueId)).toEqual([
       'model-like id leaked into report.md',
-      'model-like id leaked into report.html',
     ]);
   });
 
@@ -600,14 +578,12 @@ describe('report-агент — интеграция (F22–F25)', () => {
       { issueId, containerName: 'c', hostDir: join(root, issueId), prompt: 'p' },
     );
 
-    // running-событие не выдумывает модель: она станет известна post-hoc.
     const running = events.find(
       (event) =>
         event.type === 'step_status' && String(event.data).includes('"running"'),
     );
     expect(JSON.parse(String(running?.data)).model).toBeNull();
 
-    // Наблюдённая модель сохранена и служит иглой точного слоя на чтении.
     expect(observedModelFor(issueId)).toBe('provider9/x');
     expect(reportWarningsFor(issueId, join(root, issueId))).toEqual([
       'model id leaked into report.md',
@@ -653,11 +629,9 @@ describe('report-агент — интеграция (F22–F25)', () => {
       { issueId, containerName: 'c', hostDir: join(root, issueId), prompt: 'p' },
     );
 
-    // Максимум один путь на прогон — берётся первый, `bash` тоже виден.
     expect(reportWarningsFor(issueId, join(root, issueId))).toEqual([
       'anchored on previous report: reports/2026-10-23T09:26:39.028Z/report.md',
     ]);
-    // Тег warn'а общий с утечкой модели; якорение — отдельной строкой в warnings.
     expect(warn).toHaveBeenCalledWith(
       'model id leaked into report artifacts',
       expect.objectContaining({
@@ -720,7 +694,6 @@ describe('report-агент — интеграция (F22–F25)', () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db);
 
-    // Нет ключа report, итерация pending → ручной путь (last completed) пуст.
     expect(reportModelFor(db, issueId, iteration.id)).toBeUndefined();
     expect(reportModelFor(db, issueId)).toBeUndefined();
 
@@ -729,11 +702,9 @@ describe('report-агент — интеграция (F22–F25)', () => {
       .where(eq(iterations.id, iteration.id))
       .run();
 
-    // Оба входа — движковый (по id итерации) и ручной (last completed) — дают одно.
     expect(reportModelFor(db, issueId, iteration.id)).toBe('iteration-model-y');
     expect(reportModelFor(db, issueId)).toBe('iteration-model-y');
 
-    // Ключ report перебивает модель итерации на обоих входах.
     db.update(issues)
       .set({ step_models: { resolve: 'x', report: 'report-model-z' } })
       .where(eq(issues.id, issueId))
@@ -790,7 +761,6 @@ describe('report-агент — интеграция (F22–F25)', () => {
     try {
       await runOnce(db, deps, issueId, iteration);
 
-      // Старый файл не восстанавливается в корень — честное неготовое состояние.
       expect(existsSync(join(wsDir, 'report.md'))).toBe(false);
       const stamps = readdirSync(join(wsDir, 'reports'));
       expect(stamps).toHaveLength(1);
@@ -852,14 +822,11 @@ describe('report-агент — интеграция (F22–F25)', () => {
         prompt: 'p',
         trigger: 'post-iteration',
       });
-      // Запись прогона в БД асинхронна (строка `step_runs` создаётся до
-      // архивации), поэтому спавн ждём, а не считаем синхронным.
       await vi.waitFor(() => expect(releases).toHaveLength(1));
       expect(isReportRunActive(issueId)).toBe(true);
       const stamps = readdirSync(join(wsDir, 'reports'));
       expect(stamps).toHaveLength(1);
 
-      // Ручной запуск поверх активного: отказ до архивации, без спавна.
       await runReportAgent(deps, {
         issueId,
         containerName: 'c',

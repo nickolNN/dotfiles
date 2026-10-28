@@ -53,7 +53,6 @@ const fail = (step: PipelineStep): StepExecutionResult => ({
   stderr: `${step} err`,
 });
 
-/** Прямой insert issue + iteration, без HTTP-слоя. */
 function seedIteration(
   db: Db,
   steps: PipelineStep[] = ['resolve'],
@@ -91,7 +90,6 @@ function seedIteration(
   return { issueId, iteration };
 }
 
-/** Прямой insert следующей итерации issue (для преемственности, number > 1). */
 function seedNextIteration(
   db: Db,
   issueId: string,
@@ -115,7 +113,6 @@ function seedNextIteration(
   return iteration;
 }
 
-/** resolve-прогон итерации с заданной JSON-строкой отчёта (байты как есть). */
 async function seedResolveRun(
   db: Db,
   iterationId: string,
@@ -211,7 +208,6 @@ describe('runIssueIteration — прямой вызов', () => {
     const stepStatuses = events
       .filter((event) => event.type === 'step_status')
       .map((event) => event.data);
-    // running несёт JSON `{ status, step, model }`; прочие статусы — строку.
     const runningPayload = stepStatuses
       .filter((data) => data.startsWith('{'))
       .map((data) => JSON.parse(data) as { status: string })
@@ -235,7 +231,6 @@ describe('runIssueIteration — прямой вызов', () => {
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi, sse } = makeDeps();
 
-    // Наблюдаем состояние БД в момент каждой публикации статуса вопроса.
     const observed: Array<{ status: string; dbStatus: string | undefined }> = [];
     sse.subscribe(iteration.id, (event) => {
       if (event.type !== 'iteration_status') return;
@@ -277,15 +272,12 @@ describe('runIssueIteration — прямой вызов', () => {
       model: undefined,
     });
 
-    // running старта → question (+БД question) → running (+БД running).
     expect(observed).toEqual([
       { status: 'running', dbStatus: 'running' },
       { status: 'question', dbStatus: 'question' },
       { status: 'running', dbStatus: 'running' },
     ]);
 
-    // Вопрос и ответ дозалиты в step_runs.events (движок → appendStepRunEvent):
-    // после перезагрузки вопрос восстанавливается без SSE-реплея.
     const run = db
       .select()
       .from(stepRuns)
@@ -303,7 +295,6 @@ describe('runIssueIteration — прямой вызов', () => {
     const { deps, pi } = makeDeps();
     pi.enqueue(pass('refine'));
 
-    // Создаём workspace-файл Jira (имитируем запись при создании задачи).
     const wsRoot = mkdtempSync(join(tmpdir(), 'jira-test-'));
     const wsDir = join(wsRoot, issueId);
     mkdirSync(join(wsDir, 'jira'), { recursive: true });
@@ -334,7 +325,6 @@ describe('runIssueIteration — прямой вызов', () => {
       model: undefined,
     });
 
-    // Post-iteration report-агент добавляет свой pi.run — считаем шаги пайплайна.
     const stepCalls = pi.calls.filter(
       (call) => call.options?.iterationId !== undefined,
     );
@@ -406,7 +396,6 @@ describe('runIssueIteration — прямой вызов', () => {
       expect(
         db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
       ).toBe('failed');
-      // Шаг не запускался — pi не вызывался.
       expect(pi.calls).toHaveLength(0);
     } finally {
       errorSpy.mockRestore();
@@ -825,7 +814,6 @@ describe('runIssueIteration — снапшот результата итерац
   });
 });
 
-/** FakeGitService с «воротами»: prepare висит до open() — для проверки preparing. */
 class GatedGitService extends FakeGitService {
   private startResolve!: () => void;
   private releaseGate!: () => void;
@@ -883,7 +871,6 @@ describe('runIssueIteration — разовая подготовка рабоче
 
     await gated.started;
 
-    // Пока prepare висит — задача `preparing`, итерация ещё `pending`, pi не запущен.
     expect(
       db.select().from(issues).where(eq(issues.id, issueId)).get()?.status,
     ).toBe('preparing');
@@ -917,12 +904,10 @@ describe('runIssueIteration — разовая подготовка рабоче
     });
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // Подготовка — ровно один раз на итерацию, а не на каждый шаг.
     expect(gated.prepares).toHaveLength(1);
     expect(gated.dependenciesInstalled).toEqual([
       [join(deps.workspaceRoot as string, issueId, 'app')],
     ]);
-    // Два шага пайплайна; report-агент идёт после и не в счёт (нет iterationId).
     expect(
       pi.calls.filter((call) => call.options?.iterationId !== undefined),
     ).toHaveLength(2);
@@ -961,7 +946,6 @@ describe('runIssueIteration — разовая подготовка рабоче
           event.data.includes('"status":"preparing"'),
       ),
     ).toBe(false);
-    // Подготовка не вызывается повторно: клоны уже на месте, install уже сделан.
     expect(git.prepares).toHaveLength(0);
     expect(git.dependenciesInstalled).toHaveLength(0);
   });
@@ -1026,7 +1010,6 @@ describe('runIssueIteration — разовая подготовка рабоче
     await prepareIssueWorkspace(db, deps, input);
     await prepareIssueWorkspace(db, deps, input);
 
-    // Publish runs `git add -A`, so all of these must sit in the local exclude.
     const lines = readFileSync(
       join(root, issueId, 'app', '.git', 'info', 'exclude'),
       'utf8',
@@ -1087,7 +1070,6 @@ describe('runIssueIteration — разовая подготовка рабоче
     }
   });
 });
-/** Hub, падающий на `step_status`: проверяет catch после runIteration. */
 class ThrowingStepStatusHub extends InMemorySseHub {
   publish(event: SSEEvent): void {
     if (event.type === 'step_status') {
@@ -1165,7 +1147,6 @@ describe('runIssueIteration — прогресс подготовки, прич�
       },
       { step: 'ready', status: 'done' },
     ]);
-    // Каждое событие адресовано задаче и итерации.
     const envelope = events.find((event) => event.type === 'workspace_progress');
     expect(envelope?.issueId).toBe(issueId);
     expect(envelope?.iterationId).toBeUndefined();
@@ -1212,7 +1193,6 @@ describe('runIssueIteration — прогресс подготовки, прич�
         message: 'git clone timed out after 5ms',
       });
 
-      // Итерация и задача терминально failed после провала подготовки.
       expect(
         db
           .select()
@@ -1514,11 +1494,9 @@ describe('runIssueIteration — run_instructions через анализатор
     });
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // Клонирование выполнено, но анализатор не вызван и install не запускался.
     expect(git.prepares).toHaveLength(1);
     expect(agent.calls).toHaveLength(0);
     expect(git.dependenciesInstalled).toHaveLength(0);
-    // Инструкции не трогаются — репозиторий даже не анализировался.
     expect(repoRow(db, repositories[0].repository_url)?.run_instructions_status).toBe(
       'unknown',
     );
@@ -1561,8 +1539,6 @@ describe('runIssueIteration — run_instructions через анализатор
       repositories,
     });
 
-    // DevOps-вывод идёт через ОБЫЧНЫЕ `log`-события (issue-level SessionView),
-    // а не через старый issue-уровневый `devops_log`.
     const logs = events.filter((event) => event.type === 'log');
     expect(logs).toHaveLength(2);
     expect(logs[0]).toMatchObject({
@@ -1577,7 +1553,6 @@ describe('runIssueIteration — run_instructions через анализатор
       stream: 'stderr',
       data: 'warning\n',
     });
-    // Тип удалён из SSEEventType — сравниваем строкой (guard от возврата события).
     expect(events.some((event) => (event.type as string) === 'devops_log')).toBe(
       false,
     );
@@ -1611,14 +1586,9 @@ describe('runIssueIteration — run_instructions через анализатор
       runInput(issueId, iteration, repoWorkspaces),
     );
 
-    // Таймаут доехал до фабрики: без него зависший pi держал бы prepare вечно.
     expect(seen).toEqual([123_456]);
   });
 });
-
-// ===========================================================================
-// B. Report-агент spawn (B6–B9)
-// ===========================================================================
 
 describe('spawnReportAgent (B6–B9)', () => {
   const roots: string[] = [];
@@ -1671,7 +1641,6 @@ describe('spawnReportAgent (B6–B9)', () => {
     const call = reportCall(pi, issueId);
     expect(call).toBeDefined();
     expect(call!.prompt).toContain('Pipeline step: report.');
-    // iterationCount=1 → narratives-папка итерации #1 перечислена в промпте.
     expect(call!.prompt).toContain('iterations/1/');
   });
 
@@ -1720,7 +1689,6 @@ describe('spawnReportAgent (B6–B9)', () => {
     const result = await runOnce(db, deps, issueId, iteration);
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // Итерация в БД тоже completed, несмотря на краш report-агента.
     expect(
       db.select().from(iterations).where(eq(iterations.id, iteration.id)).get()
         ?.status,
@@ -1766,21 +1734,15 @@ describe('spawnReportAgent (B6–B9)', () => {
         (event) =>
           event.type === 'step_status' && event.stepRunId === reportRunId,
       );
-    // Терминал публикуется после `await pi.run` — ждём его, не полагаясь на
-    // порядок микрозадач fire-and-forget прогона.
     await vi.waitFor(() => expect(statuses()).toHaveLength(2));
 
-    // running — JSON `{status, step, model}`, как у шагов пайплайна.
     expect(JSON.parse(statuses()[0].data)).toEqual({
       status: 'running',
       step: 'report',
       model: null,
     });
-    // Терминал — плоская строка статуса (контракт движка). Прогон без
-    // артефактов не «успех с пустым отчётом», а провал: report.md не появился.
     expect(statuses()[1].data).toBe('failed');
     expect(statuses()[1].issueId).toBe(issueId);
-    // Исход прогона персистентен: строка step_runs вне итерации + лог.
     const reportRun = db
       .select()
       .from(stepRuns)
@@ -1824,7 +1786,6 @@ describe('spawnReportAgent (B6–B9)', () => {
         );
       await vi.waitFor(() => expect(terminal()).toBeDefined());
 
-      // Старт тоже виден, а ошибка не тонет в console.error без контекста.
       expect(
         events.some(
           (event) =>
@@ -1848,7 +1809,6 @@ describe('spawnReportAgent (B6–B9)', () => {
     const { deps, pi, sse } = makeDeps();
     deps.workspaceRoot = tempRoot();
     pi.enqueue(pass('resolve'));
-    // pi завершился с ошибкой без throw — тоже падение прогона.
     pi.enqueue(fail('report'));
 
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1875,10 +1835,6 @@ describe('spawnReportAgent (B6–B9)', () => {
   });
 });
 
-// ===========================================================================
-// C. DevOps SSE миграция (C10–C12)
-// ===========================================================================
-
 describe('DevOps SSE миграция (C10–C12)', () => {
   const roots: string[] = [];
 
@@ -1894,7 +1850,6 @@ describe('DevOps SSE миграция (C10–C12)', () => {
     }
   });
 
-  /** Прогон prepareIssueWorkspace с эмитящим DevOps-агентом; возвращает SSE. */
   const runDevOps = async (): Promise<{ events: SSEEvent[]; issueId: string }> => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
@@ -1954,7 +1909,6 @@ describe('DevOps SSE миграция (C10–C12)', () => {
   it('C12: старый devops_log больше не публикуется', async () => {
     const { events } = await runDevOps();
 
-    // Тип удалён из SSEEventType — сравниваем строкой.
     expect(events.some((event) => (event.type as string) === 'devops_log')).toBe(
       false,
     );

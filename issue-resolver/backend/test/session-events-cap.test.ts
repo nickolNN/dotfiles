@@ -16,7 +16,6 @@ describe('capSessionEvents', () => {
   });
 
   it('сверх бюджета остаётся хвост, первым идёт маркер обрезки', () => {
-    // One event per 100 KB, 50 events = 5 MB against a 2 MB budget.
     const events = Array.from({ length: 50 }, (_, index) =>
       text(`${index}:`.padEnd(100_000, 'x')),
     );
@@ -25,7 +24,6 @@ describe('capSessionEvents', () => {
 
     expect(capped[0]).toMatchObject({ type: 'text' });
     expect((capped[0] as { text: string }).text).toContain('truncated');
-    // Tail kept: the last event survives, the first one does not.
     expect(capped.at(-1)).toEqual(events.at(-1));
     expect(capped).not.toContainEqual(events[0]);
     const bytes = capped.reduce(
@@ -57,7 +55,6 @@ describe('capSessionEvents', () => {
   });
 
   it('повторная обрезка не накапливает маркеры', () => {
-    // The writer appends one event at a time and re-caps on every append.
     let log: SessionEvent[] = Array.from({ length: 40 }, (_, index) =>
       text(`${index}:`.padEnd(100_000, 'y')),
     );

@@ -10,7 +10,6 @@ import { BUILTIN_SLASH_COMMANDS } from '../src/pi/slash-commands';
 
 const BASE = '/issue-resolver/api/v1/iterations';
 
-/** Control-шпион: фиксирует prompt/send и отдаёт заранее заданные ответы. */
 function makeControl(options?: {
   onSend?: (command: Record<string, unknown>) => ControlResult;
 }): {
@@ -192,7 +191,6 @@ describe('GET /iterations/:id/control', () => {
         ],
         thinkingLevels: ['off', 'high'],
       });
-      // Встроенные команды идут первыми (source:'builtin'), затем get_commands.
       expect(body.commands).toEqual([
         ...BUILTIN_SLASH_COMMANDS.map((command) => ({
           name: command.name,
@@ -205,7 +203,6 @@ describe('GET /iterations/:id/control', () => {
         { name: 'skill:foo', source: 'skill' },
         { name: 'weird', source: 'extension' },
       ]);
-      // Все четыре запроса ушли в живую сессию.
       expect(spy.commands.map((c) => c.type)).toEqual([
         'get_state',
         'get_available_models',
@@ -226,7 +223,6 @@ describe('GET /iterations/:id/control', () => {
               ok: true,
               data: {
                 commands: [
-                  // Коллизия с builtin'ом — должна быть пропущена.
                   { name: 'compact', description: 'dup', source: 'prompt' },
                   { name: 'other', description: 'x', source: 'prompt' },
                 ],
@@ -470,7 +466,6 @@ describe('POST /iterations/:id/control', () => {
 });
 
 describe('POST /iterations/:id/prompt — встроенные slash-команды', () => {
-  /** Control: get_available_models отдаёт модели, прочее — ok. */
   function slashControl(): ReturnType<typeof makeControl> {
     return makeControl({
       onSend: (command) =>

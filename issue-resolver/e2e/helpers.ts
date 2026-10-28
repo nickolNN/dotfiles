@@ -1,21 +1,6 @@
-/**
- * Общие helpers для edge-case e2e-тестов (`tests/edge-cases/*`).
- *
- * Edge-case-сценарии (пустое состояние, два одновременных issue,
- * переподключение SSE, devops-прогресс по двум репозиториям) должны быть
- * детерминированными, поэтому API и SSE перехватываются Playwright'ом поверх
- * мок-стека (`playwright.config.ts` → `backend/test/e2e-server.ts`). Реальные
- * Docker/git/pi/сеть не используются; `tests/flow.spec.ts` идёт через
- * vite-прокси на тот же мок-бэкенд.
- *
- * Все пути — относительно Vite-origin (`baseURL: http://localhost:5196`),
- * фронт ходит в `'/issue-resolver/api/v1'`.
- */
 import { expect, type Page, type Route } from '@playwright/test';
 
 export const API_PREFIX = '/issue-resolver/api/v1';
-
-// --- локальные duck-typed копии shared-типов (e2e не зависит от shared) ---
 
 export type TaskStatus =
   | 'pending'
@@ -109,7 +94,6 @@ export interface FakeStepRun {
   screenshots_dir: string | null;
 }
 
-/** SSE-кадр — форма `SSEEvent` из shared. */
 export interface FakeSseEvent {
   type:
     | 'log'
@@ -132,29 +116,18 @@ function uid(prefix: string): string {
 }
 const now = (): string => new Date().toISOString();
 
-/**
- * Управляемый in-memory бэкенд. `install(page)` вешает один catch-all роут
- * на `**\/issue-resolver/api/v1/**`; всё, что не описано явно, отдаёт 404
- * `{ error }` (фронт такие ответы либо глушит, либо показывает ожидаемо).
- */
 export class FakeApi {
   repos: FakeRepo[] = [];
   issues: FakeIssue[] = [];
   iterations = new Map<string, FakeIteration[]>();
   stepRuns = new Map<string, FakeStepRun[]>();
-  /** HTML-артефакт по issueId (для `desired_result: 'html'`). */
   resultHtml = new Map<string, string>();
-  /** Markdown-артефакт по issueId. */
   resultMd = new Map<string, string>();
 
   private sseQueue = new Map<string, FakeSseEvent[]>();
   private sseDelivered = new Set<string>();
-  /** issueId, для которых SSE-соединение «порвано» (эмуляция падения backend). */
   sseDown = new Set<string>();
-  /** История запросов `METHOD path` — удобно для ассертов. */
   requests: string[] = [];
-
-  // ---------------- фабрики данных ----------------
 
   addRepo(input: Partial<FakeRepo> & { url: string }): FakeRepo {
     const derivedName = input.url
@@ -182,10 +155,6 @@ export class FakeApi {
     return repo;
   }
 
-  /**
-   * Сеет задачу. По умолчанию сразу создаёт итерацию #1 — так карточка
-   * детали рисуется полноценно (кнопка «Повторить» и т.п.).
-   */
   addIssue(
     input: Partial<FakeIssue> & { title: string },
   ): { issue: FakeIssue; iteration: FakeIteration } {
@@ -261,7 +230,6 @@ export class FakeApi {
     return run;
   }
 
-  /** Ставит задаче терминальный статус и её активной итерации. */
   finishIssue(issueId: string, status: TaskStatus = 'completed'): void {
     const issue = this.issues.find((item) => item.id === issueId);
     if (issue) issue.status = status;
@@ -270,9 +238,6 @@ export class FakeApi {
     }
   }
 
-  // ---------------- SSE ----------------
-
-  /** Очередь событий, которую получит SSE-подписчик issue. */
   setSse(
     issueId: string,
     events: Array<Omit<FakeSseEvent, 'issueId' | 'ts'>>,
@@ -291,18 +256,14 @@ export class FakeApi {
     this.sseDelivered.delete(issueId);
   }
 
-  /** Рвёт SSE: следующий запрос стрима падает (эмуляция «backend умер»). */
   killSse(issueId: string): void {
     this.sseDown.add(issueId);
   }
 
-  /** «Поднимает backend»: следующий реконнект снова доставит события. */
   restartSse(issueId: string): void {
     this.sseDown.delete(issueId);
     this.sseDelivered.delete(issueId);
   }
-
-  // ---------------- роутинг ----------------
 
   async install(page: Page): Promise<void> {
     await page.route(`**${API_PREFIX}/**`, (route) => this.handle(route));
@@ -337,7 +298,6 @@ export class FakeApi {
     }
   }
 
-  /** @returns true, если маршрут обработан. */
   private async route(
     route: Route,
     segments: string[],
@@ -482,11 +442,6 @@ export class FakeApi {
         return true;
       }
       if (issue && tail === 'report' && !tail2 && method === 'POST') {
-        // Фикстура кодирует АКТУАЛЬНЫЙ контракт отчёта:
-        // MD — `## Answer` первым, `## Execution details` последним; MR-ссылка
-        // в Answer. HTML — самодостаточный (инлайн <style>/<script>), один
-        // свёрнутый <details> внизу, внешние ссылки разрешены, загрузка
-        // внешних ресурсов — нет.
         const reportContent = `# Task: ${issue.title}\n\n**Status:** completed\n**Iterations:** ${this.iterations.get(id)?.length ?? 0}\n\n## Answer\n\nMock answer — the task is done. MR: https://gitlab.example.com/team/project/-/merge_requests/1\n\n### Verification\n\nAll mock checks pass.\n\n## Execution details\n\n### Iteration timeline\n\nMock execution details.`;
         const htmlContent = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${issue.title}</title><style>body{background:#0d1117;color:#e6edf3;font-family:system-ui,sans-serif;max-width:900px;margin:2rem auto;padding:1rem;line-height:1.6}h1{color:#58a6ff}summary{cursor:pointer}</style></head><body><h1>${issue.title}</h1><h2>Answer</h2><p>Mock report — iteration completed.</p><p>MR: <a href="https://gitlab.example.com/team/project/-/merge_requests/1" target="_blank" rel="noopener">!1</a></p><details><summary>How the task was executed</summary><p>Mock execution details.</p></details><script>document.addEventListener('beforeprint',()=>document.querySelectorAll('details').forEach(d=>d.open=true));</script></body></html>`;
         this.resultMd.set(id, reportContent);
@@ -605,7 +560,6 @@ function safeJson(raw: string | null): any {
   }
 }
 
-/** `new URL()` бросает на мусоре — возвращаем null, а не роняем роут. */
 function safeUrl(raw: string): URL | null {
   try {
     return new URL(raw);
@@ -614,7 +568,6 @@ function safeUrl(raw: string): URL | null {
   }
 }
 
-/** Кадр SSE `workspace_progress` (шаг разовой подготовки). */
 export function wsProgress(
   step: string,
   status: 'running' | 'done' | 'error',
@@ -626,8 +579,6 @@ export function wsProgress(
   };
 }
 
-/** Кадр SSE `log` (живой stdout/stderr агента: шаги, DevOps, Report).
- * `stepRunId` у issue-уровневых сессий — `{issueId}/devops` | `{issueId}/report`. */
 export function logChunk(
   stepRunId: string,
   text: string,
@@ -641,15 +592,6 @@ export function logChunk(
   };
 }
 
-// ---------------------------- публичные helpers ----------------------------
-
-/**
- * Создаёт сохранённый репозиторий через страницу «Репозитории»
- * (модалка → живая валидация URL → «Сохранить»).
- *
- * `branch` — ожидаемая базовая ветка; используется вызывающим тестом как
- * подсказка (сама форма валидации отдаёт ветки из фейкового API).
- */
 export async function createRepo(
   page: Page,
   url: string,
@@ -665,7 +607,6 @@ export async function createRepo(
   const field = page.getByTestId('repo-url-field');
   await field.fill(url);
 
-  // Живая валидация дебаунсится — ждём зелёную галочку.
   await expect(page.getByTestId('repo-url-valid')).toBeVisible({
     timeout: 10_000,
   });
@@ -675,10 +616,6 @@ export async function createRepo(
   await expect(page.getByTestId('repo-card').last()).toBeVisible();
 }
 
-/**
- * Ждёт, пока App переключится на деталь задачи, и возвращает id из URL
- * (`#/tasks/<id>`).
- */
 export async function getLatestIssueId(page: Page): Promise<string> {
   await expect(page).toHaveURL(/#\/tasks\/([^/?#]+)/, { timeout: 15_000 });
   const match = page.url().match(/#\/tasks\/([^/?#]+)/);
@@ -688,10 +625,6 @@ export async function getLatestIssueId(page: Page): Promise<string> {
   return match[1];
 }
 
-/**
- * Ждёт, пока выбранная итерация в карточке задачи покажет `status`
- * (сырой статус итерации из `Iteration`, как его рисует TaskDetail).
- */
 export async function pollIterationStatus(
   page: Page,
   status: TaskStatus,

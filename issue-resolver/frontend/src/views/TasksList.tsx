@@ -46,10 +46,6 @@ interface TasksListProps {
   onOpenResult?: (issueId: string) => void;
 }
 
-/**
- * Issue + живое состояние активного шага из SSE `step_status` (в БД не
- * персистится): показывается на карточке, пока шаг выполняется.
- */
 type IssueWithActiveStep = Issue & {
   activeStep?: string;
   activeModel?: string | null;
@@ -71,7 +67,6 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
   question: 'Вопрос',
 };
 
-/** Runtime-проверка статуса: SSE-данные приходят строками. */
 const TASK_STATUSES: ReadonlySet<string> = new Set([
   'draft',
   'pending',
@@ -87,11 +82,9 @@ function isTaskStatus(value: unknown): value is TaskStatus {
   return typeof value === 'string' && TASK_STATUSES.has(value);
 }
 
-/** Баннер, если финал удаления не пришёл за `DELETE_TIMEOUT_MS`. */
 const DELETE_TIMEOUT_MESSAGE =
   'Таймаут удаления. Задача может быть удалена частично. Обновите страницу.';
 
-/** Человекочитаемые фазы фонового удаления задачи (SSE `issue_deleting`). */
 const DELETE_PHASE_LABELS: Record<string, string> = {
   stopping_processes: 'останавливаем процессы',
   removing_db_record: 'Удаление записи...',
@@ -99,20 +92,17 @@ const DELETE_PHASE_LABELS: Record<string, string> = {
   removing_workspace: 'удаляем рабочую папку',
 };
 
-/** Статусы, карточка которых пульсирует. */
 const PULSE_STATUSES: ReadonlySet<TaskStatus> = new Set([
   'running',
   'preparing',
   'question',
 ]);
 
-/** Карточный класс для завершённых/отменённых — приглушённый. */
 const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   'completed',
   'cancelled',
 ]);
 
-/** Статусы без точки-индикатора слева от заголовка. */
 const NO_DOT_STATUSES: ReadonlySet<TaskStatus> = new Set([
   'completed',
   'cancelled',
@@ -127,7 +117,6 @@ function issueKey(issue: Issue): string {
   );
 }
 
-/** Пары «repo:branch», соединённые middle dot. Без ветки — только имя репо. */
 function repositoryNames(issue: Issue): string {
   return issue.repositories
     .map((repository) => {
@@ -140,10 +129,8 @@ function repositoryNames(issue: Issue): string {
     .join(' · ');
 }
 
-/** Готовность репозитория задачи к показу сводки на карточке. */
 type RepoReadiness = 'ready' | 'connected' | 'waiting' | 'error';
 
-/** Порядок вывода категорий готовности; `error` показывается только при ≥1. */
 const REPO_READINESS_ORDER: readonly RepoReadiness[] = [
   'ready',
   'connected',
@@ -172,13 +159,6 @@ const REPO_READINESS_LABELS: Record<RepoReadiness, string> = {
   error: 'ошибка',
 };
 
-/**
- * Готовность репозитория задачи по его сохранённой записи:
- * - `ok` + инструкция сгенерирована → готов (клон и анализ есть);
- * - `ok` без инструкции → подключён (клон есть, анализ не готов);
- * - `error` → ошибка соединения;
- * - записи нет / `unknown` → ещё ждёт (в т.ч. репозиторий не сохранён).
- */
 function repoReadiness(repo: SavedRepo | undefined): RepoReadiness {
   if (repo === undefined) return 'waiting';
   if (repo.connectionStatus === 'error') return 'error';
@@ -188,12 +168,6 @@ function repoReadiness(repo: SavedRepo | undefined): RepoReadiness {
   return 'waiting';
 }
 
-/**
- * Сводка по репозиториям pending/preparing-задачи: сколько готово/подключено/
- * ждёт/с ошибкой. Молчит, пока `savedRepos` не загружены или у задачи нет repo.
- *
- * Формат: `📦 репо: ✅2 🔵1 🟡0`; `❌` добавляется в конец только при ошибках.
- */
 function RepoReadinessLine({
   issue,
   savedRepos,
@@ -244,7 +218,6 @@ function RepoReadinessLine({
   );
 }
 
-/** Просматриваемый отчёт есть у завершённой задачи с md/html-артефактом. */
 function hasViewableResult(issue: Issue): boolean {
   return (
     issue.status === 'completed' &&
@@ -252,7 +225,6 @@ function hasViewableResult(issue: Issue): boolean {
   );
 }
 
-/** Staggered-классы появления карточек (d1…d8, дальше — без задержки). */
 const CARD_ANIMATIONS = [
   'animate-fade-in-up-d1',
   'animate-fade-in-up-d2',
@@ -268,21 +240,13 @@ function cardAnimation(index: number): string {
   return CARD_ANIMATIONS[index] ?? 'animate-fade-in-up';
 }
 
-/**
- * Длительность задачи в текущем UI — чистое время работы агентов, поэтому
- * wall-clock `created_at → updated_at` здесь больше не считается: между
- * итерациями задача простаивает. Время берётся из step-runs (см. `IssueStats`).
- */
-
 interface IssueStatsData {
   iterations: number;
-  /** Все step-runs задачи; null — ещё не загружены (таймер в fallback). */
   runs: StepRunWithEvents[] | null;
   tokensInput: number;
   tokensOutput: number;
   tokensCache: number;
   hasTokenStats: boolean;
-  /** Средняя скорость последней итерации (токенов/сек) или null. */
   avgSpeed: number | null;
 }
 
@@ -291,7 +255,6 @@ type IssueStatsState =
   | { status: 'ready'; data: IssueStatsData }
   | { status: 'error' };
 
-/** Компактные иконки-роли для токенов (↓ входящие, ↑ исходящие, ⤓ кеш). */
 function TokensInline(data: IssueStatsData) {
   if (!data.hasTokenStats) return null;
   return (
@@ -318,16 +281,6 @@ function TokensInline(data: IssueStatsData) {
   );
 }
 
-/**
- * Ленивая статистика карточки: число итераций есть у всех начатых задач,
- * время работы и токены — только у running/completed (для остальных step-runs
- * не финальны или не начаты). Ответы кешируются в состоянии компонента,
- * поэтому ререндеры (живой таймер) не перезапрашивают сеть.
- *
- * Таймер показывает чистое время работы step-runs, а не wall-clock. Пока
- * step-runs не загружены, `issue-timer` не рендерится — относительное время
- * `formatRelativeTime(created_at)` рядом служит fallback'ом.
- */
 function IssueStats({
   issue,
   now,
@@ -374,8 +327,6 @@ function IssueStats({
           );
           runs = batches.flat();
 
-          // Токены — только у завершённой задачи с завершённой последней
-          // итерацией; step-runs во время работы ещё не финальны.
           if (
             issue.status === 'completed' &&
             lastIteration?.status === 'completed'
@@ -438,10 +389,6 @@ function IssueStats({
 
   if (state.status === 'error') return null;
 
-  // Живой тик `useNow` сэмплирует время при монтировании, а данные о
-  // running-step-runs приходят позже (fetch → setState). Без этой поправки
-  // таймер на первом кадре мог показать время на миллисекунду меньше
-  // реального и «отмотаться» назад; берём не раньше wall-clock.
   const workMs = sumStepRunWorkMs(state.data.runs, Math.max(now, Date.now()));
   const workTime = workMs === null ? '' : formatDuration(workMs);
 
@@ -472,7 +419,6 @@ function IssueStats({
   );
 }
 
-/** Inline-иконка «стоп» (квадрат) для гашения dev-серверов. */
 function StopIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -490,7 +436,6 @@ function StopIcon({ className }: { className?: string }) {
   );
 }
 
-/** Иконка параллельных агентов — две вертикальные полосы. */
 function ParallelIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -508,7 +453,6 @@ function ParallelIcon({ className }: { className?: string }) {
   );
 }
 
-/** Inline-иконка мусорного ведра, без внешних зависимостей. */
 function TrashIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -537,13 +481,6 @@ export default function TasksList(props: TasksListProps) {
   );
 }
 
-/**
- * Гарантирует наличие QueryClient. В приложении провайдер ставит `main.tsx`,
- * но компонент (и `App`) в тестах монтируется напрямую — без провайдера любой
- * `useQuery` бросил бы «No QueryClient set». Если провайдер уже есть — просто
- * пробрасываем детей в общий клиент приложения; иначе создаём локальный клиент
- * на время жизни списка, чтобы тесты не делили кэш между собой.
- */
 function TasksListQueryBoundary({ children }: { children: ReactNode }) {
   const existing = useContext(QueryClientContext);
   const [fallbackClient] = useState(() =>
@@ -580,17 +517,12 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
     error: issuesFetchError,
   } = useQuery({ queryKey: ['issues'], queryFn: getIssues });
 
-  // Локальный стейт для живых SSE-мутаций (activeStep, activeModel, status):
-  // серверные данные из useQuery живут в кэше, а живой статус — здесь, поверх
-  // них.
   const [localIssues, setLocalIssues] = useState<IssueWithActiveStep[]>([]);
 
   useEffect(() => {
     if (fetchedIssues) setLocalIssues(fetchedIssues);
   }, [fetchedIssues]);
 
-  // Производный стейт из useQuery: показываем «loading»/«error»/«ready» тем же
-  // контрактом, что и раньше, чтобы рендер не менялся.
   const state: LoadState = issuesLoading
     ? { status: 'loading' }
     : issuesError
@@ -605,40 +537,25 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [stopError, setStopError] = useState<string | null>(null);
-  // id задач, которые прямо сейчас удаляются: карточка показывает
-  // «Удаление...», пока не придёт SSE `issue_deleted`.
   const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set());
-  // Текущая фаза удаления (SSE `issue_deleting`) по id задачи.
   const [deletingPhases, setDeletingPhases] = useState<Record<string, string>>(
     {},
   );
-  // Живые SSE-подписки на потоки удаляемых задач (id → функция отписки).
   const deleteStreamsRef = useRef<Map<string, () => void>>(new Map());
-  // Таймауты ожидания финала удаления (id → handle), чтобы не оставлять
-  // карточку в «Удаление...» навсегда, если поток замолчал.
   const deleteTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
-  // Предупреждение о зависшем удалении (отдельно от actionError, у которого
-  // свой префикс «Не удалось удалить задачу:»).
   const [deleteTimeoutNotice, setDeleteTimeoutNotice] = useState<string | null>(
     null,
   );
 
-  // Живой тик, пока в списке есть хотя бы одна running-задача.
   const now = useNow(
     state.status === 'ready' &&
       state.issues.some((issue) => issue.status === 'running'),
   );
 
-  // Живой статус задач: глобальный SSE-поток шлёт `iteration_status` по всем
-  // задачам — обновляем карточки в списке без перезагрузки страницы.
   useEffect(() => {
     return subscribeToGlobalStream({
-      // `step_status` обновляется на КАЖДЫЙ шаг (refine→resolve→…). При
-      // status='running' бэкенд кладёт в `data` JSON `{status, step, model}`,
-      // при остальных статусах — плоскую строку. Показываем активный шаг с
-      // моделью, пока задача `running`, и сбрасываем при завершении шага.
       onStepStatus: (event) => {
         let payload: {
           status?: unknown;
@@ -648,7 +565,6 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
         try {
           payload = JSON.parse(event.data) as typeof payload;
         } catch {
-          // Старый формат — `data` это плоская строка статуса.
           return;
         }
         const issueId = event.issueId;
@@ -681,7 +597,6 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
         }
       },
       onIterationStatus: (event) => {
-        // `data` — JSON-строка; статус лежит внутри, а не в поле события.
         let parsed: { status?: unknown; iterationId?: unknown; needsInput?: unknown };
         try {
           parsed = JSON.parse(event.data) as typeof parsed;
@@ -701,7 +616,6 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
     });
   }, []);
 
-  // Закрываем все живые потоки удаления при размонтировании списка.
   useEffect(() => {
     const streams = deleteStreamsRef.current;
     const timeouts = deleteTimeoutsRef.current;
@@ -713,8 +627,6 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
     };
   }, []);
 
-  // Есть ли pending/preparing-задача с репозиториями — только тогда нужна
-  // сводка готовности (и запрос сохранённых репозиториев).
   const needsRepoReadiness =
     state.status === 'ready' &&
     state.issues.some(
@@ -723,16 +635,12 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
         issue.repositories.length > 0,
     );
 
-  // Сохранённые репозитории для сводки готовности грузятся одним запросом на
-  // весь список и кэшируются react-query. Ошибка молчалива: без сохранённых
-  // репозиториев сводка просто не рендерится.
   const { data: savedRepos = null } = useQuery({
     queryKey: ['repositories'],
     queryFn: getRepositories,
     enabled: needsRepoReadiness,
   });
 
-  /** Закрывает SSE-поток удаления задачи (если он открыт). */
   const stopDeleteStream = useCallback((id: string) => {
     const unsubscribe = deleteStreamsRef.current.get(id);
     if (!unsubscribe) return;
@@ -740,7 +648,6 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
     deleteStreamsRef.current.delete(id);
   }, []);
 
-  /** Снимает таймаут ожидания финала удаления (если он запущен). */
   const clearDeleteTimeout = useCallback((id: string) => {
     const timer = deleteTimeoutsRef.current.get(id);
     if (timer === undefined) return;
@@ -748,7 +655,6 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
     deleteTimeoutsRef.current.delete(id);
   }, []);
 
-  /** Снимает id со статуса «удаляется» (финал SSE или ошибка вызова). */
   const clearDeleting = useCallback(
     (id: string) => {
       clearDeleteTimeout(id);
@@ -774,12 +680,8 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
 
       setActionError(null);
       setDeleteTimeoutNotice(null);
-      // Локально сразу помечаем карточку удаляемой; SSE подтвердит прогресс
-      // (`issue_deleting`) и финал (`issue_deleted`).
       setDeletingIds((current) => new Set(current).add(id));
 
-      // Страховка от «зависшего» удаления: если за `DELETE_TIMEOUT_MS` не
-      // пришёл ни финал, ни ошибка — возвращаем карточку и предупреждаем.
       clearDeleteTimeout(id);
       deleteTimeoutsRef.current.set(
         id,
@@ -790,8 +692,6 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
         }, DELETE_TIMEOUT_MS),
       );
 
-      // Подписку открываем ДО DELETE: иначе быстрые фазы и `issue_deleted`
-      // можно пропустить (поток уже удалённой задачи повторно не открыть).
       if (!deleteStreamsRef.current.has(id)) {
         const unsubscribe = subscribeToIssueEvents(id, {
           onIssueDeleting: (payload) => {
@@ -837,8 +737,6 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
     setStopError(null);
     try {
       await stopDevServers(id);
-      // Backend обнуляет порт — не перезапрашиваем весь список ради одной
-      // карточки, гасим индикатор/кнопку локально.
       setLocalIssues((current) =>
         current.map((issue) =>
           issue.id === id ? { ...issue, dev_server_port: null } : issue,

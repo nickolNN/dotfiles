@@ -148,7 +148,6 @@ describe('create_mr — per-repo режим сдачи (spec-parity)', () => {
       url: `${ROUTE_PATH}/${issue.id}/iterations`,
       payload: {
         context: 'без MR',
-        // Фронт при снятом шаге pr не перечисляет его в steps.
         steps: ['resolve'],
         pr_repository_ids: [],
       },

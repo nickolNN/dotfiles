@@ -7,20 +7,14 @@ const API_PATH = '/issue-resolver/api/v1';
 const HOSTNAME_KEY = 'hostname';
 const HOSTNAME_PATH = `${API_PATH}/settings/hostname`;
 
-/**
- * Роуты настроек: key-value хранилище (`settings`). Сейчас — hostname,
- * отсутствие значения отдаётся пустой строкой.
- */
 export async function settingsRoutes(
   app: FastifyInstance,
   db: Db,
 ): Promise<void> {
-  // GET /settings/hostname — значение или '' (настройка ещё не задана).
   app.get(HOSTNAME_PATH, async () => ({
     hostname: getSetting(db, HOSTNAME_KEY) ?? '',
   }));
 
-  // PUT /settings/hostname — сохранить значение (строка ≤ 100 символов).
   app.put(HOSTNAME_PATH, async (request, reply) => {
     const parsed = updateHostnameRequestSchema.safeParse(request.body);
     if (!parsed.success) {

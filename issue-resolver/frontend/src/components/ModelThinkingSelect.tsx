@@ -6,62 +6,39 @@ import { thinkingLevelsFor } from '../constants/thinking-levels';
 import { inputClass } from './formStyles';
 
 export interface ModelThinkingSelectProps {
-  /** Доступные модели. */
   models: ModelDescriptor[];
-  /** Доступные уровни мышления (обычно из thinkingLevelsFor выбранной модели). */
   thinkingLevels: readonly ThinkingLevel[];
 
-  /** Текущее значение модели. */
   modelValue: string;
-  /** Текущий уровень мышления. */
   thinkingValue: string;
 
-  /** Заблокировать оба селекта. */
   disabled?: boolean;
-  /** Заблокировать только thinking (когда модель не выбрана). */
   thinkingDisabled?: boolean;
 
-  /** Как строить value для <option> модели. По умолчанию: model.id. */
   modelOptionValue?: (model: ModelDescriptor) => string;
-  /** Как строить label для <option> модели. По умолчанию: model.name ?? model.id. */
   modelOptionLabel?: (model: ModelDescriptor) => string;
 
-  /** Плейсхолдер для пустой опции модели. */
   modelPlaceholder?: string;
-  /** Плейсхолдер для пустой опции мышления. */
   thinkingPlaceholder?: string;
 
-  /** Видимая подпись рядом с селектом модели (если задана). */
   modelLabel?: string;
-  /** Видимая подпись рядом с селектом мышления (если задана). */
   thinkingLabel?: string;
 
-  /** data-testid для селекта модели. */
   modelTestId?: string;
-  /** data-testid для селекта мышления. */
   thinkingTestId?: string;
 
-  /** aria-label для селекта модели. */
   modelAriaLabel?: string;
-  /** aria-label для селекта мышления. */
   thinkingAriaLabel?: string;
 
-  /** CSS-класс для селекта модели (по умолчанию inputClass). */
   modelSelectClassName?: string;
-  /** CSS-класс для селекта мышления (по умолчанию inputClass). */
   thinkingSelectClassName?: string;
 
-  /** Дополнительный класс для враппера пары. */
   className?: string;
 
   onModelChange: (value: string) => void;
   onThinkingChange: (value: string) => void;
 }
 
-/**
- * Единая пара «модель + thinking» для ВСЕХ мест в приложении. Одна реализация —
- * больше никакой копипасты селектов модели и мышления.
- */
 export default function ModelThinkingSelect({
   models,
   thinkingLevels,

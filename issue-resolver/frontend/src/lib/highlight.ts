@@ -28,14 +28,12 @@ hljs.registerLanguage('c', c);
 hljs.registerLanguage('cpp', cpp);
 hljs.registerLanguage('sql', sql);
 
-// Алиасы расширений, которые не всегда идут в комплекте с грамматикой.
 hljs.registerAliases(['js', 'jsx'], { languageName: 'javascript' });
 hljs.registerAliases(['ts', 'tsx'], { languageName: 'typescript' });
 hljs.registerAliases(['html', 'htm', 'svg'], { languageName: 'xml' });
 hljs.registerAliases(['sh', 'zsh'], { languageName: 'bash' });
 hljs.registerAliases(['yml'], { languageName: 'yaml' });
 
-/** Маппинг расширения файла на зарегистрированный язык highlight.js. */
 export function extToLanguage(ext: string): string | null {
   switch (ext.toLowerCase()) {
     case 'js':
@@ -83,10 +81,6 @@ export function extToLanguage(ext: string): string | null {
   }
 }
 
-/**
- * Подсвечивает код и возвращает HTML (`hljs.highlight` экранирует разметку).
- * Неизвестный/незарегистрированный язык → null, вызывающий рендерит сырой текст.
- */
 export function highlightCode(
   code: string,
   language: string | null,

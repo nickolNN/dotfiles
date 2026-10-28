@@ -55,7 +55,6 @@ function makeSavedRepo(
   };
 }
 
-/** Issue с репозиториями — для сводки готовности на pending/preparing. */
 function makeRepoIssue(
   id: string,
   status: Issue['status'],
@@ -151,7 +150,6 @@ interface RoutedFetch {
   calls: string[];
 }
 
-/** Мок с маршрутизацией по URL: считает вызовы и отдаёт фикстуры по id. */
 function stubRoutedFetch(routes: Omit<RoutedFetch, 'calls'>): RoutedFetch {
   const result: RoutedFetch = { ...routes, calls: [] };
   vi.stubGlobal(
@@ -192,7 +190,6 @@ function stubRoutedFetch(routes: Omit<RoutedFetch, 'calls'>): RoutedFetch {
   return result;
 }
 
-/** Фейк EventSource: запоминает URL/закрытие и отдаёт onmessage вручную. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -320,8 +317,6 @@ describe('TasksList', () => {
       'pending',
     );
 
-    // Глобальный поток: `/issues/:id/stream` здесь не подходит — список
-    // слушает общий канал `/stream`.
     const stream = FakeEventSource.instances.find((source) =>
       source.url.endsWith('/api/v1/stream'),
     );
@@ -386,7 +381,6 @@ describe('TasksList', () => {
         'resolve · deepseek-v4-pro',
       ),
     );
-    // Модель теперь в блоке статистики (IssueStats), а не под статусом карточки.
     const stats = screen.getByTestId('issue-stats');
     expect(
       stats.parentElement?.contains(screen.getByTestId('active-step')),
@@ -490,7 +484,6 @@ describe('TasksList', () => {
     render(<TasksList />);
     await screen.findByText('Running task');
 
-    // До SSE — модель ещё не известна, бейджа нет.
     expect(screen.queryByTestId('active-model-badge')).toBeNull();
 
     const stream = FakeEventSource.instances.find((source) =>
@@ -642,7 +635,6 @@ describe('TasksList', () => {
 
     fireEvent.click(viewButton);
     expect(onOpenResult).toHaveBeenCalledWith('1');
-    // Кнопка отчёта не должна открывать саму задачу (это делает row-click).
     expect(onOpenTask).not.toHaveBeenCalled();
   });
 
@@ -713,7 +705,6 @@ describe('TasksList', () => {
       screen.getByRole('button', { name: 'Удалить задачу First task' }),
     );
 
-    // DELETE ушёл, а карточка локально перешла в «Удаление...».
     expect(await screen.findByTestId('issue-deleting')).toBeInTheDocument();
     expect(screen.queryByText('First task')).not.toBeInTheDocument();
     expect(confirmMock).toHaveBeenCalledWith(
@@ -727,7 +718,6 @@ describe('TasksList', () => {
     );
     expect(stream).toBeDefined();
 
-    // Фаза удаления из SSE показывается рядом с «Удаление...».
     stream?.emit({
       type: 'issue_deleting',
       issueId: '1',
@@ -738,7 +728,6 @@ describe('TasksList', () => {
       await screen.findByText('удаляем рабочую папку'),
     ).toBeInTheDocument();
 
-    // Финал: задача пропадает из списка, поток закрывается.
     stream?.emit({
       type: 'issue_deleted',
       issueId: '1',
@@ -919,7 +908,6 @@ describe('TasksList', () => {
     await screen.findByText('Running task');
 
     const timer = await screen.findByTestId('issue-timer');
-    // 2м (завершённый step-run) + ~60с (текущий running-step), допускаем дрейф тика.
     expect(timer).toHaveTextContent(/⏱ 3м \d+с/);
     const stats = screen.getByTestId('issue-stats');
     expect(stats).toHaveTextContent('↻ 2');
@@ -931,7 +919,6 @@ describe('TasksList', () => {
     const issue: Issue = {
       ...makeIssue('1', 'Done task'),
       status: 'completed',
-      // Wall-clock ровно час, но реальной работы ~10 минут.
       created_at: '2026-10-09T00:00:00.000Z',
       updated_at: '2026-10-09T01:00:00.000Z',
     };
@@ -974,7 +961,6 @@ describe('TasksList', () => {
     );
     const stats = screen.getByTestId('issue-stats');
     expect(stats).toHaveTextContent('↻ 2');
-    // Токены берутся только с последней итерации (it-2), не суммируются c it-1.
     expect(stats).toHaveTextContent('↓142k');
     expect(stats).toHaveTextContent('↑3.4k');
     expect(stats).toHaveTextContent('⤓85k');
@@ -1016,7 +1002,6 @@ describe('TasksList', () => {
     await screen.findByText('Running task');
     await screen.findByText('Загрузка статистики…');
 
-    // Fallback — относительное время, никакого wall-clock таймера.
     expect(screen.queryByTestId('issue-timer')).toBeNull();
     expect(screen.getByText('10 мин назад')).toBeInTheDocument();
 
@@ -1083,7 +1068,6 @@ describe('TasksList', () => {
             iteration_id: 'it-2',
             stats: makeStats(1000, 100, 0, 44),
           }),
-          // Run без скорости не должен ломать среднее.
           makeStepRun({
             id: 'c',
             iteration_id: 'it-2',
@@ -1099,7 +1083,6 @@ describe('TasksList', () => {
     await waitFor(() => {
       expect(screen.getByTestId('issue-stats')).toHaveTextContent('⚡42 t/s');
     });
-    // Скорость it-1 (30 t/s) не учитывается.
     expect(screen.getByTestId('issue-stats')).not.toHaveTextContent('⚡30');
   });
 
@@ -1123,11 +1106,9 @@ describe('TasksList', () => {
 
     const summary = await screen.findByTestId('repo-readiness');
     expect(summary).toHaveTextContent('📦 репо: ✅1 🔵1 🟡1');
-    // Иконки цветные (матричная палитра).
     expect(within(summary).getByText('✅')).toHaveStyle({ color: '#00FF41' });
     expect(within(summary).getByText('🔵')).toHaveStyle({ color: '#00B4FF' });
     expect(within(summary).getByText('🟡')).toHaveStyle({ color: '#FFB000' });
-    // Нет ошибок — категория ❌ не выводится.
     expect(screen.queryByTestId('repo-readiness-error')).toBeNull();
     expect(calls.filter((url) => url.endsWith('/repositories'))).toHaveLength(1);
   });

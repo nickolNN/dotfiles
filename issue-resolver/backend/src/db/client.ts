@@ -10,20 +10,11 @@ export const DEFAULT_DB_PATH = resolve(
   '../../data/issue-resolver.db',
 );
 
-/**
- * Путь БД из env: при заданном `ISSUE_RESOLVER_DATA_DIR` — 
- * `<DATA_DIR>/issue-resolver.db`, иначе DEFAULT_DB_PATH (текущее поведение).
- * Общий DATA_DIR двигает БД, workspaces и originals-кэш вместе.
- */
 export const dbPathFromEnv = (env: NodeJS.ProcessEnv): string => {
   const dataDir = env.ISSUE_RESOLVER_DATA_DIR;
   return dataDir ? join(dataDir, 'issue-resolver.db') : DEFAULT_DB_PATH;
 };
 
-/**
- * DDL совпадает с src/db/schema.ts. drizzle-kit-миграции в этом срезе нет,
- * поэтому таблицы создаются идемпотентно при открытии БД.
- */
 const DDL = `
 CREATE TABLE IF NOT EXISTS issues (
   id TEXT PRIMARY KEY,
@@ -190,12 +181,6 @@ CREATE TABLE IF NOT EXISTS settings (
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
-/**
- * Догоняет уже существующие БД: `CREATE TABLE IF NOT EXISTS` не добавляет
- * новые колонки в созданную ранее таблицу, поэтому доводим их ALTER-ами.
- * Идемпотентно — повторный запуск ничего не делает. DDL — литералы, без
- * интерполяции извне.
- */
 function ensureIterationColumns(sqlite: Database.Database): void {
   const columns = new Set(
     (sqlite.pragma('table_info(iterations)') as { name: string }[]).map(
@@ -281,11 +266,6 @@ function ensureIssueColumns(sqlite: Database.Database): void {
   if (!columns.has('tag_id')) {
     sqlite.exec('ALTER TABLE issues ADD COLUMN tag_id TEXT REFERENCES tags(id) ON DELETE SET NULL');
   }
-  // Настройки DevOps-агента и числа исполнителей: без них черновик их терял
-  // (они писались только в `iterations`, а у черновика итераций нет).
-  // Колонки назывались `bootstrapper_*` — если живая БД успела их создать
-  // до ренейма, переносим значения через RENAME COLUMN (SQLite ≥ 3.25);
-  // иначе добавляем колонку с новым именем.
   if (!columns.has('devops_model')) {
     if (columns.has('bootstrapper_model')) {
       sqlite.exec(
@@ -384,7 +364,6 @@ function ensureStepRunColumns(sqlite: Database.Database): void {
   }
 }
 
-/* Таблица settings создаётся свежей, доводить ALTER-ами пока нечего. */
 function ensureSettingsColumns(_sqlite: Database.Database): void {}
 
 function ensureStepOutputColumns(sqlite: Database.Database): void {
@@ -413,14 +392,6 @@ function ensureStepOutputColumns(sqlite: Database.Database): void {
   }
 }
 
-/**
- * Прогоны вне итерации (`issue_id` + nullable `iteration_id`).
- *
- * SQLite не умеет снять NOT NULL с колонки, поэтому старую таблицу приходится
- * пересобирать. `foreign_keys` на время пересборки выключается: `step_outputs`
- * ссылается на `step_runs` с ON DELETE CASCADE, и `DROP TABLE` иначе снёс бы
- * отчёты всех шагов. `issue_id` для старых строк берётся из их итерации.
- */
 function ensureStepRunIssueColumn(sqlite: Database.Database): void {
   const columns = sqlite.pragma('table_info(step_runs)') as {
     name: string;
@@ -447,7 +418,6 @@ CREATE TABLE step_runs_rebuilt (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )`);
-    // 
     sqlite.exec(`
 INSERT INTO step_runs_rebuilt
   (id, issue_id, iteration_id, step, attempt, status, context, feedback, events, created_at, updated_at)

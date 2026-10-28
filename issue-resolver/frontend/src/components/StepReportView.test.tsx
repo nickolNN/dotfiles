@@ -59,7 +59,6 @@ describe('StepReportView — структурированный отчёт', () 
     const banner = screen.getByTestId('step-report-pr-error');
     expect(banner).toHaveTextContent('MR/ветка не созданы');
     expect(banner).toHaveTextContent('commit/push: rejected');
-    // Статус агента остаётся PASS — публикация отдельна от самого шага.
     expect(screen.getByTestId('step-report-status')).toHaveTextContent('PASS');
   });
 
@@ -254,7 +253,6 @@ describe('StepReportView — структурированный отчёт', () 
     expect(items[0]).toHaveTextContent('Сбор контекста');
     expect(items[0]).toHaveTextContent('2 исп.');
     expect(items[0]).toHaveTextContent('собрать');
-    // Без name — дефолт «Этап N»; task без executors.
     expect(items[1]).toHaveTextContent('Этап 2');
     expect(items[1]).toHaveTextContent('починить');
   });

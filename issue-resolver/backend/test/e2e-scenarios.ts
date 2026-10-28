@@ -1,12 +1,3 @@
-/**
- * Сценарный мок pi-агента для e2e: детерминированные ответы шагов
- * (success/failure/question/timeout) без Docker, сети и токенов.
- *
- * Сценарии задаются через `POST /e2e/scenarios` (см. `registerScenarioRoutes`)
- * до создания задачи. Движок вызывает `pi.run()` по разу на шаг конвейера;
- * `ScenarioPiRunner` держит курсор НА ИТЕРАЦИЮ, поэтому несколько задач могут
- * идти параллельно и независимо задавать вопросы.
- */
 import type { FastifyInstance } from 'fastify';
 import type {
   SessionQuestion,
@@ -37,7 +28,6 @@ const PIPELINE_STEPS: readonly ScenarioPipelineStep[] = [
   'pr',
 ];
 
-/** Шаг конвейера из промпта `buildStepPrompt` (`Pipeline step: <step>.`). */
 function stepFromPrompt(prompt: string): ScenarioPipelineStep {
   const match = /^Pipeline step:\s*([a-z]+)/m.exec(prompt);
   const candidate = match?.[1] as ScenarioPipelineStep | undefined;
@@ -61,27 +51,22 @@ const cloneScenario = (scenario: MockPiScenario): MockPiScenario => ({
   })),
 });
 
-/** Текущий сценарий сервера: pi-ответы + режим bootstrap. */
 export class ScenarioController {
   private scenario: MockPiScenario = cloneScenario(allSuccessScenario);
   private name: string | null = allSuccessScenario.name ?? null;
 
-  /** Снимок текущего сценария (копия — вызывающий не мутирует состояние). */
   current(): { name: string | null; scenario: MockPiScenario } {
     return { name: this.name, scenario: cloneScenario(this.scenario) };
   }
 
-  /** Ответы шагов текущего сценария. */
   get steps(): readonly MockPiStep[] {
     return this.scenario.steps;
   }
 
-  /** Таймаут авто-ответа на вопрос, мс. */
   get questionTimeoutMs(): number {
     return this.scenario.questionTimeoutMs ?? 15_000;
   }
 
-  /** Режим подготовки рабочей папки. */
   get bootstrapMode(): ScenarioBootstrapMode {
     return this.scenario.bootstrap ?? 'success';
   }
@@ -96,12 +81,6 @@ export class ScenarioController {
   }
 }
 
-/**
- * pi-раннер поверх сценария. Курсор — на `iterationId`; недостающие шаги
- * деградируют до `success`, лишние игнорируются. Вопрос получает ответ через
- * реестр живых сессий (`POST /iterations/:id/ui-response` → `respond`),
- * поэтому UI-сценарий «модалка → ответ → продолжение» работает по-настоящему.
- */
 export class ScenarioPiRunner implements PiRunner {
   readonly calls: PiRunCall[] = [];
   private readonly cursors = new Map<string, number>();
@@ -112,7 +91,6 @@ export class ScenarioPiRunner implements PiRunner {
 
   constructor(private readonly controller: ScenarioController) {}
 
-  /** Сбрасывает курсоры шагов (новый сценарий / чистый прогон). */
   clearCursors(): void {
     this.cursors.clear();
   }
@@ -151,7 +129,6 @@ export class ScenarioPiRunner implements PiRunner {
     return this.successResult(step, mock);
   }
 
-  /** Регистрирует живую сессию: respond резолвит ожидающий вопрос. */
   private registerControl(opts: PiRunOptions): void {
     const { registry, stepRunId, iterationId } = opts;
     if (!registry || !stepRunId || !iterationId) return;
@@ -260,7 +237,6 @@ export class ScenarioPiRunner implements PiRunner {
   }
 }
 
-/** Git-фейк, умеющий валить установку зависимостей по сценарию. */
 export class ScenarioGitService extends FakeGitService {
   constructor(private readonly controller: ScenarioController) {
     super();
@@ -274,11 +250,6 @@ export class ScenarioGitService extends FakeGitService {
   }
 }
 
-/**
- * Фабрика анализатора: при `bootstrap: 'failure'` анализ не удаётся,
- * иначе отдаёт валидные инструкции. `holdMs` держит паузу перед выводом —
- * клиент успевает открыть SSE и не теряет `devops_log`.
- */
 export function createScenarioDevOpsFactory(
   controller: ScenarioController,
   options: { holdMs?: number } = {},
@@ -310,13 +281,6 @@ interface ScenarioRoutesDeps {
   runner: ScenarioPiRunner;
 }
 
-/**
- * Регистрирует `GET/POST /e2e/scenarios` и `POST /e2e/reset`.
- *
- * Тело POST: `{ scenario?: BuiltinScenarioName, steps?: MockPiStep[],
- * bootstrap?: 'success'|'failure', questionTimeoutMs?: number }`. Явный
- * `scenario` имеет приоритет; иначе используются inline `steps`.
- */
 export function registerScenarioRoutes(
   app: FastifyInstance,
   { controller, runner }: ScenarioRoutesDeps,

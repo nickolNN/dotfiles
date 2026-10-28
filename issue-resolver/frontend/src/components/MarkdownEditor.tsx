@@ -5,18 +5,8 @@ import { Markdown } from '@tiptap/markdown';
 import { Placeholder } from '@tiptap/extensions';
 import type { Editor, Extensions } from '@tiptap/core';
 
-/**
- * Реестр живых редакторов по их contenteditable-элементу.
- *
- * Живой ProseMirror-вид под jsdom не реагирует на DOM-события (innerHTML +
- * `input` не обновляют состояние, программный window.getSelection не
- * становится editor selection). Поэтому тесты, которым нужно изменить
- * содержание, достают реальный экземпляр редактора по элементу и вызывают
- * его команды — это ровно тот же путь, что и внешний `value`-prop.
- */
 const editorsByElement = new Map<HTMLElement, Editor>();
 
-/** Вернуть живой экземпляр редактора, смонтированный на элементе. */
 export function getMarkdownEditorInstance(
   element: Element | null,
 ): Editor | undefined {
@@ -39,20 +29,11 @@ interface ToolbarButton {
   key: string;
   label: string;
   title: string;
-  /** Доступное имя кнопки. По умолчанию = `title`, но для заголовков
-   * отличается: `title` — тултип «Заголовок N», а accessible name — «HN»,
-   * чтобы не ловиться substring-матчем Playwright `getByLabel('Заголовок')`. */
   ariaLabel?: string;
   isActive: (editor: Editor) => boolean;
   run: (editor: Editor) => void;
 }
 
-/**
- * Кнопки тулбара покрывают ровно те узлы markdown, которые умеет
- * сериализовать `@tiptap/markdown`: заголовки 1-3, bold/italic/strike,
- * inline code, code block, списки, цитата, ссылка и hr. Underline отключён
- * в StarterKit (в markdown нет эквивалента — сериализация была бы lossy).
- */
 const TOOLBAR: ToolbarButton[] = [
   {
     key: 'h1',
@@ -164,11 +145,6 @@ const TOOLBAR: ToolbarButton[] = [
   },
 ];
 
-/**
- * Набор расширений редактора: StarterKit (без underline — в markdown нет
- * эквивалента), официальный `Markdown` и Placeholder. Один и тот же набор
- * используется компонентом и headless-тестами round-trip.
- */
 export function markdownEditorExtensions(placeholder = ''): Extensions {
   return [
     StarterKit.configure({
@@ -181,15 +157,6 @@ export function markdownEditorExtensions(placeholder = ''): Extensions {
   ];
 }
 
-/**
- * Контролируемый markdown-редактор на Tiptap v3 с официальным
- * `@tiptap/markdown`. Значение на входе — markdown-строка, на выходе
- * (`onChange`) — markdown, сериализованный текущим документом.
- *
- * Контроль без петель и скачков курсора: последний собственный emit
- * запоминается в ref; внешний `value` применяется только если он от него
- * отличается.
- */
 export default function MarkdownEditor({
   id,
   value,
@@ -223,8 +190,6 @@ export default function MarkdownEditor({
     },
   });
 
-  // Внешнее обновление значения (сброс формы после отправки, загрузка
-  // черновика) — только когда оно реально разошлось с последним emit.
   useEffect(() => {
     if (!editor) return;
     if (value === lastEmitted.current) return;
@@ -236,7 +201,6 @@ export default function MarkdownEditor({
     editor?.setEditable(!disabled);
   }, [editor, disabled]);
 
-  // Регистрируем живой экземпляр для интроспекции (тесты/автоматизация).
   useEffect(() => {
     if (!editor) return;
     const element = editor.view.dom;
@@ -275,8 +239,6 @@ export default function MarkdownEditor({
                 ? 'border border-[#00FF41] bg-[#008F11]/30 text-[#00FF41]'
                 : 'border border-transparent text-[#00FF41]/70 hover:border-[#008F11] hover:text-[#00FF41]')
             }
-            // preventDefault сохраняет фокус и выделение в редакторе,
-            // иначе команда применится к потерянному selection.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => editor && button.run(editor)}
           >

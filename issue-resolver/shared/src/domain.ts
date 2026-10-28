@@ -1,9 +1,5 @@
 import type { Iteration, TaskStatus } from './types';
 
-/**
- * Последний непустой сегмент пути URL.
- * Пусто/пробелы или URL без пути → null.
- */
 export function extractIssueKeyFromUrl(url: string): string | null {
   const trimmed = url.trim();
   if (!trimmed) return null;
@@ -19,10 +15,6 @@ export function extractIssueKeyFromUrl(url: string): string | null {
   return segments.length > 0 ? segments[segments.length - 1] : null;
 }
 
-/**
- * Имя репозитория из URL: последний сегмент после '/' или ':',
- * без суффикса '.git'.
- */
 export function extractRepoNameFromUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, '');
   const segments = trimmed.split(/[/:]/).filter((segment) => segment.length > 0);
@@ -34,10 +26,6 @@ function formatQuantity(value: number, unit: string): string {
   return `${Math.max(1, value)} ${unit} назад`;
 }
 
-/**
- * Относительное время: 'только что' | 'N мин назад' | 'N ч назад' | 'N дн назад'.
- * N округляется вниз, минимум 1.
- */
 export function formatRelativeTime(iso: string, now: Date = new Date()): string {
   const diffSeconds = Math.floor(
     (now.getTime() - new Date(iso).getTime()) / 1000,
@@ -62,20 +50,14 @@ const DATE_TIME_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
   minute: '2-digit',
 });
 
-/** 'DD.MM.YYYY, HH:MM' в локальной таймзоне (ru-RU). */
 export function formatDateTime(iso: string): string {
   return DATE_TIME_FORMATTER.format(new Date(iso));
 }
 
-/** Статус итерации с максимальным номером; null для пустого списка. */
 export function statusOfIssue(
   iterations: Iteration[],
-  /** Прямой статус задачи (поле `issues.status`). Приоритетнее статуса итераций. */
   issueStatus?: TaskStatus,
 ): TaskStatus | null {
-  // Статус «вопрос» живёт на задаче, а не на итерации — итерация остаётся
-  // `running`, пока агент ждёт ответа. Без этого перезагрузка страницы теряет
-  // статус `question`.
   if (issueStatus === 'question') return 'question';
   if (iterations.length === 0) return null;
 
@@ -85,28 +67,14 @@ export function statusOfIssue(
   return latest.status;
 }
 
-/**
- * Активная итерация: ещё выполняется (`running`), запущена, но не стартовала
- * (`pending`), или готовит рабочую папку (`preparing`). Повтор/начало новой по
- * такой итерации запрещены.
- */
 export function isIterationActive(status: TaskStatus): boolean {
   return status === 'running' || status === 'pending' || status === 'preparing';
 }
 
-/**
- * Можно ли запустить задачу: статус `draft` и ещё нет итераций.
- * `canStartIteration` проверяет отсутствие активных итераций — черновик
- * попадает под это правило, потому что у него их нет.
- */
 export function canStartDraft(status: TaskStatus, iterationsCount: number): boolean {
   return status === 'draft' && iterationsCount === 0;
 }
 
-/**
- * Можно ли начать новую итерацию: итераций нет либо последняя
- * (max number) завершена, провалена или отменена.
- */
 export function canStartIteration(iterations: Iteration[]): boolean {
   const status = statusOfIssue(iterations);
   return status === null || !isIterationActive(status);

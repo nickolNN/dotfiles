@@ -102,7 +102,6 @@ describe('listWorkspaceFiles', () => {
     const root = await tempRoot();
     const issueId = 'issue-2';
     const dir = join(root, issueId);
-    // Клон репозитория: код, служебный .git и поставленные зависимости.
     await mkdir(join(dir, 'aqua-com', '.git', 'objects'), { recursive: true });
     await mkdir(join(dir, 'aqua-com', 'node_modules', 'left-pad'), {
       recursive: true,
@@ -112,7 +111,6 @@ describe('listWorkspaceFiles', () => {
       join(dir, 'aqua-com', 'node_modules', 'left-pad', 'index.js'),
       '',
     );
-    // Артефакты итерации — на верхнем уровне, рядом с клоном.
     await writeFile(join(dir, 'plan.md'), '# plan');
     await writeFile(join(dir, 'report.md'), '# report');
 

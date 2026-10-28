@@ -1,9 +1,3 @@
-/**
- * `runRoomResolve`/`runStagedResolve` должны возвращать в результате шага
- * (`result.stats` → step_outputs.stats) СУММУ телеметрии всех агентов шага:
- * исполнителей, координаторов этапов и финального координатора, а не stats
- * последнего агента. `cost` суммируется только по не-null значениям.
- */
 import { describe, expect, it } from 'vitest';
 import type {
   ExecutionPlan,
@@ -43,7 +37,6 @@ const options = (): RoomResolveOptions => ({
   issueId: 'issue-1',
 });
 
-/** Статистика агента с уникальным `n`, чтобы сумма отличалась от любого одного. */
 const statsWith = (n: number): SessionStats => ({
   userMessages: n,
   assistantMessages: n * 2,
@@ -70,7 +63,6 @@ const pass = (summary: string, stats: SessionStats | null): StepExecutionResult 
   stats,
 });
 
-/** Сумма статистики n=1..count — ожидаемый агрегат набора агентов. */
 const sumOf = (count: number): SessionStats => {
   let acc = statsWith(0);
   for (let n = 1; n <= count; n += 1) {
@@ -106,7 +98,6 @@ describe('runRoomResolve — stats шага = сумма всех агентов
 
     expect(result.report?.summary).toBe('agent-4');
     expect(result.stats).toEqual(sumOf(4));
-    // Не телеметрия одного координатора (n=4).
     expect(result.stats?.tokens.input).not.toBe(400);
   });
 
@@ -123,8 +114,6 @@ describe('runRoomResolve — stats шага = сумма всех агентов
 describe('runStagedResolve — stats шага = сумма всех агентов этапов и финала', () => {
   it('сложный stages 2→1→3: суммируются исполнители, координаторы этапов и финал', async () => {
     const pi = new FakePiRunner();
-    // 2 исполнителя + координатор этапа 1, 1 агент этапа 2, 3 исполнителя +
-    // координатор этапа 3, финальный lead → 9 агентов.
     for (let n = 1; n <= 9; n += 1) {
       pi.enqueue(pass(`agent-${n}`, statsWith(n)));
     }
@@ -138,7 +127,6 @@ describe('runStagedResolve — stats шага = сумма всех агенто
     expect(pi.calls).toHaveLength(9);
     expect(result.report?.summary).toBe('agent-9');
     expect(result.stats).toEqual(sumOf(9));
-    // Не телеметрия финального координатора (n=9).
     expect(result.stats?.tokens.input).not.toBe(900);
   });
 

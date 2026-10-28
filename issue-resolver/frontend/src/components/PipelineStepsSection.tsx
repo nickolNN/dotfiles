@@ -8,7 +8,6 @@ import { thinkingLevelsFor } from '../constants/thinking-levels';
 import { compactInputClass, labelClass } from './formStyles';
 import StepRow from './StepRow';
 
-/** Шаги пайплайна: порядок и подписи по умолчанию (форма задачи/итерации). */
 export const DEFAULT_STEP_OPTIONS: ReadonlyArray<{
   value: PipelineStep;
   label: string;
@@ -29,35 +28,24 @@ export interface PipelineStepOption {
 }
 
 export interface PipelineStepsSectionProps {
-  /** Checked steps; every step, `resolve` included, is toggled by the user. */
   selectedSteps: PipelineStep[];
   stepModels: StepModels;
   stepThinkingLevels: StepThinkingLevels;
   models: ModelDescriptor[];
   modelsLoading: boolean;
-  /** Число агентов: инпут показывается только когда значение задано. */
   workerCount?: number;
-  /** id репозиториев задачи — для секции MR (в форме: repo_id, в модалке: id). */
   mrRepoOptions: Array<{ id: string; label: string }>;
   prRepoIds: Set<string>;
-  /** Заблокировать шаг pr (нет репозиториев с правом записи). */
   prDisabled?: boolean;
-  /** Общий fieldset disabled (модалка итерации: !canStart). */
   disabled?: boolean;
   onToggleStep: (step: PipelineStep) => void;
   onStepModelChange: (step: PipelineStep, value: string) => void;
   onStepThinkingChange: (step: PipelineStep, value: string) => void;
   onWorkerCountChange?: (value: number) => void;
   onTogglePrRepo: (repoId: string) => void;
-  /** Переопределить подписи/порядок шагов (модалка итерации: `pr` → «PR»). */
   stepOptions?: ReadonlyArray<PipelineStepOption>;
 }
 
-/**
- * Секция «шаги пайплайна + модели + thinking + worker_count + репозитории
- * для MR». Управляемая: всё состояние живёт у родителя, поэтому один и тот
- * же компонент используют и `IssueForm`, и модалка итерации в `TaskDetail`.
- */
 export default function PipelineStepsSection({
   selectedSteps,
   stepModels,

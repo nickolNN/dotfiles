@@ -4,7 +4,6 @@ import IssueForm from './IssueForm';
 import type { IssueFormProps } from './IssueForm';
 import type { CreateIssueRequest } from '@issue-resolver/shared';
 
-// Mock API — data inlined for vi.mock hoisting.
 vi.mock('../api/client', () => ({
   getModels: vi.fn().mockResolvedValue([
     { id: 'gpt-4', name: 'GPT-4', thinkingLevels: ['off', 'low', 'medium', 'high'] },
@@ -31,10 +30,6 @@ vi.mock('../stores/queries', () => ({
   })),
 }));
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function renderForm(props: Partial<IssueFormProps> = {}) {
   const onSubmit = vi.fn().mockResolvedValue(undefined);
   const onBack = vi.fn();
@@ -44,10 +39,6 @@ function renderForm(props: Partial<IssueFormProps> = {}) {
     onBack,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe('IssueForm', () => {
   afterEach(cleanup);
@@ -112,7 +103,6 @@ describe('IssueForm', () => {
       fireEvent.change(screen.getByPlaceholderText('Коротко о задаче'), {
         target: { value: 'No steps' },
       });
-      // `resolve` starts checked; unchecking it leaves no selection at all.
       fireEvent.click(screen.getByRole('checkbox', { name: 'Исполнение' }));
 
       const run = screen.getByRole('button', { name: 'Запустить' });
@@ -169,9 +159,6 @@ describe('IssueForm', () => {
       });
     });
 
-    // Регрессия поведения вложений (первоначально покрыто Фёдором, его версию
-    // файла затёрла моя более поздняя запись — восстановлено здесь).
-    // Успех: `submitForm` делает `setFiles([])` ПОСЛЕ await → чипы исчезают.
     it('clears attached files after a successful submit', async () => {
       const { onSubmit } = renderForm();
       await waitFor(() => screen.getByText('Создание задачи'));
@@ -185,16 +172,12 @@ describe('IssueForm', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
 
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-      // Файлы дошли до вызывающего вторым аргументом...
       expect((onSubmit.mock.calls[0][1] as File[]).map((file) => file.name)).toEqual([
         'spec.md',
       ]);
-      // ...после успешного ответа форма их очистила.
       await waitFor(() => expect(screen.queryByTestId('file-chip')).not.toBeInTheDocument());
     });
 
-    // Реджект: `catch` не чистит файлы — пользователь может повторить
-    // отправку без повторного выбора вложений.
     it('keeps attached files when submit rejects and shows role=alert', async () => {
       const onReject = vi.fn().mockRejectedValue(new Error('Сервер отказал'));
       render(
@@ -220,10 +203,6 @@ describe('IssueForm', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('Сервер отказал');
     });
 
-    // Регрессия: `submitForm` вызывается как `void submitForm(true)`, поэтому
-    // неотhandled reject из `onSubmit` валил весь прогон Vitest секцией
-    // `Unhandled Rejection`. Форма обязана гасить ошибку сама (текст приходит
-    // через проп `error`), а не выпускать реджект наружу.
     it('swallows a rejecting onSubmit without an unhandled rejection', async () => {
       const unhandled = vi.fn();
       process.on('unhandledRejection', unhandled);
@@ -246,7 +225,6 @@ describe('IssueForm', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
 
       await waitFor(() => expect(onReject).toHaveBeenCalledTimes(1));
-      // Даем микрозадачам отработать — реджект должен быть пойман внутри.
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(unhandled).not.toHaveBeenCalled();
       expect(
@@ -258,18 +236,14 @@ describe('IssueForm', () => {
   });
 
   describe('devops thinking effort', () => {
-    // Пользователь завал: «шаг девопса» (DevOps-агент) должен настраиваться
-    // по thinking effort так же, как остальные шаги.
     it('renders a thinking selector next to the analyzer model', async () => {
       renderForm();
       await waitFor(() => screen.getByText('Создание задачи'));
 
-      // Секция DevOps появляется только при наличии репозиториев.
       fireEvent.click(screen.getByText('Добавить репозиторий'));
       await waitFor(() => expect(screen.getByText('org/repo-one')).toBeInTheDocument());
 
       expect(screen.getByTestId('devops-thinking-input')).toBeInTheDocument();
-      // Без выбранной модели выбор заблокирован — уровень ставим дефолтом pi.
       expect(screen.getByTestId('devops-thinking-input')).toBeDisabled();
     });
 
@@ -280,7 +254,6 @@ describe('IssueForm', () => {
       fireEvent.click(screen.getByText('Добавить репозиторий'));
       await waitFor(() => expect(screen.getByText('org/repo-one')).toBeInTheDocument());
 
-      // Модель анализатора -> thinking-селектор разблокируется.
       const modelSelect = screen.getByLabelText(
         "Модель анализатора для DevOps-агента проектов",
       );
@@ -302,7 +275,6 @@ describe('IssueForm', () => {
       renderForm({
         initialData: {
           title: 'Draft',
-          // Секция DevOps рендерится только при наличии репозиториев.
           repositories: [{ repo_id: 'r1', base_branch: 'main' }],
           devopsModel: 'opus',
           devopsThinkingLevel: 'medium',
@@ -339,11 +311,9 @@ describe('IssueForm', () => {
       renderForm({ showRunButton: false, showSaveButton: false });
       await waitFor(() => screen.getByText('Создание задачи'));
 
-      // Add repo
       fireEvent.click(screen.getByText('Добавить репозиторий'));
       await waitFor(() => expect(screen.getByText('org/repo-one')).toBeInTheDocument());
 
-      // Check "Merge Request"
       fireEvent.click(screen.getByRole('checkbox', { name: 'Merge Request' }));
       await waitFor(() => {
         expect(screen.getByText('Репозитории для MR')).toBeInTheDocument();
@@ -362,12 +332,10 @@ describe('IssueForm', () => {
       });
       await waitFor(() => screen.getByText('Редактирование задачи'));
 
-      // Причина видна строкой рядом с репозиторием.
       const notice = screen.getByTestId('repo-url-unmatched');
       expect(notice).toHaveTextContent(url);
       expect(notice).toHaveTextContent('MR для него недоступен');
 
-      // В секции MR такого репозитория нет — вместо галки честное сообщение.
       fireEvent.click(screen.getByRole('checkbox', { name: 'Merge Request' }));
       await waitFor(() =>
         expect(screen.getByTestId('pr-repositories-section')).toBeInTheDocument(),
@@ -382,7 +350,6 @@ describe('IssueForm', () => {
       await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
 
       const payload = onSubmit.mock.calls[0][0] as CreateIssueRequest;
-      // Репозиторий не пропадает, но create_mr не уезжает как true.
       expect(payload.repositories).toEqual([
         {
           repository_url: url,

@@ -9,21 +9,12 @@ import { useSavedRepos } from '../stores/queries';
 import IssueForm from './IssueForm';
 import type { IssueFormProps } from './IssueForm';
 
-/**
- * Модалка редактирования черновика задачи.
- *
- * Форма живёт в общем `IssueForm` — тот же код, что на странице создания
- * задачи. Здесь только диалог, предзаполнение из `Issue` и отправка в
- * `PUT /issues/:id`.
- */
 export interface EditDraftModalProps {
   issue: Issue;
   onClose: () => void;
-  /** Вызывается после успешного сохранения с обновлённой задачей. */
   onSaved: (issue: Issue) => void;
 }
 
-/** Обратное преобразование `Issue` → предзаполнение для `IssueForm`. */
 function toInitialData(
   issue: Issue,
   savedRepos: SavedRepo[],
@@ -32,7 +23,6 @@ function toInitialData(
     title: issue.title,
     description: issue.description,
     jiraIssueUrl: issue.jira_issue_url ?? '',
-    // Задача хранит URL репозитория, форма — id сохранённого репозитория.
     repositories: issue.repositories.map((repository) => {
       const saved = savedRepos.find(
         (candidate) =>
@@ -64,8 +54,6 @@ export default function EditDraftModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Предзаполнение считаем один раз на открытие: `IssueForm` держит своё
-  // состояние и не должна пересоздаваться на каждый рефетч задачи.
   const initialData = useMemo(
     () => toInitialData(issue, savedRepos),
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -3,7 +3,6 @@ import type { JiraIssueInfo } from '@issue-resolver/shared';
 import { extractIssueKeyFromUrl } from '@issue-resolver/shared';
 import { validateJiraUrl } from '../api/client';
 
-/** Пауза после последнего нажатия, прежде чем дёрнуть API валидации. */
 export const JIRA_URL_DEBOUNCE_MS = 600;
 
 type ValidationState =
@@ -15,9 +14,7 @@ type ValidationState =
 
 export interface JiraIssueUrlInputProps {
   value: string;
-  /** Новый URL и (при успехе) данные Jira-задачи; `null` — сброс. */
   onChange: (url: string, issue: JiraIssueInfo | null) => void;
-  /** Внешняя ошибка (например, серверная при submit). */
   error?: string;
   disabled?: boolean;
   id?: string;
@@ -29,7 +26,6 @@ const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 pr-10 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)] disabled:opacity-50';
 const labelClass = 'mb-1 block text-sm font-medium text-[#00FF41]/80';
 
-/** Карточка enriched-инфо о найденной Jira-задаче. */
 function JiraIssueCard({ issue }: { issue: JiraIssueInfo }) {
   return (
     <div
@@ -53,11 +49,6 @@ function JiraIssueCard({ issue }: { issue: JiraIssueInfo }) {
   );
 }
 
-/**
- * Поле ввода ссылки на Jira-задачу с живой валидацией: debounce, индикатор
- * состояния (спиннер/✓/✕), карточка метаданных при успехе и красный текст
- * ошибки при неудаче. Запрос идёт, только когда из URL удалось извлечь ключ.
- */
 export default function JiraIssueUrlInput({
   value,
   onChange,
@@ -84,13 +75,11 @@ export default function JiraIssueUrlInput({
       timerRef.current = null;
     }
 
-    // Любое изменение значения сбрасывает прошлый результат.
     setIssue(null);
     setMessage(null);
 
     const trimmed = value.trim();
 
-    // Пусто или выключено — ничего не проверяем.
     if (!trimmed || disabled) {
       setState('idle');
       return () => {
@@ -98,7 +87,6 @@ export default function JiraIssueUrlInput({
       };
     }
 
-    // Пытаемся разобрать как URL и извлечь ключ.
     let url: string;
     try {
       url = new URL(trimmed).toString();
@@ -117,7 +105,6 @@ export default function JiraIssueUrlInput({
       };
     }
 
-    // Спиннер показываем сразу, а запрос шлём только после паузы в вводе.
     setState('checking');
 
     timerRef.current = setTimeout(() => {
@@ -157,8 +144,6 @@ export default function JiraIssueUrlInput({
         timerRef.current = null;
       }
     };
-    // onChange сознательно не в зависимостях: родитель может передавать
-    // инлайн-функцию, и валидация не должна перезапускаться на каждом рендере.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, disabled]);
 

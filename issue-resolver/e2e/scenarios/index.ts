@@ -22,7 +22,6 @@ export {
   stepFailureScenario,
 };
 
-/** Имя встроенного сценария. */
 export type BuiltinScenarioName =
   | 'all-success'
   | 'step-failure'
@@ -30,7 +29,6 @@ export type BuiltinScenarioName =
   | 'concurrent-questions'
   | 'bootstrap-failure';
 
-/** Реестр встроенных сценариев: имя → неизменяемое описание. */
 export const BUILTIN_SCENARIOS: Readonly<
   Record<BuiltinScenarioName, MockPiScenario>
 > = {
@@ -41,7 +39,6 @@ export const BUILTIN_SCENARIOS: Readonly<
   'bootstrap-failure': bootstrapFailureScenario,
 };
 
-/** Разрешает имя встроенного сценария или бросает понятную ошибку. */
 export function builtinScenario(name: string): MockPiScenario {
   const scenario = BUILTIN_SCENARIOS[name as BuiltinScenarioName];
   if (!scenario) {

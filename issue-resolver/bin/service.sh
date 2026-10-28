@@ -1,20 +1,4 @@
 #!/usr/bin/env bash
-#
-# Issue Resolver — локальный up/down веб-сервиса (backend + frontend).
-#
-#   ./bin/service.sh start      # поднять backend (:8080) + vite (:5173)
-#   ./bin/service.sh stop       # погасить оба процесса
-#   ./bin/service.sh restart    # stop && start
-#   ./bin/service.sh status     # что слушает/работает
-#
-# Режим запуска задаётся переменной IR_MODE:
-#   IR_MODE=local  (по умолчанию) — pi запускается НАПРЯМУЮ, без docker
-#                   (ISSUE_RESOLVER_LOCAL=1; для dev-контейнера без docker).
-#   IR_MODE=docker — backend в режиме реальных адаптеров
-#                   (ISSUE_RESOLVER_USE_REAL=1 + DOCKER_SOCKET), спавнит
-#                   dotfiles-agent-контейнеры на задачу.
-#
-# PID-файлы и логи — в /tmp (переопределяется IR_PID_DIR / IR_LOG_DIR).
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,7 +12,6 @@ FRONTEND_LOG="$LOG_DIR/ir-frontend.log"
 BACKEND_PORT="${IR_BACKEND_PORT:-8080}"
 FRONTEND_PORT="${IR_FRONTEND_PORT:-5173}"
 
-# Экспортирует env-переменные для backend в зависимости от режима.
 export_run_env() {
   if [ "$MODE" = "local" ]; then
     export ISSUE_RESOLVER_LOCAL=1
@@ -40,9 +23,6 @@ export_run_env() {
   fi
 }
 
-# dev-образ не содержит ss/lsof/fuser — определяем слушающий порт по
-# /proc/net/tcp{,6}. Строка: <sl>: <local_ip>:<local_port> <remote> <state> ...
-# слушающий сокет = state 0A (LISTEN) и local_port == искомому.
 is_port_open() {
   local port="$1"
   local hex
@@ -63,8 +43,6 @@ start_backend() {
     return 1
   }
 
-  # NOTE: эмпирически стабильно работает `nohup npm run start &` (не setsid):
-  # better-sqlite3 (Node 24) падает на exit-time assert при setsid.
   export_run_env
   PORT="$BACKEND_PORT" nohup npm run start >"$BACKEND_LOG" 2>&1 &
   echo $! >"$BACKEND_PID"
@@ -77,12 +55,8 @@ start_frontend() {
     return 0
   fi
 
-  # Монорепо на npm workspaces: все пакеты подняты в корневой node_modules.
-  # Если фронтендовая node_modules пустая (только кеши .vite*), она блокирует
-  # walk-up-резолв Node.js до корня — удаляем её перед стартом.
   local nm="$ROOT/frontend/node_modules"
   if [ -d "$nm" ]; then
-    # Есть ли внутри что-то, кроме .vite/.vite-temp?
     local has_real
     has_real="$(find "$nm" -maxdepth 1 ! -name node_modules ! -name '.vite' ! -name '.vite-temp' -print -quit 2>/dev/null)"
     if [ -z "$has_real" ]; then
@@ -114,7 +88,6 @@ kill_by_pid() {
 }
 
 stop() {
-  # бракет-паттерн ('[t]sx') защищает от pkill, матчащего собственный bash -c.
   kill_by_pid "$FRONTEND_PID"
   pkill -f '[v]ite --host 0.0.0.0' 2>/dev/null || true
 

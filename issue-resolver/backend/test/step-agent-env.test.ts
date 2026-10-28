@@ -16,13 +16,11 @@ describe('stepAgentEnv', () => {
       'issue-123',
     );
 
-    // A step agent must start its own session, not resume the launcher's.
     expect(env.PI_SESSION_FILE).toBeUndefined();
     expect(env.PI_SESSION_ID).toBeUndefined();
     expect(env.PI_SESSION_NAME).toBeUndefined();
     expect(env.PI_MODEL).toBeUndefined();
     expect(env.PI_PROVIDER).toBeUndefined();
-    // Config and the per-task room are still passed through.
     expect(env.PI_CODING_AGENT_DIR).toBe('/home/agent/.pi/agent');
     expect(env.PATH).toBe('/usr/bin');
     expect(env.PI_AGENT_ROOM).toBe('issue-123');
@@ -35,7 +33,6 @@ describe('stepAgentEnv', () => {
 
     expect(base.PI_SESSION_FILE).toBe('/tmp/s.jsonl');
     expect(env.PI_SESSION_FILE).toBeUndefined();
-    // Without an explicit room the agent must not join the caller's room.
     expect(env.PI_AGENT_ROOM).toBeUndefined();
   });
 

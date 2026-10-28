@@ -72,9 +72,6 @@ function jsonResponse(
   } as Response;
 }
 
-/** Различает GET (issue/iterations/step-runs) и POST message.
- * `withControl`: если true — мокает /control эндпоинт (для тестов,
- * где нужен controlSnapshot). */
 function stubFetch(
   postMessage: () => Promise<Response>,
   stepRuns: StepRunWithLog[] = [makeStepRun()],
@@ -183,7 +180,6 @@ describe('TaskDetail — отправка сообщения агенту', () =
     fireEvent.click(await screen.findByTestId('step-expand'));
 
     const modal = screen.getByTestId('step-log-modal');
-    // controlSnapshot грузится асинхронно — ждём появления кнопки
     await waitFor(() => {
       expect(
         within(modal).getByTestId('abort-iteration-modal'),

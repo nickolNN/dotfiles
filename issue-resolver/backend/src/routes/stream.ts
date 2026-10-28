@@ -14,27 +14,13 @@ const ROUTE_PATH = '/issue-resolver/api/v1/issues';
 const MESSAGE_PATH = '/issue-resolver/api/v1/iterations';
 const GLOBAL_STREAM_PATH = '/issue-resolver/api/v1/stream';
 
-/** Интервал keepalive-комментариев в SSE-потоке статистики контейнера. */
 const CONTAINER_STATS_HEARTBEAT_MS = 15_000;
 
-/** Глобальный поток статистики контейнера — без привязки к задаче. */
 const GLOBAL_CONTAINER_STATS_PATH =
   '/issue-resolver/api/v1/container-stats-stream';
-/** Имя контейнера для глобального потока: сам хост/агентский контейнер. */
 const GLOBAL_CONTAINER_STATS_CONTAINER = 'host';
-/** issueId-псевдоним событий глобального потока (задачи у них нет). */
 const GLOBAL_CONTAINER_STATS_ISSUE_ID = '__global__';
 
-/**
- * Открывает SSE-ответ: заголовки + стартовый комментарий «: connected».
- *
- * Комментарий нужен не клиенту, а прокси (Vite dev-proxy, nginx): они держат
- * блок заголовков в буфере, пока не придёт первый байт тела. Стрим, который
- * сразу ничего не пишет, выглядит для `EventSource` незапустившимся: через
- * dev-прокси `container-stats-stream` открывался лишь на первом keepalive
- * (15 с), а поток без событий — никогда. Один байт после `flushHeaders()`
- * снимает буферизацию; через него открываются все SSE-ответы.
- */
 function openSse(reply: FastifyReply): void {
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -46,19 +32,12 @@ function openSse(reply: FastifyReply): void {
   reply.raw.write(': connected\n\n');
 }
 
-/** Терминальные статусы итерации: повторный abort — no-op. */
 const TERMINAL_ITERATION_STATUSES: ReadonlySet<string> = new Set([
   'completed',
   'failed',
   'cancelled',
 ]);
 
-/**
- * Гарантированно переводит итерацию в терминальное `cancelled`, когда живой
- * pi-сессии уже нет (процесс погиб, движок не успел обновить статус).
- * Без этого abort отвечал 409 и итерация навсегда оставалась `running`.
- * Шаги помечаются собственным статусом `aborted` (не `failed`).
- */
 function markIterationAborted(
   db: Db,
   hub: SseHub,
@@ -102,14 +81,6 @@ function markIterationAborted(
   return true;
 }
 
-/**
- * Отдаёт SSE-ответ `container-stats-stream`: заголовки, keepalive, построчный
- * разбор docker-stats NDJSON и публикация `container_stats` в шину под
- * переданным `issueId`. Метрики в сам ответ не пишутся — их доставляет
- * общий/по-задачный SSE-поток; ответ нужен лишь для управления жизненным
- * циклом docker-потока. Захватывает ответ (hijack), поэтому вызывается только
- * после успешного открытия `stream`.
- */
 function attachContainerStatsStream(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -119,7 +90,6 @@ function attachContainerStatsStream(
 ): void {
   openSse(reply);
 
-  // Комментарий-keepalive, чтобы прокси не рвали простаивающее соединение.
   const heartbeat = setInterval(() => {
     reply.raw.write(': keepalive\n\n');
   }, CONTAINER_STATS_HEARTBEAT_MS);
@@ -130,8 +100,6 @@ function attachContainerStatsStream(
     ).destroy?.();
   };
 
-  // Docker стримит конкатенированные JSON-объекты без гарантии границы
-  // на chunk — держим «хвост» и режем по строкам.
   let buffer = '';
   stream.on('data', (chunk: Buffer) => {
     buffer += chunk.toString();
@@ -154,7 +122,6 @@ function attachContainerStatsStream(
       });
     }
   });
-  // Обрыв/ошибка docker-потока завершает ответ, а не роняет процесс.
   stream.on('error', () => {
     teardown();
     reply.raw.end();
@@ -168,10 +135,6 @@ function attachContainerStatsStream(
   reply.hijack();
 }
 
-/**
- * Live-view: SSE-стрим по задаче + steer/abort пользователя в живую
- * pi-сессию шага итерации (через реестр сессий).
- */
 export async function streamRoutes(
   app: FastifyInstance,
   db: Db,
@@ -179,8 +142,6 @@ export async function streamRoutes(
   control: StepSessionRegistry,
   container: ContainerController,
 ): Promise<void> {
-  // Глобальный поток: все события шины без фильтра по задаче/итерации.
-  // Нужен списку задач, который не слушает per-issue канал.
   app.get(GLOBAL_STREAM_PATH, async (request, reply) => {
     openSse(reply);
     const unsubscribe = hub.subscribeGlobal((event) => {
@@ -208,22 +169,11 @@ export async function streamRoutes(
       });
       request.raw.on('close', unsubscribe);
 
-      // Отдаём управление Fastify: ответ уже пишется напрямую в сокет.
       reply.hijack();
       return reply;
     },
   );
 
-  /**
-   * Живой поток статистики контейнера задачи. Периодический поллинг заменён
-   * на docker-stats `stream`: бэкенд открывает его, пока клиент держит это
-   * SSE-соединение, и публикует каждую метрику событием `container_stats`
-   * в общую шину. Доставляет его `/issues/:id/stream` — именно его слушает
-   * фронтенд. Сам ответ здесь нужен лишь для управления жизненным циклом
-   * docker-потока (и keepalive), метрики в него не пишутся.
-   *
-   * Задача/контейнер проверяются ДО hijack: 404 отдаётся обычным ответом.
-   */
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/container-stats-stream`,
     async (request, reply) => {
@@ -258,12 +208,6 @@ export async function streamRoutes(
     },
   );
 
-  /**
-   * Глобальный поток статистики контейнера (без `:id`): метрики самого
-   * контейнера-хоста. Нужен страницам без выбранной задачи. События уходят в
-   * шину с `issueId: '__global__'` и доставляются глобальным SSE-потоком
-   * (`/issue-resolver/api/v1/stream`).
-   */
   app.get(GLOBAL_CONTAINER_STATS_PATH, async (request, reply) => {
     let stream: NodeJS.ReadableStream;
     try {
@@ -304,16 +248,12 @@ export async function streamRoutes(
     async (request) => {
       const ok = control.abortByIteration(request.params.id);
       if (!ok) {
-        // Сессии нет (пи погиб, движок не довёл статус) — не отвечаем 409,
-        // а сами доводим итерацию до терминального `failed`.
         markIterationAborted(db, hub, request.params.id);
       }
       return { ok: true };
     },
   );
 
-  // Ответ пользователя на интерактивный вопрос агента
-  // (`extension_ui_request` → `extension_ui_response`).
   app.post<{
     Params: { id: string };
     Body: {
@@ -347,11 +287,6 @@ export async function streamRoutes(
       ...(cancelled !== undefined ? { cancelled } : {}),
     };
 
-    // Ответ сохраняется до пересылки: сессия могла уже умереть (рестарт
-    // движка), но пользовательский выбор не должен потеряться. Ре-ответ
-    // идемпотентен. Доставка в живую pi-сессию — best-effort. Если итерации
-    // уже нет (её удалили в гонке), сохранять некуда (FK), но роут всё равно
-    // отвечает 200 — фронт не должен спотыкаться об ответ на вопрос.
     const iteration = db
       .select({
         id: iterations.id,
@@ -370,9 +305,6 @@ export async function streamRoutes(
         ...(cancelled !== undefined ? { cancelled } : {}),
       });
       control.respondByIteration(request.params.id, payload);
-      // Ответ на вопрос возвращает задачу в работу. Только пока итерация
-      // `running`: поздний ответ на уже завершённую/отменённую задачу не
-      // должен воскрешать её статус.
       if (iteration.status === 'running') {
         db.update(issues)
           .set({ status: 'running', updated_at: new Date().toISOString() })
@@ -383,7 +315,6 @@ export async function streamRoutes(
     return { ok: true };
   });
 
-  // Живые агенты комнаты resolve: роли/индексы/статусы для вкладок фронта.
   app.get<{ Params: { id: string } }>(
     `${MESSAGE_PATH}/:id/agents`,
     async (request, reply) => {
@@ -399,9 +330,6 @@ export async function streamRoutes(
     },
   );
 
-  // Поток событий ОДНОГО агента комнаты (`?agentId=<RoomAgent.id>`), чтобы
-  // открыть сессию исполнителя отдельно. Контроль (steer/abort) остаётся
-  // broadcast на всю комнату — здесь только чтение.
   app.get<{
     Params: { id: string };
     Querystring: { agentId?: string };
@@ -413,7 +341,6 @@ export async function streamRoutes(
 
     openSse(reply);
     const unsubscribe = hub.subscribe(request.params.id, (event) => {
-      // agentId только у эмитов агентов комнаты; прочие — не наш поток.
       if (event.agentId !== agentId) return;
       reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
     });

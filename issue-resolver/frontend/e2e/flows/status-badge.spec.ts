@@ -22,8 +22,6 @@ function issue(status: Status, title: string) {
   };
 }
 
-// Цвета — из `frontend/src/theme.ts` (`statusColor`), переведённые в rgb.
-// pending здесь матричный зелёный #008F11, а не серый: так задан в теме.
 const CASES: Array<{ status: Status; label: string; rgb: string }> = [
   { status: 'pending', label: 'В очереди', rgb: 'rgb(0, 143, 17)' },
   { status: 'running', label: 'В работе', rgb: 'rgb(0, 180, 255)' },
@@ -32,10 +30,6 @@ const CASES: Array<{ status: Status; label: string; rgb: string }> = [
   { status: 'question', label: 'Вопрос', rgb: 'rgb(255, 176, 0)' },
 ];
 
-/**
- * Цвета и подписи бейджа статуса в списке задач. GET /issues мокается, чтобы
- * одновременно проверить все статусы без ожидания реальных переходов.
- */
 test.describe('status badge', () => {
   test('все статусы: подпись и янтарный вопрос', async ({ page }) => {
     await page.route(/\/issue-resolver\/api\/v1\/issues$/, (route) =>
@@ -59,7 +53,6 @@ test.describe('status badge', () => {
       await expect(badge).toHaveCSS('color', rgb);
     }
 
-    // Отдельный акцент ТЗ: статус вопроса — «Вопрос» на янтарном #FFB000.
     const question = page.locator(
       '[data-testid="issue-status"][data-status="question"]',
     );

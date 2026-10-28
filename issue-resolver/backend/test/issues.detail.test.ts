@@ -45,7 +45,6 @@ describe('GET /issues/:id', () => {
     const issue = response.json();
     expect(issue.id).toBe(id);
     expect(issue.title).toBe('Детали');
-    // Фоновый прогон стартует сразу после создания → running/completed.
     expect(['running', 'completed']).toContain(issue.status);
     expect(issue.jira_issue_url).toBeNull();
     expect(issue.pipeline_steps).toEqual(['refine', 'resolve']);
@@ -80,7 +79,6 @@ describe('GET /issues/:id/iterations', () => {
     const list = response.json();
     expect(list).toHaveLength(1);
     expect(list[0].number).toBe(1);
-    // Фоновый прогон стартует сразу после создания → running/completed.
     expect(['running', 'completed']).toContain(list[0].status);
     expect(list[0].steps).toEqual(['refine', 'resolve']);
     expect(list[0].issue_id).toBe(id);

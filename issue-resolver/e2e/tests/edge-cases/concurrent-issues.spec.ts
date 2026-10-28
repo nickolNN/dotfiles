@@ -1,11 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { FakeApi } from '../../helpers';
 
-/**
- * Две задачи в списке одновременно. `FakeApi` даёт детерминированный набор
- * (реальная БД общая с другими агентами), а разные статусы проверяют, что
- * прогресс задач считается независимо.
- */
 test.describe('edge: две задачи одновременно', () => {
   test('обе в списке, статусы независимы', async ({ page }) => {
     const api = new FakeApi();
@@ -20,13 +15,11 @@ test.describe('edge: две задачи одновременно', () => {
     await expect(rowA).toBeVisible();
     await expect(rowB).toBeVisible();
 
-    // статус-бейджи корректны и не перепутаны
     await expect(rowA.getByText('В работе')).toBeVisible();
     await expect(rowB.getByText('Завершено')).toBeVisible();
     await expect(rowA.getByText('Завершено')).toHaveCount(0);
     await expect(rowB.getByText('В работе')).toHaveCount(0);
 
-    // каждая задача открывается в свою деталь
     await rowA.click();
     await expect(
       page.getByRole('heading', { name: 'Параллельная A' }),

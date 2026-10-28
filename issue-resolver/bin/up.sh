@@ -1,24 +1,8 @@
 #!/usr/bin/env bash
-#
-# Issue Resolver — «лаунчер одной командой»: поднимает backend (:8080) + Vite
-# (:5173) через bin/service.sh, ждёт готовности и печатает ровно одну
-# host-команду для публикации UI наружу.
-#
-#   ./bin/up.sh
-#
-# Публикацию порта сам сделать НЕ может: в dev-контейнере нет docker CLI и
-# /var/run/docker.sock. Port-forward выполняется НА ХОСТЕ: agent-fwd up 5173:5173.
-#
-# Переменные: IR_MODE (local|docker, прокидывается в service.sh как есть),
-# IR_UP_WAIT_SECS (таймаут ожидания готовности, дефолт 15).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Переиспользуем is_port_open и остальные хелперы service.sh — не копируем awk.
-# Валидная подкоманда `status` нужна, чтобы sourced-файл не ушёл в usage/exit;
-# её вывод глушим (нам важны только определения функций и пороги).
-# shellcheck source=/dev/null
 source "$ROOT/bin/service.sh" status >/dev/null 2>&1
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
@@ -37,22 +21,17 @@ frontend_ready() {
     curl -fsS --max-time 2 -o /dev/null "http://localhost:$FRONTEND_PORT/"
 }
 
-# Что уже слушало ДО старта — чтобы отличить «поднял» от «уже слушает».
 pre_backend=0
 pre_frontend=0
 backend_ready && pre_backend=1
 frontend_ready && pre_frontend=1
 
-# Монорепо на npm workspaces: ставим зависимости один раз с корня (идемпотентно).
 echo "  → npm install (root)…"
 (cd "$ROOT" && npm install --prefer-offline) || true
 
-# service.sh сам идемпотентен (пропускает уже слушающие порты) и печатает
-# свой дубль host-строки — глушим её, канонический вывод ниже у up.sh.
 start_out="$("$ROOT/bin/service.sh" start 2>&1)" || true
 printf '%s\n' "$start_out" | grep -v 'agent-fwd' || true
 
-# Ждём готовности обеих сторон до ~WAIT_SECS секунд.
 deadline=$((SECONDS + WAIT_SECS))
 while :; do
   b=0; f=0

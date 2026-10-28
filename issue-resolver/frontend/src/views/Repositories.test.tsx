@@ -130,7 +130,6 @@ describe('Repositories', () => {
     render(<Repositories />);
 
     expect(await screen.findByText(readOnly.fullName!)).toBeInTheDocument();
-    // Ровно один бейдж — у read-only репозитория.
     expect(screen.getAllByTestId('repo-read-only')).toHaveLength(1);
   });
 
@@ -160,7 +159,6 @@ describe('Repositories', () => {
     const { rerender } = render(<Repositories />);
     await screen.findByTestId('repo-list-empty');
 
-    // Кнопку добавления убрали: диалог открывается внешним сигналом ("+" в хедере).
     rerender(<Repositories createSignal={1} />);
     await screen.findByTestId('repo-form');
     fireEvent.change(screen.getByTestId('repo-url-field'), {

@@ -1,11 +1,3 @@
-/**
- * Сервис задач — глубокий модуль, скрывающий повторяющуюся сантехнику
- * из роутов: поиск задачи с 404, чтение артефактов результата,
- * фоновое удаление.
- *
- * Интерфейс: 7 методов. За швом: DB-запросы, файловые операции,
- * defaulting workspaceRoot, 6-шаговое чтение результата.
- */
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile, rm, stat } from 'node:fs/promises';
@@ -40,37 +32,19 @@ import {
   workspaceFilePathFor,
 } from '../workspace/workspace-files';
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
 export interface IssueServiceConfig {
   workspaceRoot: string;
   container: ContainerController;
   sse: SseHub;
 }
 
-// ---------------------------------------------------------------------------
-// Result types
-// ---------------------------------------------------------------------------
-
 export interface ResultArtifactResponse {
   body: string;
   contentType: string;
   filename: string;
-  /**
-   * Откуда взят артефакт: `root` — свежий `report.*` в корне, `iteration-snapshot`
-   * — устаревший отчёт из `.iteration-results/<latest>/` (пока идёт новый прогон
-   * или агент упал). Роут отдаёт это заголовком `x-artifact-source`.
-   */
   source: 'root' | 'iteration-snapshot';
-  /** ISO-mtime исходного файла — заголовок `x-artifact-mtime`. */
   mtime: string;
 }
-
-// ---------------------------------------------------------------------------
-// Interface
-// ---------------------------------------------------------------------------
 
 export interface IssueService {
   resolveConfig(deps: {
@@ -93,7 +67,6 @@ export interface IssueService {
     id: string,
   ): Promise<ResultArtifactResponse | null>;
 
-  /** MD-артефакт (report.md) для скачивания агентами. */
   getMdArtifact(
     db: Db,
     config: IssueServiceConfig,
@@ -118,10 +91,6 @@ export interface IssueService {
     id: string,
   ): Promise<void>;
 }
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
 
 function toIteration(row: typeof iterations.$inferSelect): Iteration {
   return {
@@ -191,7 +160,6 @@ function toIssue(
     created_at: row.created_at,
     updated_at: row.updated_at,
     workspace_missing: !existsSync(workspaceHostDirFor(workspaceRoot, row.id)),
-    // Сохранённое на задаче значение приоритетно; фолбек — последняя итерация.
     worker_count:
       row.worker_count ??
       iterationRows.reduce<typeof iterations.$inferSelect | null>(
@@ -212,7 +180,6 @@ async function readArtifactFrom(
   try {
     const fileStat = await stat(path);
     const body = await readFile(path, 'utf8');
-    // ISO-Z без миллисекунд: заголовок парсит фронт, а мс здесь ничего не решают.
     return {
       ...artifact,
       body,
@@ -226,7 +193,6 @@ async function readArtifactFrom(
   }
 }
 
-/** Готовый ответ артефакта с пометкой источника (для заголовков роута). */
 function artifactResponse(
   read: { body: string; mtime: string } & ResultArtifact,
   source: ResultArtifactResponse['source'],
@@ -287,7 +253,6 @@ async function deleteIssueInBackground(
         { stdio: 'ignore' },
       );
     } catch {
-      // Процессов может не быть — это нормально.
     }
     try {
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -298,7 +263,6 @@ async function deleteIssueInBackground(
         { stdio: 'ignore' },
       );
     } catch {
-      // pkill -9, нет процессов — ok.
     }
 
     releaseIssueDevPorts(id);
@@ -339,10 +303,6 @@ function getIssueRow(
   return db.select().from(issues).where(eq(issues.id, id)).get();
 }
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
 export function createIssueService(): IssueService {
   return {
     resolveConfig(deps) {
@@ -373,14 +333,12 @@ export function createIssueService(): IssueService {
 
       const latest = latestCompletedIterationId(db, id);
 
-      // 1. Корень воркспейса: report-агент пишет report.html/report.md сюда.
       const wsDir = workspaceHostDirFor(config.workspaceRoot, id);
       const rootHtml = await readArtifactFrom(wsDir, HTML_ARTIFACT);
       if (rootHtml) {
         return artifactResponse(rootHtml, 'root');
       }
 
-      // 2. Старый путь: .iteration-results/<latest>/ (артефакты resolve-шага).
       if (!latest) return null;
       const iterDir = iterationResultDirFor(config.workspaceRoot, id, latest);
 
@@ -389,7 +347,6 @@ export function createIssueService(): IssueService {
         return artifactResponse(htmlResult, 'iteration-snapshot');
       }
 
-      // MD-фолбек: корень, затем iteration-results.
       const desiredResult: DesiredResult | undefined =
         (row.desired_result as DesiredResult) ?? undefined;
       if (desiredResult === 'md' || desiredResult === undefined) {
@@ -412,13 +369,11 @@ export function createIssueService(): IssueService {
 
       const wsDir = workspaceHostDirFor(config.workspaceRoot, id);
 
-      // Корень воркспейса (report-агент пишет сюда).
       const rootMd = await readArtifactFrom(wsDir, MD_ARTIFACT);
       if (rootMd) {
         return artifactResponse(rootMd, 'root');
       }
 
-      // Старый путь: .iteration-results/
       const latest = latestCompletedIterationId(db, id);
       if (!latest) return null;
       const iterDir = iterationResultDirFor(config.workspaceRoot, id, latest);
@@ -434,7 +389,6 @@ export function createIssueService(): IssueService {
 
       if (!latestCompletedIterationId(db, id)) return null;
 
-      // Исключаем оба артефакта из списка файлов.
       const exclude = new Set(
         ALL_RESULT_ARTIFACTS.map((a) => a.filename),
       );
@@ -475,7 +429,6 @@ export function createIssueService(): IssueService {
         }
       }
 
-      // Включаем все артефакты из снапшота (HTML + MD).
       const snapshotDir = iterationResultDirFor(
         config.workspaceRoot,
         id,

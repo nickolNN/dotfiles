@@ -16,7 +16,6 @@ import {
 
 const STEP: PipelineStep = 'resolve';
 
-/** Временные папки тестов (чистятся в afterEach). */
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -66,7 +65,6 @@ const aborted = (summary: string): StepExecutionResult => ({
   aborted: true,
 });
 
-/** Реальный раннер заполняет `report` только при abort — обычный исход null. */
 const noReport = (): StepExecutionResult => ({
   step: STEP,
   exitCode: 0,
@@ -89,7 +87,6 @@ const twoStages: ExecutionPlan = {
   ],
 };
 
-/** Три одиночных этапа — для проверки resume по файлам исходов. */
 const threeStages: ExecutionPlan = {
   mode: 'stages',
   stages: [
@@ -111,11 +108,8 @@ describe('runStagedResolve — последовательные этапы', () 
 
     const result = await runStagedResolve(pi, input(twoStages), options(control));
 
-    // Итог шага — результат финального lead.
     expect(result.report?.summary).toBe('final');
 
-    // Строгий порядок: исполнители этапа 1 → координатор этапа 1 → этап 2 (1 агент)
-    // → финальный координатор.
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
       'run.run-1.s1.w0',
       'run.run-1.s1.w1',
@@ -124,14 +118,11 @@ describe('runStagedResolve — последовательные этапы', () 
       'run-1',
     ]);
 
-    // Промпты исполнителей: свой файл этапа, peer не lead, имя этапа.
     expect(pi.calls[0].prompt).toContain('NOT the lead');
     expect(pi.calls[0].prompt).toContain('Сбор');
     expect(pi.calls[0].prompt).toContain('.issue-stage-1-worker-1.json');
     expect(pi.calls[1].prompt).toContain('.issue-stage-1-worker-2.json');
 
-    // Координатор этапа 1: интегрирует исполнителей, пишет файл этапа (не финал),
-    // читает/пишет общую память.
     expect(pi.calls[2].prompt).toContain('Stage 1');
     expect(pi.calls[2].prompt).toContain('s1w1');
     expect(pi.calls[2].prompt).toContain('s1w2');
@@ -141,12 +132,9 @@ describe('runStagedResolve — последовательные этапы', () 
     expect(pi.calls[2].prompt).toContain('#decision');
     expect(pi.calls[2].prompt).not.toContain('.issue-worker-result-');
 
-    // Этап 2 (executors=1) — один агент-этап, без исполнителей.
     expect(pi.calls[3].prompt).toContain('Починка');
     expect(pi.calls[3].prompt).toContain('.issue-stage-2.json');
 
-    // Финальный lead: исходы обоих этапов, финальный отчёт, память;
-    // report.md/report.html генерирует ТОЛЬКО report-шаг.
     expect(pi.calls[4].prompt).toContain('LEAD');
     expect(pi.calls[4].prompt).toContain('s1coord');
     expect(pi.calls[4].prompt).toContain('s2');
@@ -156,7 +144,6 @@ describe('runStagedResolve — последовательные этапы', () 
     expect(pi.calls[4].prompt).toContain('## Memory');
     expect(pi.calls[4].prompt).toContain('#decision');
 
-    // Агенты этапов регистрируются с stage/stageName.
     expect(control.listAgents('iter-1').map((agent) => agent.stage)).toEqual([
       1, 1, 1, 2, null,
     ]);
@@ -176,7 +163,6 @@ describe('runStagedResolve — последовательные этапы', () 
       stage: 1,
       stageName: 'Сбор',
     });
-    // Этап без исполнителей (executors=1) — это один исполнитель этапа, а не координатор.
     expect(control.listAgents('iter-1')[3]).toMatchObject({
       id: 'run.run-1.s2.w0',
       role: 'worker',
@@ -196,7 +182,6 @@ describe('runStagedResolve — последовательные этапы', () 
 
     expect(result.aborted).toBe(true);
     expect(result.report).toEqual({ status: 'fail', summary: 'aborted' });
-    // Только два исполнителя этапа 1 (Promise.all ждёт оба), без координатора.
     expect(pi.calls).toHaveLength(2);
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
       'run.run-1.s1.w0',
@@ -237,7 +222,6 @@ describe('runStagedResolve — последовательные этапы', () 
       'run.run-1.s2.w0',
       'run-1',
     ]);
-    // Промпт — единственного исполнителя этапа: исполнителей нет, интегрировать нечего.
     expect(pi.calls[0].prompt).toContain('the only worker of stage 1');
     expect(pi.calls[0].prompt).not.toContain("Integrate the workers' changes");
   });
@@ -251,8 +235,6 @@ describe('runStagedResolve — последовательные этапы', () 
         JSON.stringify({ status: 'pass', summary }),
         'utf8',
       );
-    // Файлов этапов нет — resume не срабатывает, все этапы исполняются;
-    // отчёты исполнителей читаются с диска.
     write('.issue-stage-1-worker-1.json', 'w1 из файла');
     write('.issue-stage-1-worker-2.json', 'w2 из файла');
 
@@ -268,11 +250,9 @@ describe('runStagedResolve — последовательные этапы', () 
       hostWorkspaceDir: dir,
     });
 
-    // Координатор этапа видит содержимое файлов исполнителей, а не «(see …)».
     expect(pi.calls[2].prompt).toContain('`.issue-stage-1-worker-1.json`: w1 из файла');
     expect(pi.calls[2].prompt).toContain('`.issue-stage-1-worker-2.json`: w2 из файла');
     expect(pi.calls[2].prompt).not.toContain('(see ');
-    // Файлов этапов нет — финальный lead падает в фолбек «(see …)».
     expect(pi.calls[4].prompt).toContain('`.issue-stage-1.json`: (see .issue-stage-1.json)');
   });
 });
@@ -292,23 +272,20 @@ describe('runStagedResolve — resume по файлам исходов этап�
     writeOutcome(dir, 2, 'этап2 готов');
 
     const pi = new FakePiRunner();
-    pi.enqueue(noReport()); // этап 3
-    pi.enqueue(noReport()); // финальный lead
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
 
     await runStagedResolve(pi, input(threeStages), {
       ...options(),
       hostWorkspaceDir: dir,
     });
 
-    // Этапы 1–2 не перезапускаются: сразу этап 3 + финал.
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
       'run.run-1.s3.w0',
       'run-1',
     ]);
-    // Финальный lead видит исходы уже готовых этапов из их файлов.
     expect(pi.calls[1].prompt).toContain('`.issue-stage-1.json`: этап1 готов');
     expect(pi.calls[1].prompt).toContain('`.issue-stage-2.json`: этап2 готов');
-    // Исход этапа 3 (только что прогнанного) тоже доходит до финального lead.
     expect(pi.calls[1].prompt).toContain('`.issue-stage-3.json`: (see .issue-stage-3.json)');
   });
 
@@ -320,7 +297,7 @@ describe('runStagedResolve — resume по файлам исходов этап�
     writeOutcome(dir, 3, 'готов3');
 
     const pi = new FakePiRunner();
-    pi.enqueue(noReport()); // только финальный lead
+    pi.enqueue(noReport());
 
     await runStagedResolve(pi, input(threeStages), {
       ...options(),
@@ -337,10 +314,10 @@ describe('runStagedResolve — resume по файлам исходов этап�
     dirs.push(dir);
 
     const pi = new FakePiRunner();
-    pi.enqueue(noReport()); // этап 1
-    pi.enqueue(noReport()); // этап 2
-    pi.enqueue(noReport()); // этап 3
-    pi.enqueue(noReport()); // финальный lead
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
 
     await runStagedResolve(pi, input(threeStages), {
       ...options(),
@@ -361,10 +338,10 @@ describe('runStagedResolve — resume по файлам исходов этап�
     writeFileSync(join(dir, '.issue-stage-1.json'), '{ not json', 'utf8');
 
     const pi = new FakePiRunner();
-    pi.enqueue(noReport()); // этап 1 (перезапуск)
-    pi.enqueue(noReport()); // этап 2
-    pi.enqueue(noReport()); // этап 3
-    pi.enqueue(noReport()); // финальный lead
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
+    pi.enqueue(noReport());
 
     await runStagedResolve(pi, input(threeStages), {
       ...options(),

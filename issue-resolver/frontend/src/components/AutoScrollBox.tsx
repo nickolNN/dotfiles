@@ -9,27 +9,11 @@ import {
 interface AutoScrollBoxProps {
   children: ReactNode;
   className?: string;
-  /**
-   * Значение-триггер: при его изменении контейнер прокручивается вниз.
-   * По умолчанию — сами `children`, т.е. прокрутка при любом новом рендере
-   * содержимого.
-   */
   scrollKey?: unknown;
 }
 
-/** Порог «у дна»: если до низа ≤ 1 строки — считаем что пользователь
- * смотрит на последние события и авто-скролл должен работать. */
 const AT_BOTTOM_PX = 16;
 
-/**
- * Скроллируемый контейнер с авто-прокруткой вниз при новых событиях.
- * Используется для живого вывода агента в карточке шага.
- *
- * Поведение как в Slack/Discord — авто-следование за новым контентом
- * **пока пользователь у дна**. Ушёл вверх → авто-скролл на паузе, кнопка
- * показывает что есть непрочитанные события. Докрутил до дна → авто-скролл
- * возобновляется. Кнопка всегда прыгает вниз и включает live.
- */
 export default function AutoScrollBox({
   children,
   className,
@@ -39,17 +23,12 @@ export default function AutoScrollBox({
   const liveRef = useRef(true);
   const [live, setLive] = useState(true);
 
-  /** Проверка: скролл-позиция в пределах порога от дна. */
   const isAtBottom = useCallback(() => {
     const el = ref.current;
-    if (!el) return true; // нет DOM — считаем у дна (монтирование)
+    if (!el) return true;
     return el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_PX;
   }, []);
 
-  /**
-   * Пользователь крутит колесом/тачпадом.
-   * Ушёл от дна → live OFF (пауза). Вернулся ко дну → live ON (resume).
-   */
   const handleScroll = useCallback(() => {
     const atBottom = isAtBottom();
     if (atBottom && !liveRef.current) {
@@ -61,7 +40,6 @@ export default function AutoScrollBox({
     }
   }, [isAtBottom]);
 
-  /** Кнопка: прыжок вниз + включение live. */
   const scrollToBottom = useCallback(() => {
     const el = ref.current;
     if (!el) return;
@@ -78,10 +56,6 @@ export default function AutoScrollBox({
     }
   }, []);
 
-  /**
-   * Синхронный скролл ко дну при изменении данных — только если
-   * live включён (пользователь не отмотал вверх).
-   */
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !liveRef.current) return;
@@ -91,11 +65,6 @@ export default function AutoScrollBox({
     el.style.scrollBehavior = prev;
   }, [scrollKey ?? children]);
 
-  /**
-   * ResizeObserver на ребёнке — ловит ВСЕ изменения лейаута ПОСЛЕ
-   * рендера (переносы текста, анимации, внутренние скроллбары).
-   * Только в браузере; в jsdom fallback на синхронный scrollTop выше.
-   */
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || typeof ResizeObserver === 'undefined') return;

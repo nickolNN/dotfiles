@@ -165,8 +165,6 @@ describe('model — runIssueIteration → pi.run', () => {
     );
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    // Post-iteration report-агент добавляет свой pi.run (fire-and-forget):
-    // считаем только вызовы шагов пайплайна.
     const stepCalls = pi.calls.filter(
       (call) => call.options?.iterationId !== undefined,
     );

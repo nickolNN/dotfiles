@@ -27,16 +27,6 @@ import {
 } from '../api/client';
 import type { CleanupResult } from '../api/client';
 
-/**
- * Shared-хуки данных задачи. Ключи кэша держим рядом с хуками, чтобы
- * `queryClient.invalidateQueries` / `setQueryData` в компонентах не расходились
- * с тем, что здесь объявлено.
- *
- * `enabled`-гейты повторяют прежние условия ручных загрузок: итерация может
- * быть не выбрана (`null`) — тогда step-runs/control не запрашиваются вовсе.
- */
-
-/** Задача по id (`GET /issues/:id`). */
 export function useIssue(issueId: string | null | undefined) {
   return useQuery({
     queryKey: ['issue', issueId],
@@ -45,7 +35,6 @@ export function useIssue(issueId: string | null | undefined) {
   });
 }
 
-/** Итерации задачи (`GET /issues/:id/iterations`). */
 export function useIterations(issueId: string | null | undefined) {
   return useQuery({
     queryKey: ['iterations', issueId],
@@ -54,7 +43,6 @@ export function useIterations(issueId: string | null | undefined) {
   });
 }
 
-/** Прогоны шагов итерации (`GET /iterations/:id/step-runs`). */
 export function useStepRuns(iterationId: string | null | undefined) {
   return useQuery({
     queryKey: ['step-runs', iterationId],
@@ -63,11 +51,6 @@ export function useStepRuns(iterationId: string | null | undefined) {
   });
 }
 
-/**
- * Снимок управления живой pi-сессией (`GET /iterations/:id/control`).
- * Опрашивается каждые 4с, пока итерация выполняется; при 409/no-session
- * `getIterationControl` отдаёт `null` — панель управления просто скрыта.
- */
 export function useIterationControl(
   iterationId: string | null | undefined,
   enabled: boolean,
@@ -80,9 +63,6 @@ export function useIterationControl(
   });
 }
 
-// ── Настройки ──────────────────────────────────────────────────────────
-
-/** Hostname инстанса (`GET /settings/hostname`). */
 export function useHostname() {
   return useQuery({
     queryKey: ['hostname'],
@@ -91,10 +71,6 @@ export function useHostname() {
   });
 }
 
-/**
- * Сохраняет hostname (`PUT /settings/hostname`) и сразу кладёт значение в
- * кэш — повторный запрос при возврате на страницу не нужен.
- */
 export function useSetHostname() {
   const qc = useQueryClient();
   return useMutation({
@@ -105,16 +81,12 @@ export function useSetHostname() {
   });
 }
 
-/** Убирает орфанед-задачи/процессы и брошенные комнаты (`POST /admin/cleanup-orphans`). */
 export function useCleanupOrphans() {
   return useMutation<CleanupResult, Error, void>({
     mutationFn: cleanupOrphans,
   });
 }
 
-// ── Репозитории ────────────────────────────────────────────────────────
-
-/** Сохранённые репозитории (`GET /repositories`). */
 export function useRepositories() {
   return useQuery({
     queryKey: ['repositories'],
@@ -123,7 +95,6 @@ export function useRepositories() {
   });
 }
 
-/** Добавить репозиторий; возвращённая сущность добавляется в кэш списка. */
 export function useCreateRepository() {
   const qc = useQueryClient();
   return useMutation({
@@ -137,7 +108,6 @@ export function useCreateRepository() {
   });
 }
 
-/** Обновить URL репозитория; заменяет сущность в кэше списка по id. */
 export function useUpdateRepository() {
   const qc = useQueryClient();
   return useMutation({
@@ -151,7 +121,6 @@ export function useUpdateRepository() {
   });
 }
 
-/** Удалить репозиторий; убирает его из кэша списка. */
 export function useDeleteRepository() {
   const qc = useQueryClient();
   return useMutation({
@@ -164,10 +133,6 @@ export function useDeleteRepository() {
   });
 }
 
-/**
- * Заменить сущность репозитория в кэше списка (используется live-валидацией
- * `POST /repositories/:id/validate`, которая не является мьютацией формы).
- */
 export function writeRepositoryToCache(
   qc: ReturnType<typeof useQueryClient>,
   repo: SavedRepo,
@@ -177,9 +142,6 @@ export function writeRepositoryToCache(
   );
 }
 
-// ── Теги ───────────────────────────────────────────────────────────────
-
-/** Создать тег; возвращённая сущность добавляется в кэш списка. */
 export function useCreateTag() {
   const qc = useQueryClient();
   return useMutation({
@@ -193,7 +155,6 @@ export function useCreateTag() {
   });
 }
 
-/** Обновить тег; заменяет сущность в кэше списка по id. */
 export function useUpdateTag() {
   const qc = useQueryClient();
   return useMutation({
@@ -207,7 +168,6 @@ export function useUpdateTag() {
   });
 }
 
-/** Удалить тег; убирает его из кэша списка. */
 export function useDeleteTag() {
   const qc = useQueryClient();
   return useMutation({
@@ -220,18 +180,15 @@ export function useDeleteTag() {
   });
 }
 
-/** Сохранённые репозитории для селекторов формы (`GET /repositories`). */
 export function useSavedRepos() {
   return useQuery({
     queryKey: ['savedRepos'],
     queryFn: () => getRepositories(),
     staleTime: 60_000,
-    // Защита от нештатного ответа: форма ожидает массив.
     select: (data) => (Array.isArray(data) ? data : []),
   });
 }
 
-/** Теги для быстрого добавления их репозиториев (`GET /tags`). */
 export function useTags() {
   return useQuery({
     queryKey: ['tags'],
@@ -241,16 +198,11 @@ export function useTags() {
   });
 }
 
-/** Аргументы создания задачи: тело + опциональные вложения (multipart). */
 export interface CreateIssueVariables {
   request: CreateIssueRequest;
   files?: File[];
 }
 
-/**
- * Создание задачи (`POST /issues`). С вложениями уходит multipart, иначе JSON.
- * После успеха инвалидирует список задач, чтобы новый черновик появился там.
- */
 export function useCreateIssue() {
   const queryClient = useQueryClient();
   return useMutation({

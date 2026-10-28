@@ -33,7 +33,6 @@ function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {
   } as Response;
 }
 
-/** Различает GET /models, /repositories, ветки и POST /issues. */
 const SAVED_REPO: SavedRepo = {
   id: 'repo-1',
   url: 'https://github.com/acme/app.git',
@@ -117,9 +116,6 @@ describe('NewIssue — селектор модели (per-step)', () => {
 
     render(<NewIssue />);
 
-    // Всегда отмечен только resolve (селектор модели + thinking level) плюс
-    // пара report-агента (модель + thinking) — у каждого селекта своя
-    // «По умолчанию».
     expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(2);
     expect(screen.getAllByRole('option', { name: 'm2' })).toHaveLength(2);
     expect(screen.getAllByRole('option', { name: 'По умолчанию' })).toHaveLength(4);
@@ -129,7 +125,6 @@ describe('NewIssue — селектор модели (per-step)', () => {
     ).toBeInTheDocument();
     expect(screen.getByTestId('report-model-input')).toBeInTheDocument();
 
-    // Отмечаем ещё два шага — появляются их селекторы.
     fireEvent.click(screen.getByLabelText('Планирование'));
     fireEvent.click(screen.getByLabelText('Код-ревью'));
     expect(await screen.findAllByRole('option', { name: 'Model One' })).toHaveLength(4);
@@ -160,8 +155,6 @@ describe('NewIssue — селектор модели (per-step)', () => {
     render(<NewIssue />);
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    // report не отмечается как шаг пайплайна, но его селектор модели виден
-    // всегда и сохраняется в step_models.
     fireEvent.change(screen.getByTestId('report-model-input'), {
       target: { value: 'm2' },
     });
@@ -196,7 +189,6 @@ describe('NewIssue — селектор модели (per-step)', () => {
     render(<NewIssue />);
     await screen.findAllByRole('option', { name: 'Model One' });
 
-    // resolve отмечен всегда → селектор виден; refine пока снят → селектора нет.
     expect(screen.getByLabelText('Модель для шага Исполнение')).toBeEnabled();
     expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
 
@@ -205,7 +197,6 @@ describe('NewIssue — селектор модели (per-step)', () => {
     expect(refineModel).toBeEnabled();
     fireEvent.change(refineModel, { target: { value: 'm2' } });
 
-    // Снимаем шаг — его модель отфильтровывается из payload, селектор скрыт.
     fireEvent.click(screen.getByLabelText('Планирование'));
     expect(screen.queryByLabelText('Модель для шага Планирование')).toBeNull();
 

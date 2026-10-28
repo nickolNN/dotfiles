@@ -6,39 +6,28 @@ import type {
 } from '@issue-resolver/shared';
 import type { SessionEvent } from '../api/session-events';
 
-/** Последнее usage из стрима (легаси-источник до первого `stats`). */
 interface LiveUsage {
   usage: SessionUsage;
-  /** Скорость генерации из того же `message_update` (может отсутствовать). */
   speed?: SessionSpeed;
 }
 
-/** Нормализованные поля строки статистики (live-stats, live-usage или prop). */
 export interface FooterData {
-  /** Метка модели, которой реально шла сессия (`name || id`), или null. */
   model: string | null;
   percent: number | null;
   input: number;
   output: number;
   cached: number;
-  /** Мгновенная скорость генерации (live-usage `speed`), иначе null. */
   tokensPerSecond: number | null;
-  /** Средняя скорость генерации (stats или live-usage `speed`), иначе null. */
   avgTokensPerSecond: number | null;
-  /** Число вызовов инструментов из stats/usage; 0, если данных нет. */
   toolCalls?: number;
 }
 
 interface SessionStatsBarProps {
   events: SessionEvent[];
-  /** Статистика pi-сессии шага (`get_session_stats`) или null. */
   stats?: SessionStats | null;
-  /** Дополнительные классы обёртки (например, чтобы закрепить в модалке). */
   className?: string;
 }
 
-/** Маленькая стрелка вверх — отправленные (input) токены. Монохромна: наследует
- * `currentColor` неонового футера (в стиле inline-SVG из `App.tsx`). */
 export function TokenUpIcon() {
   return (
     <svg
@@ -56,7 +45,6 @@ export function TokenUpIcon() {
   );
 }
 
-/** Маленькая стрелка вниз — полученные (output) токены. */
 export function TokenDownIcon() {
   return (
     <svg
@@ -74,12 +62,6 @@ export function TokenDownIcon() {
   );
 }
 
-/**
- * Строка статистики сессии: «{model} · CTX {p}% · ↑ input · ↓ output · кеш».
- * Показывает свежайшее `stats`-событие, иначе легаси `usage`-событие,
- * иначе статичный prop `stats`; при отсутствии данных не рендерится.
- * `model` и `CTX {p}%` рендерятся только при наличии значения.
- */
 export default function SessionStatsBar({
   events,
   stats,
@@ -141,7 +123,6 @@ export default function SessionStatsBar({
   );
 }
 
-/** Последнее `usage`-событие в логе (кумулятивный снапшот) или null. */
 function lastLiveUsage(events: SessionEvent[]): LiveUsage | null {
   let live: LiveUsage | null = null;
   for (const event of events) {
@@ -152,7 +133,6 @@ function lastLiveUsage(events: SessionEvent[]): LiveUsage | null {
   return live;
 }
 
-/** Последнее `stats`-событие сессии (периодический `get_session_stats`). */
 function lastStatsEvent(events: SessionEvent[]): SessionStats | null {
   let latest: SessionStats | null = null;
   for (const event of events) {
@@ -161,12 +141,6 @@ function lastStatsEvent(events: SessionEvent[]): SessionStats | null {
   return latest;
 }
 
-/**
- * Источник строки статистики: свежайшее `stats`-событие (опрос ~3s) → легаси
- * `usage` (контекст% и число вызовов при этом берём из prop stats) → статичный
- * prop `stats`. Экспортирован, чтобы футер шага мог рендерить ту же строку,
- * не монтируя `SessionStatsBar` (в блоке она выключена через showFooter).
- */
 export function resolveFooter(
   events: SessionEvent[],
   stats?: SessionStats | null,
@@ -180,7 +154,6 @@ export function resolveFooter(
       input: liveStats.tokens.input,
       output: liveStats.tokens.output,
       cached: liveStats.tokens.cacheRead + liveStats.tokens.cacheWrite,
-      // `stats` несёт только среднее; мгновенную скорость даёт live-usage.
       tokensPerSecond: null,
       avgTokensPerSecond: finiteOrNull(liveStats.avgTokensPerSecond),
       toolCalls: liveStats.toolCalls,
@@ -188,13 +161,11 @@ export function resolveFooter(
   }
   if (live) {
     return {
-      // usage-событие модели/вызовов не несёт — берём их из статичного prop `stats`.
       model: stats?.model ?? null,
       percent: stats?.contextUsage?.percent ?? null,
       input: live.usage.input,
       output: live.usage.output,
       cached: live.usage.cacheRead + live.usage.cacheWrite,
-      // Оба значения приходят вместе в `speed` живого usage-события.
       tokensPerSecond: finiteOrNull(live.speed?.tokensPerSecond),
       avgTokensPerSecond: finiteOrNull(live.speed?.avgTokensPerSecond),
       toolCalls: stats?.toolCalls ?? 0,
@@ -215,28 +186,23 @@ export function resolveFooter(
   return null;
 }
 
-/** Мгновенная скорость генерации: один знак после запятой (63.5 → "63.5"). */
 export function formatInstantSpeed(value: number): string {
   return value.toFixed(1);
 }
 
-/** Средняя скорость генерации: округление до целого (63.5 → "64"). */
 export function formatAvgSpeed(value: number): string {
   return String(Math.round(value));
 }
 
-/** Возвращает число, если оно конечное, иначе null (нет данных). */
 function finiteOrNull(value: number | undefined | null): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-/** Компактная стоимость: `$0` / `$0.0123` / `$1.5`; null/NaN/<= 0 → `$0`. */
 export function formatCost(total: number): string {
   if (!Number.isFinite(total) || total <= 0) return '$0';
   return `$${total.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
 }
 
-/** Компактный формат токенов: 950 → "950", 105000 → "105k", 1200000 → "1.2M". */
 export function formatTokens(total: number): string {
   if (!Number.isFinite(total) || total <= 0) return '0';
   if (total >= 1_000_000) return `${trimDecimal(total / 1_000_000)}M`;
@@ -244,7 +210,6 @@ export function formatTokens(total: number): string {
   return String(Math.round(total));
 }
 
-/** Округляет до одного знака, убирая лишний ".0" (105.0 → 105). */
 function trimDecimal(value: number): string {
   return value.toFixed(1).replace(/\.0$/, '');
 }

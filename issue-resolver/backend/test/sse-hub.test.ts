@@ -136,9 +136,6 @@ describe('GET /stream (глобальный SSE)', () => {
 
     const controller = new AbortController();
     try {
-      // В шину не публикуем ни одного события: молчащий поток обязан отдать
-      // первый байт сам, иначе прокси буферизует заголовки и EventSource не
-      // переходит в open (регрессия «мёртвого» UI в dev-режиме).
       const response = await fetch(
         `http://127.0.0.1:${address.port}/issue-resolver/api/v1/stream`,
         { signal: controller.signal },

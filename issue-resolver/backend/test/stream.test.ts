@@ -263,7 +263,6 @@ describe('POST /iterations/:id/abort', () => {
   });
 });
 
-/** Минимальный control без процесса — для регистрации агентов в реестре. */
 const noopControl = {
   steer: () => undefined,
   abort: () => undefined,
@@ -290,7 +289,6 @@ describe('GET /iterations/:id/agents', () => {
       index: null,
       label: 'Координатор',
     });
-    // Телеметрия исполнителя: usage-токены + последний stats-событие (контекст/model).
     control.recordEvent(`${iterationId}.w0`, {
       type: 'usage',
       usage: { input: 12, output: 3, cacheRead: 0, cacheWrite: 0, total: 15 },
@@ -409,7 +407,6 @@ describe('GET /iterations/:id/agents/stream', () => {
         data: JSON.stringify({ stepRunId: iterationId, agentId, event: { type: 'text', text: 'x' } }),
         ts: NOW,
       };
-      // Чужой агент — не должен просочиться в поток.
       hub.publish({ ...target, agentId: `${iterationId}.w1` });
       hub.publish(target);
 

@@ -122,7 +122,6 @@ function seedIteration(
   return id;
 }
 
-/** Разбирает несжатый ustar-тар в список имён записей. */
 function parseTarNames(buf: Buffer): string[] {
   const names: string[] = [];
   let offset = 0;
@@ -274,7 +273,6 @@ describe('getIssue', () => {
       source: 'jira',
       dev_server_port: 5101,
       pipeline_steps: ['resolve'],
-      // Статус выводится из последней итерации.
       status: 'completed',
       workspace_missing: true,
     });
@@ -366,11 +364,9 @@ describe('getResultArtifact', () => {
     const { config } = makeConfig(root);
     const id = seedIssue(db, { desired_result: 'html' });
     const iterationId = seedIteration(db, id, { status: 'completed' });
-    // Устаревший отчёт в снапшоте последней итерации…
     const iterDir = iterationResultDirFor(root, id, iterationId);
     mkdirSync(iterDir, { recursive: true });
     writeFileSync(join(iterDir, 'report.html'), '<h1>OLD</h1>');
-    // …и свежий в корне рабочей папки.
     mkdirSync(join(root, id), { recursive: true });
     writeFileSync(join(root, id, 'report.html'), '<h1>NEW</h1>');
 
@@ -505,12 +501,10 @@ describe('deleteIssue', () => {
 
     await service.deleteIssue(db, config, id);
 
-    // Запись стёрта, контейнер и рабочая папка снесены.
     expect(db.select().from(issues).all()).toHaveLength(0);
     expect(removeSpy).toHaveBeenCalledWith(`issue-resolver-${id}`);
     expect(existsSync(issueDir)).toBe(false);
 
-    // Прогресс — фазы issue_deleting в порядке, финал — issue_deleted.
     const phases = events
       .filter((event) => event.type === 'issue_deleting')
       .map(

@@ -41,7 +41,6 @@ const COORDINATOR = makeAgent({
 });
 const AGENTS: RoomAgent[] = [WORKER_1, WORKER_2, COORDINATOR];
 
-/** Полный SessionStats с переопределяемыми полями (tokens/cost). */
 function makeStats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
     userMessages: 1,
@@ -60,7 +59,6 @@ function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response;
 }
 
-/** Фейк EventSource: запоминает URL/закрытие и отдаёт onmessage вручную. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -79,7 +77,6 @@ class FakeEventSource {
   }
 }
 
-/** step_event-эмит как его кладёт бэкенд в data (`{stepRunId, agentId, event}`). */
 function stepEvent(agentId: string, event: SessionEvent): unknown {
   return {
     type: 'step_event',
@@ -96,7 +93,6 @@ function stubFetch(agents: RoomAgent[]): void {
   stubFetchDynamic(() => agents);
 }
 
-/** Динамический список агентов: тест меняет ответ между запросами. */
 function stubFetchDynamic(getAgents: () => RoomAgent[]): { agents: number } {
   const calls = { agents: 0 };
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
@@ -164,8 +160,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     await screen.findByTestId('room-agents');
 
     const tabs = screen.getAllByTestId('room-agent-tab');
-    // Порядок: этап 1 (исполнители 1,2, затем координатор этапа) → этап 2 →
-    // финальный координатор (stage=null).
     expect(tabs.map((tab) => tab.getAttribute('data-agent-id'))).toEqual([
       'stage-1/worker/0',
       'stage-1/worker/1',
@@ -176,7 +170,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     expect(tabs[0]).toHaveTextContent('Этап 1 · Исполнитель 1');
     expect(tabs[1]).toHaveTextContent('Этап 1 · Исполнитель 2');
     expect(tabs[2]).toHaveTextContent('Этап 1 · Координатор');
-    // Координатор этапа — не финальный, «(lead)» ему не добавляем.
     expect(tabs[2]).not.toHaveTextContent('(lead)');
     expect(tabs[3]).toHaveTextContent('Этап 2 · Исполнитель 1');
     expect(tabs[4]).toHaveTextContent('Координатор (lead)');
@@ -196,7 +189,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     expect(tabs[1]).toHaveTextContent('Исполнитель 2');
     expect(tabs[2]).toHaveTextContent('Координатор (lead)');
 
-    // Статус каждого агента виден и продублирован в data-status.
     expect(tabs[0]).toHaveAttribute('data-status', 'running');
     expect(tabs[1]).toHaveAttribute('data-status', 'finished');
     expect(tabs[2]).toHaveAttribute('data-role', 'coordinator');
@@ -246,7 +238,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     });
     expect(await screen.findByText('сессия исполнителя 1')).toBeInTheDocument();
 
-    fireEvent.click(tabs[1]); // Исполнитель 2
+    fireEvent.click(tabs[1]);
 
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
     expect(FakeEventSource.instances[0].close).toHaveBeenCalledTimes(1);
@@ -304,7 +296,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
 
     const { unmount } = render(<RoomAgentTabs iterationId="iter-1" />);
     await screen.findByTestId('room-agents');
-    // Эффект подписки разворачивается после коммита — дожидаемся EventSource.
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const source = FakeEventSource.instances[0];
 
@@ -321,7 +312,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     const tabs = await screen.findAllByTestId('room-agent-tab');
     expect(tabs[0]).toHaveAttribute('data-status', 'running');
 
-    // Исполнитель 1 завершился — родитель бампает refreshKey, статусы перечитываются.
     agents = [
       makeAgent({ ...WORKER_1, status: 'finished' }),
       WORKER_2,
@@ -329,7 +319,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     ];
     rerender(<RoomAgentTabs iterationId="iter-1" refreshKey={1} />);
 
-    // Вкладки не подменяются заглушкой загрузки на время фонового fetch.
     expect(screen.queryByTestId('room-agents-loading')).toBeNull();
     expect(screen.getByTestId('room-agents')).toBeInTheDocument();
 
@@ -372,7 +361,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     render(<RoomAgentTabs iterationId="iter-1" />);
     await screen.findByTestId('room-agents');
 
-    // Живой футер включён и берёт числа из stats выбранного агента.
     expect(screen.getByTestId('session-stats')).toBeInTheDocument();
     expect(screen.getByTestId('session-token-in')).toHaveTextContent('1k');
     expect(screen.getByTestId('session-token-out')).toHaveTextContent('500');
@@ -408,7 +396,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
   });
 
   it('null startedAt/stats не роняет компонент и даёт нулевой итог', async () => {
-    stubFetch([makeAgent()]); // startedAt: null, stats: null
+    stubFetch([makeAgent()]);
 
     render(<RoomAgentTabs iterationId="iter-1" />);
     await screen.findByTestId('room-agents');
@@ -416,7 +404,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     const summary = screen.getByTestId('room-step-summary');
     expect(summary).toHaveTextContent('Всего:');
     expect(summary).toHaveTextContent('$0');
-    // Без старта время агента не показываем.
     expect(screen.queryByTestId('room-agent-duration')).toBeNull();
   });
 
@@ -502,8 +489,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     const groups = screen.getAllByTestId('room-stage-group');
     expect(groups).toHaveLength(2);
 
-    // Этап 1: исполнитель + координатор → токены/cost суммируются, модели
-    // различаются без дублей, CTX — максимум по этапу.
     expect(groups[0]).toHaveAttribute('data-stage', '1');
     expect(groups[0]).toHaveAttribute('data-stage-name', 'Сбор');
     expect(within(groups[0]).getByTestId('room-stage-name')).toHaveTextContent(
@@ -521,12 +506,10 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     expect(
       within(groups[0]).getByTestId('room-stage-context'),
     ).toHaveTextContent('CTX 30%');
-    // Wall-time этапа посчитан (а не «—»): агенты завершились.
     expect(
       within(groups[0]).getByTestId('room-stage-duration').textContent,
     ).not.toBe('—');
 
-    // Этап 2: один исполнитель без contextUsage → CTX-сегмента нет.
     expect(groups[1]).toHaveAttribute('data-stage', '2');
     expect(groups[1]).toHaveAttribute('data-stage-name', 'Реализация');
     expect(within(groups[1]).getByTestId('room-stage-tokens')).toHaveTextContent(
@@ -537,8 +520,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     );
     expect(within(groups[1]).queryByTestId('room-stage-context')).toBeNull();
 
-    // Финальный координатор (stage === null) в сводку не входит — групп ровно 2
-    // и все вкладки (включая финального lead) остаются на месте.
     expect(screen.getAllByTestId('room-agent-tab')).toHaveLength(4);
   });
 
@@ -563,7 +544,6 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     expect(group).toHaveTextContent('$0');
     expect(within(group).getByTestId('room-stage-models')).toHaveTextContent('—');
     expect(within(group).queryByTestId('room-stage-context')).toBeNull();
-    // Без startedAt времени этапа нет.
     expect(within(group).getByTestId('room-stage-duration')).toHaveTextContent(
       '—',
     );

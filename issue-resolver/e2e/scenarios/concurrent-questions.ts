@@ -1,10 +1,5 @@
 import type { MockPiScenario } from './types';
 
-/**
- * Две задачи могут идти параллельно: у каждой итерации свой курсор, поэтому
- * обе одновременно задают вопрос на первом шаге. Курсор раннера ключуется
- * `iterationId`, так что шаги не «съедают» друг друга.
- */
 export const concurrentQuestionsScenario: MockPiScenario = {
   name: 'concurrent-questions',
   bootstrap: 'success',

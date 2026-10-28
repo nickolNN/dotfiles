@@ -63,7 +63,6 @@ export async function iterationsRoutes(
       if (!issue) return reply.status(404).send({ error: 'issue not found' });
       const dir = iterationResultDirFor(deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT, iteration.issue_id, iteration.id);
 
-      // Пробуем HTML первым, затем MD (для старых md-задач).
       let result: { body: string; contentType: string; filename: string } | null = null;
       for (const artifact of [HTML_ARTIFACT, MD_ARTIFACT]) {
         try {
@@ -89,7 +88,6 @@ export async function iterationsRoutes(
       if (!issue) return reply.status(404).send({ error: 'issue not found' });
       const dir = iterationResultDirFor(deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT, iteration.issue_id, iteration.id);
 
-      // Пробуем HTML первым, затем MD.
       let result: { body: string; contentType: string; filename: string } | null = null;
       for (const artifact of [HTML_ARTIFACT, MD_ARTIFACT]) {
         try {
@@ -105,7 +103,6 @@ export async function iterationsRoutes(
     },
   );
 
-  // MD-артефакт (report.md) для скачивания агентами.
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/result/md`,
     async (request, reply) => {
@@ -146,7 +143,6 @@ export async function iterationsRoutes(
     },
   );
 
-  // Обновить черновик (только context).
   app.put<{ Params: { id: string }; Body: { context: string } }>(
     `${ROUTE_PATH}/:id`,
     async (request, reply) => {
@@ -163,7 +159,6 @@ export async function iterationsRoutes(
     },
   );
 
-  // Повторить итерацию: новая с теми же параметрами.
   app.post<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/repeat`,
     async (request, reply) => {
@@ -195,13 +190,10 @@ export async function iterationsRoutes(
         status: 'pending', created_at: now, updated_at: now,
       };
 
-      // Проверяем ограничения до вставки в БД.
       const hasRunning = db.select({ id: iterations.id }).from(iterations).where(
         and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'running')),
       ).get();
 
-      // See POST /iterations in issues.ts: the slot checks hold with or without
-      // a running iteration, else the queue can hold two pending rows.
       const hasPlanned = db.select({ id: iterations.id }).from(iterations).where(
         and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'pending')),
       ).get();
@@ -212,15 +204,12 @@ export async function iterationsRoutes(
       if (hasDraft) return reply.status(409).send({ error: 'A draft iteration already exists — edit or delete it first' });
 
       if (hasRunning) {
-        // Вставляем как draft.
         db.insert(iterations).values({ ...iteration, status: 'draft' }).run();
-        // Копируем вложения.
         const srcFiles = await listByIteration(db, id);
         await insertMany(db, srcFiles.map((f) => ({ issueId: issue.id, iterationId, name: f.name, relPath: f.rel_path, size: f.size, mimeType: f.mime_type })));
         return reply.status(201).send({ ...iteration, status: 'draft' });
       }
 
-      // Нет активной — вставляем как pending и auto-start.
       db.insert(iterations).values(iteration).run();
       const srcFiles = await listByIteration(db, id);
       await insertMany(db, srcFiles.map((f) => ({ issueId: issue.id, iterationId, name: f.name, relPath: f.rel_path, size: f.size, mimeType: f.mime_type })));
@@ -248,7 +237,6 @@ export async function iterationsRoutes(
     },
   );
 
-  // Поставить черновик в очередь.
   app.post<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/queue`,
     async (request, reply) => {
@@ -261,8 +249,6 @@ export async function iterationsRoutes(
       const now = new Date().toISOString();
       db.update(iterations).set({ status: 'pending', updated_at: now }).where(eq(iterations.id, id)).run();
 
-      // Если задача завершена (completed/failed), но в неё добавили pending-итерацию —
-      // возвращаем задачу в pending, иначе startNextPendingIteration не запустится.
       const issue = db.select({ status: issues.status }).from(issues).where(eq(issues.id, it.issue_id)).get();
       if (issue && (issue.status === 'completed' || issue.status === 'failed')) {
         db.update(issues).set({ status: 'pending', updated_at: now }).where(eq(issues.id, it.issue_id)).run();
@@ -271,7 +257,6 @@ export async function iterationsRoutes(
     },
   );
 
-  // Получить комментарии ревью из MR/PR.
   app.post<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/fetch-review-comments`,
     async (request, reply) => {
@@ -301,8 +286,6 @@ export async function iterationsRoutes(
           const comments = await deps.mr.fetchComments({
             mrUrl: mr.url,
             token: deps.mrToken ?? '',
-            // Repository URL того же артефакта: нужен, чтобы долечить
-            // сохранённые bitbucket-ссылки без project-ключа.
             repositoryUrl: mr.repository_url,
           });
           for (const c of comments) allComments.push({ repo: mr.repository_url, file: c.file, line: c.line, body: c.body, author: c.author });

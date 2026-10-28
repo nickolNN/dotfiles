@@ -1,13 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { FakeApi, createRepo, getLatestIssueId } from '../../helpers';
 
-/**
- * `desired_result`:
- * - `html` → результат открывается как HTML (iframe), а не как Markdown;
- * - `pr` → радио доступно только с выбранным репозиторием и уходит в запрос
- *   (в форме `create_mr` само не включается — это осознанное отступление от
- *   формулировки спеки, см. отчёт).
- */
 test.describe('edge: желаемый результат', () => {
   test('html → результат рендерится как html', async ({ page }) => {
     const api = new FakeApi();
@@ -30,7 +23,6 @@ test.describe('edge: желаемый результат', () => {
     await expect(
       frame.getByRole('heading', { name: 'HTML RESULT' }),
     ).toBeVisible();
-    // markdown-ветка не должна использоваться
     await expect(page.getByTestId('result-markdown')).toHaveCount(0);
   });
 
@@ -42,7 +34,6 @@ test.describe('edge: желаемый результат', () => {
     await createRepo(page, 'https://github.com/acme/one', 'main');
 
     await page.goto('/#/new');
-    // без репозитория вариант pr недоступен
     await expect(page.getByTestId('desired-result-pr')).toBeDisabled();
 
     await page.getByLabel('Заголовок').fill('PR результат');

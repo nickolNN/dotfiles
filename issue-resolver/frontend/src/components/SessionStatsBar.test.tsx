@@ -46,12 +46,10 @@ function usageEvent(
   };
 }
 
-/** Обёртка input-токенов со стрелкой ↑ внутри `session-stats`. */
 function tokenIn(bar: HTMLElement): HTMLElement {
   return within(bar).getByTestId('session-token-in');
 }
 
-/** Обёртка output-токенов со стрелкой ↓ внутри `session-stats`. */
 function tokenOut(bar: HTMLElement): HTMLElement {
   return within(bar).getByTestId('session-token-out');
 }
@@ -190,7 +188,6 @@ describe('SessionStatsBar', () => {
     expect(within(bar).getByTestId('session-speed')).toHaveTextContent(
       '63.5 t/s · avg 42 t/s',
     );
-    // Существующие сегменты не сломаны.
     expect(tokenIn(bar)).toHaveTextContent('1.5k');
     expect(bar).toHaveTextContent('кеш 0');
   });
