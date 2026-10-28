@@ -49,6 +49,24 @@ export interface RoomAgentInfo {
   stageName?: string | null;
 }
 
+/**
+ * Address of a live session. `run` is one exact address; `iteration` is that
+ * run's anchor — the last session registered for it, because a room has N
+ * workers plus a coordinator and only one of them speaks for the run.
+ */
+export type SessionTarget =
+  | { by: 'iteration'; id: string }
+  | { by: 'run'; id: string };
+
+/** Addresses the anchor session of a run. */
+export const iterationTarget = (id: string): SessionTarget => ({
+  by: 'iteration',
+  id,
+});
+
+/** Addresses exactly one session by its own id. */
+export const runTarget = (id: string): SessionTarget => ({ by: 'run', id });
+
 export interface StepSessionRegistry {
   /** Регистрирует control активной сессии шага; `agent` — если это агент комнаты. */
   register(
@@ -90,20 +108,17 @@ export interface StepSessionRegistry {
     payload: UiResponsePayload,
   ): boolean;
   /**
-   * Промпт в «якорную» (последнюю зарегистрированную) сессию итерации;
-   * null — живой сессии нет. Не broadcast: результат — единственный Promise.
+   * Prompt to the addressed session; null when it is not live. Never broadcast:
+   * a prompt produces exactly one result.
    */
-  promptByIteration(
-    iterationId: string,
+  prompt(
+    target: SessionTarget,
     message: string,
     mode?: PromptMode,
   ): Promise<PromptResult> | null;
-  /**
-   * RPC-команда в «якорную» сессию итерации; null — живой сессии нет.
-   * Не broadcast: результат — единственный ControlResult.
-   */
-  sendByIteration(
-    iterationId: string,
+  /** RPC command to the addressed session; null when it is not live. */
+  send(
+    target: SessionTarget,
     command: Record<string, unknown>,
   ): Promise<ControlResult> | null;
   /**
@@ -381,23 +396,29 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
     return this.respond(stepRunId, payload);
   }
 
-  promptByIteration(
-    iterationId: string,
+  prompt(
+    target: SessionTarget,
     message: string,
     mode?: PromptMode,
   ): Promise<PromptResult> | null {
-    const entry = this.anchorEntry(iterationId);
+    const entry = this.entryFor(target);
     if (!entry) return null;
     return entry.control.prompt(message, mode);
   }
 
-  sendByIteration(
-    iterationId: string,
+  send(
+    target: SessionTarget,
     command: Record<string, unknown>,
   ): Promise<ControlResult> | null {
-    const entry = this.anchorEntry(iterationId);
+    const entry = this.entryFor(target);
     if (!entry) return null;
     return entry.control.send(command);
+  }
+
+  /** One lookup for both operations; the union keeps the surface small. */
+  private entryFor(target: SessionTarget): SessionEntry | undefined {
+    if (target.by === 'run') return this.byStepRun.get(target.id);
+    return this.anchorEntry(target.id) ?? undefined;
   }
 
   /** Снимок активных stepRunId итерации в порядке регистрации. */

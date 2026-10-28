@@ -11,9 +11,9 @@ export interface StepRowProps {
   /** Шаг пайплайна: чекбокс + подпись. */
   step: { value: PipelineStep; label: string };
   checked: boolean;
-  /** Шаг зафиксирован (resolve отмечен всегда) или заблокирован (pr без репо). */
+  /** Disabled step: `pr` without a writable repo. */
   disabled?: boolean;
-  /** Суффикс подписи: « (всегда)» для resolve, « (нужен репозиторий)» для pr. */
+  /** Label suffix, e.g. the note shown for a blocked `pr`. */
   labelSuffix?: string;
   /** Показывать селекторы модели/уровня (шаг выбран). */
   modelEnabled: boolean;

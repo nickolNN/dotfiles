@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   ContainerSpec,
@@ -23,13 +23,14 @@ import type {
   WorkspaceProgressReporter,
 } from '@issue-resolver/shared';
 import {
-  extractRepoNameFromUrl,
   MAX_SELF_RETRIES,
+  SELF_RETRY_STEPS,
+  SessionAddress,
+  extractRepoNameFromUrl,
   maxExecutorsFor,
   nextStepDecision,
   parseStepReport,
   planExecutionMode,
-  SELF_RETRY_STEPS,
   stepRunStatusFromResult,
 } from '@issue-resolver/shared';
 import type { ContainerController } from '../docker/controller';
@@ -40,7 +41,11 @@ import type {
   RepoChangeDigest,
 } from '../git/service';
 import type { PiRunner } from '../pi/runner';
-import type { RoomAgentInfo, StepSessionRegistry } from '../pi/session-registry';
+import {
+  iterationTarget,
+  type RoomAgentInfo,
+  type StepSessionRegistry,
+} from '../pi/session-registry';
 import {
   detectGitHost,
   formatPrPublishErrors,
@@ -54,10 +59,22 @@ import {
   workspaceContainerDirFor,
   workspaceHostDirFor,
 } from '../workspace/paths';
-import { buildStepPrompt, type PrTarget } from './prompts';
+import {
+  STEP_SYSTEM_APPEND,
+  buildStepPrompt,
+  type PrTarget,
+} from './prompts';
 import type { DevOpsAgent } from './devops';
 import { runRoomResolve, runStagedResolve } from './room';
-import { resolveAgentTimeoutMs, withAgentTimeout } from './timeout';
+import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
+import { soloRunExcludeTools } from '../pi/tool-policy';
+import { stallRecoveries } from '../pi/stall-recovery';
+import {
+  resolveAgentStallTimeoutMs,
+  resolveAgentTimeoutMs,
+  withAgentStallGuard,
+  withAgentTimeout,
+} from './timeout';
 
 /** Канонический порядок исполнения шагов пайплайна. */
 const PIPELINE_STEP_ORDER: readonly PipelineStep[] = [
@@ -86,7 +103,8 @@ export const canonicalStepOrder = (steps: PipelineStep[]): PipelineStep[] => {
  */
 export interface StepRunStore {
   createStepRun(input: {
-    iterationId: string;
+    issueId: string;
+    iterationId: string | null;
     step: PipelineStep;
     attempt: number;
     context: string;
@@ -213,6 +231,11 @@ export interface RunIterationInput {
    * По умолчанию — env/30 мин; короткие значения используются в тестах.
    */
   agentTimeoutMs?: number;
+  /**
+   * Per-run silence window for one pi agent (ms); tests use short values.
+   * Defaults to env/15 min.
+   */
+  agentStallTimeoutMs?: number;
 }
 
 export interface RunIterationResult {
@@ -496,7 +519,7 @@ export async function prepareWorkspace(
       }
       onProgress?.({ step: 'checking_instructions', repo: repoName, status: 'running' });
       onProgress?.({ step: 'devops', repo: repoName, status: 'running' });
-      const devopsId = `${issue.id}/devops`;
+      const devopsId = SessionAddress.forIssueRun(issue.id, 'devops').toString();
       const devops = deps.devops({
         containerName: spec.containerName,
         hostWorkspaceDir: workspaceHostDir,
@@ -631,19 +654,80 @@ export async function prepareWorkspace(
   return prepared.repoWorkspaces;
 }
 
+async function stepReportCandidates(workspaceHostDir: string): Promise<string[]> {
+  const rootFile = join(workspaceHostDir, STEP_REPORT_FILE);
+  const repoFiles = await depthOneStepReportFiles(workspaceHostDir);
+  return [rootFile, ...repoFiles];
+}
+
+/** `<workspace>/<repo>/.issue-step-result.json` — where a `cd <repo>` step drops it. */
+async function depthOneStepReportFiles(
+  workspaceHostDir: string,
+): Promise<string[]> {
+  try {
+    const entries = await readdir(workspaceHostDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(workspaceHostDir, entry.name, STEP_REPORT_FILE));
+  } catch {
+    return [];
+  }
+}
+
+interface StepReportSource {
+  report: StepReport;
+  path: string;
+}
+
+/** Report file mtimes taken before a step starts, keyed by path. */
+type StepReportMtimes = Map<string, number>;
+
+async function stepReportMtimes(
+  workspaceHostDir: string,
+): Promise<StepReportMtimes> {
+  const mtimes = await Promise.all(
+    (await stepReportCandidates(workspaceHostDir)).map(async (path) => {
+      try {
+        return [path, (await stat(path)).mtimeMs] as const;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return new Map(mtimes.filter((entry) => entry !== null));
+}
+
 /**
- * Читает `.issue-step-result.json` из рабочей папки задачи. Отсутствие файла,
- * ошибки чтения и невалидный JSON → null (не роняем прогон).
+ * Reads the report the current step wrote: only files touched after the `before`
+ * snapshot. All steps share one report path, so an untouched file still carries
+ * the previous step's verdict — accepting it judges this step by someone else's
+ * work. Workspace root wins, then the newest rewritten repo copy.
  */
 async function readStepReportFile(
   workspaceHostDir: string,
-): Promise<StepReport | null> {
-  try {
-    const text = await readFile(join(workspaceHostDir, STEP_REPORT_FILE), 'utf8');
-    return parseStepReport(text);
-  } catch {
-    return null;
-  }
+  before: StepReportMtimes,
+): Promise<StepReportSource | null> {
+  const touched = await Promise.all(
+    (await stepReportCandidates(workspaceHostDir)).map(async (path) => {
+      try {
+        const { mtimeMs } = await stat(path);
+        if (mtimeMs <= (before.get(path) ?? Number.NEGATIVE_INFINITY)) return null;
+        const report = parseStepReport(await readFile(path, 'utf8'));
+        return report ? { report, path, mtimeMs } : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  const fresh = touched.filter((entry) => entry !== null);
+  if (fresh.length === 0) return null;
+
+  const rootFile = join(workspaceHostDir, STEP_REPORT_FILE);
+  const newestFirst = fresh.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const chosen =
+    newestFirst.find((entry) => entry.path === rootFile) ?? newestFirst[0];
+  return { report: chosen.report, path: chosen.path };
 }
 
 /**
@@ -781,6 +865,8 @@ export async function runIteration(
   let refinedExecution: ExecutionPlan | null = null;
   // Общий таймаут одного pi-агента: override прогона или env-дефолт (30 мин).
   const agentTimeoutMs = input.agentTimeoutMs ?? resolveAgentTimeoutMs();
+  // A hang shows up as silence, not as elapsed time.
+  const agentStallMs = input.agentStallTimeoutMs ?? resolveAgentStallTimeoutMs();
   // Потолок параллельности из `worker_count` задачи: единственная ручка
   // пользователя на число исполнителей, поэтому она ограничивает движок, а не
   // только текст промпта refine (0/undefined → системный потолок).
@@ -808,6 +894,7 @@ export async function runIteration(
     const step = steps[stepIndex];
 
     const stepRun = await deps.store.createStepRun({
+      issueId: issue.id,
       iterationId: iteration.id,
       step,
       attempt,
@@ -830,6 +917,9 @@ export async function runIteration(
     // комнаты (у комнаты отличие только в buildRoom* промптах).
     // Снимок перечитывается перед КАЖДЫМ шагом: предыдущий шаг что-то изменил.
     const stateDigest = await changeDigestOf(deps.git, repoPaths);
+    // Agent-visible cwd: the prompt states it, otherwise "working folder" reads
+    // as the repository clone (where agents already `cd`).
+    const agentWorkingDir = deps.local ? workspaceHostDir : workspaceContainerPath;
     const promptContext = {
       issueTitle: issue.title,
       description: input.description ?? '',
@@ -846,16 +936,28 @@ export async function runIteration(
       prTargets,
       workerCount: iteration.worker_count ?? undefined,
       stateDigest,
+      workingDir: agentWorkingDir,
     };
+    // Watchdog counter: any stdout/stderr chunk or session event proves the
+    // agent is alive. An empty stream is a hung session, not a long step.
+    let stepActivity = 0;
     const runOptions = {
       model,
       thinkingLevel,
-      cwd: deps.local ? workspaceHostDir : workspaceContainerPath,
+      cwd: agentWorkingDir,
       iterationId: iteration.id,
       issueId: issue.id,
       registry: deps.control,
       timeoutMs: agentTimeoutMs,
-      onStdout: (chunk: string, agent?: RoomAgentInfo) =>
+      sessionDir: issueSessionDir(issue.id),
+      systemAppend: STEP_SYSTEM_APPEND,
+      sessionName: sessionDisplayName({
+        step,
+        issueId: issue.id,
+        attempt: stepRun.attempt,
+      }),
+      onStdout: (chunk: string, agent?: RoomAgentInfo) => {
+        stepActivity += 1;
         deps.sse.publish(
           streamEvent(
             issue.id,
@@ -865,8 +967,10 @@ export async function runIteration(
             chunk,
             agent?.id,
           ),
-        ),
-      onStderr: (chunk: string, agent?: RoomAgentInfo) =>
+        );
+      },
+      onStderr: (chunk: string, agent?: RoomAgentInfo) => {
+        stepActivity += 1;
         deps.sse.publish(
           streamEvent(
             issue.id,
@@ -876,8 +980,10 @@ export async function runIteration(
             chunk,
             agent?.id,
           ),
-        ),
+        );
+      },
       onEvent: (event: SessionEvent, agent?: RoomAgentInfo) => {
+        stepActivity += 1;
         deps.sse.publish(
           stepEvent(issue.id, iteration.id, stepRun.id, event, agent?.id),
         );
@@ -911,6 +1017,9 @@ export async function runIteration(
       },
     };
 
+    // Snapshot the report files: an untouched file is the previous step's verdict.
+    const reportsBefore = await stepReportMtimes(workspaceHostDir);
+
     // Детерминированная развилка топологии resolve: refine рекомендует
     // single|room|stages, движок распоряжается (см. planExecutionMode) с учётом
     // `worker_count` задачи: room с потолком < 2 исполнителей смысла не имеет.
@@ -936,51 +1045,64 @@ export async function runIteration(
 
     let result: StepExecutionResult;
     try {
+      const roomOptions = {
+        ...runOptions,
+        stepRunId: stepRun.id,
+        onWorkerStart,
+        hostWorkspaceDir: workspaceHostDir,
+      };
+      const resolveInput = {
+        containerName,
+        execution: refinedExecution as ExecutionPlan,
+        maxExecutors,
+        ...promptContext,
+        refinedPlan,
+      };
+      // Room tools exist for agents that run side by side. A lone step agent
+      // only pays for their declarations and can steer itself by accident.
+      const soloStepOptions =
+        topology === 'room' || topology === 'stages'
+          ? runOptions
+          : { ...runOptions, excludeTools: soloRunExcludeTools() };
+      let agentRun: Promise<StepExecutionResult>;
       if (topology === 'room') {
-        result = await runRoomResolve(
-          deps.pi,
-          {
-            containerName,
-            execution: refinedExecution as ExecutionPlan,
-            maxExecutors,
-            ...promptContext,
-            refinedPlan,
-          },
-          {
-            ...runOptions,
-            stepRunId: stepRun.id,
-            onWorkerStart,
-            hostWorkspaceDir: workspaceHostDir,
-          },
-        );
+        agentRun = runRoomResolve(deps.pi, resolveInput, roomOptions);
       } else if (topology === 'stages') {
-        result = await runStagedResolve(
-          deps.pi,
-          {
-            containerName,
-            execution: refinedExecution as ExecutionPlan,
-            maxExecutors,
-            ...promptContext,
-            refinedPlan,
-          },
-          {
-            ...runOptions,
-            stepRunId: stepRun.id,
-            onWorkerStart,
-            hostWorkspaceDir: workspaceHostDir,
-          },
-        );
+        agentRun = runStagedResolve(deps.pi, resolveInput, roomOptions);
       } else {
-        result = await withAgentTimeout(
+        agentRun = withAgentTimeout(
           deps.pi.run(
             containerName,
             buildStepPrompt({ step, ...promptContext, refinedPlan }),
-            { ...runOptions, stepRunId: stepRun.id },
+            {
+              ...soloStepOptions,
+              stepRunId: stepRun.id,
+              sessionId: SessionAddress.forStepRun(stepRun.id).toString(),
+            },
           ),
           agentTimeoutMs,
           `${step} agent`,
         );
       }
+      result = await withAgentStallGuard(agentRun, {
+        stallMs: agentStallMs,
+        label: `${step} agent`,
+        activity: () => stepActivity,
+        recover: stallRecoveries({
+          control: deps.control,
+          target: iterationTarget(iteration.id),
+          graceMs: agentStallMs,
+        }),
+        // A silent agent is still alive: cancel it instead of leaving the
+        // process behind a rejected promise. Clear the retry loop first —
+        // a plain abort does not stop an in-flight auto-retry.
+        onStall: () => {
+          void deps.control?.send(iterationTarget(iteration.id), {
+            type: 'abort_retry',
+          });
+          deps.control?.abortByIteration(iteration.id);
+        },
+      });
     } catch (error) {
       // Падение/зависание pi-агента (spawn ENOENT, timeout, child error,
       // любой reject). Причину не глотаем: пишем в stderr step_output и в
@@ -1031,8 +1153,23 @@ export async function runIteration(
     // `result.report` всегда null, поэтому отдаём приоритет файлу
     // `.issue-step-result.json`, а `result.report` — фолбек для in-memory
     // реализаций (тесты, не-RPC раннеры).
-    const fileReport = await readStepReportFile(workspaceHostDir);
-    const report = fileReport ?? result.report;
+    // Only a report this step wrote counts; a stale one is another step's verdict.
+    const source = await readStepReportFile(workspaceHostDir, reportsBefore);
+    const report = source?.report ?? result.report;
+    const contractPath = join(workspaceHostDir, STEP_REPORT_FILE);
+    if (source !== null && source.path !== contractPath) {
+      const message = `step result written to ${source.path} instead of ${contractPath} (the contract path)`;
+      console.error(`workflow: step '${step}' (${stepRun.id}): ${message}`);
+      deps.sse.publish(
+        streamEvent(issue.id, iteration.id, stepRun.id, 'system', message),
+      );
+    } else if (source === null && result.report === null) {
+      const message = `no fresh ${STEP_REPORT_FILE} from this step — status comes from the agent exit code (${result.exitCode})`;
+      console.error(`workflow: step '${step}' (${stepRun.id}): ${message}`);
+      deps.sse.publish(
+        streamEvent(issue.id, iteration.id, stepRun.id, 'system', message),
+      );
+    }
 
     // abort — отдельный терминальный статус шага (не failed): никакого retry
     // и следующих шагов, вся итерация переводится в cancelled.

@@ -122,7 +122,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS iterations_issue_id_number_unique
 
 CREATE TABLE IF NOT EXISTS step_runs (
   id TEXT PRIMARY KEY,
-  iteration_id TEXT NOT NULL REFERENCES iterations(id) ON DELETE CASCADE,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  iteration_id TEXT REFERENCES iterations(id) ON DELETE CASCADE,
   step TEXT NOT NULL,
   attempt INTEGER NOT NULL,
   status TEXT NOT NULL,
@@ -133,9 +134,8 @@ CREATE TABLE IF NOT EXISTS step_runs (
   updated_at TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS step_runs_iteration_id_step_attempt_unique
-  ON step_runs(iteration_id, step, attempt);
-
+-- Индексы step_runs создаются после миграции (см. createDb): legacy-таблица
+-- без колонки issue_id уронила бы CREATE INDEX.
 CREATE TABLE IF NOT EXISTS question_answers (
   id TEXT PRIMARY KEY,
   iteration_id TEXT NOT NULL REFERENCES iterations(id) ON DELETE CASCADE,
@@ -413,6 +413,65 @@ function ensureStepOutputColumns(sqlite: Database.Database): void {
   }
 }
 
+/**
+ * Прогоны вне итерации (`issue_id` + nullable `iteration_id`).
+ *
+ * SQLite не умеет снять NOT NULL с колонки, поэтому старую таблицу приходится
+ * пересобирать. `foreign_keys` на время пересборки выключается: `step_outputs`
+ * ссылается на `step_runs` с ON DELETE CASCADE, и `DROP TABLE` иначе снёс бы
+ * отчёты всех шагов. `issue_id` для старых строк берётся из их итерации.
+ */
+function ensureStepRunIssueColumn(sqlite: Database.Database): void {
+  const columns = sqlite.pragma('table_info(step_runs)') as {
+    name: string;
+    notnull: number;
+  }[];
+  const byName = new Map(columns.map((column) => [column.name, column]));
+  const iterationNotNull = byName.get('iteration_id')?.notnull === 1;
+  if (byName.has('issue_id') && !iterationNotNull) return;
+
+  sqlite.pragma('foreign_keys = OFF');
+  try {
+    sqlite.exec('BEGIN');
+    sqlite.exec(`
+CREATE TABLE step_runs_rebuilt (
+  id TEXT PRIMARY KEY,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  iteration_id TEXT REFERENCES iterations(id) ON DELETE CASCADE,
+  step TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  context TEXT NOT NULL,
+  feedback TEXT,
+  events TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`);
+    // 
+    sqlite.exec(`
+INSERT INTO step_runs_rebuilt
+  (id, issue_id, iteration_id, step, attempt, status, context, feedback, events, created_at, updated_at)
+SELECT s.id, COALESCE(i.issue_id, ''), s.iteration_id, s.step, s.attempt, s.status, s.context, s.feedback,
+       COALESCE(s.events, '[]'), s.created_at, s.updated_at
+FROM step_runs s LEFT JOIN iterations i ON i.id = s.iteration_id`);
+    sqlite.exec('DROP TABLE step_runs');
+    sqlite.exec('ALTER TABLE step_runs_rebuilt RENAME TO step_runs');
+    sqlite.exec('DROP INDEX IF EXISTS step_runs_iteration_id_step_attempt_unique');
+    sqlite.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS step_runs_iteration_step_attempt_unique ON step_runs(iteration_id, step, attempt) WHERE iteration_id IS NOT NULL',
+    );
+    sqlite.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS step_runs_issue_step_attempt_unique ON step_runs(issue_id, step, attempt) WHERE iteration_id IS NULL',
+    );
+    sqlite.exec('COMMIT');
+  } catch (error) {
+    sqlite.exec('ROLLBACK');
+    throw error;
+  } finally {
+    sqlite.pragma('foreign_keys = ON');
+  }
+}
+
 export function createDb(file: string = DEFAULT_DB_PATH): Db {
   if (file !== ':memory:') {
     mkdirSync(dirname(file), { recursive: true });
@@ -425,6 +484,14 @@ export function createDb(file: string = DEFAULT_DB_PATH): Db {
   ensureIssueColumns(sqlite);
   ensureIssueRepositoryColumns(sqlite);
   ensureStepRunColumns(sqlite);
+  ensureStepRunIssueColumn(sqlite);
+  sqlite.exec(`
+DROP INDEX IF EXISTS step_runs_iteration_id_step_attempt_unique;
+CREATE UNIQUE INDEX IF NOT EXISTS step_runs_iteration_step_attempt_unique
+  ON step_runs(iteration_id, step, attempt) WHERE iteration_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS step_runs_issue_step_attempt_unique
+  ON step_runs(issue_id, step, attempt) WHERE iteration_id IS NULL;
+`);
   ensureStepOutputColumns(sqlite);
   ensureRepositoriesColumns(sqlite);
   ensureSettingsColumns(sqlite);

@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionEvent, SSEEvent, StepExecutionResult } from '@issue-resolver/shared';
 import { FakePiRunner, type PiRunner } from '../src/pi/runner';
 import { RpcPiRunner } from '../src/pi/rpc-runner';
-import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
+import {
+  InMemoryStepSessionRegistry,
+  iterationTarget,
+} from '../src/pi/session-registry';
 import { InMemorySseHub } from '../src/sse/hub';
 
 const sseEvent = (iterationId: string, data = 'chunk'): SSEEvent => ({
@@ -169,14 +172,14 @@ describe('FakePiRunner', () => {
     const registry = new InMemoryStepSessionRegistry();
 
     // Issue-уровневый отчёт: итерации нет, адрес = синтетический stepRunId.
-    await runner.run('c', 'p', { registry, stepRunId: 'issue-1/report' });
+    await runner.run('c', 'p', { registry, stepRunId: 'issue.issue-1.report' });
 
-    expect(registry.hasByIteration('issue-1/report')).toBe(true);
+    expect(registry.hasByIteration('issue.issue-1.report')).toBe(true);
     expect(
-      registry.promptByIteration('issue-1/report', 'допиши вывод'),
+      registry.prompt(iterationTarget('issue.issue-1.report'), 'допиши вывод'),
     ).not.toBeNull();
     expect(runner.controlCalls).toEqual([
-      { kind: 'prompt', stepRunId: 'issue-1/report', text: 'допиши вывод' },
+      { kind: 'prompt', stepRunId: 'issue.issue-1.report', text: 'допиши вывод' },
     ]);
   });
 });

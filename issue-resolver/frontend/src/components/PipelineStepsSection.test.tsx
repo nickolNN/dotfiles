@@ -51,17 +51,31 @@ function renderSection(overrides: Partial<PipelineStepsSectionProps> = {}) {
 describe('PipelineStepsSection', () => {
   afterEach(cleanup);
 
-  it('resolve всегда отмечен и задизейблен, остальные — по selectedSteps', () => {
-    renderSection({ selectedSteps: ['refine'] });
-
-    const resolve = screen.getByRole('checkbox', {
-      name: 'Исполнение (всегда)',
+  it('resolve отмечен и снимается как любой другой шаг', () => {
+    const { onToggleStep } = renderSection({
+      selectedSteps: ['resolve', 'refine'],
     });
+
+    const resolve = screen.getByRole('checkbox', { name: 'Исполнение' });
     expect(resolve).toBeChecked();
-    expect(resolve).toBeDisabled();
+    expect(resolve).not.toBeDisabled();
+
+    fireEvent.click(resolve);
+    expect(onToggleStep).toHaveBeenCalledWith('resolve');
 
     expect(screen.getByRole('checkbox', { name: 'Планирование' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Тест' })).not.toBeChecked();
+  });
+
+  it('без resolve в selectedSteps: галочка снята, селектора модели нет', () => {
+    renderSection({ selectedSteps: ['refine'] });
+
+    expect(
+      screen.getByRole('checkbox', { name: 'Исполнение' }),
+    ).not.toBeChecked();
+    expect(
+      screen.queryByLabelText('Модель для шага Исполнение'),
+    ).toBeNull();
   });
 
   it('клик по шагу зовёт onToggleStep', () => {

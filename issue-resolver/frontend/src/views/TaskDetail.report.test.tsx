@@ -10,6 +10,18 @@ import {
 import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 
+/** Neither report half on disk. */
+const noArtifact = { present: false, bytes: 0, mtime: null };
+
+/** A live report run: fresh heartbeat, nothing written yet. */
+const runningStatus = () =>
+  jsonResponse({
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    artifacts: { md: noArtifact, html: noArtifact },
+  });
+
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
     id: 'issue-1',
@@ -97,6 +109,10 @@ function stubFetch(options: {
   reportStatus?: () => Response;
   onReportPost?: () => Response;
   artifact?: Parameters<typeof headResponse>[0];
+  /** Тело GET /result; по умолчанию — html-заглушка. */
+  resultBody?: string;
+  /** Последний прогон отчёта (`GET /report/run`); по умолчанию — 404. */
+  reportRun?: unknown;
   /** Снапшот GET /iterations/:id/control (по умолчанию — нет сессии). */
   controlSnapshot?: unknown;
 } = {}) {
@@ -116,7 +132,7 @@ function stubFetch(options: {
       return Promise.resolve(
         options.onReportPost
           ? options.onReportPost()
-          : jsonResponse({ ok: true, reportRunId: 'issue-1/report' }),
+          : jsonResponse({ ok: true, reportRunId: 'issue.issue-1.report' }),
       );
     }
     if (url.endsWith('/control') && init?.method === 'POST') {
@@ -131,11 +147,24 @@ function stubFetch(options: {
     if (url.endsWith('/step-runs')) {
       return Promise.resolve(jsonResponse([]));
     }
+    if (url.endsWith('/report/run')) {
+      return Promise.resolve(
+        options.reportRun
+          ? jsonResponse(options.reportRun)
+          : ({
+              ok: false,
+              status: 404,
+              json: async () => ({ error: 'report run not found' }),
+            } as Response),
+      );
+    }
     if (url.endsWith('/result') && init?.method === 'HEAD') {
       return Promise.resolve(headResponse(options.artifact));
     }
     if (url.endsWith('/result')) {
-      return Promise.resolve(textResponse('<html>report</html>'));
+      return Promise.resolve(
+        textResponse(options.resultBody ?? '<html>report</html>'),
+      );
     }
     if (url.endsWith('/iterations')) {
       return Promise.resolve(jsonResponse([iteration]));
@@ -153,7 +182,7 @@ function emitReportLog(text: string, stream: 'stdout' | 'stderr' = 'stdout') {
     FakeEventSource.instances[0].emit({
       type: 'log',
       issueId: 'issue-1',
-      stepRunId: 'issue-1/report',
+      stepRunId: 'issue.issue-1.report',
       stream,
       data: text,
       ts: '2026-10-09T00:00:00.000Z',
@@ -196,17 +225,20 @@ describe('TaskDetail — секция «Отчёт»', () => {
   });
 
   it('клик «Обновить» → POST /report + «Генерируется» с SessionView', async () => {
-    const fetchMock = stubFetch();
+    const fetchMock = stubFetch({ reportStatus: runningStatus });
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
     fireEvent.click(screen.getByTestId('refresh-report'));
 
-    // Кнопка уходит в disabled, показывается индикатор генерации.
     await waitFor(() =>
       expect(screen.getByTestId('report-generating')).toBeInTheDocument(),
     );
-    expect(screen.getByTestId('refresh-report')).toBeDisabled();
+    // A live run does not lock the retry button: the server answers 409 and the
+    // user keeps the ability to retry a run that silently died.
+    await waitFor(() =>
+      expect(screen.getByTestId('refresh-report')).toBeEnabled(),
+    );
 
     // POST ушёл на report-роут.
     const posted = fetchMock.mock.calls.some(
@@ -223,7 +255,7 @@ describe('TaskDetail — секция «Отчёт»', () => {
   });
 
   it('живой вывод генерации показан в шапке задачи', async () => {
-    stubFetch();
+    stubFetch({ reportStatus: runningStatus });
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
@@ -237,21 +269,55 @@ describe('TaskDetail — секция «Отчёт»', () => {
     expect(session.closest('header')).not.toBeNull();
   });
 
-  it('report.md готов → «✓ Сгенерирован» + MD', async () => {
+  it('идёт прогон → «Обновить» доступна, а не заблокирована статусом', async () => {
+    stubFetch({ reportStatus: runningStatus });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    expect(await screen.findByTestId('report-generating')).toBeInTheDocument();
+    expect(screen.getByTestId('refresh-report')).toBeEnabled();
+    expect(screen.queryByTestId('report-stale')).toBeNull();
+  });
+
+  it('прогон без сердцебиения → «нет активности» и повтор разрешён', async () => {
     stubFetch({
       reportStatus: () =>
         jsonResponse({
-          status: 'success',
-          lastRunAt: new Date().toISOString(),
+          status: 'running',
+          startedAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+          // Heartbeat stopped 5 minutes ago: the run is dead, not busy.
+          updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+          artifacts: { md: noArtifact, html: noArtifact },
         }),
     });
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    await screen.findByTestId('report-ready');
-    expect(screen.getByTestId('report-ready')).toHaveTextContent(
-      'Сгенерирован',
+    const stale = await screen.findByTestId('report-stale');
+    expect(stale).toHaveTextContent('нет активности 5 мин');
+    expect(screen.getByTestId('refresh-report')).toBeEnabled();
+  });
+
+  it('report.md готов, html нет → «Только markdown» + MD', async () => {
+    stubFetch({
+      reportStatus: () =>
+        jsonResponse({
+          status: 'success',
+          lastRunAt: new Date().toISOString(),
+          artifacts: {
+            md: { present: true, bytes: 100, mtime: '2026-10-27T14:01:42Z' },
+            html: { present: false, bytes: 0, mtime: null },
+          },
+        }),
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    await screen.findByTestId('report-md-only');
+    expect(screen.getByTestId('report-md-only')).toHaveTextContent(
+      'Только markdown',
     );
+    expect(screen.queryByTestId('report-ready')).toBeNull();
     expect(screen.getByTestId('open-result')).toHaveTextContent(
       'Показать отчёт',
     );
@@ -268,6 +334,10 @@ describe('TaskDetail — секция «Отчёт»', () => {
         jsonResponse({
           status: 'success',
           lastRunAt: new Date().toISOString(),
+          artifacts: {
+            md: { present: true, bytes: 21, mtime: '2026-10-27T14:01:42Z' },
+            html: { present: false, bytes: 0, mtime: null },
+          },
           warnings: [
             'model-like id leaked into report.md',
             'anchored on previous report: reports/x/report.md',
@@ -288,6 +358,10 @@ describe('TaskDetail — секция «Отчёт»', () => {
         jsonResponse({
           status: 'success',
           lastRunAt: new Date().toISOString(),
+          artifacts: {
+            md: { present: true, bytes: 21, mtime: '2026-10-27T14:01:42Z' },
+            html: { present: false, bytes: 0, mtime: null },
+          },
           observedModel: 'provider1/some-model',
         }),
     });
@@ -328,6 +402,30 @@ describe('TaskDetail — секция «Отчёт»', () => {
 
     await clickOpenReport();
     expect(await screen.findByTestId('result-missing')).toBeInTheDocument();
+    expect(screen.queryByTestId('result-html')).toBeNull();
+  });
+
+  it('HEAD text/markdown → markdown рендерится в модалке, iframe нет', async () => {
+    stubFetch({
+      reportStatus: () =>
+        jsonResponse({
+          status: 'success',
+          lastRunAt: new Date().toISOString(),
+        }),
+      artifact: {
+        contentType: 'text/markdown; charset=utf-8',
+        source: 'root',
+        mtime: '2026-10-23T08:21:07.878Z',
+      },
+      resultBody: '# Отчёт\n\nТело отчёта из report.md.\n',
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    await clickOpenReport();
+    expect(await screen.findByTestId('result-not-html')).toBeInTheDocument();
+    const markdown = await screen.findByTestId('result-markdown');
+    expect(markdown.textContent).toContain('Тело отчёта из report.md.');
     expect(screen.queryByTestId('result-html')).toBeNull();
   });
 
@@ -425,10 +523,10 @@ function emitReportStats() {
     FakeEventSource.instances[0].emit({
       type: 'step_event',
       issueId: 'issue-1',
-      stepRunId: 'issue-1/report',
+      stepRunId: 'issue.issue-1.report',
       stream: 'system',
       data: JSON.stringify({
-        stepRunId: 'issue-1/report',
+        stepRunId: 'issue.issue-1.report',
         event: {
           type: 'stats',
           stats: {
@@ -458,7 +556,7 @@ function emitReportStats() {
 
 describe('TaskDetail — контроль и статистика report-агента', () => {
   it('stats-эмит → строка статистики в секции отчёта', async () => {
-    stubFetch();
+    stubFetch({ reportStatus: runningStatus });
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
@@ -472,7 +570,10 @@ describe('TaskDetail — контроль и статистика report-аге�
   });
 
   it('«Развернуть» открывает модалку с живым выводом и контролем', async () => {
-    stubFetch({ controlSnapshot: makeControlSnapshot() });
+    stubFetch({
+      controlSnapshot: makeControlSnapshot(),
+      reportStatus: runningStatus,
+    });
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
@@ -490,5 +591,115 @@ describe('TaskDetail — контроль и статистика report-аге�
     expect(await screen.findByTestId('live-controls')).toBeInTheDocument();
     expect(screen.getByTestId('control-model')).toBeInTheDocument();
     expect(screen.getByTestId('control-thinking')).toBeInTheDocument();
+  });
+});
+/**
+ * Исход прогона отчёта — из БД (`/report/status` + `/report/run`), а не из
+ * флагов в памяти. Каждый кейс ловит ровно ту ложь, что висела в UI: «успех по
+ * умолчанию», «готово без html» и «сессия пуста после перезагрузки».
+ */
+describe('TaskDetail — исход прогона отчёта', () => {
+  const absent = { present: false, bytes: 0, mtime: null };
+
+  const makeReportRun = (overrides: Record<string, unknown> = {}) => ({
+    id: 'report-run-1',
+    issue_id: 'issue-1',
+    iteration_id: null,
+    step: 'report',
+    attempt: 1,
+    status: 'failed',
+    context: 'manual',
+    feedback: 'report failed: report.md отсутствует после прогона',
+    created_at: '2026-10-27T15:42:19.000Z',
+    updated_at: '2026-10-27T16:01:09.000Z',
+    stdout: '',
+    stderr: '',
+    events: [{ type: 'text', text: 'строка из сохранённой сессии' }],
+    stats: null,
+    report: null,
+    screenshots_dir: null,
+    ...overrides,
+  });
+
+  it('прогон упал → «✕ Прогон упал» + причина, а не зелёный успех', async () => {
+    stubFetch({
+      reportStatus: () =>
+        jsonResponse({
+          status: 'failed',
+          feedback: 'report failed: report.md отсутствует после прогона',
+          artifacts: { md: absent, html: absent },
+        }),
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    expect(await screen.findByTestId('report-failed')).toBeInTheDocument();
+    expect(screen.getByTestId('report-feedback')).toHaveTextContent(
+      'report.md отсутствует',
+    );
+    expect(screen.queryByTestId('report-ready')).toBeNull();
+    expect(screen.queryByTestId('report-md-only')).toBeNull();
+  });
+
+  it('прогон прерван, но отчёт есть → бейдж «Отчёт есть» и MD доступен', async () => {
+    stubFetch({
+      reportStatus: () =>
+        jsonResponse({
+          status: 'failed',
+          feedback: 'interrupted by server restart',
+          artifacts: {
+            md: { present: true, bytes: 18259, mtime: '2026-10-28T07:07:41Z' },
+            html: { present: true, bytes: 1208650, mtime: '2026-10-28T07:34:40Z' },
+          },
+        }),
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    // The run died, but the artifact outlives it: a red "failed" badge plus a
+    // hidden download would hide a perfectly usable report.
+    expect(await screen.findByTestId('report-failed-with-artifacts')).toHaveTextContent(
+      'Отчёт есть',
+    );
+    expect(screen.getByTestId('report-md')).toBeInTheDocument();
+    expect(screen.queryByTestId('report-failed')).toBeNull();
+  });
+
+  it('есть и html, и md → «✓ Готов: HTML + MD»', async () => {
+    stubFetch({
+      reportStatus: () =>
+        jsonResponse({
+          status: 'success',
+          artifacts: {
+            md: { present: true, bytes: 21, mtime: '2026-10-27T14:01:42Z' },
+            html: { present: true, bytes: 42, mtime: '2026-10-27T14:02:00Z' },
+          },
+        }),
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const ready = await screen.findByTestId('report-ready');
+    expect(ready).toHaveTextContent('HTML + MD');
+  });
+
+  it('сохранённый прогон поднимает сессию из БД после перезагрузки', async () => {
+    stubFetch({
+      reportStatus: () =>
+        jsonResponse({
+          status: 'failed',
+          feedback: 'report failed: report.md отсутствует после прогона',
+          startedAt: '2026-10-27T15:42:19.000Z',
+          artifacts: { md: absent, html: absent },
+        }),
+      reportRun: makeReportRun(),
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const session = await screen.findByTestId('report-session');
+    expect(session).toHaveTextContent('строка из сохранённой сессии');
+    // Кнопка «Вывод» есть и после прогона, а не только во время него.
+    expect(await screen.findByTestId('report-expand')).toBeInTheDocument();
   });
 });

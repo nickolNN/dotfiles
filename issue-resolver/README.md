@@ -99,7 +99,15 @@ git-кэш originals — в `<DATA_DIR>/originals`. Без него работа
 `agent-memory`). Таймаут одного pi-агента шага —
 `ISSUE_RESOLVER_RESOLVE_AGENT_TIMEOUT_MS` (мс, дефолт 90 мин; значения меньше
 60с поднимаются до 60с): прокидывается в `RpcPiRunner` (reject + SIGKILL) и
-дополнительно страхуется внешним таймером движка. Таймаут pi-агента разовой
+дополнительно страхуется внешним таймером движка. Отдельно работает сторож
+тишины — `ISSUE_RESOLVER_AGENT_STALL_TIMEOUT_MS` (мс, дефолт 15 мин; минимум
+30с): если за это время от агента не пришло ни одного чанка stdout/stderr или
+события сессии, сторож сначала пробует разбудить агента, а не убить его:
+отправляет `follow_up`-нудж с просьбой доложить одной строкой, даёт ещё окно
+тишины, затем шлёт `compact` — и только после этого снимает прогон как зависший
+(`<step> agent stalled: no output for Nms (tried: nudge, compact)`), не дожидаясь
+трёхчасового потолка. Счётчик активности питают те же колбэки, что публикуют
+SSE. Таймаут pi-агента разовой
 подготовки — `ISSUE_RESOLVER_DEVOPS_TIMEOUT_MS` (мс, дефолт 90 мин; тот
 же минимум 60с; если новая переменная не задана, читается устаревшее имя —
 `LEGACY_DEVOPS_TIMEOUT_ENV`): прокидывается в `PiDevOpsAgent` через
@@ -242,8 +250,12 @@ allow-list enforcement'ится на мутирующих методах (`POST`
 `/issues/:id/result` (inline-предпросмотр) и `/issues/:id/result/download`.
 
 Эффективный конвейер берётся напрямую из `pipeline_steps` (при создании задачи)
-/ `steps` (при новой итерации); дефолт — `['refine', 'resolve']`. `resolve`
-гарантированно присутствует. Шаги `review` и `test` выбираются НЕЗАВИСИМО друг
+/ `steps` (при новой итерации); дефолт — `['refine', 'resolve']`. `resolve` НЕ
+добавляется принудительно: галочка «Исполнение» снимается, поэтому итерация
+может состоять из одного `pr` (публикация уже сделанной работы) или, например,
+`['review', 'pr']`. Пустой выбор отвергается — `400` на `pipeline_steps: []` и
+`steps: []` (UI без галочек не даёт стартовать), а не подменяется дефолтом.
+Шаги `review` и `test` выбираются НЕЗАВИСИМО друг
 от друга (можно включить только `review`, только `test`, оба или ни одного) —
 они просто перечисляются в `pipeline_steps`/`steps`. Флаг `is_review_need`
 БОЛЬШЕ НЕ вставляет шаги: это только метаданные на итерации (при этом
@@ -448,7 +460,12 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   Каждый шаг пишет в рабочую папку задачи `.issue-step-result.json` (`{ status:
   pass|fail|blocked, summary, scenarios, findings }`), а движок читает его
   после шага (`parseStepReport`) и мапит в статус: `pass → success`,
-  `fail → failed`, `blocked → needs_input`. Если файла нет (или он битый/не
+  `fail → failed`, `blocked → needs_input`. Файл принимается только если он
+  записан **во время** шага: движок снимает mtime кандидатов перед запуском,
+  поэтому незатронутый файл — вердикт предыдущего шага, а не этого. Копия,
+  оставшаяся в клоне репозитория (`<workspace>/<repo>/`), читается как
+  fallback (корень рабочей папки приоритетнее) и видна в логе предупреждением.
+  Если файла нет (или он битый/не
   читается), статус определяется по exit-коду: exit 0 → `success` (отчёт при
   этом хранится пустой строкой, не `"null"`), иначе `failed` — прогон не падает.
 - **Шаги `review` и `test`** (оба необязательны и независимы): `review` —
@@ -478,7 +495,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   событие со `status: 'error'` и
   `message` и `iteration_status` со `status: 'failed'` + `error`. Живой
   stdout/stderr DevOps-агента идёт обычными SSE `log`-событиями с
-  синтетическим `stepRunId = '{issueId}/devops'` (`stream` — `stdout`/`stderr`,
+  адресом `issue.<issueId>.devops` (`stream` — `stdout`/`stderr`,
   `data` — чанк вывода); UI конвертирует чанки в `text`-события и рендерит их
   тем же `SessionView`, что и шаги, в скроллируемом окне ~300px под панелью
   подготовки. Пару
@@ -519,7 +536,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   narratives `iterations/<n>/.<step>.md` всех итераций (плюс `report-<number>.md`
   как фолбек и `git diff --stat` рабочей копии). Прогон виден в SSE: на старте
   публикуется `step_status` `running`, на финише — терминальный `success`/
-  `failed` по `stepRunId = '{issueId}/report'` (тот же ключ, что несут
+  `failed` по адресу `issue.<issueId>.report` (тот же ключ, что несут
   `log`/`step_event` и `reportRunId` в `POST /issues/:id/report`); ошибка
   агента не тонет молча — старт/итог/длительность пишутся в серверный лог
   (`report agent started|finished: … trigger=post-iteration|manual [origin=…]
@@ -530,31 +547,55 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   Перед спавном прошлые `report.md`/`report.html` **архивируются** в
   `<workspace>/<issueId>/reports/<ISO-ts-Z>/`, чтобы агент писал отчёт заново,
   а не «дописывал» старый (сбой архивации → агент не запускается, причина в
-  ответе `500` / серверном логе). Корень на время прогона пуст, поэтому
+  ответе `500` / серверном логе). Повторный запуск во время активного прогона
+  → `409 { error: 'report run already active' }` — без второй архивации, иначе
+  готовый `report.md` исчезал бы из корня, пока первый агент ещё пишет;
+  post-iteration прогон в это же окно тоже пропускается (в логе
+  `report agent skipped: run already active`). Корень на время прогона пуст, поэтому
   `GET /result` (и `/result/md`, `/download`) отдаёт артефакт из снапшота
   последней итерации, но помечает это заголовками `x-artifact-source:
   iteration-snapshot` (+ `x-artifact-mtime`); из корня — `x-artifact-source:
   root`. Честный `404` — только когда нет ни в корне, ни в снапшоте. `GET
-  /issues/:id/report/status` во время прогона отвечает `{"status":"running"}`,
-  после успеха — `success`, если последний прогон упал и корень пуст —
-  `{"status":"failed"}`, а **`idle` теперь означает «прогонов вообще не было»,
-  а не «нет файлов»** (прежняя семантика и путала UI при пустом корне; исходы
-  прогонов process-local — после рестарта backend `failed` сбрасывается в
-  `idle`, пока не случится новый прогон; `lastRunAt` — mtime **первого** из
-  двух файлов в формате ISO-Z **без миллисекунд** (один формат с
-  `x-artifact-mtime`), а `report.md` пишется раньше `report.html`, так что это
-  НЕ
-  момент готовности HTML; готовность гарантирует лишь то, что прогон уже
-  завершён); так
-  UI отличает «генерируется», «упал» и «показана предыдущая версия» от
-  устаревшего вранья. Агент пишет `report.md` **раньше** `report.html` (окно
+  /issues/:id/report/status` отвечает статусом **последнего прогона из БД**
+  (строка `step_runs` с `iteration_id = NULL`), а не наличием файла:
+  `running` — прогон идёт, `success` — прогон завершился успешно и на диске
+  есть `report.md`, `failed` — прогон упал **или не создал ни одного
+  артефакта** (типичный случай: ответ модели упёрся в лимит выхода, exit code
+  0, файлов нет), `idle` — прогонов не было. Поля ответа: `runId`,
+  `runStatus`, `startedAt`, `finishedAt`, `feedback` (причина падения либо
+  «report.html отсутствует»), `artifacts{md,html}` (`present/bytes/mtime`),
+  `lastRunAt` (mtime `report.md`, ISO-Z без миллисекунд — один формат с
+  `x-artifact-mtime`), плюс process-local `observedModel`/`warnings`. Исходы
+  больше не живут только в памяти: после рестарта backend статус не
+  сбрасывается в `idle`. `GET /issues/:id/report/run` отдаёт последний прогон
+  целиком (`StepRunWithLog`: события сессии, stdout/stderr, stats) — UI
+  поднимает из него панель вывода после перезагрузки страницы.
+- **Прогон отчёта вне итерации**: строка `step_runs` с `issue_id` и
+  `iteration_id = NULL`, `step = 'report'`, `attempt` = число прошлых
+  прогонов + 1; на финише — `step_outputs` с сессией и статистикой. Поэтому
+  ручной запуск не требует фиктивной итерации, а тот же приём готов для шага
+  `pr`. Схема: `iteration_id` больше не `NOT NULL`, добавлен `issue_id`;
+  уникальность держат частичные индексы
+  `step_runs_iteration_step_attempt_unique (WHERE iteration_id IS NOT NULL)` и
+  `step_runs_issue_step_attempt_unique (WHERE iteration_id IS NULL)` — в SQLite
+  NULL-ы в UNIQUE не конфликтуют, один общий индекс дубли не ловит. Миграция
+  пересобирает таблицу (`client.ts` → `ensureStepRunIssueColumn`): SQLite не
+  умеет снять `NOT NULL`, а `DROP TABLE` при включённых FK снёс бы
+  `step_outputs` каскадом, поэтому пересборка идёт при `foreign_keys = OFF`,
+  `issue_id` бэкфиллится из `iterations`, индексы создаются после миграции.
+  Готовность отчёта для UI: `success` + `artifacts.html.present` → «HTML + MD»,
+  `success` без html → «Только markdown» (модалка рендерит markdown сама),
+  `failed` → «✕ Прогон упал» с причиной, `running` → «⏳ Генерируется · N мин».
+  Агент пишет `report.md` **раньше** `report.html` (окно
   обычно минуты): пока html нет, корень содержит только md, и `/result` отдаёт
   прошлый HTML из снапшота с пометкой `iteration-snapshot`, а не markdown — вот
   почему важно смотреть и на `content-type`, и на `x-artifact-source`. После
   успеха новый отчёт попадает и в снапшот итерации.
 - **Управление report-агентом как шагом**: живая report-сессия
-  регистрируется в реестре под синтетическим `stepRunId = '{issueId}/report'`
-  (итерации у неё нет, поэтому группирующий ключ — сам адрес); control-роуты
+  регистрируется в реестре под адресом `issue.<issueId>.report`
+  (SSE и control-роуты работают с этим id), но сам прогон живёт в БД обычной
+  строкой `step_runs` — поэтому исход, длительность и вся сессия видны после
+  перезагрузки и рестарта. control-роуты
   `/iterations/:id/{control,prompt,abort,message}` принимают этот id
   (URL-encoded) и обслуживают отчёт теми же командами, что шаги (модель,
   thinking, compact, clear-queue, abort, отправка сообщения). UI секции
@@ -681,8 +722,8 @@ Node-reverse-proxy (node в образе всегда), без попыток е
     свой итог (`memory_write`, теги `#issue-resolver`/`[[stage-N]]`).
   - иначе (нет плана, битый, `single`, < 2 валидных этапов) — один агент.
   В `room`/`stages` у каждого агента свой `RoomAgent.id` (`<stepRunId>` у
-  финального координатора, `<stepRunId>/worker/<i>` у исполнителей комнаты,
-  `<stepRunId>/stage/<s>/worker/<w>` и `<stepRunId>/stage/<s>/coordinator` у
+  финального координатора, `run.<stepRunId>.w<i>` у исполнителей комнаты,
+  `run.<stepRunId>.s<s>.w<w>` и `run.<stepRunId>.s<s>.lead` у
   staged-агентов) и отдельный per-agent SSE (`/agents/stream?agentId=`), а
   `RoomAgent` несёт `stage`/`stageName` (staged-режим), `startedAt` (ISO) и
   агрегированные `stats` (токены/cost/context из usage/stats-событий его
@@ -703,6 +744,14 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   (`report.md`/`report.html`, обрезан до ~4000 символов; для `'pr'` документа
   нет). Агент продолжает с этого итога, а не решает задачу заново. Битый JSON
   отчёта/отсутствующий документ деградируют до пометки, не роняя прогон.
+- **Очередь итераций**: у задачи максимум одна `running`, одна `pending` и одна
+  `draft`-итерация. Проверки слотов не зависят от наличия `running`: создание
+  (и `repeat`) при уже стоящей в очереди `pending` или `draft` отвечает `409`
+  (`A pending iteration already exists…` / `A draft iteration already exists…`).
+  Без этого простаивающая задача принимала вторую `pending`, и порядок
+  выполнения расходился с номерами (в реальном прогоне: `#2 → #4 → #3`).
+  `POST /iterations/:id/queue` переводит `draft → pending` и тоже требует
+  свободный слот очереди.
 - **Git/MR**: под каждый репозиторий готовится рабочая копия на базовой ветке
   (bare-кэш originals). `create_mr` задаётся **на репозиторий**; успешный
   `pr`-шаг коммитит (`feat: <title>`), пушит **feature-ветку**
@@ -719,6 +768,14 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   репозиторий не отмечен для MR, публикация не выполняется, а в события шага
   уходит предупреждение (`notice`/`warning`) — шаг больше не остаётся молча
   зелёным без ветки/MR.
+  Коммит идёт с явной identity (`-c user.name/user.email`, дефолт
+  `issue-resolver <issue-resolver@localhost>`, переопределяется
+  `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`): в контейнере нет git-конфига, и без
+  этого `git commit` падал с `Author identity unknown`, ошибка глоталась, а
+  затем пушилась ветка без коммитов и GitHub отвечал `422`. Ошибка коммита
+  (кроме `nothing to commit`) роняет шаг, а тело ответа GitHub/GitLab
+  (например `No commits between …`) попадает в причину сбоя, а не только код
+  `422`.
 - **Jira-enrichment**: если задан `jira_issue_url` без `title`, backend
   подтягивает `summary`/`description` из Jira REST; ошибка Jira деградирует до
   `title = ключ` тикета.
@@ -824,7 +881,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   `<details>` внизу; HTML отдаётся в iframe с
   `sandbox="allow-scripts allow-popups"` (без `allow-same-origin`) — отчёт
   не видит origin приложения и не может писать в его хранилища. Живой
-  `SessionView` с `log`-чанками `stepRunId = '{issueId}/report'` показывается
+  `SessionView` с `log`-чанками адреса `issue.<issueId>.report` показывается
   там же в шапке, пока идёт генерация. Старого блока с сырым `devops_log`
   и его `onDevOpsLog`-колбэка в карточке больше нет.
 - **Английские промпты**: тексты шагов конвейера (`workflow/prompts.ts`) и

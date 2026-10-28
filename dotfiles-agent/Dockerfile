@@ -130,15 +130,30 @@ RUN for pkg in \
   && rm -rf /tmp/go-build*
 
 # ── golangci-lint ─────────────────────────────────────────────────
+# The version comes from the `releases/latest` HTML REDIRECT, never from
+# `api.github.com`. The REST API allows 60 unauthenticated requests per hour
+# per IP — a budget this network shares with every other build — and its 403
+# body arrives as a perfectly normal JSON error, so `jq -r .tag_name` prints
+# `null` and the build dies on a 404 for `.../download/null/...`, which reads
+# like a missing release. GitHub does not rate-limit the plain redirect, and
+# `-f` still fails loudly on 429. The pinned fallback keeps the build working
+# if the lookup ever returns nothing at all.
 RUN . /etc/environment \
-  && GCI_VERSION=$(curl --retry 3 --retry-delay 5 --retry-all-errors -s https://api.github.com/repos/golangci/golangci-lint/releases/latest | jq -r .tag_name) \
+  && GCI_FALLBACK=v2.15.0 \
+  && GCI_VERSION=$(curl --retry 3 --retry-delay 5 --retry-all-errors -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/golangci/golangci-lint/releases/latest | sed 's#.*/tag/##') \
+  && case "$GCI_VERSION" in v[0-9]*) ;; *) echo "WARN: golangci-lint version lookup returned '$GCI_VERSION' — falling back to ${GCI_FALLBACK}" >&2; GCI_VERSION=$GCI_FALLBACK ;; esac \
   && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL "https://github.com/golangci/golangci-lint/releases/download/${GCI_VERSION}/golangci-lint-${GCI_VERSION#v}-linux-${TARGETARCH}.tar.gz" \
   | tar xz -C /usr/local/bin --strip-components=1 "golangci-lint-${GCI_VERSION#v}-linux-${TARGETARCH}/golangci-lint"
 
 # ── lazygit ───────────────────────────────────────────────────────
+# Unlike golangci-lint and Go, lazygit assets use a lowercase GOOS and its own
+# arch names (`x86_64`, not `amd64`).
 RUN . /etc/environment \
-  && LG_VERSION=$(curl --retry 3 --retry-delay 5 --retry-all-errors -s https://api.github.com/repos/jesseduffield/lazygit/releases/latest | jq -r .tag_name | sed 's/^v//') \
-  && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL "https://github.com/jesseduffield/lazygit/releases/download/v${LG_VERSION}/lazygit_${LG_VERSION}_Linux_${TARGETARCH}.tar.gz" \
+  && LG_FALLBACK=0.66.2 \
+  && LG_VERSION=$(curl --retry 3 --retry-delay 5 --retry-all-errors -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/jesseduffield/lazygit/releases/latest | sed 's#.*/tag/v\?##') \
+  && case "$LG_VERSION" in [0-9]*) ;; *) echo "WARN: lazygit version lookup returned '$LG_VERSION' — falling back to ${LG_FALLBACK}" >&2; LG_VERSION=$LG_FALLBACK ;; esac \
+  && case "$TARGETARCH" in amd64) LG_ARCH=x86_64 ;; arm64) LG_ARCH=arm64 ;; *) echo "ERROR: lazygit publishes no asset for TARGETARCH=$TARGETARCH" >&2; exit 1 ;; esac \
+  && curl --retry 3 --retry-delay 5 --retry-all-errors -fsSL "https://github.com/jesseduffield/lazygit/releases/download/v${LG_VERSION}/lazygit_${LG_VERSION}_linux_${LG_ARCH}.tar.gz" \
   | tar xz -C /usr/local/bin lazygit
 
 # ── Neovim (from official releases) ──────────────────────────────
@@ -458,7 +473,10 @@ RUN git config --global protocol.version 2 \
 RUN jq -c '{packages: (.packages // [])}' \
     /home/agent/.pi/agent/settings.json > /tmp/pi-pkg-meta.json
 
-# ── Host config (volatile — kept LAST so edits only bust this layer) ──
+# ── Host config (volatile — kept last among the config layers) ──
+# Digest-based: touching anything under `pi/` changes this COPY's digest, so
+# this layer rebuilds, and so do the few after it (pi-lens posture,
+# trust.json, ENTRYPOINT) — while the heavy installs above stay cached.
 COPY --chown=agent:agent pi/ /tmp/pi-config/
 # GLOBAL_AGENTS.md must NOT land in /tmp/pi-config: `pi/AGENTS.md` is a
 # symlink and `COPY pi/` restores it over any file we put there. Stage it

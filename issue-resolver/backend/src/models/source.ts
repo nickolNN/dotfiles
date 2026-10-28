@@ -93,6 +93,27 @@ function sanitizeModels(input: unknown): ModelDescriptor[] {
   return models;
 }
 
+/**
+ * One pi `Model` object → public descriptor. Shared with the live probe so the
+ * thinking-level rule has exactly one implementation.
+ */
+export function modelDescriptorFromPiModel(
+  record: Record<string, unknown>,
+  provider?: string,
+): ModelDescriptor | null {
+  if (typeof record.id !== 'string' || record.id.length === 0) return null;
+  const model: ModelDescriptor = { id: record.id };
+  const providerName =
+    provider ?? (typeof record.provider === 'string' ? record.provider : undefined);
+  if (providerName) model.provider = providerName;
+  if (typeof record.name === 'string') model.name = record.name;
+  if (typeof record.contextWindow === 'number') {
+    model.contextWindow = record.contextWindow;
+  }
+  model.thinkingLevels = supportedThinkingLevels(record);
+  return model;
+}
+
 /** Расплющивает pi-формат `{ providers: { <name>: { models: [...] } } }`. */
 function modelsFromPiConfig(input: unknown): ModelDescriptor[] {
   if (typeof input !== 'object' || input === null) return [];

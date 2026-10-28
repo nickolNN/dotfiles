@@ -4,6 +4,7 @@ import type {
   PipelineStep,
   SSEEvent,
   SessionEvent,
+  SessionStats,
   StepModels,
   StepRunStatus,
   StepRunWithLog,
@@ -12,6 +13,9 @@ import type {
   ThinkingLevel,
 } from '@issue-resolver/shared';
 import {
+  SESSION_HEARTBEAT_MS,
+  SESSION_STALE_MS,
+  SessionAddress,
   extractIssueKeyFromUrl,
   extractRepoNameFromUrl,
   stepRunStatusFromResult,
@@ -30,6 +34,16 @@ import {
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Db } from '../db/client';
+import { startAgentSession } from '../pi/agent-session';
+import {
+  resolveAgentStallTimeoutMs,
+  withAgentStallGuard,
+} from './timeout';
+import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
+import { soloRunExcludeTools } from '../pi/tool-policy';
+import { stallRecoveries } from '../pi/stall-recovery';
+import { STEP_SYSTEM_APPEND } from './prompts';
+import { capSessionEvents } from '../pi/session-events-cap';
 import { allocateDevPort, releaseIssueDevPorts } from '../port-allocator';
 import { listAttachableRelPaths } from '../db/issue-files.repo';
 import {
@@ -42,13 +56,17 @@ import {
   appendStepRunEvent,
   createStepOutput,
   createStepRun,
+  listStepRunsByIssue,
   listStepRunsWithLog,
   updateStepRun,
 } from '../db/step-runs.repo';
 import type { ContainerController } from '../docker/controller';
 import type { GitPrepareResult, GitService } from '../git/service';
 import type { PiRunner } from '../pi/runner';
-import type { StepSessionRegistry } from '../pi/session-registry';
+import {
+  runTarget,
+  type StepSessionRegistry,
+} from '../pi/session-registry';
 import type { MrClient } from '../pr/mr';
 import type { SseHub } from '../sse/hub';
 import type {
@@ -76,10 +94,22 @@ const DEV_SERVER_SCRIPT = 'DEV_SERVER.sh';
 const INFRA_FILES = ['RUN_INSTRUCTIONS.md', DEV_SERVER_SCRIPT];
 
 /**
- * Прячет инфраструктурные файлы задачи от git: публикация (`pr`) делает
- * `git add -A`, поэтому без exclude `RUN_INSTRUCTIONS.md`/`DEV_SERVER.sh`
- * уехали бы в MR. Пишем в локальный `.git/info/exclude` — он сам в репозиторий
- * не попадает. Идемпотентно и best-effort: сбой не роняет подготовку.
+ * Pipeline bookkeeping of the working-folder root. A step that misses its path
+ * leaves a copy inside the clone, and `git add -A` on publish would ship it in
+ * the MR. Patterns, not names: the worker/stage reports are numbered.
+ */
+const ENGINE_FILES = [
+  '.issue-step-result.json',
+  '.issue-worker-result-*.json',
+  '.issue-stage-*.json',
+];
+
+const EXCLUDED_FROM_MR = [...INFRA_FILES, ...ENGINE_FILES];
+
+/**
+ * Keeps task infra files and engine bookkeeping out of the commit: the publish
+ * step runs `git add -A`. Written to `.git/info/exclude`, which is never
+ * committed. Best-effort and idempotent — a failure must not break prepare.
  */
 function excludeInfraFiles(workspaceDir: string, repoName: string): void {
   const excludePath = join(workspaceDir, repoName, '.git', 'info', 'exclude');
@@ -88,7 +118,7 @@ function excludeInfraFiles(workspaceDir: string, repoName: string): void {
       ? readFileSync(excludePath, 'utf8')
       : '';
     const known = new Set(current.split('\n'));
-    const missing = INFRA_FILES.filter((name) => !known.has(`/${name}`));
+    const missing = EXCLUDED_FROM_MR.filter((name) => !known.has(`/${name}`));
     if (missing.length === 0) return;
     mkdirSync(dirname(excludePath), { recursive: true });
     appendFileSync(
@@ -702,7 +732,10 @@ export async function prepareIssueWorkspace(
         type: 'log',
         issueId: input.issueId,
         iterationId: input.iterationId,
-        stepRunId: `${input.issueId}/devops`,
+        stepRunId: SessionAddress.forIssueRun(
+          input.issueId,
+          'devops',
+        ).toString(),
         stream: 'stdout',
         data: chunk,
         ts: new Date().toISOString(),
@@ -712,7 +745,10 @@ export async function prepareIssueWorkspace(
         type: 'log',
         issueId: input.issueId,
         iterationId: input.iterationId,
-        stepRunId: `${input.issueId}/devops`,
+        stepRunId: SessionAddress.forIssueRun(
+          input.issueId,
+          'devops',
+        ).toString(),
         stream: 'stderr',
         data: chunk,
         ts: new Date().toISOString(),
@@ -936,6 +972,61 @@ function describeReportArtifacts(issueDir: string): string {
 }
 
 /**
+ * Есть ли артефакты отчёта в корне задачи. Это контракт прогона: агент может
+ * выйти с кодом 0 и не написать ничего (упёрся в лимит выхода модели), и тогда
+ * `success` — ложь, которую видит пользователь.
+ */
+function reportArtifactsPresent(issueDir: string): {
+  md: boolean;
+  html: boolean;
+} {
+  const present = (name: string): boolean => {
+    try {
+      return statSync(join(issueDir, name)).size > 0;
+    } catch {
+      return false;
+    }
+  };
+  return { md: present('report.md'), html: present('report.html') };
+}
+
+/**
+ * Финализация прогона отчёта в БД: статус + output-строка с сессией, stdout
+ * и статистикой. Раньше это жило только в памяти, поэтому после перезагрузки
+ * страницы или рестарта backend от прогона не оставалось ничего.
+ */
+async function persistReportRun(
+  db: Db,
+  stepRunId: string,
+  input: {
+    status: StepRunStatus;
+    feedback: string | null;
+    stdout: string;
+    stderr: string;
+    events: SessionEvent[];
+    stats: SessionStats | null;
+    artifacts: { md: boolean; html: boolean };
+  },
+): Promise<void> {
+  try {
+    await updateStepRun(db, stepRunId, {
+      status: input.status,
+      feedback: input.feedback,
+    });
+    await createStepOutput(db, {
+      stepRunId,
+      report: JSON.stringify({ artifacts: input.artifacts }),
+      stdout: input.stdout,
+      stderr: input.stderr,
+      events: input.events,
+      stats: input.stats,
+    });
+  } catch (error) {
+    console.error('report run persistence failed', { stepRunId, error });
+  }
+}
+
+/**
  * Узкие паттерны «похоже на id модели/провайдера» — НЕ зависят от `input.model`.
  * Нужны, чтобы поймать id ЧУЖОЙ модели, перекочевавший из прошлого отчёта
  * (якорение): точный слой знает только модель текущего прогона. Намеренно
@@ -1014,19 +1105,29 @@ function anchoredPreviousReportPath(event: SessionEvent): string | null {
 export type ReportRunDeps = Pick<
   IterationRunDeps,
   'pi' | 'sse' | 'control' | 'workspaceRoot'
->;
+> & {
+  /** Прогон отчёта персистентен: строка `step_runs` + `step_outputs`. */
+  db: Db;
+};
 
 /**
- * Задачи, для которых прямо сейчас идёт report-прогон. Пока флаг есть, корень
- * задачи заархивирован, поэтому `/report/status` отдаёт `running`, а UI
- * показывает живой SessionView вместо «✓ Сгенерирован». `/result` при этом НЕ
- * 404: он отдаёт прошлый HTML из `.iteration-results/<latest>/` с пометкой
- * `x-artifact-source: iteration-snapshot` — предыдущую версию полезнее показать
- * под честной подписью, чем пустоту. Флаг живёт только в этом процессе
- * (in-process only): рестарт backend его обнуляет, так что прогон, оборванный
- * рестартом, не остаётся «вечно активным».
+ * Issues with a report run in flight. While the flag is set the task root is
+ * archived, so `/report/status` reports `running`. `/result` is NOT 404 then:
+ * it serves the previous HTML from `.iteration-results/<latest>/` marked
+ * `x-artifact-source: iteration-snapshot`. In-process only: a restart drops
+ * every flag, so an interrupted run never stays active.
  */
 const activeReportRuns = new Set<string>();
+
+/**
+ * Heartbeat for a report run: while the agent is alive, the `running` row keeps
+ * moving. Without it a dead run is indistinguishable from a live one — the UI
+ * keeps «⏳» and blocks the retry although the process is long gone.
+ */
+export const REPORT_RUN_HEARTBEAT_MS = SESSION_HEARTBEAT_MS;
+
+/** A `running` row without updates for longer than this is dead (see `/report/status`). */
+export const REPORT_RUN_STALE_MS = SESSION_STALE_MS;
 
 /**
  * Исход последнего report-прогона (process-local): нужен `/report/status`,
@@ -1158,16 +1259,15 @@ export interface RunReportAgentInput {
   prompt: string;
   model?: string;
   thinkingLevel?: ThinkingLevel;
-  /** Кто запустил прогон: терминальная итерация или ручной POST /report. */
+  /** Who started the run: a terminal iteration or a manual POST /report. */
   trigger?: 'post-iteration' | 'manual';
-  /** Для ручного запуска — Origin HTTP-запроса (атрибуция в логе). */
+  /** Manual runs only: request origin, for log attribution. */
   origin?: string | null;
 }
 
 /**
- * `step_status` для issue-уровневого report-прогона: та же форма, что у шагов
- * пайплайна (running — JSON `{status, step, model}`, терминал — строка
- * статуса), но без `iterationId` — отчёт живёт на уровне задачи.
+ * `step_status` for an issue-level report run: same shape as pipeline steps,
+ * with `iterationId` omitted because a report lives at the task level.
  */
 function reportStepStatusEvent(
   issueId: string,
@@ -1188,22 +1288,52 @@ function reportStepStatusEvent(
 }
 
 /**
- * Запускает report-агента с единым SSE-контрактом: `step_status` running →
- * терминальный success/failed по stepRunId `{issueId}/report` плюс live
- * log/step_event. Ошибки агента не пробрасываются: они публикуются как
- * `failed` и пишутся в серверный лог, чтобы fire-and-forget прогон не тонул
- * молча. Старт/итог/длительность видны в `/tmp/ir-backend.log`.
+ * Runs the report agent under one SSE contract: `step_status` running, then a
+ * terminal success/failed for the report run, plus live
+ * log/step_event. Agent errors are published as `failed` and logged instead of
+ * thrown: a fire-and-forget run must not fail silently.
  */
 export async function runReportAgent(
   deps: ReportRunDeps,
   input: RunReportAgentInput,
 ): Promise<void> {
-  const reportRunId = `${input.issueId}/report`;
+  const reportRunId = SessionAddress.forIssueRun(
+    input.issueId,
+    'report',
+  ).toString();
 
-  // Архивация — ОДНА точка на оба входа (post-iteration и ручной POST):
-  // агент не должен «дописывать» прошлый отчёт, в корне его больше нет.
-  // Сбой → терминальный `failed` + лог, агента НЕ спавним (старый файл
-  // остаётся в корне — это видимое, но честное состояние).
+  // One run per issue: a second run would archive the root the first run is
+  // still writing into and double the agent work. Refuse before archiving.
+  if (isReportRunActive(input.issueId)) {
+    console.error('report agent skipped: run already active', {
+      issueId: input.issueId,
+      trigger: input.trigger ?? 'unknown',
+    });
+    return;
+  }
+
+  let stepRunId: string;
+  try {
+    const previous = await listStepRunsByIssue(deps.db, input.issueId);
+    const stepRun = await createStepRun(deps.db, {
+      issueId: input.issueId,
+      iterationId: null,
+      step: 'report',
+      attempt: previous.filter((run) => run.step === 'report').length + 1,
+      context: input.trigger ?? 'report',
+    });
+    await updateStepRun(deps.db, stepRun.id, { status: 'running' });
+    stepRunId = stepRun.id;
+  } catch (error) {
+    console.error('report run record failed', {
+      issueId: input.issueId,
+      error,
+    });
+    return;
+  }
+
+  // One archive point for both entry paths, so a new run never appends to a
+  // previous report. A failed archive is terminal: the agent is not spawned.
   let archive: ReportArchiveResult;
   try {
     archive = archiveReportArtifacts(deps.workspaceRoot, input.issueId);
@@ -1216,6 +1346,15 @@ export async function runReportAgent(
     deps.sse.publish(
       reportStepStatusEvent(input.issueId, reportRunId, 'failed'),
     );
+    await persistReportRun(deps.db, stepRunId, {
+      status: 'failed',
+      feedback: `archive failed: ${error instanceof Error ? error.message : String(error)}`,
+      stdout: '',
+      stderr: '',
+      events: [],
+      stats: null,
+      artifacts: { md: false, html: false },
+    });
     return;
   }
 
@@ -1232,80 +1371,95 @@ export async function runReportAgent(
   let failure: unknown;
   let observedModel: string | undefined;
   let anchoredPath: string | null = null;
+  // Plumbing of the live session (SSE, accumulation, heartbeat) lives in one
+  // module; this function only decides what the outcome means.
+  const session = startAgentSession(
+    {
+      sse: deps.sse,
+      store: {
+        appendStepRunEvent: (id, event) =>
+          appendStepRunEvent(deps.db, id, event),
+        updateStepRun: (id, patch) => updateStepRun(deps.db, id, patch),
+      },
+    },
+    {
+      issueId: input.issueId,
+      sessionId: reportRunId,
+      persistStepRunId: stepRunId,
+      heartbeatMs: REPORT_RUN_HEARTBEAT_MS,
+      // Anchoring visibility: the agent reads a PREVIOUS report (archive or
+      // snapshot). Signal only, never a block; at most one path per run.
+      onEvent: (event) => {
+        if (anchoredPath === null) {
+          anchoredPath = anchoredPreviousReportPath(event);
+        }
+      },
+    },
+  );
   try {
-    const result = await deps.pi.run(input.containerName, input.prompt, {
-      // Report пишет в host-папку задачи: контейнер итерации к этому моменту
-      // уже не нужен, а артефакты должны осесть в переживающей папке.
+    const reportRun = deps.pi.run(input.containerName, input.prompt, {
       cwd: input.hostDir,
       model: input.model,
       thinkingLevel: input.thinkingLevel,
       stepRunId: reportRunId,
       issueId: input.issueId,
       registry: deps.control,
-      onStdout: (chunk: string) =>
-        deps.sse.publish({
-          type: 'log',
-          issueId: input.issueId,
-          stepRunId: reportRunId,
-          stream: 'stdout',
-          data: chunk,
-          ts: new Date().toISOString(),
-        }),
-      onStderr: (chunk: string) =>
-        deps.sse.publish({
-          type: 'log',
-          issueId: input.issueId,
-          stepRunId: reportRunId,
-          stream: 'stderr',
-          data: chunk,
-          ts: new Date().toISOString(),
-        }),
-      // Структурированные события сессии (thinking/tool_use/…) — в SSE
-      // обычным step_event, чтобы SessionView отчёта показывал не только
-      // сырой stdout.
-      onEvent: (event) => {
-        // Видимость якорения: агент читает ПРОШЛЫЙ отчёт (архив/снапшот).
-        // Только сигнал, не блокировка; максимум один путь на прогон.
-        if (anchoredPath === null) {
-          anchoredPath = anchoredPreviousReportPath(event);
-        }
-        deps.sse.publish({
-          type: 'step_event',
-          issueId: input.issueId,
-          stepRunId: reportRunId,
-          stream: 'system',
-          data: JSON.stringify({ stepRunId: reportRunId, event }),
-          ts: new Date().toISOString(),
-        });
+      sessionDir: issueSessionDir(input.issueId),
+      excludeTools: soloRunExcludeTools(),
+      systemAppend: STEP_SYSTEM_APPEND,
+      sessionName: sessionDisplayName({ step: 'report', issueId: input.issueId }),
+      ...session.callbacks,
+    });
+    // Silence is the one failure an agent cannot report itself: cancel the live
+    // session instead of waiting for a process that will never finish.
+    const stallMs = resolveAgentStallTimeoutMs();
+    const result = await withAgentStallGuard(reportRun, {
+      stallMs,
+      label: 'report agent',
+      activity: () => session.activity(),
+      recover: stallRecoveries({
+        control: deps.control,
+        target: runTarget(reportRunId),
+        graceMs: stallMs,
+      }),
+      onStall: () => {
+        // The report session is registered under its own run id, not under the
+        // issue: address it exactly, or the command reaches no one.
+        void deps.control?.send(runTarget(reportRunId), { type: 'abort_retry' });
+        deps.control?.abort(reportRunId);
       },
     });
-    // Что сессия назвала фактически — единственная честная игла для детекта.
+    // The model the session actually used: the only honest signal for leakage.
     observedModel = result.stats?.model ?? undefined;
+    session.setStats(result.stats ?? null);
     const derived = result.aborted
       ? 'failed'
       : stepRunStatusFromResult(result.exitCode, result.report);
-    // Для отчёта осмысленны только success/failed (`needs_input`/`skipped`
-    // у него не бывает): всё, кроме явного успеха, — падение прогона.
     status = derived === 'success' ? 'success' : 'failed';
     if (status === 'failed') failure = `exit status: ${derived}`;
   } catch (error) {
     failure = error;
     status = 'failed';
   } finally {
-    // Снятие флага — строго в `finally`: любой throw выше (в т.ч. из
-    // `sse.publish`) не имеет права оставить «вечный активный» прогон, иначе
-    // `/report/status` навсегда `running`, а UI крутит «⏳» навсегда.
+    // Strictly in `finally`: any throw above must not leave the flag set, or
+    // `/report/status` stays `running` forever.
     activeReportRuns.delete(input.issueId);
+    session.stop();
     if (observedModel) observedReportModel.set(input.issueId, observedModel);
     else observedReportModel.delete(input.issueId);
+    // Success without report.md is not success: exit 0 on an empty folder used
+    // to show a green badge for a report that did not exist.
+    const artifacts = reportArtifactsPresent(input.hostDir);
+    if (status === 'success' && !artifacts.md) {
+      status = 'failed';
+      failure = 'report.md отсутствует после прогона';
+    }
     if (status === 'success') {
       lastReportOutcome.delete(input.issueId);
-      // Игла — наблюдённая модель (если сессия её назвала), иначе запрошенная.
       const warnings = [
         ...detectModelLeak(input.hostDir, observedModel ?? input.model),
-        // Якорение — своя строка (отдельно от модели), но тег warn'а общий,
-        // чтобы грепалось вместе с моделью. Сигнал из tool_use, не из файла:
-        // process-local, после рестарта с диска не пересчитывается.
+        // Anchoring is its own line but shares the warning tag, so it greps
+        // alongside the model. The signal comes from tool_use, not the file.
         ...(anchoredPath
           ? [`anchored on previous report: ${anchoredPath}`]
           : []),
@@ -1322,6 +1476,24 @@ export async function runReportAgent(
     } else {
       lastReportOutcome.set(input.issueId, 'failed');
     }
+    let feedback: string | null = null;
+    if (status === 'failed') {
+      const reason =
+        failure instanceof Error ? failure.message : String(failure);
+      feedback = `report failed: ${reason}`;
+    } else if (!artifacts.html) {
+      feedback = 'report.html отсутствует — доступен только markdown';
+    }
+    const snapshot = session.snapshot();
+    await persistReportRun(deps.db, stepRunId, {
+      status,
+      feedback,
+      stdout: snapshot.stdout,
+      stderr: snapshot.stderr,
+      events: capSessionEvents(snapshot.events),
+      stats: snapshot.stats,
+      artifacts,
+    });
   }
 
   deps.sse.publish(reportStepStatusEvent(input.issueId, reportRunId, status));
@@ -1340,8 +1512,8 @@ export async function runReportAgent(
 }
 
 /**
- * Создаёт и запускает report-агента для сборки `report.md` и `report.html`
- * по итогам завершённых итераций. Fire-and-forget: ошибки не роняют итерацию.
+ * Spawns the report agent that builds `report.md`/`report.html` from finished
+ * iterations. Fire-and-forget: failures never take an iteration down.
  */
 async function spawnReportAgent(
   db: Db,
@@ -1360,9 +1532,11 @@ async function spawnReportAgent(
     feedback: null,
     repoPaths: outcome.repoPaths,
     iterationCount: outcome.iterationCount,
+    // The report agent writes at this path; a clone path is not it.
+    workingDir: deps.local ? hostDir : workspaceContainerDirFor(outcome.issueId),
   });
 
-  await runReportAgent(deps, {
+  await runReportAgent({ ...deps, db }, {
     issueId: outcome.issueId,
     containerName: outcome.containerName,
     hostDir,

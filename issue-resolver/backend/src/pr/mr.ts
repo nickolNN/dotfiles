@@ -1041,7 +1041,10 @@ export class HttpMrClient implements MrClient {
         },
       );
       if (!response.ok) {
-        throw new Error(`gitlab mr failed: ${response.status}`);
+        const body = await response.text().catch(() => '(body unavailable)');
+        throw new Error(
+          `gitlab mr failed: ${response.status} — POST /projects/${encodeURIComponent(path)}/merge_requests — ${body.slice(0, 500)}`,
+        );
       }
       const data = (await response.json()) as GitLabMrResponse;
       return { mrUrl: data.web_url, id: String(data.iid) };
@@ -1071,7 +1074,12 @@ export class HttpMrClient implements MrClient {
         }),
       });
       if (!response.ok) {
-        throw new Error(`github pr failed: ${response.status}`);
+        // The body carries GitHub's reason ("No commits between …", "Bad
+        // credentials") — without it a 422 is a number nobody can act on.
+        const body = await response.text().catch(() => '(body unavailable)');
+        throw new Error(
+          `github pr failed: ${response.status} — POST /repos/${owner}/${repo}/pulls — ${body.slice(0, 500)}`,
+        );
       }
       const data = (await response.json()) as GitHubPrResponse;
       return { mrUrl: data.html_url, id: String(data.number) };

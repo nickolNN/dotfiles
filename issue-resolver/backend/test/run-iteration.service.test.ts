@@ -1026,15 +1026,20 @@ describe('runIssueIteration — разовая подготовка рабоче
     await prepareIssueWorkspace(db, deps, input);
     await prepareIssueWorkspace(db, deps, input);
 
-    // Публикация (`pr`) делает `git add -A`, поэтому RUN_INSTRUCTIONS.md и
-    // DEV_SERVER.sh должны быть в локальном exclude — иначе они уедут в MR.
+    // Publish runs `git add -A`, so all of these must sit in the local exclude.
     const lines = readFileSync(
       join(root, issueId, 'app', '.git', 'info', 'exclude'),
       'utf8',
     )
       .split('\n')
       .filter((line) => line.startsWith('/'));
-    expect(lines).toEqual(['/RUN_INSTRUCTIONS.md', '/DEV_SERVER.sh']);
+    expect(lines).toEqual([
+      '/RUN_INSTRUCTIONS.md',
+      '/DEV_SERVER.sh',
+      '/.issue-step-result.json',
+      '/.issue-worker-result-*.json',
+      '/.issue-stage-*.json',
+    ]);
   });
 
   it('prepareIssueWorkspace init-fail → задача и итерация failed, pi не вызван', async () => {
@@ -1563,12 +1568,12 @@ describe('runIssueIteration — run_instructions через анализатор
     expect(logs[0]).toMatchObject({
       issueId,
       iterationId: iteration.id,
-      stepRunId: `${issueId}/devops`,
+      stepRunId: `issue.${issueId}.devops`,
       stream: 'stdout',
       data: 'installing deps\n',
     });
     expect(logs[1]).toMatchObject({
-      stepRunId: `${issueId}/devops`,
+      stepRunId: `issue.${issueId}.devops`,
       stream: 'stderr',
       data: 'warning\n',
     });
@@ -1631,7 +1636,7 @@ describe('spawnReportAgent (B6–B9)', () => {
   });
 
   const reportCall = (pi: FakePiRunner, issueId: string) =>
-    pi.calls.find((call) => call.options?.stepRunId === `${issueId}/report`);
+    pi.calls.find((call) => call.options?.stepRunId === `issue.${issueId}.report`);
 
   const runOnce = async (
     db: Db,
@@ -1690,7 +1695,7 @@ describe('spawnReportAgent (B6–B9)', () => {
     await runOnce(db, deps, issueId, iteration);
 
     const logs = events.filter(
-      (event) => event.type === 'log' && event.stepRunId === `${issueId}/report`,
+      (event) => event.type === 'log' && event.stepRunId === `issue.${issueId}.report`,
     );
     expect(logs.map((event) => event.stream)).toEqual(['stdout', 'stderr']);
     expect(logs.map((event) => event.data)).toEqual([
@@ -1708,7 +1713,7 @@ describe('spawnReportAgent (B6–B9)', () => {
 
     const original = pi.run.bind(pi);
     pi.run = (containerName, prompt, options) =>
-      options?.stepRunId === `${issueId}/report`
+      options?.stepRunId === `issue.${issueId}.report`
         ? Promise.reject(new Error('report boom'))
         : original(containerName, prompt, options);
 
@@ -1755,7 +1760,7 @@ describe('spawnReportAgent (B6–B9)', () => {
 
     await runOnce(db, deps, issueId, iteration);
 
-    const reportRunId = `${issueId}/report`;
+    const reportRunId = `issue.${issueId}.report`;
     const statuses = () =>
       events.filter(
         (event) =>
@@ -1771,9 +1776,22 @@ describe('spawnReportAgent (B6–B9)', () => {
       step: 'report',
       model: null,
     });
-    // Терминал — плоская строка статуса (контракт движка).
-    expect(statuses()[1].data).toBe('success');
+    // Терминал — плоская строка статуса (контракт движка). Прогон без
+    // артефактов не «успех с пустым отчётом», а провал: report.md не появился.
+    expect(statuses()[1].data).toBe('failed');
     expect(statuses()[1].issueId).toBe(issueId);
+    // Исход прогона персистентен: строка step_runs вне итерации + лог.
+    const reportRun = db
+      .select()
+      .from(stepRuns)
+      .all()
+      .find((run) => run.step === 'report');
+    expect(reportRun).toMatchObject({
+      issue_id: issueId,
+      iteration_id: null,
+      status: 'failed',
+    });
+    expect(reportRun?.feedback).toContain('report.md');
   });
 
   it('B11: падение report-агента → step_status failed, ошибка в серверном логе', async () => {
@@ -1785,7 +1803,7 @@ describe('spawnReportAgent (B6–B9)', () => {
 
     const original = pi.run.bind(pi);
     pi.run = (containerName, prompt, options) =>
-      options?.stepRunId === `${issueId}/report`
+      options?.stepRunId === `issue.${issueId}.report`
         ? Promise.reject(new Error('report boom'))
         : original(containerName, prompt, options);
 
@@ -1796,7 +1814,7 @@ describe('spawnReportAgent (B6–B9)', () => {
     try {
       await runOnce(db, deps, issueId, iteration);
 
-      const reportRunId = `${issueId}/report`;
+      const reportRunId = `issue.${issueId}.report`;
       const terminal = () =>
         events.find(
           (event) =>
@@ -1840,7 +1858,7 @@ describe('spawnReportAgent (B6–B9)', () => {
     try {
       await runOnce(db, deps, issueId, iteration);
 
-      const reportRunId = `${issueId}/report`;
+      const reportRunId = `issue.${issueId}.report`;
       await vi.waitFor(() =>
         expect(
           events.find(
@@ -1918,7 +1936,7 @@ describe('DevOps SSE миграция (C10–C12)', () => {
       (event) => event.type === 'log' && event.stream === 'stdout',
     );
     expect(stdout).toBeDefined();
-    expect(stdout!.stepRunId).toBe(`${issueId}/devops`);
+    expect(stdout!.stepRunId).toBe(`issue.${issueId}.devops`);
     expect(stdout!.data).toBe('installing deps\n');
   });
 
@@ -1929,7 +1947,7 @@ describe('DevOps SSE миграция (C10–C12)', () => {
       (event) => event.type === 'log' && event.stream === 'stderr',
     );
     expect(stderr).toBeDefined();
-    expect(stderr!.stepRunId).toBe(`${issueId}/devops`);
+    expect(stderr!.stepRunId).toBe(`issue.${issueId}.devops`);
     expect(stderr!.data).toBe('warning\n');
   });
 

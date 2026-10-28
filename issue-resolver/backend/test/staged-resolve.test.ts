@@ -117,10 +117,10 @@ describe('runStagedResolve — последовательные этапы', () 
     // Строгий порядок: исполнители этапа 1 → координатор этапа 1 → этап 2 (1 агент)
     // → финальный координатор.
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run-1/stage/1/worker/1',
-      'run-1/stage/1/worker/2',
-      'run-1/stage/1/coordinator',
-      'run-1/stage/2/worker/1',
+      'run.run-1.s1.w0',
+      'run.run-1.s1.w1',
+      'run.run-1.s1.lead',
+      'run.run-1.s2.w0',
       'run-1',
     ]);
 
@@ -136,9 +136,9 @@ describe('runStagedResolve — последовательные этапы', () 
     expect(pi.calls[2].prompt).toContain('s1w1');
     expect(pi.calls[2].prompt).toContain('s1w2');
     expect(pi.calls[2].prompt).toContain('.issue-stage-1.json');
-    expect(pi.calls[2].prompt).toContain('memory_read');
+    expect(pi.calls[2].prompt).toContain('## Memory');
     expect(pi.calls[2].prompt).toContain('memory_search');
-    expect(pi.calls[2].prompt).toContain('memory_write');
+    expect(pi.calls[2].prompt).toContain('#decision');
     expect(pi.calls[2].prompt).not.toContain('.issue-worker-result-');
 
     // Этап 2 (executors=1) — один агент-этап, без исполнителей.
@@ -153,14 +153,15 @@ describe('runStagedResolve — последовательные этапы', () 
     expect(pi.calls[4].prompt).not.toContain('report.md');
     expect(pi.calls[4].prompt).not.toContain('report.html');
     expect(pi.calls[4].prompt).toContain('.issue-step-result.json');
-    expect(pi.calls[4].prompt).toContain('memory_write');
+    expect(pi.calls[4].prompt).toContain('## Memory');
+    expect(pi.calls[4].prompt).toContain('#decision');
 
     // Агенты этапов регистрируются с stage/stageName.
     expect(control.listAgents('iter-1').map((agent) => agent.stage)).toEqual([
       1, 1, 1, 2, null,
     ]);
     expect(control.listAgents('iter-1')[0]).toMatchObject({
-      id: 'run-1/stage/1/worker/1',
+      id: 'run.run-1.s1.w0',
       role: 'worker',
       index: 1,
       label: 'Этап 1 · Исполнитель 1',
@@ -168,7 +169,7 @@ describe('runStagedResolve — последовательные этапы', () 
       stageName: 'Сбор',
     });
     expect(control.listAgents('iter-1')[2]).toMatchObject({
-      id: 'run-1/stage/1/coordinator',
+      id: 'run.run-1.s1.lead',
       role: 'coordinator',
       index: null,
       label: 'Этап 1 · Координатор',
@@ -177,7 +178,7 @@ describe('runStagedResolve — последовательные этапы', () 
     });
     // Этап без исполнителей (executors=1) — это один исполнитель этапа, а не координатор.
     expect(control.listAgents('iter-1')[3]).toMatchObject({
-      id: 'run-1/stage/2/worker/1',
+      id: 'run.run-1.s2.w0',
       role: 'worker',
       index: 1,
       label: 'Этап 2 · Исполнитель 1',
@@ -198,8 +199,8 @@ describe('runStagedResolve — последовательные этапы', () 
     // Только два исполнителя этапа 1 (Promise.all ждёт оба), без координатора.
     expect(pi.calls).toHaveLength(2);
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run-1/stage/1/worker/1',
-      'run-1/stage/1/worker/2',
+      'run.run-1.s1.w0',
+      'run.run-1.s1.w1',
     ]);
   });
 
@@ -213,7 +214,7 @@ describe('runStagedResolve — последовательные этапы', () 
 
     expect(result.aborted).toBe(true);
     expect(pi.calls).toHaveLength(3);
-    expect(pi.calls[2].options?.stepRunId).toBe('run-1/stage/1/coordinator');
+    expect(pi.calls[2].options?.stepRunId).toBe('run.run-1.s1.lead');
   });
 
   it('executors=1 этап = один вызов, отдельного исполнителя нет', async () => {
@@ -232,8 +233,8 @@ describe('runStagedResolve — последовательные этапы', () 
     await runStagedResolve(pi, input(execution), options());
 
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run-1/stage/1/worker/1',
-      'run-1/stage/2/worker/1',
+      'run.run-1.s1.w0',
+      'run.run-1.s2.w0',
       'run-1',
     ]);
     // Промпт — единственного исполнителя этапа: исполнителей нет, интегрировать нечего.
@@ -301,7 +302,7 @@ describe('runStagedResolve — resume по файлам исходов этап�
 
     // Этапы 1–2 не перезапускаются: сразу этап 3 + финал.
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run-1/stage/3/worker/1',
+      'run.run-1.s3.w0',
       'run-1',
     ]);
     // Финальный lead видит исходы уже готовых этапов из их файлов.
@@ -347,9 +348,9 @@ describe('runStagedResolve — resume по файлам исходов этап�
     });
 
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run-1/stage/1/worker/1',
-      'run-1/stage/2/worker/1',
-      'run-1/stage/3/worker/1',
+      'run.run-1.s1.w0',
+      'run.run-1.s2.w0',
+      'run.run-1.s3.w0',
       'run-1',
     ]);
   });
@@ -371,9 +372,9 @@ describe('runStagedResolve — resume по файлам исходов этап�
     });
 
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run-1/stage/1/worker/1',
-      'run-1/stage/2/worker/1',
-      'run-1/stage/3/worker/1',
+      'run.run-1.s1.w0',
+      'run.run-1.s2.w0',
+      'run.run-1.s3.w0',
       'run-1',
     ]);
   });
@@ -388,9 +389,9 @@ describe('runStagedResolve — resume по файлам исходов этап�
     await runStagedResolve(pi, input(threeStages), options());
 
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run-1/stage/1/worker/1',
-      'run-1/stage/2/worker/1',
-      'run-1/stage/3/worker/1',
+      'run.run-1.s1.w0',
+      'run.run-1.s2.w0',
+      'run.run-1.s3.w0',
       'run-1',
     ]);
   });

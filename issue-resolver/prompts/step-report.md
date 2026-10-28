@@ -283,6 +283,34 @@ base64 data URI — preserve full quality, do not resize or compress, and
 show it through a `<dialog>` lightbox, never as an external file reference.
 The file is a local artifact, not served over the network.
 
+**Embedding screenshots — build, don't type.** A `data:` URI is generated,
+never typed: a multi-megabyte `write` argument gets truncated by the runtime
+and arrives as an empty call (`arguments: {}` after `read`-style retries),
+which silently loses the whole HTML. Two rules follow:
+
+1. Write the page with one placeholder per image instead of the base64 blob:
+   `<img alt="…" data-slot="02-dashboard-header.png">`.
+2. Expand the placeholders with a script, one file at a time:
+
+```bash
+python3 - <<'PY'
+import base64, pathlib, re
+page = pathlib.Path('report.html')
+text = page.read_text(encoding='utf-8')
+def uri(match):
+    raw = pathlib.Path('screenshots', match.group(1)).read_bytes()
+    return 'src="data:image/png;base64,' + base64.b64encode(raw).decode() + '"'
+text = re.sub(r'data-slot="([^"]+)"', uri, text)
+page.write_text(text, encoding='utf-8')
+PY
+```
+
+The HTML write itself is chunked too: several `cat >> report.html <<'EOF'`
+appends of 50–100 lines each, never one giant `write`. After expanding, prove
+it: `grep -c 'data-slot=' report.html` is `0`,
+`grep -c 'src="data:image/png;base64,' report.html` equals the number of
+screenshots, and the file still opens from `file://`.
+
 **Hyperlinks are allowed and wanted.** `<a href="https://…">` is NOT a
 resource load: it costs no request and the file still looks IDENTICAL
 offline — it just gives the reader somewhere to go. Use links for merge
@@ -331,8 +359,9 @@ render content from JS; the content is static.
   `addEventListener('beforeprint',()=>document.querySelectorAll('details').forEach(d=>d.open=true));`
   Without JS, only the sections already expanded make it into print — say
   so honestly.
-- Budget: the whole file ≤ 400 KB excluding base64 screenshots, ≤ 2 MB
-  total. JS is dozens of lines, not hundreds.
+- Budget: the whole file ≤ 400 KB excluding base64 screenshots, ≤ 50 MB
+  total (screenshots are embedded at full resolution, up to 50 MB combined).
+  JS is dozens of lines, not hundreds.
 
 **Structure**: Header → Answer (open) → a single collapsed `<details>` block
 pressed to the very bottom:
@@ -488,14 +517,15 @@ and check again.
    at-rule, no remote `@font-face`, no `<img src="http…">`, no `<iframe>`,
    no `fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource`, no
    `eval`/`document.write`; screenshots are base64 `<img>` inside the
-   collapsed block; the page is fully readable with JavaScript disabled.
+   collapsed block, expanded from `data-slot` placeholders by a script (no
+   `data-slot=` left); the page is fully readable with JavaScript disabled.
 8. **Same facts in both files** — every Answer fact appears in both; the
    collapsed Execution block loses nothing (timeline, step outcomes, change
    set, findings with provenance, MR links, metrology).
 9. **Nothing unverified stated as fact** — any number not re-checked in the
    code is marked unverified with its source named.
 10. **Budget respected** — HTML ≤ 400 KB excluding base64 screenshots
-    (≤ 2 MB total).
+    (≤ 50 MB total, screenshots at full resolution).
 11. **Same diagrams in both forms** — every Answer section with a form has
     a diagram in BOTH files (monospace ASCII/table in `report.md`, inline
     `<svg>` in `report.html`); the `glyph` structure (verdict first, icon +

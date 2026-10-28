@@ -3,7 +3,10 @@ import { EventEmitter } from 'node:events';
 import type { SessionEvent } from '@issue-resolver/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RpcPiRunner } from '../src/pi/rpc-runner';
-import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
+import {
+  InMemoryStepSessionRegistry,
+  iterationTarget,
+} from '../src/pi/session-registry';
 
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 
@@ -384,7 +387,7 @@ describe('RpcPiRunner — command bridge', () => {
       iterationId: 'iter-1',
     });
 
-    const promptPromise = registry.promptByIteration('iter-1', 'ещё', 'steer');
+    const promptPromise = registry.prompt(iterationTarget('iter-1'), 'ещё', 'steer');
     expect(promptPromise).not.toBeNull();
     const sent = commands(child).find(
       (command) => command.type === 'prompt' && command.message === 'ещё',
@@ -421,7 +424,7 @@ describe('RpcPiRunner — command bridge', () => {
       iterationId: 'iter-1',
     });
 
-    const okPromise = registry.sendByIteration('iter-1', {
+    const okPromise = registry.send(iterationTarget('iter-1'), {
       type: 'set_model',
       provider: 'p',
       modelId: 'm',
@@ -437,7 +440,7 @@ describe('RpcPiRunner — command bridge', () => {
     });
     expect(await okPromise).toEqual({ ok: true, data: { changed: true } });
 
-    const failPromise = registry.sendByIteration('iter-1', { type: 'cycle_model' });
+    const failPromise = registry.send(iterationTarget('iter-1'), { type: 'cycle_model' });
     const failSent = commands(child).find((command) => command.type === 'cycle_model');
     emit(child, {
       type: 'response',
@@ -465,7 +468,7 @@ describe('RpcPiRunner — command bridge', () => {
       iterationId: 'iter-1',
     });
 
-    const sendPromise = registry.sendByIteration('iter-1', { type: 'get_commands' });
+    const sendPromise = registry.send(iterationTarget('iter-1'), { type: 'get_commands' });
     await vi.advanceTimersByTimeAsync(10000);
     expect(await sendPromise).toEqual({ ok: false, error: 'timeout' });
 
@@ -485,7 +488,7 @@ describe('RpcPiRunner — command bridge', () => {
       iterationId: 'iter-1',
     });
 
-    const pendingSend = registry.sendByIteration('iter-1', { type: 'get_commands' });
+    const pendingSend = registry.send(iterationTarget('iter-1'), { type: 'get_commands' });
     child.emit('close', 0);
     expect(await pendingSend).toEqual({ ok: false, error: 'session closed' });
 
@@ -523,15 +526,20 @@ describe('RpcPiRunner — комната агента per-task (PI_AGENT_ROOM)',
     await promise;
   });
 
-  it('local без issueId → env отсутствует', async () => {
+  it('local без issueId → env без идентичности запускающей сессии', async () => {
     const child = makeFakeChild();
     spawnMock.mockReturnValue(child as unknown as ChildProcess);
 
     const runner = new RpcPiRunner('resolve', 'local');
     const promise = runner.run('container-1', 'prompt', { cwd: '/tmp' });
 
-    const options = spawnMock.mock.calls[0][2] as { env?: unknown };
-    expect('env' in options).toBe(false);
+    // Env is always passed now — it is what strips the launcher's session
+    // identity (otherwise the step agent resumes the caller's session).
+    const options = spawnMock.mock.calls[0][2] as { env?: NodeJS.ProcessEnv };
+    expect(options.env).toBeDefined();
+    expect(options.env?.PI_SESSION_FILE).toBeUndefined();
+    expect(options.env?.PI_SESSION_ID).toBeUndefined();
+    expect(options.env?.PI_AGENT_ROOM).toBeUndefined();
 
     settle(child);
     await promise;
@@ -643,5 +651,160 @@ describe('RpcPiRunner — скорость генерации', () => {
     settle(child);
     const result = await promise;
     expect(result.events?.some((event) => event.type === 'usage')).toBe(true);
+  });
+});
+describe('RpcPiRunner — идентификатор сессии (--session-id)', () => {
+  const SESSION = 'run.3b0989cb-9818-4377-97b0-f3e818d26558.w0';
+
+  it('local + sessionId → --session-id перед --model', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', {
+      sessionId: SESSION,
+      model: 'm-1',
+    });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--session-id') + 1]).toBe(SESSION);
+    expect(args.indexOf('--session-id')).toBeLessThan(args.indexOf('--model'));
+
+    settle(child);
+    await promise;
+  });
+
+  it('docker + sessionId → флаг доходит до pi внутри контейнера', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'docker');
+    const promise = runner.run('container-1', 'prompt', { sessionId: SESSION });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--session-id') + 1]).toBe(SESSION);
+    expect(args.indexOf('--session-id')).toBeGreaterThan(args.indexOf('container-1'));
+
+    settle(child);
+    await promise;
+  });
+
+  it('без sessionId → флага нет (pi создаст id сам)', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt');
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain('--session-id');
+
+    settle(child);
+    await promise;
+  });
+
+  it('невалидный id → падаем сразу, не запуская pi', () => {
+    const runner = new RpcPiRunner('resolve', 'local');
+    expect(() =>
+      runner.run('container-1', 'prompt', {
+        sessionId: 'issue.359dd92c-4c43-48b0-83fc-e4375b53b958/report',
+      }),
+    ).toThrow(/invalid Pi session id/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('RpcPiRunner — выбор инструментов (--tools/--exclude-tools)', () => {
+  it('tools → --tools со списком через запятую', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', {
+      tools: ['read', 'write', 'bash'],
+    });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--tools') + 1]).toBe('read,write,bash');
+
+    settle(child);
+    await promise;
+  });
+
+  it('excludeTools → --exclude-tools с шаблоном', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'docker');
+    const promise = runner.run('container-1', 'prompt', {
+      excludeTools: ['room_*'],
+    });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--exclude-tools') + 1]).toBe('room_*');
+    expect(args.indexOf('--exclude-tools')).toBeGreaterThan(args.indexOf('container-1'));
+
+    settle(child);
+    await promise;
+  });
+
+  it('ни tools, ни excludeTools → флагов нет', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt');
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain('--tools');
+    expect(args).not.toContain('--exclude-tools');
+
+    settle(child);
+    await promise;
+  });
+});
+
+describe('RpcPiRunner — system prompt и verbose', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('systemAppend → --append-system-prompt с текстом контракта', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt', {
+      systemAppend: 'deliverable is a file',
+    });
+
+    const args = spawnMock.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(
+      'deliverable is a file',
+    );
+
+    settle(child);
+    await promise;
+  });
+
+  it('ISSUE_RESOLVER_AGENT_VERBOSE=1 → --verbose; без него флага нет', async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+    vi.stubEnv('ISSUE_RESOLVER_AGENT_VERBOSE', '1');
+
+    const runner = new RpcPiRunner('resolve', 'local');
+    const promise = runner.run('container-1', 'prompt');
+    expect(spawnMock.mock.calls[0][1] as string[]).toContain('--verbose');
+    settle(child);
+    await promise;
+
+    vi.unstubAllEnvs();
+    spawnMock.mockReset();
+    spawnMock.mockReturnValue(child as unknown as ChildProcess);
+    const quiet = new RpcPiRunner('resolve', 'local');
+    const second = quiet.run('container-1', 'prompt');
+    expect(spawnMock.mock.calls[0][1] as string[]).not.toContain('--verbose');
+    settle(child);
+    await second;
   });
 });

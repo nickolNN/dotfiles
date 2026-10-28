@@ -57,9 +57,16 @@ function insertStepRun(
   status: StepRunStatus,
 ): string {
   const id = randomUUID();
+  const issueId =
+    db
+      .select({ issue_id: iterations.issue_id })
+      .from(iterations)
+      .where(eq(iterations.id, iterationId))
+      .get()?.issue_id ?? '';
   db.insert(stepRuns)
     .values({
       id,
+      issue_id: issueId,
       iteration_id: iterationId,
       step: 'resolve',
       attempt: 1,
@@ -271,8 +278,8 @@ describe('GET /iterations/:id/agents', () => {
     const issueId = insertIssue(db);
     const iterationId = insertIteration(db, issueId, 'running');
     const control = new InMemoryStepSessionRegistry();
-    control.register(`${iterationId}/worker/0`, iterationId, noopControl, {
-      id: `${iterationId}/worker/0`,
+    control.register(`${iterationId}.w0`, iterationId, noopControl, {
+      id: `${iterationId}.w0`,
       role: 'worker',
       index: 1,
       label: 'Исполнитель 1',
@@ -284,12 +291,12 @@ describe('GET /iterations/:id/agents', () => {
       label: 'Координатор',
     });
     // Телеметрия исполнителя: usage-токены + последний stats-событие (контекст/model).
-    control.recordEvent(`${iterationId}/worker/0`, {
+    control.recordEvent(`${iterationId}.w0`, {
       type: 'usage',
       usage: { input: 12, output: 3, cacheRead: 0, cacheWrite: 0, total: 15 },
       cost: null,
     });
-    control.recordEvent(`${iterationId}/worker/0`, {
+    control.recordEvent(`${iterationId}.w0`, {
       type: 'stats',
       stats: {
         model: 'test-model',
@@ -314,7 +321,7 @@ describe('GET /iterations/:id/agents', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual([
       {
-        id: `${iterationId}/worker/0`,
+        id: `${iterationId}.w0`,
         role: 'worker',
         index: 1,
         label: 'Исполнитель 1',
@@ -382,7 +389,7 @@ describe('GET /iterations/:id/agents/stream', () => {
     if (address === null || typeof address === 'string') {
       throw new Error('server has no TCP address');
     }
-    const agentId = `${iterationId}/worker/0`;
+    const agentId = `${iterationId}.w0`;
     const controller = new AbortController();
     try {
       const response = await fetch(
@@ -403,7 +410,7 @@ describe('GET /iterations/:id/agents/stream', () => {
         ts: NOW,
       };
       // Чужой агент — не должен просочиться в поток.
-      hub.publish({ ...target, agentId: `${iterationId}/worker/1` });
+      hub.publish({ ...target, agentId: `${iterationId}.w1` });
       hub.publish(target);
 
       const reader = response.body?.getReader();

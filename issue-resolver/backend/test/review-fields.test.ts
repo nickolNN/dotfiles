@@ -82,7 +82,7 @@ describe('review-поля итерации — spec-parity', () => {
     expect(list[0].is_review_need).toBe(true);
     expect(list[0].review_context).toBe('ctx');
     expect(list[0].steps).toContain('review');
-    expect(list[0].steps).toContain('resolve');
+    expect(list[0].steps).not.toContain('resolve');
   });
 
   it('POST /issues без is_review_need → false и review_context === ""', async () => {

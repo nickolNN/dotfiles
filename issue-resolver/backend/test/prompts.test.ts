@@ -1,17 +1,7 @@
 import type { NormalizedStage, PipelineStep } from '@issue-resolver/shared';
 import { DEFAULT_MAX_ROOM_EXECUTORS } from '@issue-resolver/shared';
 import { describe, expect, it } from 'vitest';
-import {
-  buildRoomCoordinatorPrompt,
-  buildRoomWorkerPrompt,
-  buildStageCoordinatorPrompt,
-  buildStageSoloPrompt,
-  buildStageWorkerPrompt,
-  buildStagedFinalCoordinatorPrompt,
-  buildStepPrompt,
-  type PrTarget,
-  type RoomPromptInput,
-} from '../src/workflow/prompts';
+import { STEP_SYSTEM_APPEND, buildRoomCoordinatorPrompt, buildRoomWorkerPrompt, buildStageCoordinatorPrompt, buildStageSoloPrompt, buildStageWorkerPrompt, buildStagedFinalCoordinatorPrompt, buildStepPrompt, type PrTarget, type RoomPromptInput } from '../src/workflow/prompts';
 
 const base = {
   issueTitle: 'Поправить вход в личный кабинет',
@@ -456,9 +446,9 @@ describe('staged prompts', () => {
     expect(text).toContain('frontend done');
     expect(text).toContain('backend done');
     expect(text).toContain('.issue-stage-1.json');
-    expect(text).toContain('memory_read');
+    expect(text).toContain('## Memory');
     expect(text).toContain('memory_search');
-    expect(text).toContain('memory_write');
+    expect(text).toContain('#decision');
     expect(text).toContain('[[stage-1]]');
   });
 
@@ -469,9 +459,9 @@ describe('staged prompts', () => {
     expect(text).toContain('there are no other workers and no stage coordinator');
     expect(text).toContain('Сбор контекста');
     expect(text).toContain('.issue-stage-1.json');
-    expect(text).toContain('memory_read');
+    expect(text).toContain('## Memory');
     expect(text).toContain('memory_search');
-    expect(text).toContain('memory_write');
+    expect(text).toContain('#decision');
     expect(text).toContain('[[stage-1]]');
     // Роль координатора/интегратора исполнителей этапу без исполнителей не достаётся.
     expect(text).not.toContain('Role: coordinator');
@@ -497,7 +487,8 @@ describe('staged prompts', () => {
     expect(text).not.toContain('report.md');
     expect(text).not.toContain('report.html');
     expect(text).toContain('.issue-step-result.json');
-    expect(text).toContain('memory_write');
+    expect(text).toContain('## Memory');
+    expect(text).toContain('#decision');
     expect(text).toContain('[[resolve]]');
   });
 });
@@ -848,5 +839,30 @@ describe('buildStepPrompt — report агент (E18–E21)', () => {
     for (const step of ['refine', 'resolve', 'review', 'test', 'pr'] as PipelineStep[]) {
       expect(prompt(step)).toContain('iterations/<n>/');
     }
+  });
+});
+
+describe('правила памяти в промптах шагов', () => {
+  it('каждый шаговый промпт несёт блок Memory с тегами и ссылками', () => {
+    const prompt = buildStepPrompt({
+      step: 'review',
+      issueTitle: 'T',
+      description: '',
+      jiraText: null,
+      context: '',
+      feedback: null,
+      repoPaths: [],
+      iterationCount: 1,
+    });
+
+    expect(prompt).toContain('## Memory');
+    expect(prompt).toContain('#decision');
+    expect(prompt).toContain('[[issue-');
+    expect(prompt).toContain('Do not write');
+  });
+
+  it('system-append фиксирует файл как единственный deliverable', () => {
+    expect(STEP_SYSTEM_APPEND).toContain('.issue-step-result.json');
+    expect(STEP_SYSTEM_APPEND).toContain('not a deliverable');
   });
 });

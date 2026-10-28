@@ -114,6 +114,8 @@ export interface StepPromptInput {
   iterationCount?: number;
   /** Путь к каталогу narratives для report-агента (видный агенту). */
   iterationNarrativesDir?: string;
+  /** Working folder as the agent sees it (session cwd); stated in the prompt. */
+  workingDir?: string;
 }
 
 export interface RoomPromptInput {
@@ -138,6 +140,8 @@ export interface RoomPromptInput {
   prTargets?: PrTarget[];
   /** Снимок рабочей копии перед шагом (см. `StepPromptInput.stateDigest`). */
   stateDigest?: RepoChangeDigest[];
+  /** Working folder as the agent sees it (session cwd); stated in the prompt. */
+  workingDir?: string;
 }
 
 export interface WorkerSummary {
@@ -148,8 +152,26 @@ export interface WorkerSummary {
 
 // ── Shared blocks (single source of truth for every prompt) ─────────
 
-function outputContract(): string {
-  return readPrompt('output-contract.md');
+function outputContract(workingDir?: string): string {
+  const contract = readPrompt('output-contract.md');
+  if (!workingDir) return contract;
+  return [
+    `Output contract — write exactly \`${join(workingDir, '.issue-step-result.json')}\` (absolute path).`,
+    'A copy inside a repository working copy is ignored by the engine.',
+    '',
+    contract,
+  ].join('\n');
+}
+
+/** The agent's cwd: the parent of the clones, never a clone itself. */
+function workingFolderBlock(workingDir?: string): string {
+  if (!workingDir) return '';
+  return [
+    `Working folder (your session's cwd): ${workingDir}`,
+    'It is the parent of the repository working copies above — not a clone.',
+    'Step artifacts (report files, screenshots/, narratives) belong here, never',
+    'inside a clone: whatever the clone contains is what the merge request ships.',
+  ].join('\n');
 }
 
 /** Вход задачи: один блок для всех step- и room-промптов. */
@@ -482,6 +504,9 @@ export function buildStepPrompt(input: StepPromptInput): string {
   const state = workingStateBlock(input.stateDigest);
   if (state) lines.push('', state);
 
+  const working = workingFolderBlock(input.workingDir);
+  if (working) lines.push('', working);
+
   // План refine — вход для следующих шагов; самому refine он не нужен.
   const plan = input.step === 'refine' ? '' : refinedPlanBlock(input.refinedPlan);
   if (plan) lines.push('', plan);
@@ -491,8 +516,8 @@ export function buildStepPrompt(input: StepPromptInput): string {
   const previousOutcome = previousOutcomeBlock(input.previousOutcome);
   if (previousOutcome) lines.push('', previousOutcome);
 
-  lines.push('', outputContract());
-  return lines.join('\n');
+  lines.push('', outputContract(input.workingDir));
+  return withMemoryRules(lines.join('\n'));
 }
 
 // ── Room / staged resolve prompts (loaded from prompts/*.md) ────────
@@ -504,10 +529,15 @@ function roomValues(
 ): Record<string, string> {
   return {
     TASK_CONTEXT: taskContext(input),
-    REPOS: reposBlock(input.repoPaths, input.devServerPort, {
-      preparedNote: true,
-      prTargets: input.prTargets,
-    }),
+    REPOS: [
+      reposBlock(input.repoPaths, input.devServerPort, {
+        preparedNote: true,
+        prTargets: input.prTargets,
+      }),
+      workingFolderBlock(input.workingDir),
+    ]
+      .filter((block) => block.length > 0)
+      .join('\n\n'),
     REFINED_PLAN: refinedPlanBlock(input.refinedPlan),
     ATTACHMENTS: attachmentsBlock(input.attachmentPaths),
     WORKING_STATE: workingStateBlock(input.stateDigest),
@@ -525,20 +555,37 @@ function workerSummariesBlock(files: (index: number) => string, workers: WorkerS
     .join('\n');
 }
 
+/**
+ * System-prompt addition for every step agent: the deliverable is a file, not a
+ * chat answer. Kept out of the user prompt so compaction cannot drop it.
+ */
+/** Room/stage prompts carry the same memory vocabulary as step prompts. */
+function withMemoryRules(prompt: string): string {
+  return `${prompt}\n\n${readPrompt('memory-rules.md')}`;
+}
+
+export const STEP_SYSTEM_APPEND = [
+  'The deliverable of this run is `.issue-step-result.json` in the working folder.',
+  'A summary in chat is not a deliverable: do not substitute prose for that file,',
+  'and do not paste the plan, the report, or the diff into chat instead of writing it.',
+].join(' ');
+
 export function buildRoomWorkerPrompt(
   input: RoomPromptInput,
   item: RoomWorkItem,
   total: number,
 ): string {
   const worker = item.index + 1;
-  return render(
-    readPrompt('resolve-room-worker.md'),
-    roomValues(input, {
-      WORKER_NUMBER: String(worker),
-      TOTAL_WORKERS: String(total),
-      WORKER_TASK: item.task,
-      DOWNSTREAM_AWARENESS: workerDownstreamAwareness(input.pipelineSteps).join('\n'),
-    }),
+  return withMemoryRules(
+    render(
+      readPrompt('resolve-room-worker.md'),
+      roomValues(input, {
+        WORKER_NUMBER: String(worker),
+        TOTAL_WORKERS: String(total),
+        WORKER_TASK: item.task,
+        DOWNSTREAM_AWARENESS: workerDownstreamAwareness(input.pipelineSteps).join('\n'),
+      }),
+    ),
   );
 }
 
@@ -550,13 +597,16 @@ export function buildRoomCoordinatorPrompt(
     (index) => `.issue-worker-result-${index}.json`,
     workers,
   );
-  return `${render(
-    readPrompt('resolve-room-lead.md'),
-    roomValues(input, {
-      WORKER_SUMMARIES:
-        summaries || 'No worker reports: perform the resolve task YOURSELF and produce the step result directly.',
-    }),
-  )}\n\n${outputContract()}`;
+  return withMemoryRules(
+    `${render(
+      readPrompt('resolve-room-lead.md'),
+      roomValues(input, {
+        WORKER_SUMMARIES:
+          summaries ||
+          'No worker reports: perform the resolve task YOURSELF and produce the step result directly.',
+      }),
+    )}\n\n${outputContract(input.workingDir)}`,
+  );
 }
 
 export function buildStageWorkerPrompt(
@@ -566,16 +616,18 @@ export function buildStageWorkerPrompt(
   total: number,
 ): string {
   const worker = item.index + 1;
-  return render(readPrompt('resolve-stages-worker.md'), {
-    ...roomValues(input),
-    STAGE_INDEX: String(stage.index),
-    STAGE_NAME: stage.name,
-    STAGE_TASK: stage.task,
-    WORKER_INDEX: String(worker),
-    TOTAL_WORKERS: String(total),
-    WORKER_TASK: item.task,
-    DOWNSTREAM_AWARENESS: workerDownstreamAwareness(input.pipelineSteps).join('\n'),
-  });
+  return withMemoryRules(
+    render(readPrompt('resolve-stages-worker.md'), {
+      ...roomValues(input),
+      STAGE_INDEX: String(stage.index),
+      STAGE_NAME: stage.name,
+      STAGE_TASK: stage.task,
+      WORKER_INDEX: String(worker),
+      TOTAL_WORKERS: String(total),
+      WORKER_TASK: item.task,
+      DOWNSTREAM_AWARENESS: workerDownstreamAwareness(input.pipelineSteps).join('\n'),
+    }),
+  );
 }
 
 export function buildStageCoordinatorPrompt(
@@ -587,33 +639,37 @@ export function buildStageCoordinatorPrompt(
     (index) => `.issue-stage-${stage.index}-worker-${index}.json`,
     workers,
   );
-  return render(readPrompt('resolve-stages-lead.md'), {
-    ...roomValues(input),
-    STAGE_INDEX: String(stage.index),
-    STAGE_NAME: stage.name,
-    STAGE_TASK: stage.task,
-    WORKER_SUMMARIES:
-      summaries ||
-      'There are no worker agents for this stage: perform the stage task YOURSELF\nand produce the stage result directly.',
-  });
+  return withMemoryRules(
+    render(readPrompt('resolve-stages-lead.md'), {
+      ...roomValues(input),
+      STAGE_INDEX: String(stage.index),
+      STAGE_NAME: stage.name,
+      STAGE_TASK: stage.task,
+      WORKER_SUMMARIES:
+        summaries ||
+        'There are no worker agents for this stage: perform the stage task YOURSELF\nand produce the stage result directly.',
+    }),
+  );
 }
 
 /**
- * Промпт единственного исполнителя одиночного этапа (`executors: 1`): у этапа нет
- * ни других исполнителей, ни координатора, поэтому он и делает работу, и пишет
- * файл этапа. Промпт координатора (`resolve-stages-lead.md`) врал бы про
- * интеграцию несуществующих исполнителей.
+ * Prompt of the single worker of a one-agent stage (`executors: 1`): such a
+ * stage has neither siblings nor a coordinator, so the worker does the work and
+ * writes the stage file. The coordinator prompt would lie about integrating
+ * workers that do not exist.
  */
 export function buildStageSoloPrompt(
   input: RoomPromptInput,
   stage: NormalizedStage,
 ): string {
-  return render(readPrompt('resolve-stages-solo.md'), {
-    ...roomValues(input),
-    STAGE_INDEX: String(stage.index),
-    STAGE_NAME: stage.name,
-    STAGE_TASK: stage.task,
-  });
+  return withMemoryRules(
+    render(readPrompt('resolve-stages-solo.md'), {
+      ...roomValues(input),
+      STAGE_INDEX: String(stage.index),
+      STAGE_NAME: stage.name,
+      STAGE_TASK: stage.task,
+    }),
+  );
 }
 
 export function buildStagedFinalCoordinatorPrompt(
@@ -626,11 +682,14 @@ export function buildStagedFinalCoordinatorPrompt(
         `- stage ${stage.index} (${stage.name}) → \`.issue-stage-${stage.index}.json\`: ${outcome}`,
     )
     .join('\n');
-  return `${render(
-    readPrompt('resolve-stages-final.md'),
-    roomValues(input, {
-      STAGE_OUTCOMES:
-        outcomes || 'No stage reports: perform the resolve task YOURSELF and produce the step result directly.',
-    }),
-  )}\n\n${outputContract()}`;
+  return withMemoryRules(
+    `${render(
+      readPrompt('resolve-stages-final.md'),
+      roomValues(input, {
+        STAGE_OUTCOMES:
+          outcomes ||
+          'No stage reports: perform the resolve task YOURSELF and produce the step result directly.',
+      }),
+    )}\n\n${outputContract(input.workingDir)}`,
+  );
 }

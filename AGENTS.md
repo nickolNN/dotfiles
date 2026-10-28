@@ -10,6 +10,10 @@
   (in `agent-skills/` or the remote skills shipped into the image), update
   that skill's `SKILL.md` in the same change — its frontmatter description
   and body are documentation the agent reads, and a stale skill is a bug.
+- **Code comments are English, and few.** No Russian in code — not in a
+  comment, docstring, or TODO. If a comment only restates the code, delete it
+  instead of translating it; keep the non-obvious "why", in English. Russian
+  stays only where it is data: UI labels, user-facing strings, test titles.
 
 ## Setup
 
@@ -79,9 +83,13 @@
 - `pi/settings.json`, `pi/web-search.json`, `pi/themes/`, `pi/extensions/`
   tracked
 - `pi/models.json` gitignored — holds literal API keys, never commit
-- `pi/sync-home-pc-models.sh` — patches `contextWindow` in `models.json`
-  from the live home-pc llama-swap `/v1/models`; run after changing a
-  preset on the PC
+- `pi/settings.json` включает `codemode` (`"defaultTools": ["+codemode"]`):
+  инструмент регистрируется неактивным и без этого ключа живёт только как
+  побочный эффект MCP (`exposure: "codemode"` в `mcp.json` включает его через
+  `builtin:mcp`) — выключи MCP, и он молча исчезает. `jq -s '.[0] * .[1]'`
+  в `dotfiles-agent/Dockerfile` мержит только `packages`, так что ключ
+  переживает сборку образа. Новые сессии видят его сразу, живой — после
+  `/reload`
 - `pi/sync-thinking-rules.sh` — syncs `reasoning` / `thinkingLevelMap` in
   `models.json` from pi's model catalog (`models-store.json`, refreshed by
   `pi update --models`); matches custom-provider models by normalized

@@ -16,12 +16,20 @@
   `module_report` to orient before you know the file,
   `read_symbol` / `read_enclosing` for one body instead of the
   whole file.
+- In pi: `codemode` — for a **local, mechanical batch**: 3+ reads/
+  greps whose output you would filter anyway (session jsonl, logs,
+  wide `rg`), or the same lookup across many files. One script
+  replaces a dozen round-trips. Not for a single call, and not for
+  anything that goes over the network (see "Internet & browser
+  tools"). Harnesses without it: batch with whatever single call
+  they offer.
 - Parallel work = room agents: `room_list_agents` to find an idle
   peer, `room_send_message` to dispatch. One writer per file;
   disjoint file sets per task. Sequential only when one depends
   on another's output.
 - Local calls: batch freely (group related lookups into one call
-  when supported); internet calls strictly sequential (below).
+  when supported; parallel tool calls in one message for a few);
+  internet calls strictly sequential (below).
 
 ## Internet & browser tools
 
@@ -33,7 +41,10 @@
 - Anti-bot pacing: one internet call per message; randomized 2–8s
   wait between calls (`sleep <N>` via Bash, random N 2–8); never
   idle — batch the sleep with local work (process fetched
-  results); don't block a turn on sleep alone.
+  results); don't block a turn on sleep alone. In pi this rules
+  out `codemode` for the fetch itself: its sandbox has no timers,
+  so a script cannot pace. Local batches inside a script are fine;
+  network calls stay direct, one per message.
 - Throttling ("try again in N seconds/minutes", rate limits):
   pause ALL queued internet requests immediately; resume after
   the announced period + buffer — N+1 seconds, or N minutes +1

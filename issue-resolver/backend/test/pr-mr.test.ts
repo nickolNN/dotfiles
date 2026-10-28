@@ -395,7 +395,9 @@ describe('HttpMrClient', () => {
             source: 'github',
           }),
         ),
-      ).rejects.toThrow('github pr failed: 422');
+      ).rejects.toThrow(
+        /github pr failed: 422 — POST \/repos\/acme\/app\/pulls — Validation Failed/,
+      );
     } finally {
       vi.unstubAllGlobals();
     }

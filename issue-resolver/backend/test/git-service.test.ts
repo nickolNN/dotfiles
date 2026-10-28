@@ -440,6 +440,78 @@ describe('GitCliService.commitAndPush — squash + force-push', () => {
       else process.env.BITBUCKET_TOKEN = prev;
     }
   });
+
+  it('identity через -c: в контейнере нет user.name/user.email в конфиге', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ir-ident-'));
+    roots.push(repo);
+    await mkdir(path.join(repo, '.git'), { recursive: true });
+    const calls: string[][] = [];
+    const exec: GitExecFile = (_file, args) => {
+      calls.push([...args]);
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const service = new GitCliService(path.join(repo, 'originals'), exec, 10_000);
+
+    await service.commitAndPush({
+      repoPath: repo,
+      branchName: 'feature/identity',
+      commitMessage: 'feat: Identity',
+    });
+
+    const commitCall = calls.find((args) => args.includes('commit'));
+    expect(commitCall).toBeDefined();
+    expect(commitCall).toContain('user.name=issue-resolver');
+    expect(commitCall).toContain('user.email=issue-resolver@localhost');
+  });
+
+  it('ошибка коммита → reject (раньше глоталась и пушилась ветка без коммитов)', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ir-commiterr-'));
+    roots.push(repo);
+    await mkdir(path.join(repo, '.git'), { recursive: true });
+    const exec: GitExecFile = (_file, args) => {
+      if (args.includes('commit')) {
+        return Promise.reject(
+          new Error('Command failed: git commit\nAuthor identity unknown'),
+        );
+      }
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const service = new GitCliService(path.join(repo, 'originals'), exec, 10_000);
+
+    await expect(
+      service.commitAndPush({
+        repoPath: repo,
+        branchName: 'feature/identity-fail',
+        commitMessage: 'feat: Identity fail',
+      }),
+    ).rejects.toThrow(/Author identity unknown/);
+  });
+
+  it('«nothing to commit» — не ошибка: пуш всё равно выполняется', async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), 'ir-nothing-'));
+    roots.push(repo);
+    await mkdir(path.join(repo, '.git'), { recursive: true });
+    const calls: string[][] = [];
+    const exec: GitExecFile = (_file, args) => {
+      calls.push([...args]);
+      if (args.includes('commit')) {
+        return Promise.reject(
+          new Error('Command failed: git commit\nnothing to commit, working tree clean'),
+        );
+      }
+      return Promise.resolve({ stdout: '', stderr: '' });
+    };
+    const service = new GitCliService(path.join(repo, 'originals'), exec, 10_000);
+
+    await expect(
+      service.commitAndPush({
+        repoPath: repo,
+        branchName: 'feature/nothing',
+        commitMessage: 'feat: Nothing',
+      }),
+    ).resolves.toBeTruthy();
+    expect(calls.some((args) => args.includes('push'))).toBe(true);
+  });
 });
 
 describe('GitCliService.prepare — идемпотентность', () => {

@@ -19,13 +19,13 @@ Stage {{STAGE_INDEX}} task: {{STAGE_TASK}}
 
 {{DOWNSTREAM_AWARENESS}}
 
-## Shared room memory
+## Stage memory
 
-- Previous stages publish their outcomes to the shared room memory. Read them
-  BEFORE starting, with the `memory_read` and `memory_search` tools (tags
-  `#issue-resolver`, `[[stage-N]]`), in addition to the working-folder files.
-- When your stage is done, write a short stage outcome with the `memory_write`
-  tool: tags `#issue-resolver` and `[[stage-{{STAGE_INDEX}}]]`.
+- Earlier stages record their outcome in the shared memory under `[[stage-N]]`.
+  Read those entries with `memory_search` before you start, in addition to the
+  working-folder files.
+- Record your own stage outcome under `[[stage-{{STAGE_INDEX}}]]`, following the
+  memory rules below.
 
 ## Your job
 

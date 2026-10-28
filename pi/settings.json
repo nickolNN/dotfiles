@@ -13,6 +13,7 @@
   "defaultProvider": "bailian-token-plan-personal",
   "defaultModel": "deepseek-v4.1-flash",
   "defaultThinkingLevel": "high",
+  "defaultTools": ["+codemode"],
   "externalEditor": "nvim",
   "showCacheMissNotices": true,
   "compaction": {

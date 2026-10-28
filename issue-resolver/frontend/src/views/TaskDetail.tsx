@@ -24,14 +24,17 @@ import type {
   PromptMode,
   SessionCommand,
   StepModels,
+  StepRunWithLog,
   StepThinkingLevels,
   StepRunStatus,
   WorkspaceFile,
 } from '@issue-resolver/shared';
 import {
+  SessionAddress,
   extractRepoNameFromUrl,
   formatDateTime,
   formatRelativeTime,
+  SESSION_STALE_MS,
 } from '@issue-resolver/shared';
 import { canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from '@issue-resolver/shared';
 import {
@@ -47,12 +50,14 @@ import {
   getIterations,
   getModels,
   getQuestionAnswers,
+  getReportRun,
   getReportStatus,
   getResultFiles,
   promptIteration,
   queueIteration,
   repeatIteration,
   runReportAgent,
+  type ReportStatus,
   startIssue,
   resultFilesArchiveUrl,
   sendIterationCommand,
@@ -472,6 +477,10 @@ type ArtifactMeta = {
 /** Имя MD-файла отчёта для скачивания агентами. */
 const RESULT_MD_FILENAME = 'report.md';
 
+// The stale window is a shared contract, not a copy: a UI that guesses it
+// differently than the server either kills live runs or hides dead ones.
+const REPORT_STALE_MS = SESSION_STALE_MS;
+
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
@@ -486,7 +495,7 @@ type StepRunsState =
 function filterArtifacts(files: IssueFile[]): IssueFile[] {
   return files.filter((file) => {
     const path = file.rel_path;
-    // Исключаем служебные каталоги и lock-файлы.
+    // Skip service directories and lock files.
     if (
       path.startsWith('node_modules/') ||
       path.startsWith('.git/') ||
@@ -594,6 +603,8 @@ function TaskDetailView({
     togglePrRepo,
   } = usePipelineSteps({
     models,
+    // `resolve` starts checked but can be unchecked — that is the MR-only run.
+    initialSteps: ['resolve'],
     prAvailable:
       state.status === 'ready' && state.issue.repositories.length > 0,
     defaultPrRepoIds: iterationPrRepoDefaults,
@@ -639,6 +650,9 @@ function TaskDetailView({
   // Нужны, чтобы НЕ совать markdown в iframe для HTML и не выдавать прошлый
   // отчёт за текущий (см. `x-artifact-source` в backend/src/routes/issues.ts).
   const [artifactMeta, setArtifactMeta] = useState<ArtifactMeta | null>(null);
+  // Markdown-артефакт: если html нет, модалка всё равно показывает отчёт —
+  // иначе «сгенерирован» выглядит как пустота (только кнопка скачивания).
+  const [resultMd, setResultMd] = useState<string | null>(null);
   // Механические сигналы по артефактам из `/report/status`: наблюдённая модель
   // прогона и предупреждения детектов. Это место UI, а не место в артефакте:
   // имя модели запрещено в report.md/report.html (GLOBAL_AGENTS), но человек
@@ -688,11 +702,25 @@ function TaskDetailView({
   // `running` — генерация идёт сейчас (локальный триггер + опрос статуса).
   const [reportReady, setReportReady] = useState(false);
   const [reportRunning, setReportRunning] = useState(false);
+  /** True only while the report POST is in flight; gates the retry button. */
+  const [reportStarting, setReportStarting] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  /**
+   * Полный ответ `/report/status`: статус прогона из БД, обе половины артефактов,
+   * причина падения и время старта. Раньше здесь был только булев `ready`, из-за
+   * чего прогон без файлов выглядел «сгенерированным».
+   */
+  const [reportStatusInfo, setReportStatusInfo] = useState<ReportStatus | null>(
+    null,
+  );
+  /** Последний прогон из БД (сессия, stdout, stats) — переживает перезагрузку. */
+  const [reportRunLog, setReportRunLog] = useState<StepRunWithLog | null>(null);
   /** Время старта текущей генерации: старый `report.md` по mtime не засчитываем. */
   const reportStartRef = useRef(0);
   /** Ref-гарда против гонки: стейт-апдейты асинхронны, ref — мгновенный. */
   const reportRunningRef = useRef(false);
+  /** Force one status poll (used right after a manual POST). */
+  const reportPollRef = useRef<() => void>(() => {});
   /** Модель для ручного запуска отчёта (переопределяет step_models.report). */
   const [reportModel, setReportModel] = useState<string>('');
   /** Thinking level для ручного запуска отчёта. */
@@ -1244,13 +1272,41 @@ function TaskDetailView({
       ]
     : [];
 
-  // Issue-уровневые сессии DevOps/Report: их stepRunId синтетические
-  // (`{issueId}/devops` | `{issueId}/report`), событий в step_runs нет —
-  // SessionView кормится только живыми `log`-чанками (text-события).
-  const devopsRunId = issueId ? `${issueId}/devops` : '';
-  const reportRunId = issueId ? `${issueId}/report` : '';
+  // Issue-level sessions (DevOps/Report) have addresses, not step runs: no
+  // `step_runs` row, so SessionView lives on the live `log` chunks alone.
+  const devopsRunId = issueId
+    ? SessionAddress.forIssueRun(issueId, 'devops').toString()
+    : '';
+  const reportRunId = issueId
+    ? SessionAddress.forIssueRun(issueId, 'report').toString()
+    : '';
   const devopsEvents = liveEventsByRun[devopsRunId] ?? [];
   const reportEvents = liveEventsByRun[reportRunId] ?? [];
+  // Статус отчёта — 4 честных состояния из БД. Раньше UI выводил успех из
+  // флагов в памяти, поэтому пустой прогон выглядел «готовым».
+  const reportPhase: 'idle' | 'running' | 'failed' | 'success' =
+    reportRunning
+      ? 'running'
+      : (reportStatusInfo?.status ?? 'idle');
+  const reportHtmlAvailable = reportStatusInfo?.artifacts?.html.present ?? false;
+  const reportMdAvailable = reportStatusInfo?.artifacts?.md.present ?? false;
+  const reportStartedAt = reportStatusInfo?.startedAt;
+  // Живой буфер SSE + сохранённая сессия прогона из БД: после перезагрузки
+  // страницы панель вывода показывает последний прогон, а не пустоту.
+  const reportModalEvents = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: SessionEvent[] = [];
+    for (const event of [
+      ...(reportRunLog ? sessionEventsOf(reportRunLog) : []),
+      ...reportEvents,
+    ]) {
+      const key = JSON.stringify(event);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(event);
+    }
+    return merged;
+  }, [reportRunLog, reportEvents]);
 
   /**
    * Цель модалки вывода: прогон шага ИЛИ issue-уровневый `report`-прогон.
@@ -1284,24 +1340,29 @@ function TaskDetailView({
         stderr: expandedStepRun.stderr,
         report: expandedStepRun.report,
         startedAt: expandedStepRun.created_at,
-        sessionId: expandedStepRun.iteration_id,
+        // У шага итерация есть всегда; `null` возможен только у прогонов вне
+        // итерации (report), которые в эту ветку не попадают.
+        sessionId: expandedStepRun.iteration_id ?? '',
       }
     : reportExpanded
       ? {
           title: STEP_LABELS.report,
           attempt: 1,
-          status: reportRunning
-            ? 'running'
-            : reportError !== null
-              ? 'failed'
-              : 'success',
-          active: reportRunning,
-          events: reportEvents,
-          stats: null,
-          stdout: '',
-          stderr: '',
+          status:
+            reportPhase === 'running'
+              ? 'running'
+              : reportPhase === 'failed'
+                ? 'failed'
+                : reportPhase === 'success'
+                  ? 'success'
+                  : 'pending',
+          active: reportPhase === 'running',
+          events: reportModalEvents,
+          stats: reportRunLog?.stats ?? null,
+          stdout: reportRunLog?.stdout ?? '',
+          stderr: reportRunLog?.stderr ?? '',
           report: null,
-          startedAt: undefined,
+          startedAt: reportStartedAt,
           sessionId: reportRunId,
         }
       : null;
@@ -1456,6 +1517,12 @@ function TaskDetailView({
       : [];
   const prAvailable =
     state.status === 'ready' && state.issue.repositories.length > 0;
+  // Empty selection is not sent as "use the issue defaults": the run simply
+  // does not start.
+  const selectedRunSteps = PIPELINE_ORDER.filter(
+    (step) => chosenSteps.has(step) && (step !== 'pr' || prAvailable),
+  );
+  const hasIterationSteps = selectedRunSteps.length > 0;
   const resultAvailable = state.status === 'ready';
   // MR-ссылки для шапки: персистентные из issue.merge_requests + живые из SSE,
   // дедуп по URL (событие и данные задачи дублируют друг друга).
@@ -1540,6 +1607,30 @@ function TaskDetailView({
     };
   }, [resultOpen, issueId]);
 
+  // HEAD сказал «markdown» — iframe такое не отрисует, поэтому тянем текст и
+  // рендерим его как markdown. Готовность отчёта и наличие html не связаны:
+  // report.md пишется раньше, и его отсутствие в UI — дефект показа, не данных.
+  useEffect(() => {
+    if (!issueId || !artifactMeta) return;
+    const isHtml = artifactMeta.contentType.includes('text/html');
+    if (artifactMeta.status !== 200 || isHtml) {
+      setResultMd(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`${API_BASE}/issues/${issueId}/result`)
+      .then((response) => (response.ok ? response.text() : null))
+      .then((text) => {
+        if (!cancelled) setResultMd(text);
+      })
+      .catch(() => {
+        if (!cancelled) setResultMd(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [artifactMeta, issueId]);
+
   // Список порождённых файлов. Best-effort: сеть/не-2xx → пустой список,
   // чтобы шапка не падала. Перезагружается с refreshTick (терминал итерации,
   // новая итерация) и когда отчёт становится готов.
@@ -1561,84 +1652,99 @@ function TaskDetailView({
     };
   }, [issueId, resultReady, refreshTick]);
 
-  // Статус отчёта (`report.md`): разово при заходе и опрос, пока идёт
-  // генерация. Report-агент пишет файл fire-and-forget — явного SSE-финала
-  // нет, поэтому готовность определяем по mtime файла (GET /report/status).
+  // Report status comes from the DB, not from a file being present: polling
+  // never gives up (the run is fire-and-forget, with no SSE finale) until a
+  // terminal status arrives. Readiness follows the artifact, html is its own flag.
   useEffect(() => {
     if (!issueId) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
 
-    const apply = (next: Awaited<ReturnType<typeof getReportStatus>>) => {
+    const hydrateRun = () => {
+      getReportRun(issueId)
+        .then((run) => {
+          if (!cancelled) setReportRunLog(run);
+        })
+        .catch(() => {
+          if (!cancelled) setReportRunLog(null);
+        });
+    };
+
+    const apply = (next: ReportStatus) => {
       if (cancelled) return;
+      // Response shape is part of the contract: without `artifacts` this is not
+      // a report status, so ignore it instead of deriving `running` from it.
+      if (!next || !next.artifacts) return;
+      setReportStatusInfo(next);
       setReportMeta({
         observedModel: next.observedModel,
         warnings: next.warnings ?? [],
       });
-      if (next.status !== 'success') {
-        if (!reportRunning) setReportReady(false);
-        return;
-      }
-      // Пока идёт новый прогон, старый report.md (mtime до старта) не считаем.
-      const fresh =
-        !reportRunning ||
-        (next.lastRunAt !== undefined &&
-          new Date(next.lastRunAt).getTime() >=
-            reportStartRef.current - 5000);
-      if (!fresh) return;
-      setReportReady(true);
-      reportRunningRef.current = false;
-      setReportRunning(false);
+      // Readiness follows the artifact, not the run outcome: a run interrupted
+      // after it wrote report.md still leaves a usable report, and hiding its
+      // download behind a red badge was a lie in the other direction.
+      setReportReady(
+        next.status === 'success' || (next.artifacts?.md.present ?? false),
+      );
+      const running = next.status === 'running';
+      reportRunningRef.current = running;
+      setReportRunning(running);
+      // Hydrate the run's session (events/stdout/stats) from the DB; otherwise a
+      // page reload leaves nothing but the badge.
+      if (!running) hydrateRun();
     };
 
-    if (!reportRunning) {
-      getReportStatus(issueId)
-        .then(apply)
-        .catch(() => {
-          if (!cancelled) setReportReady(false);
-        });
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    let attempts = 0;
     const poll = () => {
       getReportStatus(issueId)
         .then(apply)
         .catch(() => {});
     };
+    reportPollRef.current = poll;
+
     poll();
-    const timer = setInterval(() => {
-      // ~5 мин — сдаёмся, чтобы не крутить опрос вечно (например, на cancelled).
-      if (++attempts > 100) {
-        clearInterval(timer);
-        setReportRunning(false);
-        return;
-      }
-      poll();
-    }, 3000);
+    // No give-up timer: a report run takes tens of minutes, and a truncated
+    // poll used to report "finished" mid-flight.
+    timer = setInterval(poll, 4000);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      reportPollRef.current = () => {};
+      if (timer) clearInterval(timer);
     };
-  }, [issueId, reportRunning]);
-  // Room-режим итерации: последний refine рекомендовал комнату. Для активного
-  // resolve карточка шага показывает вкладки агентов вместо одной сессии.
+  }, [issueId]);
+  // Room mode: the last refine recommended a room, so an active resolve step
+  // shows agent tabs instead of a single session.
   const roomIteration =
     stepRuns.status === 'ready' && isRoomIteration(stepRuns.stepRuns);
-  const hint = !context.trim()
-    ? 'Укажи контекст для новой итерации.'
-    : selectedSteps.includes('review')
-      ? 'После Resolver автоматически запустится Код-ревью.'
-      : 'Итерация завершится сразу после работы Resolver.';
+  const hint = !hasIterationSteps
+    ? 'Отметь хотя бы один шаг пайплайна.'
+    : !context.trim()
+      ? 'Укажи контекст для новой итерации.'
+      : selectedSteps.includes('review')
+        ? 'После Resolver автоматически запустится Код-ревью.'
+        : 'Итерация завершится сразу после работы Resolver.';
 
-  // Один живой тик на все карточки шагов: активные показывают elapsed.
+  // One shared tick for every step card that shows elapsed time.
   const anyActiveStep =
     stepRuns.status === 'ready' &&
     stepRuns.stepRuns.some((run) => isActiveStatus(statusOf(run)));
-  const now = useNow(anyActiveStep);
+  const now = useNow(anyActiveStep || reportPhase === 'running');
 
-  // Палитра слэш-команд: при вводе `/…` фильтруем команды живой сессии.
+  // A run whose heartbeat stopped is dead, whatever the status word says. The
+  // old code trusted `running` alone: a run killed mid-flight left the badge at
+  // «⏳» forever and the retry button disabled forever.
+  const reportLastActivity = reportStatusInfo?.updatedAt
+    ? Date.parse(reportStatusInfo.updatedAt)
+    : null;
+  const reportActivityStale =
+    reportPhase === 'running' &&
+    reportLastActivity !== null &&
+    now - reportLastActivity > REPORT_STALE_MS;
+  const reportStaleMinutes =
+    reportActivityStale && reportLastActivity !== null
+      ? Math.max(1, Math.round((now - reportLastActivity) / 60_000))
+      : 0;
+
+  // Slash palette: filter the live session's commands while typing `/…`.
   const slashQuery = message.startsWith('/') ? message.slice(1) : null;
   const commandMatches =
     slashQuery !== null && controlSnapshot
@@ -1673,15 +1779,12 @@ function TaskDetailView({
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!issueId) return;
-    if (!canStart) return;
+    if (!canStart || !hasIterationSteps) return;
 
     const issue = state.status === 'ready' ? state.issue : null;
 
     // Шаг PR допустим только при наличии хотя бы одного репозитория.
-    const orderedSteps = PIPELINE_ORDER.filter((step) => chosenSteps.has(step));
-    const effectiveSteps = prAvailable
-      ? orderedSteps
-      : orderedSteps.filter((step) => step !== 'pr');
+    const effectiveSteps = selectedRunSteps;
 
     // В тело идут только модели выбранных шагов.
     const activeStepModels = Object.fromEntries(
@@ -1705,7 +1808,7 @@ function TaskDetailView({
       context,
       is_review_need: selectedSteps.includes('review'),
       review_context: '',
-      steps: effectiveSteps.length > 0 ? effectiveSteps : undefined,
+      steps: effectiveSteps,
       step_models:
         Object.keys(activeStepModels).length > 0 ? activeStepModels : undefined,
       step_thinking_levels:
@@ -2110,25 +2213,31 @@ function TaskDetailView({
     setResultOpen(true);
   }
 
-  /** Кнопка «🔄 Обновить»: принудительный ре-ран report-агента. */
+  /**
+   * Retry button: re-runs the report agent. The server refuses a second run
+   * with 409, so the button is gated by its own request only — gating it by run
+   * status is what left it disabled on a dead run.
+   */
   async function handleRefreshReport() {
-    if (state.status !== 'ready' || reportRunningRef.current) return;
+    if (state.status !== 'ready' || reportStarting) return;
     setReportError(null);
+    setReportStarting(true);
     reportStartRef.current = Date.now();
-    reportRunningRef.current = true;
-    setReportRunning(true);
     try {
       const modelParam = reportModel || undefined;
       const thinkingParam = reportThinkingLevel || undefined;
       await runReportAgent(state.issue.id, modelParam, thinkingParam);
+      // No optimistic "running": re-read the DB so the badge shows the run that
+      // actually exists (a 409 here means another run is live).
+      reportPollRef.current();
     } catch (error) {
-      reportRunningRef.current = false;
-      setReportRunning(false);
       setReportError(
         error instanceof Error
           ? error.message
           : 'Не удалось запустить генерацию отчёта',
       );
+    } finally {
+      setReportStarting(false);
     }
   }
 
@@ -2405,19 +2514,43 @@ function TaskDetailView({
                     📄 Отчёт и артефакты
                   </h4>
                   <span className="ml-auto text-xs">
-                    {reportRunning ? (
+                    {reportPhase === 'running' ? (
                       <span
                         data-testid="report-generating"
                         className="text-[#FFB000]"
                       >
-                        ⏳ Генерируется…
+                        ⏳ Генерируется
+                        {reportStartedAt
+                          ? ` · ${formatStepDuration(now - Date.parse(reportStartedAt))}`
+                          : '…'}
                       </span>
-                    ) : reportReady ? (
+                    ) : reportPhase === 'failed' && reportMdAvailable ? (
+                      <span
+                        data-testid="report-failed-with-artifacts"
+                        className="text-[#FFB000]"
+                      >
+                        ⚠ Отчёт есть, прогон прерван
+                      </span>
+                    ) : reportPhase === 'failed' ? (
+                      <span
+                        data-testid="report-failed"
+                        className="text-[#FF0033]"
+                      >
+                        ✕ Прогон упал
+                      </span>
+                    ) : reportPhase === 'success' && reportHtmlAvailable ? (
                       <span
                         data-testid="report-ready"
                         className="text-[#00FF41]/80"
                       >
-                        ✓ Сгенерирован
+                        ✓ Готов: HTML + MD
+                      </span>
+                    ) : reportPhase === 'success' ? (
+                      <span
+                        data-testid="report-md-only"
+                        className="text-[#FFB000]"
+                      >
+                        ⚠ Только markdown
                       </span>
                     ) : (
                       <span
@@ -2427,8 +2560,25 @@ function TaskDetailView({
                         Отчёт ещё не сгенерирован
                       </span>
                     )}
+                    {reportActivityStale && (
+                      <span
+                        data-testid="report-stale"
+                        className="ml-2 text-[#FF0033]"
+                      >
+                        ⚠ нет активности {reportStaleMinutes} мин
+                      </span>
+                    )}
                   </span>
                 </div>
+
+                {reportStatusInfo?.feedback && (
+                  <p
+                    data-testid="report-feedback"
+                    className="mt-2 border-l-2 border-[#008F11] pl-2 text-xs text-[#00FF41]/60"
+                  >
+                    {reportStatusInfo.feedback}
+                  </p>
+                )}
 
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
@@ -2462,13 +2612,13 @@ function TaskDetailView({
                   <button
                     type="button"
                     data-testid="refresh-report"
-                    disabled={reportRunning}
+                    disabled={reportStarting}
                     onClick={() => void handleRefreshReport()}
                     className="min-h-9 rounded-none border border-[#008F11] px-3 py-1 text-xs font-medium text-[#00FF41]/80 hover:border-[#00FF41] hover:text-[#00FF41] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[#008F11] disabled:hover:text-[#00FF41]/80 transition-base"
                   >
                     🔄 Обновить
                   </button>
-                  {reportEvents.length > 0 && (
+                  {reportModalEvents.length > 0 && (
                     <button
                       type="button"
                       data-testid="report-expand"
@@ -2543,23 +2693,25 @@ function TaskDetailView({
                   </p>
                 )}
 
-                {reportRunning && reportEvents.length > 0 && (
+                {reportModalEvents.length > 0 && (
                   <AutoScrollBox
-                    scrollKey={reportEvents.length}
+                    scrollKey={reportModalEvents.length}
                     className="mt-2 h-[300px] overflow-auto border border-[#008F11] bg-[#000200] p-2"
                   >
                     <div data-testid="report-session">
                       <SessionView
-                        events={reportEvents}
-                        running
+                        events={reportModalEvents}
+                        stats={reportRunLog?.stats ?? null}
+                        running={reportPhase === 'running' && !reportActivityStale}
+                        startedAt={reportStartedAt}
                         showFooter={false}
                       />
                     </div>
                   </AutoScrollBox>
                 )}
-                {reportEvents.length > 0 && (
+                {reportModalEvents.length > 0 && (
                   <SessionStatsBar
-                    events={reportEvents}
+                    events={reportModalEvents}
                     className="mt-2 border-t border-[#008F11]/40 pt-2 text-[10px]"
                   />
                 )}
@@ -2745,7 +2897,9 @@ function TaskDetailView({
                 <p className="text-xs text-[#00FF41]/60">{hint}</p>
                 <button
                   type="submit"
-                  disabled={!canStart || !context.trim() || submitting}
+                  disabled={
+                    !canStart || !hasIterationSteps || !context.trim() || submitting
+                  }
                   className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 md:w-auto transition-base"
                 >
                   {submitting
@@ -3158,7 +3312,7 @@ function TaskDetailView({
                                         {roomIteration &&
                                         run.step === 'resolve' ? (
                                           <RoomAgentTabs
-                                            iterationId={run.iteration_id}
+                                            iterationId={run.iteration_id ?? ''}
                                             refreshKey={refreshTick}
                                           />
                                         ) : (
@@ -3426,12 +3580,22 @@ function TaskDetailView({
                   запустить report-агента.
                 </div>
               ) : artifactMeta && !artifactMeta.contentType.includes('text/html') ? (
-                <div
-                  data-testid="result-not-html"
-                  className="border border-[#008F11] p-4 text-sm text-[#00FF41]"
-                >
-                  HTML-версия отчёта недоступна — доступен только markdown.
-                  Скачайте «Скачать .md».
+                <div data-testid="result-not-html" className="text-sm text-[#00FF41]">
+                  <p className="mb-3 border border-[#008F11] p-2 text-[11px] text-[#00FF41]/70">
+                    HTML-версия отчёта недоступна — показан markdown.
+                  </p>
+                  {resultMd === null ? (
+                    <p className="border border-[#008F11] p-4">
+                      Загрузка отчёта…
+                    </p>
+                  ) : (
+                    <div
+                      data-testid="result-markdown"
+                      className="border border-[#008F11] p-4"
+                    >
+                      <AgentMarkdown>{resultMd}</AgentMarkdown>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <iframe

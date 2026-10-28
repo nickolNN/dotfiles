@@ -205,6 +205,7 @@ describe('TaskDetail — live SSE', () => {
     const iteration = makeIteration({ steps: ['refine', 'resolve'] });
     const refineRun = {
       id: 'run-refine',
+      issue_id: 'issue-1',
       iteration_id: 'iter-1',
       step: 'refine',
       attempt: 1,
@@ -274,6 +275,7 @@ describe('TaskDetail — live SSE', () => {
     const iteration = makeIteration();
     const stepRun = {
       id: 'run-1',
+      issue_id: 'issue-1',
       iteration_id: 'iter-1',
       step: 'resolve',
       attempt: 1,
@@ -338,6 +340,7 @@ describe('TaskDetail — live SSE', () => {
     const iteration = makeIteration();
     const stepRun = {
       id: 'run-1',
+      issue_id: 'issue-1',
       iteration_id: 'iter-1',
       step: 'resolve',
       attempt: 1,
@@ -414,6 +417,7 @@ describe('TaskDetail — live SSE', () => {
     const iteration = makeIteration();
     const stepRun = {
       id: 'run-1',
+      issue_id: 'issue-1',
       iteration_id: 'iter-1',
       step: 'resolve',
       attempt: 1,
@@ -484,6 +488,7 @@ describe('TaskDetail — live SSE', () => {
     const iteration = makeIteration();
     const stepRun = {
       id: 'run-1',
+      issue_id: 'issue-1',
       iteration_id: 'iter-1',
       step: 'resolve',
       attempt: 1,

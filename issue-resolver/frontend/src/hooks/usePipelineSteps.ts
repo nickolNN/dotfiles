@@ -36,7 +36,7 @@ export interface UsePipelineStepsResult {
   selectedSteps: PipelineStep[];
   stepModels: StepModels;
   stepThinkingLevels: StepThinkingLevels;
-  /** `resolve` + отмеченные — по этому набору фильтруются модели и шаги payload. */
+  /** Selected steps; payload models/steps are filtered by this set. */
   chosenSteps: Set<PipelineStep>;
   prRepoIds: Set<string>;
   toggleStep: (step: PipelineStep) => void;
@@ -157,7 +157,7 @@ export function usePipelineSteps({
   }, []);
 
   const chosenSteps = useMemo(
-    () => new Set<PipelineStep>(['resolve', ...selectedSteps]),
+    () => new Set<PipelineStep>(selectedSteps),
     [selectedSteps],
   );
 

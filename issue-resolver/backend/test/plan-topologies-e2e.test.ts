@@ -291,9 +291,9 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
       .all()
       .find((run) => run.step === 'resolve');
     // Исполнители нумеруются 0-based в id, координатор = stepRunId шага.
-    expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRun?.id}/worker/0`);
-    expect(pi.calls[2].options?.stepRunId).toBe(`${resolveRun?.id}/worker/1`);
-    expect(pi.calls[3].options?.stepRunId).toBe(`${resolveRun?.id}/worker/2`);
+    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRun?.id}.w0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRun?.id}.w1`);
+    expect(pi.calls[3].options?.stepRunId).toBe(`run.${resolveRun?.id}.w2`);
     expect(pi.calls[4].options?.stepRunId).toBe(resolveRun?.id);
   });
 
@@ -329,9 +329,9 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
         .map((call) => call.options?.stepRunId),
     ).toEqual([
       pi.calls[0].options?.stepRunId, // refine
-      `${resolveRun?.id}/stage/1/worker/1`,
-      `${resolveRun?.id}/stage/2/worker/1`,
-      `${resolveRun?.id}/stage/3/worker/1`,
+      `run.${resolveRun?.id}.s1.w0`,
+      `run.${resolveRun?.id}.s2.w0`,
+      `run.${resolveRun?.id}.s3.w0`,
       resolveRun?.id,
     ]);
   });
@@ -385,14 +385,14 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
         .map((call) => call.options?.stepRunId),
     ).toEqual([
       pi.calls[0].options?.stepRunId, // refine
-      `${resolveRun?.id}/stage/1/worker/1`,
-      `${resolveRun?.id}/stage/1/worker/2`,
-      `${resolveRun?.id}/stage/1/coordinator`,
-      `${resolveRun?.id}/stage/2/worker/1`,
-      `${resolveRun?.id}/stage/3/worker/1`,
-      `${resolveRun?.id}/stage/3/worker/2`,
-      `${resolveRun?.id}/stage/3/worker/3`,
-      `${resolveRun?.id}/stage/3/coordinator`,
+      `run.${resolveRun?.id}.s1.w0`,
+      `run.${resolveRun?.id}.s1.w1`,
+      `run.${resolveRun?.id}.s1.lead`,
+      `run.${resolveRun?.id}.s2.w0`,
+      `run.${resolveRun?.id}.s3.w0`,
+      `run.${resolveRun?.id}.s3.w1`,
+      `run.${resolveRun?.id}.s3.w2`,
+      `run.${resolveRun?.id}.s3.lead`,
       resolveRun?.id,
     ]);
   });

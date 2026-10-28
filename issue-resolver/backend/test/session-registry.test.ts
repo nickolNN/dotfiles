@@ -5,6 +5,8 @@ import { createDb } from '../src/db/client';
 import { issues, iterations } from '../src/db/schema';
 import {
   InMemoryStepSessionRegistry,
+  iterationTarget,
+  runTarget,
   type StepSessionControl,
   type UiResponsePayload,
 } from '../src/pi/session-registry';
@@ -161,8 +163,8 @@ describe('InMemoryStepSessionRegistry', () => {
     registry.register('run-1', 'iter-1', first.control);
     registry.register('run-2', 'iter-1', second.control);
 
-    await registry.promptByIteration('iter-1', 'anchor');
-    await registry.sendByIteration('iter-1', { type: 'get_state' });
+    await registry.prompt(iterationTarget('iter-1'), 'anchor');
+    await registry.send(iterationTarget('iter-1'), { type: 'get_state' });
     registry.respondByIteration('iter-1', { id: 'ui-1', value: 'y' });
 
     // Anchor = последняя зарегистрированная (в фазе room — координатор).
@@ -200,14 +202,14 @@ describe('InMemoryStepSessionRegistry', () => {
 
   it('listAgents: агенты комнаты в порядке регистрации, статус меняется при unregister', () => {
     const registry = new InMemoryStepSessionRegistry();
-    registry.register('base/worker/0', 'iter-1', spyControl().control, {
-      id: 'base/worker/0',
+    registry.register('base.w0', 'iter-1', spyControl().control, {
+      id: 'base.w0',
       role: 'worker',
       index: 1,
       label: 'Исполнитель 1',
     });
-    registry.register('base/worker/1', 'iter-1', spyControl().control, {
-      id: 'base/worker/1',
+    registry.register('base.w1', 'iter-1', spyControl().control, {
+      id: 'base.w1',
       role: 'worker',
       index: 2,
       label: 'Исполнитель 2',
@@ -221,7 +223,7 @@ describe('InMemoryStepSessionRegistry', () => {
 
     expect(registry.listAgents('iter-1')).toEqual([
       {
-        id: 'base/worker/0',
+        id: 'base.w0',
         role: 'worker',
         index: 1,
         label: 'Исполнитель 1',
@@ -233,7 +235,7 @@ describe('InMemoryStepSessionRegistry', () => {
         stats: null,
       },
       {
-        id: 'base/worker/1',
+        id: 'base.w1',
         role: 'worker',
         index: 2,
         label: 'Исполнитель 2',
@@ -258,10 +260,10 @@ describe('InMemoryStepSessionRegistry', () => {
       },
     ]);
 
-    registry.unregister('base/worker/0', 'failed');
+    registry.unregister('base.w0', 'failed');
     // Вкладка завершённого агента остаётся, но живой сессии уже нет.
     expect(registry.listAgents('iter-1')[0].status).toBe('failed');
-    expect(registry.steer('base/worker/0', 'x')).toBe(false);
+    expect(registry.steer('base.w0', 'x')).toBe(false);
     expect(registry.listAgents('iter-1')).toHaveLength(3);
     expect(registry.listAgents('iter-unknown')).toEqual([]);
   });
@@ -295,8 +297,8 @@ describe('InMemoryStepSessionRegistry', () => {
 
   it('listAgents: stage/stageName агента комнаты попадают в снимок', () => {
     const registry = new InMemoryStepSessionRegistry();
-    registry.register('base/stage/1/worker/0', 'iter-stage', spyControl().control, {
-      id: 'base/stage/1/worker/0',
+    registry.register('base.s1.w-1', 'iter-stage', spyControl().control, {
+      id: 'base.s1.w-1',
       role: 'worker',
       index: 1,
       label: 'Этап 1 · Исполнитель 1',
@@ -312,7 +314,7 @@ describe('InMemoryStepSessionRegistry', () => {
 
     expect(registry.listAgents('iter-stage')).toEqual([
       {
-        id: 'base/stage/1/worker/0',
+        id: 'base.s1.w-1',
         role: 'worker',
         index: 1,
         label: 'Этап 1 · Исполнитель 1',
@@ -340,8 +342,8 @@ describe('InMemoryStepSessionRegistry', () => {
 
   it('recordEvent: usage агрегируется в stats, cost null пока его не было', () => {
     const registry = new InMemoryStepSessionRegistry();
-    registry.register('base/worker/0', 'iter-3', spyControl().control, {
-      id: 'base/worker/0',
+    registry.register('base.w0', 'iter-3', spyControl().control, {
+      id: 'base.w0',
       role: 'worker',
       index: 1,
       label: 'Исполнитель 1',
@@ -352,12 +354,12 @@ describe('InMemoryStepSessionRegistry', () => {
     expect(before.startedAt).toEqual(expect.any(String));
     expect(before.stats).toBeNull();
 
-    registry.recordEvent('base/worker/0', {
+    registry.recordEvent('base.w0', {
       type: 'usage',
       usage: { input: 10, output: 2, cacheRead: 3, cacheWrite: 1, total: 16 },
       cost: null,
     });
-    registry.recordEvent('base/worker/0', {
+    registry.recordEvent('base.w0', {
       type: 'usage',
       usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0, total: 6 },
       cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, total: 3 },
@@ -377,26 +379,26 @@ describe('InMemoryStepSessionRegistry', () => {
 
   it('recordEvent: кумулятивные снапшоты одного ответа схлопываются, ответы суммируются', () => {
     const registry = new InMemoryStepSessionRegistry();
-    registry.register('base/worker/0', 'iter-cumulative', spyControl().control, {
-      id: 'base/worker/0',
+    registry.register('base.w0', 'iter-cumulative', spyControl().control, {
+      id: 'base.w0',
       role: 'worker',
       index: 1,
       label: 'Исполнитель 1',
     });
 
     // Ответ 1: total растёт 50 → 100 (кумулятив) — берём последний снапшот.
-    registry.recordEvent('base/worker/0', {
+    registry.recordEvent('base.w0', {
       type: 'usage',
       usage: { input: 40, output: 10, cacheRead: 0, cacheWrite: 0, total: 50 },
       cost: null,
     });
-    registry.recordEvent('base/worker/0', {
+    registry.recordEvent('base.w0', {
       type: 'usage',
       usage: { input: 80, output: 20, cacheRead: 0, cacheWrite: 0, total: 100 },
       cost: null,
     });
     // Ответ 2: total упал → новая граница, предыдущий ответ суммируется.
-    registry.recordEvent('base/worker/0', {
+    registry.recordEvent('base.w0', {
       type: 'usage',
       usage: { input: 4, output: 1, cacheRead: 0, cacheWrite: 0, total: 5 },
       cost: null,
@@ -504,8 +506,8 @@ describe('InMemoryStepSessionRegistry', () => {
     const registry = new InMemoryStepSessionRegistry();
     for (let i = 0; i < 65; i += 1) {
       const iterationId = `iter-${i}`;
-      registry.register(`${iterationId}/worker/0`, iterationId, spyControl().control, {
-        id: `${iterationId}/worker/0`,
+      registry.register(`${iterationId}.w0`, iterationId, spyControl().control, {
+        id: `${iterationId}.w0`,
         role: 'worker',
         index: 1,
         label: 'Исполнитель 1',
@@ -516,19 +518,19 @@ describe('InMemoryStepSessionRegistry', () => {
     expect(registry.listAgents('iter-64')).toHaveLength(1);
   });
 
-  it('promptByIteration/sendByIteration резолвят активную сессию; без → null', async () => {
+  it('prompt/send по итерации резолвят активную сессию; без → null', async () => {
     const registry = new InMemoryStepSessionRegistry();
     const spy = spyControl();
 
-    expect(await registry.promptByIteration('iter-x', 'hi')).toBeNull();
-    expect(registry.sendByIteration('iter-x', { type: 'get_state' })).toBeNull();
+    expect(await registry.prompt(iterationTarget('iter-x'), 'hi')).toBeNull();
+    expect(registry.send(iterationTarget('iter-x'), { type: 'get_state' })).toBeNull();
     expect(registry.hasByIteration('iter-x')).toBe(false);
 
     registry.register('run-1', 'iter-1', spy.control);
     expect(registry.hasByIteration('iter-1')).toBe(true);
 
-    const promptResult = await registry.promptByIteration('iter-1', 'привет', 'steer');
-    const sendResult = await registry.sendByIteration('iter-1', {
+    const promptResult = await registry.prompt(iterationTarget('iter-1'), 'привет', 'steer');
+    const sendResult = await registry.send(iterationTarget('iter-1'), {
       type: 'set_model',
       provider: 'anthropic',
       modelId: 'claude',
@@ -546,8 +548,31 @@ describe('InMemoryStepSessionRegistry', () => {
 
     registry.unregister('run-1');
     expect(registry.hasByIteration('iter-1')).toBe(false);
-    expect(registry.promptByIteration('iter-1', 'после')).toBeNull();
-    expect(registry.sendByIteration('iter-1', { type: 'get_state' })).toBeNull();
+    expect(registry.prompt(iterationTarget('iter-1'), 'после')).toBeNull();
+    expect(registry.send(iterationTarget('iter-1'), { type: 'get_state' })).toBeNull();
+  });
+
+  it('run-адрес бьёт точно в свою сессию, а не в якорь итерации', async () => {
+    const registry = new InMemoryStepSessionRegistry();
+    const worker = spyControl();
+    const coordinator = spyControl();
+
+    registry.register('iter-1.w1', 'iter-1', worker.control);
+    registry.register('iter-1.coord', 'iter-1', coordinator.control);
+
+    expect(await registry.prompt(runTarget('iter-1.w1'), 'только исполнителю')).toEqual(
+      { ok: true, disposition: 'queued' },
+    );
+    expect(worker.prompts).toHaveLength(1);
+    expect(coordinator.prompts).toHaveLength(0);
+
+    // The anchor is the last registered one — that is what iterationTarget hits.
+    await registry.prompt(iterationTarget('iter-1'), 'координатору');
+    expect(worker.prompts).toHaveLength(1);
+    expect(coordinator.prompts).toHaveLength(1);
+
+    expect(registry.prompt(runTarget('iter-1.nobody'), 'hi')).toBeNull();
+    expect(registry.send(runTarget('iter-1.nobody'), { type: 'get_state' })).toBeNull();
   });
 
   it('respond/respondByIteration резолвят сессию и шлют payload', () => {

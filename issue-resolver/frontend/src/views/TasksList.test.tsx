@@ -124,6 +124,7 @@ function makeStats(
 function makeStepRun(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog {
   return {
     id: 'run-1',
+    issue_id: 'issue-1',
     iteration_id: 'it-1',
     step: 'resolve',
     attempt: 1,

@@ -154,9 +154,7 @@ function IssueFormView({
     togglePrRepo,
   } = usePipelineSteps({
     models,
-    initialSteps: (initialData?.pipelineSteps ?? []).filter(
-      (step) => step !== 'resolve',
-    ),
+    initialSteps: initialData?.pipelineSteps ?? ['resolve'],
     initialStepModels: initialData?.stepModels,
     initialStepThinkingLevels: initialData?.stepThinkingLevels,
     initialPrRepoIds: (initialData?.repositories ?? [])
@@ -403,6 +401,8 @@ function IssueFormView({
 
   /** Собрать payload и отправить — общая для «Запустить» и «Сохранить». */
   async function submitForm(runImmediately: boolean) {
+    // Empty selection would fall back to the issue defaults server-side.
+    if (chosenSteps.size === 0) return;
     // В тело идут только модели выбранных шагов. `report` — не шаг пайплайна
     // (отчёт всегда генерируется движком на терминальной итерации), поэтому
     // его модель сохраняется независимо от набора выбранных шагов.
@@ -707,7 +707,7 @@ function IssueFormView({
           {showRunButton && (
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || chosenSteps.size === 0}
               className="min-h-12 w-full rounded-none border border-[#00FF41] bg-[#003B00] px-5 py-2 text-sm font-medium text-[#00FF41] shadow-[0_0_10px_rgba(0,255,65,0.35)] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 md:w-auto"
             >
               {submitting ? 'Запускаем…' : submitLabel}
@@ -716,7 +716,7 @@ function IssueFormView({
           {showSaveButton && (
             <button
               type="button"
-              disabled={submitting}
+              disabled={submitting || chosenSteps.size === 0}
               onClick={handleSave}
               className="min-h-12 w-full rounded-none border border-[#008F11] bg-[#0D0208] px-5 py-2 text-sm font-medium text-[#008F11] hover:bg-[#008F11]/20 hover:text-[#00FF41] disabled:opacity-50 md:w-auto"
             >

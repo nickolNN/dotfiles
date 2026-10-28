@@ -83,7 +83,7 @@ describe('IssueForm', () => {
     it('renders pipeline step checkboxes', async () => {
       renderForm();
       await waitFor(() => {
-        expect(screen.getByText('Исполнение (всегда)')).toBeInTheDocument();
+        expect(screen.getByText('Исполнение')).toBeInTheDocument();
         expect(screen.getByText('Планирование')).toBeInTheDocument();
         expect(screen.getByText('Код-ревью')).toBeInTheDocument();
       });
@@ -94,7 +94,6 @@ describe('IssueForm', () => {
     it('submits with runImmediately=true on "Запустить"', async () => {
       const { onSubmit } = renderForm();
       await waitFor(() => screen.getByText('Создание задачи'));
-
       fireEvent.change(screen.getByPlaceholderText('Коротко о задаче'), {
         target: { value: 'Test' },
       });
@@ -104,6 +103,42 @@ describe('IssueForm', () => {
       const payload = onSubmit.mock.calls[0][0] as CreateIssueRequest;
       expect(payload.run_immediately).toBe(true);
       expect(payload.title).toBe('Test');
+    });
+
+    it('без галочек ни запуск, ни сохранение недоступны, onSubmit не зовётся', async () => {
+      const { onSubmit } = renderForm();
+      await waitFor(() => screen.getByText('Создание задачи'));
+
+      fireEvent.change(screen.getByPlaceholderText('Коротко о задаче'), {
+        target: { value: 'No steps' },
+      });
+      // `resolve` starts checked; unchecking it leaves no selection at all.
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Исполнение' }));
+
+      const run = screen.getByRole('button', { name: 'Запустить' });
+      const save = screen.getByRole('button', { name: 'Сохранить' });
+      expect(run).toBeDisabled();
+      expect(save).toBeDisabled();
+
+      fireEvent.click(run);
+      fireEvent.click(save);
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('ровно выбранные шаги уходят в pipeline_steps (resolve можно снять)', async () => {
+      const { onSubmit } = renderForm();
+      await waitFor(() => screen.getByText('Создание задачи'));
+
+      fireEvent.change(screen.getByPlaceholderText('Коротко о задаче'), {
+        target: { value: 'Only MR' },
+      });
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Исполнение' }));
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Merge Request' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Запустить' }));
+
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      const payload = onSubmit.mock.calls[0][0] as CreateIssueRequest;
+      expect(payload.pipeline_steps).toEqual(['pr']);
     });
 
     it('submits with runImmediately=false on "Сохранить"', async () => {

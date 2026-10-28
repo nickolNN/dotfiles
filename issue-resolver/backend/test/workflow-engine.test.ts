@@ -46,13 +46,15 @@ class InMemoryStepRunStore implements StepRunStore {
   }
 
   async createStepRun(input: {
-    iterationId: string;
+    issueId?: string;
+    iterationId: string | null;
     step: PipelineStep;
     attempt: number;
     context: string;
   }): Promise<StepRun> {
     const run: StepRun = {
       id: `run-${++this.seq}`,
+      issue_id: input.issueId ?? 'issue-1',
       iteration_id: input.iterationId,
       step: input.step,
       attempt: input.attempt,
@@ -560,7 +562,7 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  /** Создаёт временный workspaceRoot и, если задан, умеренно пишет файл отчёта. */
+  /** Temp workspaceRoot; optionally seeds a pre-written report file. */
   const withWorkspace = async (
     reportContent?: string,
   ): Promise<{ root: string; dir: string }> => {
@@ -572,6 +574,22 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
       await writeFile(join(dir, '.issue-step-result.json'), reportContent);
     }
     return { root, dir };
+  };
+
+  /**
+   * A step writes its report while it runs; the engine only trusts a file
+   * touched during the run, so pre-writing one would test the old behaviour.
+   */
+  const piWritesDuringRun = (
+    pi: FakePiRunner,
+    writes: () => [string, string][],
+  ): void => {
+    const run = pi.run.bind(pi);
+    pi.run = async (containerName, prompt, options) => {
+      const result = await run(containerName, prompt, options);
+      for (const [path, content] of writes()) await writeFile(path, content);
+      return result;
+    };
   };
 
   it('нет файла и result.report=null → report хранится пустой строкой, exit0 success', async () => {
@@ -612,12 +630,15 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
 
   it('файл {status:fail,summary} перекрывает result.report → 4 попытки fail, self-retry исчерпаны', async () => {
     const { deps, store, pi } = makeDeps();
-    const { root } = await withWorkspace(
-      JSON.stringify({ status: 'fail', summary: 'найдено 3 дефекта' }),
-    );
+    const { root, dir } = await withWorkspace();
     deps.workspaceRoot = root;
-    // result.report — pass, но файл важнее (источник истины в RPC-режиме).
-    // Файл не исчезает → все 4 попытки читают его и получают failed.
+    // The step rewrites its report on every attempt: file wins over result.report.
+    piWritesDuringRun(pi, () => [
+      [
+        join(dir, '.issue-step-result.json'),
+        JSON.stringify({ status: 'fail', summary: 'найдено 3 дефекта' }),
+      ],
+    ]);
     pi.enqueue(pass('resolve'));
 
     const result = await runIteration(deps, makeInput(['resolve']));
@@ -638,10 +659,14 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
 
   it('файл {status:blocked} → needs_input', async () => {
     const { deps, store, pi } = makeDeps();
-    const { root } = await withWorkspace(
-      JSON.stringify({ status: 'blocked', summary: 'нужен доступ' }),
-    );
+    const { root, dir } = await withWorkspace();
     deps.workspaceRoot = root;
+    piWritesDuringRun(pi, () => [
+      [
+        join(dir, '.issue-step-result.json'),
+        JSON.stringify({ status: 'blocked', summary: 'нужен доступ' }),
+      ],
+    ]);
     pi.enqueue(noReport('resolve'));
 
     const result = await runIteration(deps, makeInput(['resolve']));
@@ -656,8 +681,9 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
 
   it('битый JSON не роняет прогон: report пустой, exit0 → success', async () => {
     const { deps, store, pi } = makeDeps();
-    const { root } = await withWorkspace('{not json');
+    const { root, dir } = await withWorkspace();
     deps.workspaceRoot = root;
+    piWritesDuringRun(pi, () => [[join(dir, '.issue-step-result.json'), '{not json']]);
     pi.enqueue(noReport('resolve'));
 
     const result = await runIteration(deps, makeInput(['resolve']));
@@ -665,6 +691,47 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(trace(store)).toEqual(['resolve#1:success']);
     expect(store.outputs[0].report).toBe('');
+  });
+
+  it('отчёт, записанный в клон репозитория, читается: клон — тоже рабочая папка', async () => {
+    const { deps, store, pi } = makeDeps();
+    const { root, dir } = await withWorkspace();
+    await mkdir(join(dir, 'app'), { recursive: true });
+    deps.workspaceRoot = root;
+    piWritesDuringRun(pi, () => [
+      [
+        join(dir, 'app', '.issue-step-result.json'),
+        JSON.stringify({ status: 'fail', summary: 'из клона' }),
+      ],
+    ]);
+    pi.enqueue(pass('resolve'));
+
+    const result = await runIteration(deps, makeInput(['resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(trace(store)[0]).toBe('resolve#1:failed');
+    expect(JSON.parse(store.outputs[0].report)).toEqual({
+      status: 'fail',
+      summary: 'из клона',
+    });
+  });
+
+  it('отчёт прошлого шага не наследуется: шаг его не трогал → статус по exit-коду', async () => {
+    const { deps, store, pi } = makeDeps();
+    const { root } = await withWorkspace(
+      JSON.stringify({ status: 'fail', summary: 'отчёт прошлого шага' }),
+    );
+    deps.workspaceRoot = root;
+    pi.enqueue(pass('resolve'));
+
+    const result = await runIteration(deps, makeInput(['resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual(['resolve#1:success']);
+    expect(JSON.parse(store.outputs[0].report)).toEqual({
+      status: 'pass',
+      summary: 'resolve ok',
+    });
   });
 });
 
@@ -1188,6 +1255,79 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
     expect(mr.calls).toEqual([]);
   });
 
+  it('только pr в шагах → один агент, публикация, completed (MR без перезапуска resolve)', async () => {
+    const { deps, pi, git, mr, store } = makeDeps();
+    pi.enqueue(pass('pr'));
+
+    const result = await runIteration(
+      deps,
+      makePrInput(['pr'], 'dummy-token', [repos[0]]),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    // No extra step: the work was already done by the previous iteration.
+    expect(trace(store)).toEqual(['pr#1:success']);
+    expect(pi.calls).toHaveLength(1);
+    expect(git.commits).toHaveLength(1);
+    expect(mr.calls).toHaveLength(1);
+  });
+
+  it('только pr и он упал → iteration failed, ветка/MR не трогались', async () => {
+    const { deps, pi, git, mr, store } = makeDeps();
+    pi.enqueue(fail('pr'));
+
+    const result = await runIteration(
+      deps,
+      makePrInput(['pr'], 'dummy-token', [repos[0]]),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(trace(store)).toEqual(['pr#1:failed']);
+    expect(git.commits).toEqual([]);
+    expect(mr.calls).toEqual([]);
+  });
+
+  it('refine + pr без resolve: планирование → публикация, resolve не запускался', async () => {
+    const { deps, pi, store } = makeDeps();
+    pi.enqueue(pass('refine'));
+    pi.enqueue(pass('pr'));
+
+    const result = await runIteration(deps, makePrInput(['refine', 'pr']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual(['refine#1:success', 'pr#1:success']);
+  });
+
+  it('review без resolve упал → iteration failed (откатывать некуда, resolve в шагах нет)', async () => {
+    const { deps, pi, store } = makeDeps();
+    pi.enqueue(fail('review'));
+
+    const result = await runIteration(deps, makePrInput(['review', 'pr']));
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(trace(store)).toEqual(['review#1:failed']);
+  });
+
+  it('resolve + review + test + pr (полный набор) → канонический порядок и completed', async () => {
+    const { deps, pi, store } = makeDeps();
+    (['resolve', 'review', 'test', 'pr'] as PipelineStep[]).forEach((step) =>
+      pi.enqueue(pass(step)),
+    );
+
+    const result = await runIteration(
+      deps,
+      makePrInput(['resolve', 'review', 'test', 'pr']),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual([
+      'resolve#1:success',
+      'review#1:success',
+      'test#1:success',
+      'pr#1:success',
+    ]);
+  });
+
   it('уже есть открытый MR из той же ветки → push обновляет его, createMr НЕ вызывается', async () => {
     const { deps, pi, git, mr, sse } = makeDeps();
     const events: SSEEvent[] = [];
@@ -1454,8 +1594,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     // refine + 2 workers + coordinator = 4 pi-вызова (3 на resolve-часть).
     expect(pi.calls).toHaveLength(4);
     const resolveRunId = store.runs[1].id;
-    expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRunId}/worker/0`);
-    expect(pi.calls[2].options?.stepRunId).toBe(`${resolveRunId}/worker/1`);
+    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.w0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.w1`);
     expect(pi.calls[3].options?.stepRunId).toBe(resolveRunId);
 
     // Итоговый report шага — от координатора (единственный решающий).
@@ -1485,7 +1625,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     // Реестр отдаёт агентов комнаты в порядке исполнитель1, исполнитель2, координатор.
     expect(control.listAgents('iter-1')).toEqual([
       {
-        id: `${resolveRunId}/worker/0`,
+        id: `run.${resolveRunId}.w0`,
         role: 'worker',
         index: 1,
         label: 'Исполнитель 1',
@@ -1497,7 +1637,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
         stats: null,
       },
       {
-        id: `${resolveRunId}/worker/1`,
+        id: `run.${resolveRunId}.w1`,
         role: 'worker',
         index: 2,
         label: 'Исполнитель 2',
@@ -1531,14 +1671,14 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     for (const event of tagged) {
       perAgent.set(event.agentId ?? '', (perAgent.get(event.agentId ?? '') ?? 0) + 1);
     }
-    expect(perAgent.get(`${resolveRunId}/worker/0`)).toBe(3);
-    expect(perAgent.get(`${resolveRunId}/worker/1`)).toBe(3);
+    expect(perAgent.get(`run.${resolveRunId}.w0`)).toBe(3);
+    expect(perAgent.get(`run.${resolveRunId}.w1`)).toBe(3);
     expect(perAgent.get(resolveRunId)).toBe(3);
     expect(
       JSON.parse(tagged[0].data) as { agentId?: string },
     ).toMatchObject({
       stepRunId: resolveRunId,
-      agentId: `${resolveRunId}/worker/0`,
+      agentId: `run.${resolveRunId}.w0`,
     });
   });
 
@@ -1590,9 +1730,9 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     // refine + 2 исполнителя + координатор (а не 4 исполнителя).
     expect(pi.calls).toHaveLength(4);
     expect(pi.calls.map((call) => call.options?.stepRunId).slice(1)).toEqual([
-      expect.stringContaining('/worker/0'),
-      expect.stringContaining('/worker/1'),
-      expect.not.stringContaining('/worker/'),
+      expect.stringContaining('.w0'),
+      expect.stringContaining('.w1'),
+      expect.not.stringContaining('.w'),
     ]);
   });
 
@@ -1619,8 +1759,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     // refine + 2 исполнителя = 3 вызова; координатор после abort не запускался.
     expect(pi.calls).toHaveLength(3);
     const resolveRunId = store.runs[1].id;
-    expect(pi.calls[1].options?.stepRunId).toBe(`${resolveRunId}/worker/0`);
-    expect(pi.calls[2].options?.stepRunId).toBe(`${resolveRunId}/worker/1`);
+    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.w0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.w1`);
     expect(store.runs[1].status).toBe('aborted');
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:aborted']);
   });
@@ -1680,10 +1820,10 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     const resolveRunId = store.runs[1].id;
     expect(pi.calls.slice(1).map((call) => call.options?.stepRunId)).toEqual([
-      `${resolveRunId}/stage/1/worker/1`,
-      `${resolveRunId}/stage/1/worker/2`,
-      `${resolveRunId}/stage/1/coordinator`,
-      `${resolveRunId}/stage/2/worker/1`,
+      `run.${resolveRunId}.s1.w0`,
+      `run.${resolveRunId}.s1.w1`,
+      `run.${resolveRunId}.s1.lead`,
+      `run.${resolveRunId}.s2.w0`,
       resolveRunId,
     ]);
     expect(JSON.parse(store.outputs[1].report)).toMatchObject({

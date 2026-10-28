@@ -14,6 +14,7 @@ import {
   type SessionUsage,
   type StepExecutionResult,
   type StepReport,
+  isValidPiSessionId,
 } from '@issue-resolver/shared';
 import type { PiRunOptions, PiRunner } from './runner';
 import type { RoomAgentStatus, UiResponsePayload } from './session-registry';
@@ -532,6 +533,17 @@ export class RpcSessionParser {
       return;
     }
 
+    // Provider/tool failures arrive as their own event type; without this they
+    // only surface as silence, which reads as a stall instead of a cause.
+    if (event.type === 'error') {
+      this.push({
+        type: 'notice',
+        level: 'error',
+        message: errorEventMessage(event),
+      });
+      return;
+    }
+
     if (event.type === 'bash_execution_update') {
       this.push({
         type: 'bash',
@@ -751,6 +763,23 @@ export class RpcSessionParser {
 
 const PROMPT_COMMAND_ID = 'step-1';
 
+/** `1`/`true`/`yes` → on; anything else (incl. unset) → off. */
+function isTruthy(value: string | undefined): boolean {
+  return ['1', 'true', 'yes'].includes(value?.trim().toLowerCase() ?? '');
+}
+
+/** Human-readable text of a pi `error` event, whatever shape it arrives in. */
+function errorEventMessage(event: RpcEvent): string {
+  const record = asRecord(event);
+  const candidates = ['message', 'error', 'reason', 'detail'];
+  for (const key of candidates) {
+    const value = record?.[key];
+    if (typeof value === 'string' && value.trim().length > 0) return value;
+    if (value instanceof Error) return value.message;
+  }
+  return 'pi reported an error';
+}
+
 /** Сколько ждать ответ `get_session_stats` после agent_settled, мс. */
 const STATS_TIMEOUT_MS = 2000;
 
@@ -775,6 +804,43 @@ const STATS_POLL_MS = 3000;
  * Точка инъекции CLI pi: продакшен зовёт `pi` (или `PI_BIN`), тесты — shim.
  * Инъекция не меняет поведение по умолчанию (`piCommand` по умолчанию 'pi').
  */
+const LAUNCHER_ENV_KEYS = [
+  'PI_SESSION_FILE',
+  'PI_SESSION_ID',
+  'PI_SESSION_NAME',
+  'PI_MODEL',
+  'PI_PROVIDER',
+  // The launcher's room is not the step's room: only `room` decides it.
+  'PI_AGENT_ROOM',
+] as const;
+
+/**
+ * Environment for an agent spawned locally (`transport: 'local'`).
+ *
+ * The backend is often started from a pi session (`bin/service.sh` from an
+ * agent shell), so `process.env` carries THAT session's identity. An inherited
+ * `PI_SESSION_FILE` makes the step agent resume a foreign session instead of
+ * starting its own: the foreign history lands in the step log wholesale (a
+ * report run produced 175 MB of events in `step_outputs`), and the launcher's
+ * model overrides `--model`. Session identity and model are therefore not
+ * inherited — only config (`PI_CODING_AGENT_DIR`) and the agent's own room.
+ */
+export function stepAgentEnv(
+  base: NodeJS.ProcessEnv,
+  room?: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const key of LAUNCHER_ENV_KEYS) delete env[key];
+  if (room) env.PI_AGENT_ROOM = room;
+  // A step agent has nothing to fetch from pi.dev: the catalog refresh and the
+  // version check are pure latency inside a container, and the run is pinned to
+  // a model we passed explicitly.
+  env.PI_OFFLINE = '1';
+  env.PI_SKIP_VERSION_CHECK = '1';
+  env.PI_TELEMETRY = '0';
+  return env;
+}
+
 export interface RpcPiRunnerConfig {
   /** Исполняемый файл pi; по умолчанию env `PI_BIN`, иначе 'pi'. */
   piCommand?: string;
@@ -804,6 +870,39 @@ export class RpcPiRunner implements PiRunner {
     const thinkingArgs = options.thinkingLevel
       ? ['--thinking', options.thinkingLevel]
       : [];
+    const sessionId = options.sessionId ?? options.stepRunId;
+    // Our address IS the id of the file Pi will write (see SessionAddress).
+    // Fail here, not inside a log line from Pi, when the address is malformed.
+    if (sessionId !== undefined && !isValidPiSessionId(sessionId)) {
+      throw new Error(`invalid Pi session id: ${JSON.stringify(sessionId)}`);
+    }
+    const sessionArgs = sessionId ? ['--session-id', sessionId] : [];
+    const sessionDirArgs = options.sessionDir
+      ? ['--session-dir', options.sessionDir]
+      : [];
+    const sessionNameArgs = options.sessionName
+      ? ['--name', options.sessionName]
+      : [];
+    const systemAppendArgs = options.systemAppend
+      ? ['--append-system-prompt', options.systemAppend]
+      : [];
+    const verboseFlags = isTruthy(process.env.ISSUE_RESOLVER_AGENT_VERBOSE)
+      ? ['--verbose']
+      : [];
+    const toolFlags = [
+      ...(options.tools?.length ? ['--tools', options.tools.join(',')] : []),
+      ...(options.excludeTools?.length
+        ? ['--exclude-tools', options.excludeTools.join(',')]
+        : []),
+    ];
+    const sessionFlags = [
+      ...sessionArgs,
+      ...sessionDirArgs,
+      ...sessionNameArgs,
+      ...systemAppendArgs,
+      ...toolFlags,
+      ...verboseFlags,
+    ];
     // Комната агента per-task: `issue-<issueId>`; иначе штатный defaultRoom.
     const room = options.issueId ? `issue-${options.issueId}` : undefined;
 
@@ -814,11 +913,18 @@ export class RpcPiRunner implements PiRunner {
         this.transport === 'local'
           ? spawn(
               this.piCommand,
-              [...this.piArgs, '--mode', 'rpc', ...modelArgs, ...thinkingArgs],
+              [
+                ...this.piArgs,
+                '--mode',
+                'rpc',
+                ...sessionFlags,
+                ...modelArgs,
+                ...thinkingArgs,
+              ],
               {
                 cwd: options.cwd,
                 stdio: ['pipe', 'pipe', 'pipe'],
-                ...(room ? { env: { ...process.env, PI_AGENT_ROOM: room } } : {}),
+                env: stepAgentEnv(process.env, room),
               },
             )
           : spawn(
@@ -833,6 +939,7 @@ export class RpcPiRunner implements PiRunner {
                 ...this.piArgs,
                 '--mode',
                 'rpc',
+                ...sessionFlags,
                 ...modelArgs,
                 ...thinkingArgs,
               ],
@@ -1049,6 +1156,18 @@ export class RpcPiRunner implements PiRunner {
 
         if (event.type === 'agent_settled') {
           requestStatsThenFinish(this.resultFor(event.aborted === true, stderr));
+          return;
+        }
+
+        // `handled`: an extension command or input handler consumed the prompt,
+        // so no run starts and `agent_settled` never arrives. Waiting for it
+        // would hang the step until its timeout.
+        if (
+          event.type === 'response' &&
+          event.command === 'prompt' &&
+          asRecord(event.data)?.disposition === 'handled'
+        ) {
+          requestStatsThenFinish(this.resultFor(false, stderr));
           return;
         }
 

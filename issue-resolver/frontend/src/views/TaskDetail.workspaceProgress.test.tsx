@@ -185,7 +185,7 @@ describe('TaskDetail — прогресс подготовки воркспей�
           type: 'log',
           issueId: 'issue-1',
           iterationId: 'iter-1',
-          stepRunId: 'issue-1/devops',
+          stepRunId: 'issue.issue-1.devops',
           stream,
           data: text,
           ts: '2026-10-09T00:00:00.000Z',

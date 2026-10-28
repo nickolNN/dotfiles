@@ -197,7 +197,7 @@ class ProbeRunner implements PiRunner {
     // Post-iteration report-агент запускается fire-and-forget ПОСЛЕ конвейера:
     // он не часть последовательности шагов/итераций, поэтому не участвует
     // в учёте одновременных агентов (см. инвариант «один агент за раз»).
-    if (options?.stepRunId?.endsWith('/report')) {
+    if (options?.stepRunId?.endsWith('.report')) {
       return Promise.resolve(result);
     }
 
@@ -337,6 +337,52 @@ describe('POST /issues/:id/iterations — одна активная итерац
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
       error: 'A pending iteration already exists — wait for it to start',
+    });
+    expect(iterationRows(db, issueId)).toHaveLength(before);
+    expect(pi.calls).toHaveLength(0);
+  });
+
+  it('pending без running (задача простаивает) → 409, очередь не копится', async () => {
+    const { db, pi, app } = makeEnv();
+    const issueId = seedIssue(db);
+    seedIteration(db, issueId, { number: 1, status: 'failed' });
+    seedIteration(db, issueId, { number: 2, status: 'pending' });
+
+    // The check used to live under `hasRunning`: an idle issue accepted a
+    // second pending row and execution order drifted away from the numbers.
+    const before = iterationRows(db, issueId).length;
+    const res = await app.inject({
+      method: 'POST',
+      url: `${ISSUES}/${issueId}/iterations`,
+      payload: { context: 'ctx', steps: ['resolve'] },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: 'A pending iteration already exists — wait for it to start',
+    });
+    expect(iterationRows(db, issueId)).toHaveLength(before);
+    expect(pi.calls).toHaveLength(0);
+  });
+
+  it('repeat при draft без running → 409 (порядок итераций не ломается)', async () => {
+    const { db, pi, app } = makeEnv();
+    const issueId = seedIssue(db);
+    const sourceId = seedIteration(db, issueId, {
+      number: 1,
+      status: 'completed',
+    });
+    seedIteration(db, issueId, { number: 2, status: 'draft' });
+
+    const before = iterationRows(db, issueId).length;
+    const res = await app.inject({
+      method: 'POST',
+      url: `${ITERATIONS}/${sourceId}/repeat`,
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: 'A draft iteration already exists — edit or delete it first',
     });
     expect(iterationRows(db, issueId)).toHaveLength(before);
     expect(pi.calls).toHaveLength(0);
@@ -653,9 +699,9 @@ describe('room-режим: исполнители одного шага бегу
     expect(pi.active).toBe(3);
     expect(pi.maxActive).toBe(3);
     expect(pi.calls.map((call) => call.id)).toEqual([
-      'run-1/worker/0',
-      'run-1/worker/1',
-      'run-1/worker/2',
+      'run.run-1.w0',
+      'run.run-1.w1',
+      'run.run-1.w2',
     ]);
     // Пока исполнители живы, координатор (id = stepRunId) ещё не стартовал.
     expect(pi.calls.some((call) => call.id === 'run-1')).toBe(false);
