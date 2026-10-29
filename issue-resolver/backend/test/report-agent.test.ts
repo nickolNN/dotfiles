@@ -32,6 +32,7 @@ import { FakeMrClient } from '../src/pr/mr';
 import { InMemorySseHub } from '../src/sse/hub';
 import {
   archiveReportArtifacts,
+  archiveReportSession,
   isReportRunActive,
   observedModelFor,
   reportModelFor,
@@ -852,5 +853,52 @@ describe('report-агент — интеграция (F22–F25)', () => {
       dir: null,
       files: [],
     });
+  });
+
+  it('архив уносит report.json предыдущего прогона, а не оставляет его следующему', () => {
+    const root = tempRoot();
+    const issueDir = join(root, 'issue-x');
+    mkdirSync(issueDir, { recursive: true });
+    writeFileSync(join(issueDir, 'report.md'), '# Отчёт' + String.fromCharCode(10));
+    writeFileSync(join(issueDir, 'report.html'), '<html></html>');
+    writeFileSync(join(issueDir, 'report.json'), '{"verdict":"старый"}');
+
+    const archived = archiveReportArtifacts(root, 'issue-x');
+
+    expect(archived.files.sort()).toEqual(['report.html', 'report.json', 'report.md']);
+    expect(existsSync(join(issueDir, 'report.json'))).toBe(false);
+    expect(readFileSync(join(archived.dir ?? '', 'report.json'), 'utf8')).toContain('старый');
+  });
+
+  it('прошлая сессия отчёта уносится в архив — прогон не наследует старый контракт', () => {
+    const root = tempRoot();
+    const issueId = 'abc12345-0000-0000-0000-000000000000';
+    const previous = process.env.PI_SESSION_DIR;
+    process.env.PI_SESSION_DIR = root;
+    try {
+      const dir = join(root, `issue-${issueId}`);
+      mkdirSync(dir, { recursive: true });
+      const base = `2026-01-01T00-00-00-000Z_issue.${issueId}.report.jsonl`;
+      const variant = `2026-01-01T00-10-00-000Z_issue.${issueId}.report.try-u1.jsonl`;
+      const other = '2026-01-01T00-00-00-000Z_run.zzz.jsonl';
+      for (const name of [base, variant, other]) {
+        writeFileSync(join(dir, name), '{"type":"session"}');
+      }
+
+      const moved = archiveReportSession(
+        issueId,
+        `issue.${issueId}.report`,
+        join(root, 'archive'),
+      );
+
+      expect(moved.sort()).toEqual([base, variant].sort());
+      expect(existsSync(join(dir, base))).toBe(false);
+      expect(existsSync(join(dir, variant))).toBe(false);
+      expect(existsSync(join(dir, other))).toBe(true);
+      expect(existsSync(join(root, 'archive', base))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.PI_SESSION_DIR;
+      else process.env.PI_SESSION_DIR = previous;
+    }
   });
 });

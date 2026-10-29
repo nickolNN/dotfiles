@@ -137,6 +137,16 @@ future reader could break without noticing, add it here instead of a comment.
   (`bin/embed-screenshots.mjs`); only files nobody cited reach the closing
   gallery. Base64 must never pass through a tool call — the argument gets
   truncated and generation costs minutes per image.
+- Inlining is a step of the run, not a manual repair: `runReportAgent` renders
+  the page, then calls `embedReportScreenshots` on the same workspace (Node, no
+  Python), and records a warning if placeholders survive. A page that still has
+  `data-slot` after the run is a bug in the pipeline, never in the operator. The
+  same file mentioned twice yields two figures: a citation marks the file as
+  used (so it leaves the gallery), it does not forbid a second placement.
+- Screenshots are not lazy: `loading="lazy"` on an image with unknown intrinsic
+  size gives it a zero-height box, and the browser never starts loading it —
+  the reader scrolls past empty space. The page is self-contained, so there is
+  nothing to save by deferring.
 - The output stays a single self-contained file that opens from `file://`.
   External fonts/CDN/scripts are forbidden, inline negative-test scan lives in
   `backend/test/report-render.test.ts`.
@@ -148,6 +158,31 @@ future reader could break without noticing, add it here instead of a comment.
 - A report run whose pi process is gone can never settle on its own — the abort
   route drives it to `failed` (`failOrphanReportRun`), otherwise the `running`
   badge and its heartbeat stay forever.
+- Warnings reach the UI two ways: the JSON body of `/report/status` and the
+  `x-artifact-warning` header of `/result`. Header values are ASCII by protocol,
+  and engine warnings are written in the user's language, so a non-ASCII value
+  is percent-encoded — otherwise Node rejects the header and the whole result
+  endpoint answers `500`, which reads to the user as «отчёта нет».
+- The report run is shown by the **same card component as a pipeline step**
+  (`RunOutcome` / `RunStatsLine`): live transcript while it runs, one-line
+  verdict plus a stats line once it ends, and the transcript behind «Развернуть».
+  Two separate renderings of the same thing is how the report kept a live-looking
+  block after a finished run. The report step's own `report` field holds artifact
+  flags, not a step verdict, so the card synthesizes PASS/FAIL from the run
+  status and only falls back to the stored payload when it is a real step report.
+- `POST /report/reembed` rebuilds `report.html` from the existing `report.md` +
+  `report.json` and inlines the screenshots again — the manual repair path when
+  inlining or the page build failed. It refuses without `report.md` (409) and
+  while a run is active, never touches the authored files, and records its
+  warnings so `/report/status` shows them.
+- The report section derives «идёт прогон» from the server status, not from a
+  local flag: the poll retries, and after three consecutive failures it stops
+  claiming a run and says the status is unknown. A stuck «Генерируется» with a
+  live spinner is the symptom of the opposite (trusting a sticky local flag), so
+  `getReportStatus` also validates the payload shape — a foreign object is an
+  error, not a silent `running`: the payload must carry the `artifacts` object,
+  which the real endpoint always sends. `getReportRun` is validated the same way
+  — a foreign body must not be drawn as a run card.
 - Model-leak detection scans the **authored** files (`report.md`,
   `report.json`) only: the generated page inherits the markdown, so scanning it
   would report one defect twice.

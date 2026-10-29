@@ -79,6 +79,17 @@ function stubFetch(stepRuns: StepRunWithLog[]) {
     if (url.endsWith('/iterations')) {
       return Promise.resolve(jsonResponse([iteration]));
     }
+    if (url.endsWith('/report/status')) {
+      return Promise.resolve(
+        jsonResponse({
+          status: 'idle',
+          artifacts: {
+            md: { present: false, bytes: 0, mtime: null },
+            html: { present: false, bytes: 0, mtime: null },
+          },
+        }),
+      );
+    }
     return Promise.resolve(jsonResponse(issue));
   });
   vi.stubGlobal('fetch', fetchMock);

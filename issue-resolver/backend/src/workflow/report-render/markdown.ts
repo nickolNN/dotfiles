@@ -79,7 +79,7 @@ function shotFigure(path: string, caption: string, block: boolean): string {
   if (name === null) return caption;
   if (!shots.includes(name)) shots.push(name);
   const alt = caption.trim() === '' ? name : caption.trim();
-  const inner = `<a class="shot-link" href="#"><img${block ? ' class="shot-image"' : ' class="inline-shot"'} data-slot="${escapeHtml(name)}" alt="${escapeHtml(alt)}" loading="lazy"></a>`;
+  const inner = `<a class="shot-link" href="#"><img${block ? ' class="shot-image"' : ' class="inline-shot"'} data-slot="${escapeHtml(name)}" alt="${escapeHtml(alt)}"></a>`;
   if (!block) return inner;
   return `<figure class="shot">${inner}<figcaption>${escapeHtml(alt)}</figcaption></figure>`;
 }
@@ -177,11 +177,11 @@ function figuresForMentions(
   const figures: string[] = [];
   for (const match of text.matchAll(SHOT_MENTION)) {
     const name = match[2];
-    if (!available.includes(name) || used.has(name)) continue;
+    if (!available.includes(name)) continue;
     used.add(name);
     if (!shots.includes(name)) shots.push(name);
     figures.push(
-      `<figure class="shot"><a class="shot-link" href="#"><img class="shot-image" data-slot="${escapeHtml(name)}" alt="${escapeHtml(name)}" loading="lazy"></a></figure>`,
+      `<figure class="shot"><a class="shot-link" href="#"><img class="shot-image" data-slot="${escapeHtml(name)}" alt="${escapeHtml(name)}"></a></figure>`,
     );
   }
   return figures.join('');

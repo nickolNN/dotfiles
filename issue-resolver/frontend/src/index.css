@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "./animations.css";
 
-   возвращаем его глобально для всех кликабельных элементов. */
 @layer base {
   button:not(:disabled),
   [role="button"]:not(:disabled),
@@ -23,6 +22,7 @@
 html {
   height: 100%;
   background-color: #0D0208;
+
   color-scheme: dark;
 }
 
@@ -30,7 +30,6 @@ body {
   height: 100%;
 }
 
-   поэтому оболочка не перестраивается при сворачивании тулбара Safari. */
 #root {
   height: 100vh;
   height: 100dvh;
@@ -188,7 +187,6 @@ body {
   color: rgba(0, 255, 65, 0.35);
 }
 
-   В остальных tool-блоках label идёт без разделителя. */
 .session-thinking .session-tool-label::before {
   content: '·';
   margin-right: 0.25rem;
@@ -408,6 +406,7 @@ body {
   color: #00ff41;
   background-color: rgba(0, 143, 17, 0.15);
 }
+
 .markdown-editor:focus-within {
   border-color: #00ff41;
   box-shadow: 0 0 8px rgba(0, 255, 65, 0.35);
@@ -527,27 +526,30 @@ body {
   background: transparent;
 }
 
-   (`scheduleProgressFade` навешивает класс, `onAnimationEnd` убирает DOM).
-   Использует общий keyframe `fade-out-up` из animations.css. */
 .workspace-progress--fade {
   animation: fade-out-up 0.5s ease forwards;
 }
 
+* {
   scrollbar-width: thin;
   scrollbar-color: #008F1140 #0D0208;
 }
 
+*::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
+*::-webkit-scrollbar-track {
   background: #0D0208;
 }
 
+*::-webkit-scrollbar-thumb {
   background: #008F1140;
   border-radius: 3px;
 }
 
+*::-webkit-scrollbar-thumb:hover {
   background: #00FF4160;
 }
 

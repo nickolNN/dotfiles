@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionControlSnapshot } from '@issue-resolver/shared';
 import {
   getIterationControl,
+  getReportStatus,
   promptIteration,
   sendIterationCommand,
 } from './client';
@@ -189,5 +190,52 @@ describe('api/client — управление живой pi-сессией', () 
     const result = await sendIterationCommand('iter-1', { type: 'clear_queue' });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('offline');
+  });
+});
+
+describe('getReportStatus — форма ответа', () => {
+  const stubFetch = (body: unknown): void => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(jsonResponse(body))),
+    );
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('корректный статус проходит как есть', async () => {
+    const body = { status: 'success', artifacts: {} };
+    stubFetch(body);
+    await expect(getReportStatus('issue-1')).resolves.toEqual(body);
+  });
+
+  it('без artifacts — ошибка: чужой объект не выглядит как статус отчёта', async () => {
+    stubFetch({ status: 'running' });
+    await expect(getReportStatus('issue-1')).rejects.toThrow(
+      'некорректный ответ статуса отчёта',
+    );
+  });
+
+  it('неизвестный статус — ошибка', async () => {
+    stubFetch({ status: 'strange' });
+    await expect(getReportStatus('issue-1')).rejects.toThrow(
+      'некорректный ответ статуса отчёта',
+    );
+  });
+
+  it('artifacts не объект — ошибка', async () => {
+    stubFetch({ status: 'success', artifacts: 'нет' });
+    await expect(getReportStatus('issue-1')).rejects.toThrow(
+      'некорректный ответ статуса отчёта',
+    );
+  });
+
+  it('null и пустое тело — ошибка', async () => {
+    stubFetch(null);
+    await expect(getReportStatus('issue-1')).rejects.toThrow(
+      'некорректный ответ статуса отчёта',
+    );
   });
 });
