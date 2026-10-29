@@ -203,6 +203,23 @@ export interface RunInstructionsPort {
   saveFailed(repoUrl: string): void;
 }
 
+const REFINED_PLAN_LIMIT = 12_000;
+
+export type ExpandedPlan = { text: string; truncated: boolean };
+
+export async function readExpandedPlan(
+  dir: string,
+): Promise<ExpandedPlan | null> {
+  const body = await readFile(join(dir, 'plan.md'), 'utf-8').catch(() => null);
+  if (!body) return null;
+  const trimmed = body.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed.length <= REFINED_PLAN_LIMIT) {
+    return { text: trimmed, truncated: false };
+  }
+  return { text: trimmed.slice(0, REFINED_PLAN_LIMIT), truncated: true };
+}
+
 export type DevOpsFactory = (params: {
   containerName: string;
   hostWorkspaceDir: string;
@@ -1023,7 +1040,23 @@ export async function runIteration(
     }
 
     if (step === 'refine' && status === 'success') {
-      refinedPlan = report?.summary || null;
+      const expandedPlan =
+        (await readExpandedPlan(agentWorkingDir)) ??
+        (await readExpandedPlan(workspaceHostDir));
+      refinedPlan = expandedPlan
+        ? expandedPlan.truncated
+          ? `${expandedPlan.text}\n[plan.md is longer than ${REFINED_PLAN_LIMIT} characters — read the full brief from plan.md in the working folder]`
+          : expandedPlan.text
+        : (report?.summary ?? null);
+      if (expandedPlan?.truncated) {
+        deps.sse.publish(
+          stepEvent(issue.id, iteration.id, stepRun.id, {
+            type: 'notice',
+            level: 'warning',
+            message: `plan.md длиннее ${REFINED_PLAN_LIMIT} символов — в промпт исполнителя вошло начало брифа, полный план он читает из plan.md.`,
+          }),
+        );
+      }
       refinedExecution = report?.execution ?? null;
     }
 

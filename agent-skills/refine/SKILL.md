@@ -1,59 +1,76 @@
 ---
 name: refine
 description: >-
-  Refine-шаг конвейера issue-resolver: RU-склейка интервью `grilling`
-  (design tree → frontier → rounds) с механикой шага — вход шага, вопрос
-  через инструмент `question`, `plan.md` и объект `execution`. Сам метод
-  живёт в скилле `grilling`, здесь только адаптер. Use when the refine
-  step of the issue-resolver pipeline runs and a raw ticket must become a
-  plan.
+  The refine step of the issue-resolver pipeline: wraps the `grilling`
+  interview (design tree → frontier → rounds) in the mechanics of the step —
+  step input, questions through the `question` tool, `plan.md`, and the
+  `execution` object. The method itself lives in the `grilling` skill; this
+  file is only the adapter. Use when the refine step of the issue-resolver
+  pipeline runs and a raw ticket must become a plan.
 ---
 
-# Refine — адаптер шага конвейера
+# Refine — pipeline step adapter
 
-Refine превращает сырой тикет в план, по которому resolve работает без
-догадок. **Сам метод — в скилле `grilling`;** этот файл только склеивает
-его с механикой шага.
+Refine sizes the work and writes the executor's brief. Two outputs, one decision:
+how big the task is and how many executors/stages it needs, and a task
+description detailed enough that the executor never has to re-interview the user
+or reopen a settled decision. **The method lives in the `grilling` skill;** this
+file only glues it to the mechanics of the step.
 
-## Метод: grilling
+## Method: grilling
 
-Интервью ведётся по протоколу скилла **`grilling`**: он задаёт форму
-(design tree → frontier → rounds), правило «факты — сам, решения — за
-пользователем» и момент завершения (frontier пуст). Здесь — только то,
-чего оригинал не знает.
+The interview follows the **`grilling`** skill's protocol: it fixes the shape
+(design tree → frontier → rounds), the rule "facts yourself, decisions to the
+user", and the stopping condition (empty frontier). Only what the original
+cannot know is written here.
 
-Адаптация под пайплайн: у нас нет чат-раунда — есть инструмент
-**`question`**, один вызов на вопрос; вызов блокирует ход до ответа
-пользователя и возвращает ответ. Поэтому frontier задаётся по одному
-вопросу, а не раундом:
+Adaptation to the pipeline: there is no chat round — there is the **`question`**
+tool, one call per question; the call blocks the turn until the user answers and
+returns that answer. So the frontier is walked one question at a time, not one
+round at a time:
 
 ```json
 { "question": "...", "options": [ { "label": "...", "description": "..." } ] }
 ```
 
-2–5 конкретных вариантов, рекомендуемый ответ — первым.
+Two to five concrete options, the recommended one first.
 
-## Вход шага
+## Step input
 
-- `title`, `description` (additional_context), `jira_text` (если есть),
-  `repositories`, `iteration_context` (при повторном refine),
-  `pipeline_steps`.
+- `title`, `description` (additional_context), `jira_text` (when present),
+  `repositories`, `iteration_context` (on a repeated refine), `pipeline_steps`.
 
-## Артефакты (контракт вывода)
+## Artifacts (output contract)
 
-- `plan.md` в корне рабочей папки — уточнённый контекст: принятые решения
-  с обоснованием, план для resolve, execution topology, риски, файлы,
-  интеграционные точки;
+- `plan.md` at the root of the working folder — the expanded brief handed to the
+  executors: the request in the user's words and what it means concretely,
+  decisions with their reasons, behaviour before/after, constraints and
+  invariants, one block per executor or stage (naming the area it owns),
+  acceptance criteria, risks, and the file ownership map (only so that parallel
+  workers never edit the same file);
 - `.issue-step-result.json` — `summary`, `scenarios`, `execution`
   (`mode` / `executors` / `decomposition` / `stages` / `rationale`);
-- `iterations/<n>/.refine.md` — нарратив шага для report-агента.
+- `iterations/<n>/.refine.md` — the step's narrative for the report agent.
 
-Что писать в `execution` и лимиты воркеров задаёт промпт шага
-(`prompts/step-refine.md`) — здесь не дублируются.
+What goes into `execution` and the worker limits is defined by the step prompt
+(`prompts/step-refine.md`) — not duplicated here.
 
-## Ограничения
+## Constraints
 
-- Не пиши код — реализация за resolve.
-- Не коммить и не пушь — это PR-шаг.
-- Не дублируй review/test, если они есть в `pipeline_steps`.
-- Продуктовые/дизайнерские решения — вопросом пользователю, не сам.
+- **You decide what and why, not how.** The executor designs the edit: which
+  files and functions to touch, the current and target code,
+  classes/props/signatures, diffs, line numbers. None of that belongs in
+  `plan.md` — such a plan duplicates the executor's work and goes stale on its
+  first change.
+- Read code shallowly and for one purpose: sizing. Where the area is, how big
+  it is, does the capability already exist, which file goes to which worker when
+  splitting. Opened a file to work out the edit itself — you have left the
+  step's boundary.
+- Judge size before writing anything: one coherent change in one area is
+  `single`. Splitting into a room or stages is a cost paid for genuinely
+  independent or genuinely ordered parts, never a default.
+- Do not write code — implementation belongs to resolve.
+- Do not commit or push — that is the PR step.
+- Do not duplicate review/test when they are in `pipeline_steps`.
+- Product and design decisions go to the user as a question, not your own
+  judgement.

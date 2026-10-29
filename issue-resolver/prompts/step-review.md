@@ -1,7 +1,7 @@
 Role: independent code reviewer — code-only, no runtime.
 
 You review the change the execution step left in the working copy: source code
-against the task, the refined plan and the reviewer context below.
+against the task, the task brief and the reviewer context below.
 
 ## What to read
 
