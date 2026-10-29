@@ -1,6 +1,3 @@
-   Animation keyframes — только transform + opacity (GPU-композит)
-   ═══════════════════════════════════════════════════════════════════════════ */
-
 @keyframes fade-in-up {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -21,7 +18,6 @@
   to   { opacity: 1; transform: scale(1); }
 }
 
-   Медленная (2.5s), мягкая (40% минимум), чтобы не раздражать на высоком Hz. */
 @keyframes pulse-subtle {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.4; }
@@ -36,9 +32,6 @@
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-
-   Utility classes
-   ═══════════════════════════════════════════════════════════════════════════ */
 
 .animate-fade-in-up {
   animation: fade-in-up 0.3s ease-out both;
@@ -79,9 +72,6 @@
 .animate-fade-in-up-d7 { animation: fade-in-up 0.3s 0.35s ease-out both; }
 .animate-fade-in-up-d8 { animation: fade-in-up 0.3s 0.40s ease-out both; }
 
-   Transition utilities — для интерактивных элементов (hover/active/state change)
-   ═══════════════════════════════════════════════════════════════════════════ */
-
 .transition-base {
   transition:
     color 0.15s ease,
@@ -107,10 +97,10 @@
     transform 0.25s ease;
 }
 
-   Reduced motion
-   ═══════════════════════════════════════════════════════════════════════════ */
-
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

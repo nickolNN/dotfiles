@@ -4,6 +4,7 @@ import type {
   SessionStats,
   StepRunStatus,
 } from '@issue-resolver/shared';
+import { capSessionEvents } from './session-events-cap';
 import type { SseHub } from '../sse/hub';
 import type {
   RoomAgentInfo,
@@ -52,6 +53,28 @@ export interface AgentSession {
 }
 
 const nowIso = () => new Date().toISOString();
+
+const STREAM_TAIL_CHARS = 512_000;
+
+const EVENT_BUDGET_BYTES = 4_000_000;
+const EVENT_KEEP_BYTES = 2_000_000;
+const EVENT_MAX_BYTES = 256_000;
+
+function snapshotKey(event: SessionEvent, agentId?: string): string | null {
+  const owner = agentId ?? '';
+  if (event.type === 'text_update' || event.type === 'thinking_update') {
+    return `${owner}|${event.type}:${event.contentIndex}`;
+  }
+  if (event.type === 'tool_update') {
+    return `${owner}|tool_update:${event.toolCallId}`;
+  }
+  return null;
+}
+
+function appendTail(previous: string, chunk: string): string {
+  if (previous.length + chunk.length <= STREAM_TAIL_CHARS) return previous + chunk;
+  return (previous + chunk).slice(-STREAM_TAIL_CHARS);
+}
 
 export function streamEvent(
   issueId: string,
@@ -102,6 +125,8 @@ export function startAgentSession(
   let stdout = '';
   let stderr = '';
   const events: SessionEvent[] = [];
+  const snapshots = new Map<string, number>();
+  let eventBytes = 0;
   let stats: SessionStats | null = null;
   let activity = 0;
 
@@ -130,21 +155,44 @@ export function startAgentSession(
     callbacks: {
       onStdout(chunk, agent) {
         activity += 1;
-        stdout += chunk;
+        stdout = appendTail(stdout, chunk);
         deps.sse.publish(
           streamEvent(issueId, iterationId, sessionId, 'stdout', chunk, agent?.id),
         );
       },
       onStderr(chunk, agent) {
         activity += 1;
-        stderr += chunk;
+        stderr = appendTail(stderr, chunk);
         deps.sse.publish(
           streamEvent(issueId, iterationId, sessionId, 'stderr', chunk, agent?.id),
         );
       },
       onEvent(event, agent) {
         activity += 1;
-        events.push(event);
+        const key = snapshotKey(event, agent?.id);
+        const slot = key === null ? undefined : snapshots.get(key);
+        if (slot === undefined) {
+          if (key !== null) snapshots.set(key, events.length);
+          events.push(event);
+          eventBytes += JSON.stringify(event).length;
+        } else {
+          eventBytes -= JSON.stringify(events[slot] as SessionEvent).length;
+          events[slot] = event;
+          eventBytes += JSON.stringify(event).length;
+        }
+        if (eventBytes > EVENT_BUDGET_BYTES) {
+          const trimmed = capSessionEvents(events, {
+            maxBytes: EVENT_KEEP_BYTES,
+            maxEventBytes: EVENT_MAX_BYTES,
+          });
+          events.length = 0;
+          events.push(...trimmed);
+          snapshots.clear();
+          eventBytes = trimmed.reduce(
+            (total, item) => total + JSON.stringify(item).length,
+            0,
+          );
+        }
         input.onEvent?.(event);
         deps.sse.publish(
           stepEvent(issueId, iterationId, sessionId, event, agent?.id),

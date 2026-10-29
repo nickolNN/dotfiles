@@ -709,3 +709,141 @@ describe('layout splitDocument — один проход по блокам', () 
     expect(duplicatesAscii('Слои приложения', [{ text: 'pointer press on a card' }])).toBe(false);
   });
 });
+
+describe('markdown — где упоминание скриншота превращается в картинку', () => {
+  const shots = ['01-board.png'];
+
+  it('картинки не отложены: data URI нечего грузить по скроллу', () => {
+    const { html } = renderMarkdown('Борд — `01-board.png`.', shots);
+    expect(html).toContain('data-slot="01-board.png"');
+    expect(html).not.toContain('loading="lazy"');
+  });
+  const figures = (html: string): number =>
+    (html.match(/class="shot"/g) ?? []).length;
+
+  it('абзац с именем файла — картинка', () => {
+    const { html } = renderMarkdown('Борд — `01-board.png`.', shots);
+    expect(figures(html)).toBe(1);
+  });
+
+  it('строка списка с именем файла — картинка', () => {
+    const { html } = renderMarkdown('- до: `01-board.png`\n- после', shots);
+    expect(figures(html)).toBe(1);
+  });
+
+  it('ячейка таблицы с именем файла — картинка', () => {
+    const { html } = renderMarkdown(
+      ['| Что | Вид |', '| --- | --- |', '| борд | `01-board.png` |'].join('\n'),
+      shots,
+    );
+    expect(figures(html)).toBe(1);
+  });
+
+  it('упоминание внутри блока кода — остаётся текстом, картинки нет', () => {
+    const { html } = renderMarkdown(
+      ['```bash', 'open screenshots/01-board.png', '```'].join('\n'),
+      shots,
+    );
+    expect(figures(html)).toBe(0);
+    expect(html).toContain('01-board.png');
+  });
+
+  it('имя файла в заголовке не вставляет картинку в заголовок', () => {
+    const { html } = renderMarkdown('## Как снять 01-board.png', shots);
+    expect(figures(html)).toBe(0);
+  });
+
+  it('несуществующий в папке скриншот не превращается в картинку', () => {
+    const { html } = renderMarkdown('См. `02-ghost.png`.', shots);
+    expect(figures(html)).toBe(0);
+  });
+
+  it('одно и то же имя дважды — два места, оба с картинкой', () => {
+    const { html } = renderMarkdown(
+      'Первый вид `01-board.png`.\n\nВторой вид `01-board.png`.',
+      shots,
+    );
+    expect(figures(html)).toBe(2);
+  });
+});
+
+describe('page — corner cases компоновки', () => {
+  it('ссылка на MR, упомянутая дважды, в шапке один раз', () => {
+    const page = renderReportPage({
+      md: [
+        '# Отчёт',
+        '',
+        '## Answer',
+        '',
+        '[MR 13](https://git.example.com/a/b/pull/13)',
+        '',
+        '## Merge requests',
+        '',
+        '[MR 13](https://git.example.com/a/b/pull/13)',
+      ].join('\n'),
+      doc: {},
+      screenshots: [],
+    });
+    const header = page.html.slice(0, page.html.indexOf('<main>'));
+    expect((header.match(/class="mr-links"/g) ?? []).length).toBe(1);
+    expect((header.match(/pull\/13/g) ?? []).length).toBe(1);
+    expect((page.html.match(/pull\/13/g) ?? []).length).toBe(3);
+  });
+
+  it('метрика с одним ключом метrology остаётся в ответе', () => {
+    const page = renderReportPage({
+      md: '# Отчёт\n\n**Status:** pass\n\n## Answer\n\nТекст.\n',
+      doc: {},
+      screenshots: [],
+    });
+    expect(page.html).not.toContain('<details class="execution">');
+    expect(page.html).toContain('Status:');
+  });
+
+  it('TOC не ведёт в разделы выполнения', () => {
+    const page = renderReportPage({
+      md: [
+        '# Отчёт',
+        '',
+        '## Answer',
+        '',
+        '## Reproduction',
+        '',
+        '## Change set',
+      ].join('\n'),
+      doc: {},
+      screenshots: [],
+    });
+    const toc = page.html.slice(
+      page.html.indexOf('<nav class="toc">'),
+      page.html.indexOf('</nav>'),
+    );
+    expect(toc).not.toMatch(/reproduction|change-set/i);
+  });
+
+  it('внешние ресурсы в тексте отчёта остаются текстом', () => {
+    const page = renderReportPage({
+      md: [
+        '# Отчёт',
+        '',
+        '## Answer',
+        '',
+        '<link rel="stylesheet" href="https://cdn.example.com/x.css">',
+        '',
+        '```css',
+        '@import url(https://cdn.example.com/y.css);',
+        '```',
+        '',
+        '<iframe src="https://example.com/x"></iframe>',
+      ].join('\n'),
+      doc: {},
+      screenshots: [],
+    });
+    const styles = page.html.match(/<style[\s\S]*?<\/style>/g) ?? [];
+    expect(styles.join('')).not.toContain('@import');
+    expect(page.html).not.toContain('src="https://example.com/x"');
+    expect(page.html).not.toContain('<iframe');
+    expect(page.html).not.toContain('href="https://cdn.example.com/x.css"');
+    expect(page.html).toContain('cdn.example.com');
+  });
+});

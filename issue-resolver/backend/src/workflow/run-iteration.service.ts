@@ -26,8 +26,11 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  copyFileSync,
   readFileSync,
+  readdirSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -44,6 +47,7 @@ import { soloRunExcludeTools } from '../pi/tool-policy';
 import { stallRecoveries } from '../pi/stall-recovery';
 import { STEP_SYSTEM_APPEND } from './prompts';
 import { renderReportArtifacts } from './report-render';
+import { embedReportScreenshots } from './embed-screenshots';
 import { capSessionEvents } from '../pi/session-events-cap';
 import { allocateDevPort, releaseIssueDevPorts } from '../port-allocator';
 import { listAttachableRelPaths } from '../db/issue-files.repo';
@@ -782,11 +786,29 @@ async function upsertMergeRequestsFromResultJson(
 }
 
 const REPORT_ARTIFACTS = ['report.md', 'report.html'] as const;
+const ARCHIVED_REPORT_FILES = [...REPORT_ARTIFACTS, 'report.json'] as const;
 const AUTHORED_REPORT_FILES = ['report.md', 'report.json'] as const;
 
 export interface ReportArchiveResult {
   dir: string | null;
   files: string[];
+}
+
+export function archiveReportSession(
+  issueId: string,
+  sessionId: string,
+  targetDir: string,
+): string[] {
+  const dir = issueSessionDir(issueId);
+  if (!dir || !existsSync(dir)) return [];
+  const files = readdirSync(dir).filter((name) => name.includes(sessionId));
+  if (files.length === 0) return [];
+  mkdirSync(targetDir, { recursive: true });
+  for (const name of files) {
+    copyFileSync(join(dir, name), join(targetDir, name));
+    rmSync(join(dir, name), { force: true });
+  }
+  return files;
 }
 
 export function archiveReportArtifacts(
@@ -795,7 +817,7 @@ export function archiveReportArtifacts(
 ): ReportArchiveResult {
   const wsRoot = workspaceRoot ?? DEFAULT_WORKSPACE_ROOT;
   const issueDir = workspaceHostDirFor(wsRoot, issueId);
-  const files = REPORT_ARTIFACTS.filter((name) =>
+  const files = ARCHIVED_REPORT_FILES.filter((name) =>
     existsSync(join(issueDir, name)),
   );
   if (files.length === 0) return { dir: null, files: [] };
@@ -944,6 +966,31 @@ const observedReportModel = new Map<string, string>();
 
 export function observedModelFor(issueId: string): string | undefined {
   return observedReportModel.get(issueId);
+}
+
+export async function rebuildReportPage(
+  issueId: string,
+  hostDir: string,
+): Promise<{ ok: boolean; warnings: string[]; embed: string }> {
+  const rendered = await renderReportArtifacts(hostDir).catch(
+    (error: unknown) => ({
+      ok: false,
+      html: false,
+      warnings: [`report page failed: ${String(error)}`],
+    }),
+  );
+  const embedded = rendered.html
+    ? await embedReportScreenshots(hostDir).catch((error: unknown) => ({
+        ok: false,
+        summary: `embed failed: ${String(error)}`,
+      }))
+    : { ok: true, summary: 'skipped: no page' };
+  const warnings = [
+    ...rendered.warnings,
+    ...(embedded.ok ? [] : [`скриншоты не вшиты: ${embedded.summary}`]),
+  ];
+  reportWarnings.set(issueId, warnings);
+  return { ok: rendered.html, warnings, embed: embedded.summary };
 }
 
 export function reportWarningsFor(issueId: string, hostDir?: string): string[] {
@@ -1098,8 +1145,31 @@ export async function runReportAgent(
   }
 
   const startedAt = Date.now();
+  const staleSessions = (() => {
+    try {
+      return archiveReportSession(
+        input.issueId,
+        reportRunId,
+        join(
+          workspaceHostDirFor(
+            deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+            input.issueId,
+          ),
+          'reports',
+          new Date(startedAt).toISOString(),
+          'session',
+        ),
+      );
+    } catch (error) {
+      console.error('report session archive failed', {
+        issueId: input.issueId,
+        error,
+      });
+      return [];
+    }
+  })();
   console.log(
-    `report agent started: issue=${input.issueId} trigger=${input.trigger ?? 'unknown'}${input.origin ? ` origin=${input.origin}` : ''} archived=${archive.dir ?? 'none'} files=[${archive.files.join(', ')}] at=${new Date(startedAt).toISOString()}`,
+    `report agent started: issue=${input.issueId} trigger=${input.trigger ?? 'unknown'}${input.origin ? ` origin=${input.origin}` : ''} archived=${archive.dir ?? 'none'} files=[${archive.files.join(', ')}] sessionReset=[${staleSessions.join(', ')}] at=${new Date(startedAt).toISOString()}`,
   );
   deps.sse.publish(
     reportStepStatusEvent(input.issueId, reportRunId, 'running', input.model),
@@ -1175,13 +1245,14 @@ export async function runReportAgent(
     session.stop();
     if (observedModel) observedReportModel.set(input.issueId, observedModel);
     else observedReportModel.delete(input.issueId);
-    const rendered = await renderReportArtifacts(input.hostDir).catch(
-      (error: unknown) => ({
-        ok: false,
-        html: false,
-        warnings: [`report page failed: ${String(error)}`],
-      }),
-    );
+    const rebuilt = await rebuildReportPage(input.issueId, input.hostDir);
+    const rendered = { html: rebuilt.ok, warnings: rebuilt.warnings };
+    if (rebuilt.warnings.some((warning) => warning.startsWith('скриншоты'))) {
+      console.warn('report screenshots failed', {
+        issueId: input.issueId,
+        summary: rebuilt.embed,
+      });
+    }
     const artifacts = reportArtifactsPresent(input.hostDir);
     if (status === 'success' && !artifacts.md) {
       status = 'failed';

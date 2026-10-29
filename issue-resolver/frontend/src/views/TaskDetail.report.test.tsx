@@ -101,6 +101,7 @@ class FakeEventSource {
 function stubFetch(options: {
   reportStatus?: () => Response;
   onReportPost?: () => Response;
+  onReembed?: () => Response;
   artifact?: Parameters<typeof headResponse>[0];
   resultBody?: string;
   reportRun?: unknown;
@@ -111,6 +112,13 @@ function stubFetch(options: {
 
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith('/report/reembed') && init?.method === 'POST') {
+      return Promise.resolve(
+        options.onReembed
+          ? options.onReembed()
+          : jsonResponse({ ok: true, warnings: [], embed: 'inlined 1' }),
+      );
+    }
     if (url.endsWith('/report/status')) {
       return Promise.resolve(
         options.reportStatus
@@ -329,6 +337,8 @@ describe('TaskDetail — секция «Отчёт»', () => {
     const warn = await screen.findByTestId('report-warnings');
     expect(warn).toHaveTextContent('model-like id leaked into report.md');
     expect(warn).toHaveTextContent('anchored on previous report');
+    expect(warn).toHaveAttribute('role', 'status');
+    expect(warn.className).not.toContain('#FF0033');
   });
 
   it('наблюдённая модель показана в UI, но не в артефакте', async () => {
@@ -532,7 +542,7 @@ function emitReportStats() {
 }
 
 describe('TaskDetail — контроль и статистика report-агента', () => {
-  it('stats-эмит → строка статистики в секции отчёта', async () => {
+  it('идёт прогон → живой транскрипт, итога ещё нет', async () => {
     stubFetch({ reportStatus: runningStatus });
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
@@ -541,10 +551,11 @@ describe('TaskDetail — контроль и статистика report-аге�
     await screen.findByTestId('report-generating');
     emitReportStats();
 
-    const stats = await screen.findByTestId('session-stats');
-    expect(stats).toHaveTextContent('CTX 42%');
-    expect(stats).toHaveTextContent('Claude Sonnet 4');
+    expect(await screen.findByTestId('report-session')).toBeInTheDocument();
+    expect(screen.queryByTestId('report-summary')).toBeNull();
   });
+
+
 
   it('«Развернуть» открывает модалку с живым выводом и контролем', async () => {
     stubFetch({
@@ -652,6 +663,54 @@ describe('TaskDetail — исход прогона отчёта', () => {
     expect(ready).toHaveTextContent('HTML + MD');
   });
 
+  it('прогон завершён → итог карточкой и строка статистики, транскрипта нет', async () => {
+    stubFetch({
+      reportStatus: () =>
+        jsonResponse({
+          status: 'success',
+          lastRunAt: new Date().toISOString(),
+          artifacts: {
+            md: { present: true, bytes: 300, mtime: '2026-10-27T14:01:42Z' },
+            html: { present: true, bytes: 900, mtime: '2026-10-27T14:01:43Z' },
+          },
+        }),
+      reportRun: makeReportRun({
+        status: 'success',
+        report: JSON.stringify({
+          status: 'pass',
+          summary: 'Доска и логин проверены',
+        }),
+        stats: {
+          model: 'Claude Sonnet 4',
+          userMessages: 1,
+          assistantMessages: 2,
+          toolCalls: 2,
+          toolResults: 2,
+          totalMessages: 5,
+          tokens: {
+            input: 1000,
+            output: 500,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 1500,
+          },
+          cost: 0.01,
+          contextUsage: { tokens: 1500, contextWindow: 200000, percent: 42 },
+        },
+      }),
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const summary = await screen.findByTestId('report-summary');
+    expect(summary).toHaveTextContent('PASS');
+    expect(summary).toHaveTextContent('Доска и логин проверены');
+    expect(screen.queryByTestId('report-session')).toBeNull();
+    expect(await screen.findByTestId('report-tokens')).toHaveTextContent(
+      'CTX 42%',
+    );
+  });
+
   it('сохранённый прогон поднимает сессию из БД после перезагрузки', async () => {
     stubFetch({
       reportStatus: () =>
@@ -666,8 +725,197 @@ describe('TaskDetail — исход прогона отчёта', () => {
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
-    const session = await screen.findByTestId('report-session');
-    expect(session).toHaveTextContent('строка из сохранённой сессии');
     expect(await screen.findByTestId('report-expand')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('report-expand'));
+
+    const session = await screen.findByTestId('modal-session');
+    expect(session).toHaveTextContent('строка из сохранённой сессии');
+  });
+});
+
+describe('TaskDetail — прогон не притворяется живым', () => {
+  function overrideReportStatus(
+    fetchMock: ReturnType<typeof stubFetch>,
+    next: () => Promise<Response>,
+  ): void {
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+      String(input).endsWith('/report/status')
+        ? next()
+        : base
+          ? base(input, init)
+          : Promise.resolve(jsonResponse({})),
+    );
+  }
+
+  it(
+    'сервер не отвечает по статусу 3 раза подряд → «Генерируется» снимается и появляется ошибка',
+    async () => {
+      const fetchMock = stubFetch({ reportStatus: runningStatus });
+      render(<TaskDetail issueId="issue-1" />);
+      await screen.findByTestId('report-generating');
+
+      overrideReportStatus(fetchMock, () =>
+        Promise.reject(new Error('backend down')),
+      );
+
+      await waitFor(
+        () => expect(screen.queryByTestId('report-generating')).toBeNull(),
+        { timeout: 20_000 },
+      );
+      expect(screen.getByTestId('report-error')).toHaveTextContent(
+        'не удалось узнать статус отчёта',
+      );
+    },
+    25_000,
+  );
+
+  it(
+    'одна ошибка опроса не сбивает «Генерируется»',
+    async () => {
+      const fetchMock = stubFetch({ reportStatus: runningStatus });
+      render(<TaskDetail issueId="issue-1" />);
+      await screen.findByTestId('report-generating');
+
+      let failures = 0;
+      overrideReportStatus(fetchMock, () => {
+        failures += 1;
+        return failures === 1
+          ? Promise.reject(new Error('blip'))
+          : Promise.resolve(runningStatus());
+      });
+
+      await waitFor(() => expect(failures).toBeGreaterThanOrEqual(2), {
+        timeout: 20_000,
+      });
+      expect(screen.getByTestId('report-generating')).toBeInTheDocument();
+      expect(screen.queryByTestId('report-error')).toBeNull();
+    },
+    25_000,
+  );
+
+  it(
+    'успех без поля artifacts всё равно снимает «Генерируется»',
+    async () => {
+      const fetchMock = stubFetch({ reportStatus: runningStatus });
+      render(<TaskDetail issueId="issue-1" />);
+      await screen.findByTestId('report-generating');
+
+      overrideReportStatus(fetchMock, () =>
+        Promise.resolve(jsonResponse({ status: 'success' })),
+      );
+
+      await waitFor(
+        () => expect(screen.queryByTestId('report-generating')).toBeNull(),
+        { timeout: 20_000 },
+      );
+      expect(screen.getByTestId('report-error')).toHaveTextContent(
+        'не удалось узнать статус отчёта',
+      );
+    },
+    25_000,
+  );
+});
+
+describe('TaskDetail — ручная пересборка страницы отчёта', () => {
+  const mdPresent = () =>
+    jsonResponse({
+      status: 'success',
+      lastRunAt: new Date().toISOString(),
+      artifacts: {
+        md: { present: true, bytes: 200, mtime: '2026-10-27T14:01:42Z' },
+        html: { present: true, bytes: 900, mtime: '2026-10-27T14:01:43Z' },
+      },
+    });
+
+  const mdMissing = () =>
+    jsonResponse({
+      status: 'idle',
+      artifacts: {
+        md: noArtifact,
+        html: noArtifact,
+      },
+    });
+
+  it('отчёта нет → кнопки пересборки нет', async () => {
+    stubFetch({ reportStatus: mdMissing });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+    await screen.findByTestId('report-idle');
+    expect(screen.queryByTestId('reembed-report')).toBeNull();
+  });
+
+  it('markdown есть → кнопка активна, клик шлёт POST и подхватывает предупреждения', async () => {
+    const calls: string[] = [];
+    let reembedded = false;
+    const fetchMock = stubFetch({
+      reportStatus: () =>
+        reembedded
+          ? jsonResponse({
+              status: 'success',
+              lastRunAt: new Date().toISOString(),
+              warnings: ['скриншоты не вшиты: пропал ghost.png'],
+              artifacts: {
+                md: { present: true, bytes: 200, mtime: '2026-10-27T14:01:42Z' },
+                html: { present: true, bytes: 900, mtime: '2026-10-27T14:01:43Z' },
+              },
+            })
+          : mdPresent(),
+      onReembed: () => {
+        calls.push('reembed');
+        reembedded = true;
+        return jsonResponse({
+          ok: true,
+          embed: 'inlined 3',
+          warnings: ['скриншоты не вшиты: пропал ghost.png'],
+        });
+      },
+    });
+    vi.spyOn(fetchMock, 'mockImplementation');
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const button = await screen.findByTestId('reembed-report');
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    expect(await screen.findByTestId('report-warnings')).toHaveTextContent(
+      'пропал ghost.png',
+    );
+    expect(calls).toEqual(['reembed']);
+    expect(await screen.findByTestId('reembed-report')).toBeEnabled();
+  });
+
+  it('идёт прогон → пересборка недоступна', async () => {
+    stubFetch({ reportStatus: runningStatus });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+    await screen.findByTestId('report-generating');
+
+    expect(screen.queryByTestId('reembed-report')).toBeNull();
+  });
+
+  it('409 от сервера → текст причины и кнопка снова доступна', async () => {
+    stubFetch({
+      reportStatus: mdPresent,
+      onReembed: () =>
+        ({
+          ok: false,
+          status: 409,
+          json: async () => ({ error: 'report.md отсутствует — пересобирать нечего' }),
+          text: async () => '',
+        }) as Response,
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const button = await screen.findByTestId('reembed-report');
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    expect(await screen.findByTestId('report-error')).toHaveTextContent(
+      'пересобирать нечего',
+    );
+    expect(await screen.findByTestId('reembed-report')).toBeEnabled();
   });
 });

@@ -45,6 +45,7 @@ import {
   isReportRunActive,
   lastReportFailed,
   prepareIssueWorkspace,
+  rebuildReportPage,
   refreshLatestResultSnapshot,
   reportWarningsFor,
   reportModelFor,
@@ -82,9 +83,10 @@ function artifactWarningHeaders(
     issueId,
   );
   const warnings = reportWarningsFor(issueId, hostDir);
-  return warnings.length > 0
-    ? { 'x-artifact-warning': warnings.join('; ') }
-    : {};
+  if (warnings.length === 0) return {};
+  const value = warnings.join('; ');
+  const ascii = /^[\x20-\x7E]*$/.test(value) ? value : encodeURIComponent(value);
+  return { 'x-artifact-warning': ascii };
 }
 
 function resolvePipelineSteps(
@@ -684,6 +686,42 @@ export async function issuesRoutes(
         ...(observedModel ? { observedModel } : {}),
         ...(warnings.length > 0 ? { warnings } : {}),
       };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/report/reembed`,
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!service.getIssue(db, config, id)) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+      if (isReportRunActive(id)) {
+        return reply.status(409).send({ error: 'report run already active' });
+      }
+      const hostDir = workspaceHostDirFor(
+        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+        id,
+      );
+      const artifacts = await reportArtifactsOnDisk(hostDir);
+      if (!artifacts.md.present) {
+        return reply
+          .status(409)
+          .send({ error: 'report.md отсутствует — пересобирать нечего' });
+      }
+      const rebuilt = await rebuildReportPage(id, hostDir);
+      if (!rebuilt.ok) {
+        return reply.status(422).send({
+          error: 'страница не собрана',
+          warnings: rebuilt.warnings,
+        });
+      }
+      return reply.send({
+        ok: true,
+        embed: rebuilt.embed,
+        warnings: rebuilt.warnings,
+        artifacts: await reportArtifactsOnDisk(hostDir),
+      });
     },
   );
 

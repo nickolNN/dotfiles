@@ -913,6 +913,8 @@ export interface ReportStatus {
   warnings?: string[];
 }
 
+const REPORT_STATUSES = new Set(['idle', 'running', 'success', 'failed']);
+
 export async function getReportStatus(issueId: string): Promise<ReportStatus> {
   const response = await fetch(
     `${API_BASE}/issues/${encodeURIComponent(issueId)}/report/status`,
@@ -920,7 +922,38 @@ export async function getReportStatus(issueId: string): Promise<ReportStatus> {
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
-  return (await response.json()) as ReportStatus;
+  const payload = (await response.json()) as Partial<ReportStatus> | null;
+  const status = payload?.status;
+  if (typeof status !== 'string' || !REPORT_STATUSES.has(status)) {
+    throw new Error('некорректный ответ статуса отчёта');
+  }
+  const artifacts = payload?.artifacts as Record<string, unknown> | null;
+  if (typeof artifacts !== 'object' || artifacts === null) {
+    throw new Error('некорректный ответ статуса отчёта');
+  }
+  return payload as ReportStatus;
+}
+
+export async function reembedReport(issueId: string): Promise<{
+  warnings: string[];
+  embed: string;
+}> {
+  const response = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(issueId)}/report/reembed`,
+    { method: 'POST' },
+  );
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as {
+      error?: string;
+      warnings?: string[];
+    } | null;
+    const reason = payload?.error ?? (await readErrorMessage(response));
+    const warnings = payload?.warnings ?? [];
+    throw new Error(
+      warnings.length > 0 ? `${reason}: ${warnings.join('; ')}` : reason,
+    );
+  }
+  return (await response.json()) as { warnings: string[]; embed: string };
 }
 
 export async function getReportRun(issueId: string): Promise<StepRunWithLog> {
@@ -930,7 +963,11 @@ export async function getReportRun(issueId: string): Promise<StepRunWithLog> {
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
-  return (await response.json()) as StepRunWithLog;
+  const payload = (await response.json()) as Partial<StepRunWithLog> | null;
+  if (typeof payload?.id !== 'string' || payload?.step !== 'report') {
+    throw new Error('некорректный ответ прогона отчёта');
+  }
+  return payload as StepRunWithLog;
 }
 
 export async function cleanupOrphans(): Promise<CleanupResult> {

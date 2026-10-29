@@ -220,7 +220,7 @@ function renderShots(screenshots: string[], quoted: string[]): string {
   const figures = leftover
     .map(
       (name) =>
-        `<figure><a href="#" class="shot-link"><img data-slot="${escapeHtml(name)}" alt="${escapeHtml(name)}" loading="lazy"></a><figcaption>${escapeHtml(name)}</figcaption></figure>`,
+        `<figure><a href="#" class="shot-link"><img data-slot="${escapeHtml(name)}" alt="${escapeHtml(name)}"></a><figcaption>${escapeHtml(name)}</figcaption></figure>`,
     )
     .join('');
   return `<h3>Остальные скриншоты</h3><div class="shots">${figures}</div>`;

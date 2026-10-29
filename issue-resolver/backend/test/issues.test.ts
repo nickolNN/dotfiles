@@ -390,6 +390,38 @@ class FailingReportPi extends FakePiRunner {
   }
 }
 
+class DiagramWarningReportPi extends FakePiRunner {
+  override run(
+    containerName: string,
+    prompt: string,
+    options?: PiRunOptions,
+  ): Promise<StepExecutionResult> {
+    if (options?.stepRunId?.endsWith('.report') && options.cwd) {
+      mkdirSync(options.cwd, { recursive: true });
+      writeFileSync(
+        join(options.cwd, 'report.md'),
+        '# Отчёт\n\n```\n┌──────┐  press  ┌────────┐\n│ card │────────▶│ dialog │\n└──────┘         └────────┘\n```\n',
+        'utf8',
+      );
+      writeFileSync(
+        join(options.cwd, 'report.json'),
+        JSON.stringify({
+          diagrams: [
+            {
+              kind: 'flow',
+              title: 'Card press opens dialog',
+              nodes: ['card', 'dialog'],
+              edges: [['card', 'dialog']],
+            },
+          ],
+        }),
+        'utf8',
+      );
+    }
+    return super.run(containerName, prompt, options);
+  }
+}
+
 class LeakyReportPi extends FakePiRunner {
   constructor(private readonly model: string) {
     super();
@@ -979,6 +1011,211 @@ describe('report routes (D13–D18)', () => {
       await leakApp.close();
       warnSpy.mockRestore();
     }
+  });
+
+  it('D24b: предупреждение по-русски не роняет /result — заголовок остаётся ASCII', async () => {
+    const id = seedIssueRow();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = buildApp(db, {
+      workspaceRoot: root,
+      sse: new InMemorySseHub(),
+      pi: new DiagramWarningReportPi(),
+    });
+    try {
+      const kick = await app.inject({
+        method: 'POST',
+        url: `${ENDPOINT}/${id}/report`,
+      });
+      expect(kick.statusCode).toBe(202);
+
+      await vi.waitFor(async () => {
+        const status = await app.inject({
+          method: 'GET',
+          url: `${ENDPOINT}/${id}/report/status`,
+        });
+        expect(status.json()).toMatchObject({ status: 'success' });
+        expect(status.json().warnings).toHaveLength(1);
+      });
+
+      const result = await app.inject({
+        method: 'GET',
+        url: `${ENDPOINT}/${id}/result`,
+      });
+      expect(result.statusCode).toBe(200);
+      const header = result.headers['x-artifact-warning'] as string;
+      expect(header).toBeDefined();
+      expect(/^[\x20-\x7E]+$/.test(header)).toBe(true);
+      expect(decodeURIComponent(header)).toContain('пропущена');
+
+      const head = await app.inject({
+        method: 'HEAD',
+        url: `${ENDPOINT}/${id}/result`,
+      });
+      expect(head.statusCode).toBe(200);
+    } finally {
+      await app.close();
+      warnSpy.mockRestore();
+    }
+  });
+
+  describe('POST /report/reembed — ручная пересборка страницы', () => {
+    const workspaceOf = (id: string): string => join(root, id);
+
+    const seedReport = (
+      files: Record<string, string | Buffer>,
+    ): string => {
+      const id = seedIssueRow();
+      const dir = workspaceOf(id);
+      mkdirSync(dir, { recursive: true });
+      for (const [name, content] of Object.entries(files)) {
+        writeFileSync(join(dir, name), content);
+      }
+      return id;
+    };
+
+    it('нет report.md → 409 и внятная причина', async () => {
+      const id = seedReport({});
+      const app = buildApp(db, {
+        workspaceRoot: root,
+        sse: new InMemorySseHub(),
+        pi: new FakePiRunner(),
+      });
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: `${ENDPOINT}/${id}/report/reembed`,
+        });
+        expect(res.statusCode).toBe(409);
+        expect(res.json().error).toContain('report.md');
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('md есть, страницы нет → страница собирается с нуля', async () => {
+      const id = seedReport({ 'report.md': '# Отчёт\n\nТекст.\n' });
+      expect(existsSync(join(workspaceOf(id), 'report.html'))).toBe(false);
+      const app = buildApp(db, {
+        workspaceRoot: root,
+        sse: new InMemorySseHub(),
+        pi: new FakePiRunner(),
+      });
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: `${ENDPOINT}/${id}/report/reembed`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().artifacts.html.present).toBe(true);
+        const html = readFileSync(join(workspaceOf(id), 'report.html'), 'utf8');
+        expect(html).toContain('Текст.');
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('скриншот на месте → вшит, md и json не тронуты', async () => {
+      const md = '# Отчёт\n\n![борд](screenshots/01-board.png)\n';
+      const json = JSON.stringify({ verdict: 'pass' });
+      const id = seedReport({ 'report.md': md, 'report.json': json });
+      mkdirSync(join(workspaceOf(id), 'screenshots'), { recursive: true });
+      writeFileSync(
+        join(workspaceOf(id), 'screenshots', '01-board.png'),
+        Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==',
+          'base64',
+        ),
+      );
+      const app = buildApp(db, {
+        workspaceRoot: root,
+        sse: new InMemorySseHub(),
+        pi: new FakePiRunner(),
+      });
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: `${ENDPOINT}/${id}/report/reembed`,
+        });
+        expect(res.statusCode).toBe(200);
+        const html = readFileSync(join(workspaceOf(id), 'report.html'), 'utf8');
+        expect(html).toContain('data:image/png;base64,');
+        expect(html).not.toContain('data-slot=');
+        expect(readFileSync(join(workspaceOf(id), 'report.md'), 'utf8')).toBe(md);
+        expect(readFileSync(join(workspaceOf(id), 'report.json'), 'utf8')).toBe(
+          json,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('пропавший скриншот → 200, страница есть, предупреждение в статусе', async () => {
+      const id = seedReport({
+        'report.md': '# Отчёт\n\n![нет](screenshots/ghost.png)\n',
+      });
+      const app = buildApp(db, {
+        workspaceRoot: root,
+        sse: new InMemorySseHub(),
+        pi: new FakePiRunner(),
+      });
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: `${ENDPOINT}/${id}/report/reembed`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(String(res.json().warnings)).toContain('скриншоты не вшиты');
+        const status = await app.inject({
+          method: 'GET',
+          url: `${ENDPOINT}/${id}/report/status`,
+        });
+        expect(String(status.json().warnings)).toContain('скриншоты не вшиты');
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('пересборка идемпотентна: второй вызов даёт тот же markdown', async () => {
+      const md = '# Отчёт\n\nТекст.\n';
+      const id = seedReport({ 'report.md': md });
+      const app = buildApp(db, {
+        workspaceRoot: root,
+        sse: new InMemorySseHub(),
+        pi: new FakePiRunner(),
+      });
+      try {
+        const first = await app.inject({
+          method: 'POST',
+          url: `${ENDPOINT}/${id}/report/reembed`,
+        });
+        expect(first.statusCode).toBe(200);
+        const second = await app.inject({
+          method: 'POST',
+          url: `${ENDPOINT}/${id}/report/reembed`,
+        });
+        expect(second.statusCode).toBe(200);
+        expect(readFileSync(join(workspaceOf(id), 'report.md'), 'utf8')).toBe(md);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('неизвестная задача → 404', async () => {
+      const app = buildApp(db, {
+        workspaceRoot: root,
+        sse: new InMemorySseHub(),
+        pi: new FakePiRunner(),
+      });
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: `${ENDPOINT}/нет-такой/report/reembed`,
+        });
+        expect(res.statusCode).toBe(404);
+      } finally {
+        await app.close();
+      }
+    });
   });
 
   it('D25: POST /report → лог trigger=manual + origin; мутация → строка mutate', async () => {
