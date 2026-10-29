@@ -193,6 +193,23 @@ future reader could break without noticing, add it here instead of a comment.
 
 ## 7. Execution topology
 
+- The planner's primary output is a decision, not a document: how big the task
+  is, and how many executors/stages it takes. `plan.md` is the executor's brief —
+  it reaches the execution step as `Task brief` (read from `plan.md`, capped at
+  12 000 characters, falling back to `summary`), so decisions settled in the
+  interview are not re-litigated downstream. Past the cap the prompt carries the
+  leading part plus a pointer to `plan.md`, which the executor can read in full;
+  the truncation is announced as a warning in the live log rather than silently
+  shortening the brief. Sizing comes before the plan:
+  `single` is the default, and a split has to be earned by independent parts or
+  by an ordering constraint.
+- The planner decides **what** changes and why; the executor decides **how**.
+  `plan.md` carries the behaviour before/after, the owning area, acceptance
+  criteria, invariants and risks — not line numbers, quoted code, or diffs. A
+  plan written at edit level duplicates the executor's own discovery and goes
+  stale after its first edit, while pushing the planner to read implementation
+  it never needs. File paths stay allowed for one purpose only: the ownership
+  map that keeps parallel workers off each other's files.
 - `refine` is the single decision point for topology. The engine follows it
   deterministically: a room only with an explicit `mode: room` and a meaningful
   executor count, a staged plan with `mode: stages` and 2+ valid stages,

@@ -8,6 +8,16 @@
   code. Markdown files have NO line-length constraint — don't
   waste time reflowing paragraphs. Write naturally.
 
+## Language of agent-facing docs
+
+- Anything an agent reads as instructions is English: `AGENTS.md`, skills
+  (`SKILL.md` and their references), step prompts, design notes, tool
+  descriptions. A rule half-translated between languages is a rule the next
+  agent reads differently than you meant it.
+- Russian stays where it is data, not instruction: user-facing strings quoted
+  as examples, keyword lists, report bodies, test titles. Quoting Russian
+  output inside an English rule is fine; writing the rule in Russian is not.
+
 ## Tools & execution
 
 - `bash` (rg/grep/find) plus `read` directly when the target is

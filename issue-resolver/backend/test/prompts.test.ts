@@ -22,6 +22,10 @@ const base = {
   iterationCount: undefined as number | undefined,
 };
 
+function flat(text: string): string {
+  return text.replace(/\s+/g, ' ');
+}
+
 function prompt(
   step: PipelineStep,
   overrides: Partial<typeof base> = {},
@@ -147,6 +151,34 @@ describe('buildStepPrompt', () => {
     }
   });
 
+  it('refine: главная задача — оценить размер и решить форму прогона', () => {
+    const text = prompt('refine');
+
+    expect(flat(text)).toContain('you size the work and decide its shape');
+    expect(text).toContain('how big this task actually is');
+    expect(text).toContain('## 3. Size the work');
+    expect(text).toContain('Default is `single`');
+    expect(text).toContain('This object is the point of the step');
+  });
+
+  it('refine: топология решается до плана', () => {
+    const text = prompt('refine');
+    const size = text.indexOf('## 3. Size the work');
+    const brief = text.indexOf('## 4. Write the brief');
+
+    expect(size).toBeGreaterThan(-1);
+    expect(brief).toBeGreaterThan(size);
+  });
+
+  it('refine: развёрнутый бриф исполнителю, а не заметка на будущее', () => {
+    const text = prompt('refine');
+
+    expect(flat(text)).toContain("the executor's task description, not a memo");
+    expect(text).toContain("the request in the user's words");
+    expect(text).toContain('re-interview the user');
+    expect(flat(text)).toContain("that worker's slice of the brief");
+  });
+
   it('refine: asks via the `question` tool with options, not stdout/skills', () => {
     const text = prompt('refine');
 
@@ -156,6 +188,55 @@ describe('buildStepPrompt', () => {
     expect(text).not.toContain('stdout');
     expect(text).not.toContain('grill-me');
     expect(text).not.toContain('to-questionnaire');
+  });
+
+  it('refine: планировщик решает «что», исполнитель — «как»', () => {
+    const text = prompt('refine');
+
+    expect(flat(text)).toContain('You decide WHAT has to change and WHY');
+    expect(flat(text)).toContain('the execution step decides HOW');
+    expect(text).toContain('## 1a. Division of labour');
+  });
+
+  it('refine: в plan.md запрещена правка — строки, текущий код, диффы', () => {
+    const text = prompt('refine');
+
+    expect(text).toContain('must NOT contain');
+    expect(text).toContain('`file.ts:412`-style references');
+    expect(text).toContain('current code quoted from the repository');
+    expect(text).toContain('before → after code');
+    expect(text).toContain('literal sequence of edits');
+  });
+
+  it('refine: чтение кода ограничено ориентированием, а не разбором правки', () => {
+    const text = prompt('refine');
+
+    expect(text).toContain('Orient, do not reverse-engineer the edit');
+    expect(text).toContain('you opened a file to work out what the edit is');
+    expect(text).toContain('Never enumerate `package.json`');
+    expect(text).not.toContain('the file or module it lands in');
+  });
+
+  it('refine: у ориентирования есть бюджет, чтение файла целиком — не он', () => {
+    const text = prompt('refine');
+
+    expect(text).toContain('Orientation budget: about eight tool calls');
+    expect(text).toContain('Reading a whole source file is not');
+    expect(text).toContain('no line references and no quoted source');
+  });
+
+  it('refine: бриф уходит исполнителю с потолком 12k, важное — в начале', () => {
+    const text = prompt('refine');
+
+    expect(flat(text)).toContain('capped at 12 000 characters');
+    expect(flat(text)).toContain('Keep the decisions and the split near the top');
+  });
+
+  it('refine: пути файлов допустимы только в карте владения для параллельных воркеров', () => {
+    const text = prompt('refine');
+
+    expect(text).toContain('exactly one purpose');
+    expect(flat(text)).toContain('naming the files or area it owns');
   });
 
   it('refine: full context (description + Jira) + questions → plan', () => {
@@ -336,10 +417,10 @@ describe('refine execution & room prompts', () => {
     expect(text).toContain('single');
   });
 
-  it('resolve: refinedPlan renders the "Refined plan" section', () => {
+  it('resolve: refinedPlan renders the "Task brief" section', () => {
     const text = prompt('resolve', { refinedPlan: 'План из refine' });
 
-    expect(text).toContain('Refined plan');
+    expect(text).toContain('Task brief');
     expect(text).toContain('План из refine');
   });
 

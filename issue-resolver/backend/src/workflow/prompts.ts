@@ -252,7 +252,7 @@ function attachmentsBlock(paths?: string[]): string {
 
 function refinedPlanBlock(plan?: string | null): string {
   return plan
-    ? `Refined plan (from the refine step — follow it, do not re-plan from scratch):\n${plan}`
+    ? `Task brief (from the refine step — the size, the split, and the decisions behind them; follow it, do not re-plan from scratch):\n${plan}`
     : '';
 }
 

@@ -29,8 +29,9 @@
   shell
 - Pane nav: `Ctrl-a h/j/k/l`; split: `Ctrl-a "` (horizontal), `Ctrl-a %` (vertical)
 - `Ctrl-a a` sends prefix (needed in nested tmux sessions)
-- Clipboard: `set-clipboard on` + `Ms` terminal override — OSC 52 escape-последовательности
-  (копирование через `Ctrl+X` в pi) пробрасываются в системный буфер через Alacritty
+- Clipboard: `set-clipboard on` + the `Ms` terminal override — OSC 52 escape
+  sequences (copying via `Ctrl+X` in pi) are passed through to the system
+  clipboard by Alacritty
 - Status bar: hand-rolled hackerman theme in `tmux/tmux.conf`
   (neon pill styling, `heading.sh` for the git branch)
 
@@ -83,13 +84,12 @@
 - `pi/settings.json`, `pi/web-search.json`, `pi/themes/`, `pi/extensions/`
   tracked
 - `pi/models.json` gitignored — holds literal API keys, never commit
-- `pi/settings.json` включает `codemode` (`"defaultTools": ["+codemode"]`):
-  инструмент регистрируется неактивным и без этого ключа живёт только как
-  побочный эффект MCP (`exposure: "codemode"` в `mcp.json` включает его через
-  `builtin:mcp`) — выключи MCP, и он молча исчезает. `jq -s '.[0] * .[1]'`
-  в `dotfiles-agent/Dockerfile` мержит только `packages`, так что ключ
-  переживает сборку образа. Новые сессии видят его сразу, живой — после
-  `/reload`
+- `pi/settings.json` enables `codemode` (`"defaultTools": ["+codemode"]`): the
+  tool registers as inactive, and without this key it exists only as an MCP side
+  effect (`exposure: "codemode"` in `mcp.json` pulls it in via `builtin:mcp`) —
+  disable MCP and it silently disappears. The `jq -s '.[0] * .[1]'` merge in
+  `dotfiles-agent/Dockerfile` only touches `packages`, so the key survives the
+  image build. New sessions see it immediately; a live one after `/reload`
 - `pi/sync-thinking-rules.sh` — syncs `reasoning` / `thinkingLevelMap` in
   `models.json` from pi's model catalog (`models-store.json`, refreshed by
   `pi update --models`); matches custom-provider models by normalized

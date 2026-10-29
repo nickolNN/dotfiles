@@ -1531,7 +1531,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     expect(pi.calls[1].prompt).toContain('Sub-task 1 of 2: a');
     expect(pi.calls[2].prompt).toContain('Sub-task 2 of 2: b');
     expect(pi.calls[1].prompt).toContain('NOT the lead');
-    expect(pi.calls[1].prompt).toContain('Refined plan');
+    expect(pi.calls[1].prompt).toContain('Task brief');
 
     expect(pi.calls[3].prompt).toContain('LEAD');
     expect(pi.calls[3].prompt).toContain('worker0');

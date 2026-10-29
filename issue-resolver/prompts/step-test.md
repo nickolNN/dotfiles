@@ -19,7 +19,7 @@ verdict sends the pipeline back to development when the app is wrong.
 1. `.issue-step-result.json` at the working-folder root — the previous step's
    report: its `scenarios` are the claims to confirm, its `findings` the known
    risks to re-check. You overwrite this file with your own report at the end.
-2. `plan.md` and the refined plan above — the acceptance picture of the change.
+2. The task brief above (`plan.md` in the working folder) — the acceptance picture of the change.
 3. The task description and iteration context above — what the user asked for.
 
 Turn each into concrete scenarios: what you do in the UI, what you expect, what
