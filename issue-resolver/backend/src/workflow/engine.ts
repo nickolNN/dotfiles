@@ -203,6 +203,21 @@ export interface RunInstructionsPort {
   saveFailed(repoUrl: string): void;
 }
 
+const LINE_REF = /(?:^|[\s(`'"[\]])((?:[\w.-]+\/)*[\w.-]+\.(?:tsx?|jsx?|css|scss|py|go|rb|vue|json|md|ya?ml)):(\d+)(?:-\d+)?/;
+
+export function planShapeWarnings(plan: string | null): string[] {
+  if (plan === null) {
+    return [
+      'plan.md отсутствует — исполнитель получит только summary, брифа нет.',
+    ];
+  }
+  const match = LINE_REF.exec(plan);
+  if (!match) return [];
+  return [
+    `plan.md ссылается на строки (${match[1]}:${match[2]}) — правку проектирует исполнитель, бриф описывает поведение; ссылка на строку устареет после первого же изменения.`,
+  ];
+}
+
 const REFINED_PLAN_LIMIT = 12_000;
 
 export type ExpandedPlan = { text: string; truncated: boolean };
@@ -1048,6 +1063,15 @@ export async function runIteration(
           ? `${expandedPlan.text}\n[plan.md is longer than ${REFINED_PLAN_LIMIT} characters — read the full brief from plan.md in the working folder]`
           : expandedPlan.text
         : (report?.summary ?? null);
+      for (const message of planShapeWarnings(expandedPlan?.text ?? null)) {
+        deps.sse.publish(
+          stepEvent(issue.id, iteration.id, stepRun.id, {
+            type: 'notice',
+            level: 'warning',
+            message,
+          }),
+        );
+      }
       if (expandedPlan?.truncated) {
         deps.sse.publish(
           stepEvent(issue.id, iteration.id, stepRun.id, {

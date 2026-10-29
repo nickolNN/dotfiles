@@ -50,7 +50,10 @@ Two to five concrete options, the recommended one first.
   workers never edit the same file);
 - `.issue-step-result.json` — `summary`, `scenarios`, `execution`
   (`mode` / `executors` / `decomposition` / `stages` / `rationale`);
-- `iterations/<n>/.refine.md` — the step's narrative for the report agent.
+- `iterations/<n>/.refine.md` — this iteration's record for the report agent: a
+  delta (what the input added, what was asked, how you sized the work), never a
+  copy of the decisions in `plan.md`; long-term memory gets only cross-task
+  conventions and traps, not this task's decisions.
 
 What goes into `execution` and the worker limits is defined by the step prompt
 (`prompts/step-refine.md`) — not duplicated here.
