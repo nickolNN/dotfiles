@@ -200,9 +200,20 @@ future reader could break without noticing, add it here instead of a comment.
   interview are not re-litigated downstream. Past the cap the prompt carries the
   leading part plus a pointer to `plan.md`, which the executor can read in full;
   the truncation is announced as a warning in the live log rather than silently
-  shortening the brief. Sizing comes before the plan:
+  shortening the brief. Two more guards keep the prompt's rules observable
+  instead of trusted: a missing `plan.md` and a brief that cites `file.ts:335`
+  both surface as warnings in the run log (`planShapeWarnings`) — the planner's
+  boundary is prose, so its violation has to be visible somewhere mechanical. Sizing comes before the plan:
   `single` is the default, and a split has to be earned by independent parts or
   by an ordering constraint.
+- The refine step's three outputs have three different readers, and none of them
+  repeats another: `plan.md` is the executor's brief and is overwritten every
+  iteration; `iterations/<n>/.refine.md` is that iteration's delta for the report
+  agent (what the input added, what was asked, how the work was sized — not a
+  copy of the decisions); long-term memory takes only what a later task on the
+  repository could not read from the code (`#convention`, `#lesson`). A decision
+  copied into two of them becomes two sources that disagree after the next
+  iteration.
 - The planner decides **what** changes and why; the executor decides **how**.
   `plan.md` carries the behaviour before/after, the owning area, acceptance
   criteria, invariants and risks — not line numbers, quoted code, or diffs. A

@@ -179,10 +179,19 @@ not get wrong.
 `.issue-step-result.json` carries `execution` (decided in step 3), `summary`
 (the gist of the brief) and `scenarios` (how the result will be checked).
 
-`iterations/<n>/.refine.md` is the narrative of this step for the report agent:
-what you asked, how you sized the work, which decisions you took and why. It
-explains decisions, not code — no line references and no quoted source there
-either.
+`iterations/<n>/.refine.md` is this iteration's record for the report agent, and
+`plan.md` is overwritten every iteration — so write the delta, not a copy of the
+brief: what the input added this time, which questions were asked and what they
+answered, how you sized the work, and what the executor is getting that the
+previous iteration did not. The decisions themselves already live in `plan.md`;
+restating them here is a second copy that drifts. It explains reasoning, not
+code — no line references and no quoted source there either.
+
+Memory is not a third copy: `plan.md` holds this task's decisions, so memory gets
+only what a later task on this repository would need and could not read from the
+code — a `#convention` nobody wrote down, a `#lesson` that cost time. Writing
+this task's decisions into memory makes two sources that disagree after the next
+iteration.
 
 Plan entries state the behaviour change, the area that owns it, and how the
 executor confirms it — as observable behaviour, not as an edit. Order entries by

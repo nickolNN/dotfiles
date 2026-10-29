@@ -225,6 +225,21 @@ describe('buildStepPrompt', () => {
     expect(text).toContain('no line references and no quoted source');
   });
 
+  it('refine: .refine.md — дельта итерации, а не копия брифа', () => {
+    const text = prompt('refine');
+
+    expect(flat(text)).toContain('write the delta, not a copy of the');
+    expect(flat(text)).toContain('restating them here is a second copy that drifts');
+    expect(flat(text)).toContain('Memory is not a third copy');
+  });
+
+  it('refine: в память — не решения задачи, а то, что не прочитать в коде', () => {
+    const text = prompt('refine');
+
+    expect(flat(text)).toContain('only what a later task on this repository would need');
+    expect(flat(text)).toContain('two sources that disagree after the next iteration');
+  });
+
   it('refine: бриф уходит исполнителю с потолком 12k, важное — в начале', () => {
     const text = prompt('refine');
 
