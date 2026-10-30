@@ -15,7 +15,104 @@ export function extractIssueKeyFromUrl(url: string): string | null {
   return segments.length > 0 ? segments[segments.length - 1] : null;
 }
 
+export interface RepositoryRef {
+  host: string;
+  project: string | null;
+  repo: string;
+}
+
+function pathSegments(value: string): string[] {
+  return value
+    .split('/')
+    .map((segment) => segment.replace(/\.git$/i, ''))
+    .filter((segment) => segment.length > 0);
+}
+
+function splitRepositoryUrl(
+  url: string,
+): { host: string; segments: string[] } | null {
+  const trimmed = url.trim().replace(/\/+$/, '');
+  if (!trimmed) return null;
+
+  const scp = /^(?:[^@/]+@)([^:/]+):(.+)$/.exec(trimmed);
+  if (scp) {
+    return { host: scp[1], segments: pathSegments(scp[2]) };
+  }
+
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withScheme);
+    return {
+      host: parsed.hostname,
+      segments: pathSegments(decodeURIComponent(parsed.pathname)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parseRepositoryUrl(url: string): RepositoryRef | null {
+  const parts = splitRepositoryUrl(url);
+  if (!parts || parts.segments.length === 0) return null;
+
+  const host = parts.host.toLowerCase();
+  const lowered = parts.segments.map((segment) => segment.toLowerCase());
+
+  const reposAt = lowered.indexOf('repos');
+  if (
+    lowered[0] === 'projects' &&
+    reposAt >= 1 &&
+    reposAt + 1 < lowered.length
+  ) {
+    return {
+      host,
+      project: parts.segments[reposAt - 1],
+      repo: parts.segments[reposAt + 1],
+    };
+  }
+
+  if (lowered[0] === 'scm' && lowered.length >= 3) {
+    return { host, project: parts.segments[1], repo: parts.segments[2] };
+  }
+
+  const gitAt = lowered.indexOf('_git');
+  if (gitAt >= 1 && gitAt + 1 < lowered.length) {
+    return {
+      host,
+      project: parts.segments[gitAt - 1],
+      repo: parts.segments[gitAt + 1],
+    };
+  }
+
+  const last = parts.segments.length - 1;
+  return {
+    host,
+    project: last > 0 ? parts.segments[last - 1] : null,
+    repo: parts.segments[last],
+  };
+}
+
+export function repositoryIdentity(url: string): string {
+  const ref = parseRepositoryUrl(url);
+  if (!ref) return url.trim().replace(/\/+$/, '').toLowerCase();
+
+  const segments = [ref.host, ref.project, ref.repo].filter(
+    (segment): segment is string => Boolean(segment),
+  );
+  return segments.map((segment) => segment.toLowerCase()).join('/');
+}
+
+export function isSameRepository(a: string, b: string): boolean {
+  if (!a.trim() || !b.trim()) return false;
+  return repositoryIdentity(a) === repositoryIdentity(b);
+}
+
 export function extractRepoNameFromUrl(url: string): string {
+  const parsed = parseRepositoryUrl(url);
+  if (parsed) return parsed.repo;
+
   const trimmed = url.trim().replace(/\/+$/, '');
   const segments = trimmed.split(/[/:]/).filter((segment) => segment.length > 0);
   const last = segments.length > 0 ? segments[segments.length - 1] : '';

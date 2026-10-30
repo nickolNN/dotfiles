@@ -82,7 +82,7 @@ rounds). It activates automatically; follow its protocol.
 ## 3. Size the work
 
 Decide the shape of the run first, and write it down before the plan. Answer
-three questions from the input and your orientation:
+four questions from the input and your orientation:
 
 1. **How many areas does the change touch?** One module or feature, or several
    that know nothing about each other.
@@ -91,15 +91,22 @@ three questions from the input and your orientation:
 3. **Does one agent hold the whole change in its head?** A coherent change with
    shared context is cheaper for one executor than for a coordinator plus
    workers who must reconcile their views.
+4. **Does the change fit one executor's working set?** An agent holds an edit
+   well while every file it touches stays in view at once — on the order of a
+   dozen files plus one test loop. Past that it re-reads, contradicts itself, and
+   spends the run rebuilding context. Judge volume from what orientation already
+   showed you: files to touch, layers to cross (UI + state + API + fixtures),
+   build and test cycles to run. Work that outgrows the working set splits even
+   when no part is independent — order its parts into `stages`.
 
 Default is `single`. Splitting is a cost, not a bonus: every extra agent costs a
 hand-off, a shared-file conflict risk, and a coordinator pass, and a split that
 does not match the real shape of the work makes the result worse than one agent
-would have produced. Plan more executors only when the answers above demand it —
-independent parts that can be built in parallel, or ordered parts that cannot
-fit in one pass.
+would have produced. Plan more executors when the answers above demand it: answers
+1 and 2 give you parallel parts, answer 4 gives you a change too big for one
+working set — split that one into ordered stages.
 
-Maximum parallel agents: {{WORKER_COUNT}} (0 = unrestricted — plan as many as the work needs).
+{{PARALLELISM}}
 
 ### Execution topology
 
@@ -120,17 +127,20 @@ follows it deterministically, so a wrong shape is a wrong run.
 ```
 
 - `single` — one agent holds the whole task; no decomposition.
-- `room` — one coordinator (lead) plus up to {{WORKER_COUNT}} workers in parallel;
-  do not exceed {{WORKER_COUNT}} workers (0 = no limit).
+- `room` — one coordinator (lead) plus up to {{MAX_EXECUTORS}} workers in
+  parallel; never exceed {{MAX_EXECUTORS}}.
   `decomposition` carries one brief per worker, naming the files or area it
   owns so two workers never touch the same file.
 - `stages` — 2+ ordered stages, each with 1..{{MAX_EXECUTORS}} workers
   (1-based `index`, one `decomposition` entry per worker); a final lead
-  integrates all stages.
+  integrates all stages. A stage with one executor is a normal stage: it is how
+  a big change is handed to a sequence of agents, each staying inside its own
+  working set.
 
 Pick by the shape of the work: independent parts that can be built at the same
-time → `room`; ordered parts where each needs the previous one's result →
-`stages`; one coherent change a single agent keeps in its head → `single`.
+time → `room`; ordered parts where each needs the previous one's result, or a
+change too big for one working set → `stages`; one coherent change a single
+agent keeps in its head and within its working set → `single`.
 
 Do NOT plan a trailing "integration" / "acceptance" / "lead" stage: the engine
 always adds its own final lead after the last stage, so such a stage is a second
@@ -141,7 +151,7 @@ The engine clamps `executors` to {{MAX_EXECUTORS}} and pads `decomposition` to
 match, so a wrong count costs nothing while a bad split costs a re-run. Split so
 that sub-tasks are file-disjoint (two agents in one file conflict) and each is
 verifiable on its own — the ownership map is the one place file paths belong. If
-the work needs more parallelism than {{WORKER_COUNT}} allows, use `stages` to
+the work needs more parallelism than {{MAX_EXECUTORS}} allows, use `stages` to
 serialize the excess into a later stage rather than oversubscribing one.
 
 Only the coordinator (lead) makes the final pass/fail decision for the execution
@@ -171,7 +181,7 @@ Each `decomposition` entry and each stage `task` is that worker's slice of the b
 what it owns and its finish line. Keep it short because the worker also receives
 the full `plan.md`.
 
-Executors receive `plan.md` as their task brief, capped at 12 000 characters —
+Executors receive `plan.md` as their task brief, capped at {{PLAN_CHAR_LIMIT}} characters —
 what follows the cap they can only read in the file. Keep the decisions and the
 split near the top, so a truncated brief still carries what the executor must
 not get wrong.

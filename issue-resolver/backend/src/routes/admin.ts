@@ -1,12 +1,11 @@
-import { execSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { eq, sql, type InferSelectModel } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { issues } from '../db/schema';
 import { cleanupAbandonedIssueRooms, roomsRootFromEnv } from '../pi/rooms';
+import { removeWorkspaceDir } from '../processes/workspace-processes';
 import { DEFAULT_WORKSPACE_ROOT } from '../workspace/paths';
 
 const API_PATH = '/issue-resolver/api/v1';
@@ -61,30 +60,8 @@ export async function adminRoutes(
       const wsPath = join(workspaceRoot, dir);
 
       try {
-        const killed = execSync(
-          `killed=0; ` +
-          `for p in /proc/*/cwd; do ` +
-          `  cwd=$(readlink "$p" 2>/dev/null || true); ` +
-          `  case "$cwd" in ${wsPath}*) pid=$(echo "$p" | grep -oE '[0-9]+'); kill "$pid" 2>/dev/null && killed=$((killed+1)) || true;; ` +
-          `  esac; ` +
-          `done; ` +
-          `killed2=$(pkill -f '${wsPath}' -c 2>/dev/null || echo 0); ` +
-          `echo $((killed + killed2))`,
-          { encoding: 'utf-8', timeout: 5_000 },
-        ).trim();
-        result.killed_processes += Number.parseInt(killed, 10) || 0;
-      } catch {
-      }
-
-      try {
-        execSync(`sleep 0.5; pkill -9 -f '${wsPath}' 2>/dev/null || true`, {
-          timeout: 3_000,
-        });
-      } catch {
-      }
-
-      try {
-        await rm(wsPath, { recursive: true, force: true });
+        const { killed } = await removeWorkspaceDir(wsPath);
+        result.killed_processes += killed.length;
         result.deleted_dirs += 1;
       } catch (error) {
         result.errors.push(

@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { SessionEvent, ThinkingLevel } from '@issue-resolver/shared';
+import type { SessionEvent, SessionStats, ThinkingLevel } from '@issue-resolver/shared';
 import type { PiRunner } from '../pi/runner';
+import { PORT_RANGE_LABEL } from '../port-allocator';
 import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
 import { soloRunExcludeTools } from '../pi/tool-policy';
 import { STEP_SYSTEM_APPEND } from './prompts';
@@ -21,6 +22,7 @@ export interface DevOpsResult {
   success: boolean;
   instructions: string | null;
   error?: string;
+  stats?: SessionStats | null;
 }
 
 export interface DevOpsAgent {
@@ -57,7 +59,7 @@ export function renderDevOpsPrompt(
   template: string,
   repoDir: string,
   repoName: string,
-  devServerPort?: number,
+  devServerPort: number,
   tagInstructions?: string | null,
   reposNames?: string | null,
   reposRequireDevServer?: string | null,
@@ -73,10 +75,8 @@ export function renderDevOpsPrompt(
   return template
     .replace(/\{\{REPO_DIR\}\}/g, repoDir)
     .replace(/\{\{REPO_NAME\}\}/g, repoName)
-    .replace(
-      /\{\{DEV_SERVER_PORT\}\}/g,
-      devServerPort !== undefined ? String(devServerPort) : 'AUTO',
-    )
+    .replace(/\{\{DEV_SERVER_PORT\}\}/g, String(devServerPort))
+    .replace(/\{\{DEV_PORT_RANGE\}\}/g, PORT_RANGE_LABEL)
     .replace(
       /\{\{TAG_INSTRUCTIONS\}\}/g,
       tagInstructions?.trim()
@@ -97,7 +97,7 @@ export function renderDevOpsPrompt(
 export function loadDevOpsPrompt(
   repoDir: string,
   repoName: string,
-  devServerPort?: number,
+  devServerPort: number,
   promptPath: string = DEFAULT_DEVOPS_PROMPT_PATH,
   tagInstructions?: string | null,
   reposNames?: string | null,
@@ -139,6 +139,14 @@ export class PiDevOpsAgent implements DevOpsAgent {
     repoName: string,
     devServerPort?: number,
   ): Promise<DevOpsResult> {
+    if (devServerPort === undefined) {
+      return {
+        success: false,
+        instructions: null,
+        error: 'задаче не выделен entry-порт dev-сервера',
+        stats: null,
+      };
+    }
     const repoDir = posix.join(workspaceDir, repoName);
     const hostInstructionsPath = join(
       this.options.hostWorkspaceDir,
@@ -190,11 +198,12 @@ export class PiDevOpsAgent implements DevOpsAgent {
 
       const instructions = await readRunInstructions(hostInstructionsPath);
       if (instructions !== null) {
-        return { success: true, instructions };
+        return { success: true, instructions, stats: result.stats ?? null };
       }
       return {
         success: false,
         instructions: null,
+        stats: result.stats ?? null,
         error:
           stderr ||
           (result.exitCode !== 0

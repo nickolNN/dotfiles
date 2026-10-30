@@ -42,6 +42,7 @@ import {
 } from '../validation';
 import type { IterationRunDeps } from '../workflow/run-iteration.service';
 import {
+  isDevopsRunActive,
   isReportRunActive,
   lastReportFailed,
   prepareIssueWorkspace,
@@ -52,6 +53,7 @@ import {
   observedModelFor,
   runIssueIteration,
   runReportAgent,
+  runDevopsAgent,
 } from '../workflow/run-iteration.service';
 import { buildStepPrompt } from '../workflow/prompts';
 import { isSessionStale, quietMinutes } from '../pi/session-liveness';
@@ -324,7 +326,8 @@ export async function issuesRoutes(
             try {
               process.kill(pid, sig);
             } catch {
-            }
+            // fallthrough: PID not found in process group
+          }
           }
         };
         signal('SIGTERM');
@@ -742,6 +745,110 @@ export async function issuesRoutes(
     },
   );
 
+  app.post<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/devops`,
+    async (request, reply) => {
+      const { id } = request.params;
+      const issue = service.getIssue(db, config, id);
+      if (!issue) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+
+      const devopsFactory = deps.devopsFactory;
+      if (!devopsFactory) {
+        return reply
+          .status(400)
+          .send({ error: 'devops factory not configured' });
+      }
+
+      if (isDevopsRunActive(id)) {
+        return reply.status(409).send({ error: 'devops run already active' });
+      }
+
+      const devopsRunId = SessionAddress.forIssueRun(id, 'devops').toString();
+
+      void runDevopsAgent({ ...deps, db, devopsFactory }, {
+        issueId: id,
+        repositories: issue.repositories ?? [],
+        trigger: 'manual',
+      }).catch((error) =>
+        console.error('devops run failed', { issueId: id, error }),
+      );
+
+      return reply.code(202).send({ ok: true, devopsRunId });
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/devops/status`,
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!service.getIssue(db, config, id)) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+
+      const run = await getLatestStepRunForIssue(db, id, 'devops');
+      const now = Date.now();
+
+      if (
+        run &&
+        run.status === 'running' &&
+        !isDevopsRunActive(id) &&
+        isSessionStale(run.updated_at, now)
+      ) {
+        const minutes = quietMinutes(run.updated_at, now);
+        const feedback = `devops failed: нет активности ${minutes} мин — прогон прерван`;
+        await updateStepRun(db, run.id, { status: 'failed', feedback });
+        run.status = 'failed';
+        run.feedback = feedback;
+      }
+
+      let status: 'idle' | 'running' | 'success' | 'failed';
+      if (isDevopsRunActive(id)) status = 'running';
+      else if (run) {
+        if (run.status === 'success') status = 'success';
+        else if (run.status === 'failed') status = 'failed';
+        else status = 'running';
+      } else {
+        status = 'idle';
+      }
+
+      return {
+        status,
+        ...(run
+          ? {
+              runId: run.id,
+              runStatus: run.status,
+              startedAt: run.created_at,
+              ...(run.status === 'success' || run.status === 'failed'
+                ? { finishedAt: run.updated_at }
+                : {}),
+              ...(run.feedback ? { feedback: run.feedback } : {}),
+            }
+          : {}),
+      };
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    `${ROUTE_PATH}/:id/devops/run`,
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!service.getIssue(db, config, id)) {
+        return reply.status(404).send({ error: 'issue not found' });
+      }
+      const run = await getLatestStepRunForIssue(db, id, 'devops');
+      if (!run) {
+        return reply.status(404).send({ error: 'devops run not found' });
+      }
+      const withLog = await getStepRunWithLog(db, run.id);
+      if (!withLog) {
+        return reply.status(404).send({ error: 'devops run not found' });
+      }
+      return withLog;
+    },
+  );
+
   app.get<{ Params: { id: string } }>(
     `${ROUTE_PATH}/:id/iterations`,
     async (request, reply) => {
@@ -1128,6 +1235,7 @@ export async function issuesRoutes(
         try {
           jiraFull = await jira.fetchIssueFull(key);
         } catch {
+          // Jira unreachable — continue without full data
         }
       }
     }

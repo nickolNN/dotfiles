@@ -1019,6 +1019,8 @@ describe('runIssueIteration — разовая подготовка рабоче
     expect(lines).toEqual([
       '/RUN_INSTRUCTIONS.md',
       '/DEV_SERVER.sh',
+      '/.dev-server.pid',
+      '/.dev-server.log',
       '/.issue-step-result.json',
       '/.issue-worker-result-*.json',
       '/.issue-stage-*.json',

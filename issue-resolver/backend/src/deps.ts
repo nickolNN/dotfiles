@@ -39,6 +39,7 @@ export function devOpsFactoryFor(
     timeoutMs,
     onStdout,
     onStderr,
+    onEvent,
   }) =>
     new PiDevOpsAgent({
       pi,
@@ -57,6 +58,7 @@ export function devOpsFactoryFor(
       timeoutMs: timeoutMs ?? defaultTimeoutMs,
       onStdout,
       onStderr,
+      onEvent,
     });
 }
 
@@ -85,6 +87,7 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
       jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
       control: new InMemoryStepSessionRegistry(),
       devopsFactory: devOpsFactoryFor(pi, devopsTimeoutMs),
+      retroPi: new RpcPiRunner('resolve', 'local'),
       devopsTimeoutMs,
       local: false,
       workspaceRoot:

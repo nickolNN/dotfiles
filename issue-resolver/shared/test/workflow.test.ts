@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { nextStepDecision } from '../src/workflow';
+import { MAX_PIPELINE_ATTEMPTS, nextStepDecision } from '../src/workflow';
 import type { PipelineStep } from '../src/types';
 
 function decide(
@@ -76,6 +76,15 @@ describe('nextStepDecision — retry_resolve on failed review/test', () => {
       kind: 'needs_input',
       reason: 'max_attempts',
     });
+  });
+
+  it('the default budget is MAX_PIPELINE_ATTEMPTS', () => {
+    expect(
+      decide(['resolve', 'test'], 'test', 'failed', MAX_PIPELINE_ATTEMPTS - 1),
+    ).toEqual({ kind: 'retry_resolve', attempt: MAX_PIPELINE_ATTEMPTS });
+    expect(
+      decide(['resolve', 'test'], 'test', 'failed', MAX_PIPELINE_ATTEMPTS),
+    ).toEqual({ kind: 'needs_input', reason: 'max_attempts' });
   });
 });
 

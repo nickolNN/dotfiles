@@ -138,6 +138,16 @@ export const updateHostnameRequestSchema = z.object({
   hostname: z.string().max(100, 'hostname не длиннее 100 символов'),
 });
 
+export const startRetroRunRequestSchema = z.object({
+  model: z.string().max(200).optional(),
+  thinking_level: thinkingLevelSchema.optional(),
+  session_limit: z.number().int().min(1).max(50).optional(),
+  instructions: z
+    .string()
+    .max(4000, 'инструкции не длиннее 4000 символов')
+    .optional(),
+});
+
 export const updateTagRequestSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().optional(),

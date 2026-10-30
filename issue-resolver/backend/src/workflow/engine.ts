@@ -23,6 +23,8 @@ import type {
   WorkspaceProgressReporter,
 } from '@issue-resolver/shared';
 import {
+  REFINED_PLAN_CHAR_LIMIT,
+  MAX_PIPELINE_ATTEMPTS,
   MAX_SELF_RETRIES,
   SELF_RETRY_STEPS,
   SessionAddress,
@@ -177,7 +179,6 @@ export interface RunIterationResult {
 }
 
 const IMAGE = 'dotfiles-agent';
-const MAX_ATTEMPTS = 3;
 
 const STEP_REPORT_FILE = '.issue-step-result.json';
 
@@ -218,8 +219,6 @@ export function planShapeWarnings(plan: string | null): string[] {
   ];
 }
 
-const REFINED_PLAN_LIMIT = 12_000;
-
 export type ExpandedPlan = { text: string; truncated: boolean };
 
 export async function readExpandedPlan(
@@ -229,10 +228,10 @@ export async function readExpandedPlan(
   if (!body) return null;
   const trimmed = body.trim();
   if (trimmed.length === 0) return null;
-  if (trimmed.length <= REFINED_PLAN_LIMIT) {
+  if (trimmed.length <= REFINED_PLAN_CHAR_LIMIT) {
     return { text: trimmed, truncated: false };
   }
-  return { text: trimmed.slice(0, REFINED_PLAN_LIMIT), truncated: true };
+  return { text: trimmed.slice(0, REFINED_PLAN_CHAR_LIMIT), truncated: true };
 }
 
 export type DevOpsFactory = (params: {
@@ -249,6 +248,7 @@ export type DevOpsFactory = (params: {
   timeoutMs?: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  onEvent?: (event: SessionEvent) => void;
   reposNames?: string | null;
   reposRequireDevServer?: string | null;
   reposInstructions?: string | null;
@@ -267,6 +267,7 @@ export interface PrepareWorkspaceDeps {
   devServerPort?: number;
   onDevOpsStdout?: (repo: string, chunk: string) => void;
   onDevOpsStderr?: (repo: string, chunk: string) => void;
+  onDevOpsEvent?: (repo: string, event: SessionEvent) => void;
   issueId?: string;
   iterationId?: string;
   control?: import('../pi/session-registry').StepSessionRegistry;
@@ -417,6 +418,7 @@ export async function prepareWorkspace(
         timeoutMs: deps.devopsTimeoutMs,
         onStdout: (chunk) => deps.onDevOpsStdout?.(repoName, chunk),
         onStderr: (chunk) => deps.onDevOpsStderr?.(repoName, chunk),
+        onEvent: (event) => deps.onDevOpsEvent?.(repoName, event),
       });
       const result = await devops.runDevOps(
         containerWorkspaceDir,
@@ -1060,7 +1062,7 @@ export async function runIteration(
         (await readExpandedPlan(workspaceHostDir));
       refinedPlan = expandedPlan
         ? expandedPlan.truncated
-          ? `${expandedPlan.text}\n[plan.md is longer than ${REFINED_PLAN_LIMIT} characters — read the full brief from plan.md in the working folder]`
+          ? `${expandedPlan.text}\n[plan.md is longer than ${REFINED_PLAN_CHAR_LIMIT} characters — read the full brief from plan.md in the working folder]`
           : expandedPlan.text
         : (report?.summary ?? null);
       for (const message of planShapeWarnings(expandedPlan?.text ?? null)) {
@@ -1077,11 +1079,24 @@ export async function runIteration(
           stepEvent(issue.id, iteration.id, stepRun.id, {
             type: 'notice',
             level: 'warning',
-            message: `plan.md длиннее ${REFINED_PLAN_LIMIT} символов — в промпт исполнителя вошло начало брифа, полный план он читает из plan.md.`,
+            message: `plan.md длиннее ${REFINED_PLAN_CHAR_LIMIT} символов — в промпт исполнителя вошло начало брифа, полный план он читает из plan.md.`,
           }),
         );
       }
       refinedExecution = report?.execution ?? null;
+      if (refinedExecution === null && steps.includes('resolve')) {
+        deps.sse.publish(
+          stepEvent(issue.id, iteration.id, stepRun.id, {
+            type: 'notice',
+            level: 'warning',
+            message:
+              'refine не вернул execution-план — resolve пойдёт одним агентом (single). Задача больше одного рабочего набора — планировщик обязан вернуть stages.',
+          }),
+        );
+        console.warn(
+          `refine step run ${stepRun.id}: no execution plan — resolve runs as single`,
+        );
+      }
     }
 
     if (status === 'aborted') {
@@ -1117,7 +1132,7 @@ export async function runIteration(
       currentStep: step,
       result: status === 'success' ? 'success' : 'failed',
       attempt: pipelineAttempt,
-      maxAttempts: MAX_ATTEMPTS,
+      maxAttempts: MAX_PIPELINE_ATTEMPTS,
     });
 
     switch (decision.kind) {
@@ -1369,6 +1384,7 @@ async function publishPrResult(
         ),
       );
     } catch {
+      // artefacts may be absent when the run failed early
     }
   }
 

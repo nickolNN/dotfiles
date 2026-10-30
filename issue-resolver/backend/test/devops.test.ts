@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeContainerController } from '../src/docker/controller';
 import { devOpsFactoryFor } from '../src/deps';
 import { FakeGitService } from '../src/git/service';
+import { PORT_RANGE_LABEL } from '../src/port-allocator';
 import { FakePiRunner } from '../src/pi/runner';
 import { RpcPiRunner } from '../src/pi/rpc-runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
@@ -421,11 +422,17 @@ describe('PiDevOpsAgent', () => {
       promptPath: template,
     });
 
-    const result = await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
+    const result = await agent.runDevOps(
+      '/workspaces/issue-1',
+      REPO_URL,
+      'app',
+      5101,
+    );
 
     expect(result).toEqual({
       success: true,
       instructions: '# Install\nnpm install',
+      stats: null,
     });
     expect(pi.calls).toHaveLength(1);
     expect(pi.calls[0].prompt).toBe('DIR=/workspaces/issue-1/app NAME=app');
@@ -448,7 +455,7 @@ describe('PiDevOpsAgent', () => {
       promptPath: template,
     });
 
-    await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
+    await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app', 5101);
 
     expect(pi.calls).toHaveLength(1);
     expect(pi.calls[0].options?.thinkingLevel).toBe('xhigh');
@@ -472,7 +479,12 @@ describe('PiDevOpsAgent', () => {
       promptPath: template,
     });
 
-    const promise = agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
+    const promise = agent.runDevOps(
+      '/workspaces/issue-1',
+      REPO_URL,
+      'app',
+      5101,
+    );
 
     const args = spawnMock.mock.calls[0][1] as string[];
     expect(args[args.indexOf('--thinking') + 1]).toBe('high');
@@ -495,7 +507,12 @@ describe('PiDevOpsAgent', () => {
       promptPath: template,
     });
 
-    const result = await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
+    const result = await agent.runDevOps(
+      '/workspaces/issue-1',
+      REPO_URL,
+      'app',
+      5101,
+    );
 
     expect(result.success).toBe(false);
     expect(result.instructions).toBeNull();
@@ -504,8 +521,56 @@ describe('PiDevOpsAgent', () => {
 
   it('renderDevOpsPrompt заменяет все вхождения плейсхолдеров', () => {
     expect(
-      renderDevOpsPrompt('{{REPO_DIR}}/{{REPO_NAME}} @ {{REPO_DIR}}', '/a', 'b'),
-    ).toBe('/a/b @ /a');
+      renderDevOpsPrompt(
+        '{{REPO_DIR}}/{{REPO_NAME}} @ {{REPO_DIR}} :{{DEV_SERVER_PORT}}',
+        '/a',
+        'b',
+        5101,
+      ),
+    ).toBe('/a/b @ /a :5101');
+  });
+
+  it('диапазон entry-портов в промпте = константа аллокатора', () => {
+    const text = renderDevOpsPrompt(
+      'outside `{{DEV_PORT_RANGE}}`',
+      '/a',
+      'b',
+      5101,
+    );
+
+    expect(text).toBe(`outside \`${PORT_RANGE_LABEL}\``);
+    expect(text).not.toContain('{{');
+  });
+
+  it('entry-порт всегда конкретный: ни AUTO, ни пустого значения в промпте', () => {
+    const text = renderDevOpsPrompt('{{DEV_SERVER_PORT}}', '/a', 'b', 5123);
+
+    expect(text).toBe('5123');
+    expect(text).not.toContain('AUTO');
+  });
+
+  it('без выделенного порта агент не стартует и объясняет причину', async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, 'app'), { recursive: true });
+    const template = join(root, 'devops.md');
+    await writeFile(template, '{{DEV_SERVER_PORT}}');
+
+    const agent = new PiDevOpsAgent({
+      pi: new FakePiRunner(),
+      containerName: 'issue-resolver-issue-1',
+      hostWorkspaceDir: root,
+      promptPath: template,
+    });
+
+    const result = await agent.runDevOps(
+      '/workspaces/issue-1',
+      REPO_URL,
+      'app',
+      undefined as unknown as number,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('не выделен entry-порт');
   });
 });
 
@@ -536,7 +601,7 @@ describe('devOpsFactoryFor — проброс полей в pi.run', () => {
       onStderr: () => {},
     });
 
-    await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app');
+    await agent.runDevOps('/workspaces/issue-1', REPO_URL, 'app', 5101);
 
     expect(pi.calls).toHaveLength(1);
     expect(pi.calls[0].options).toMatchObject({

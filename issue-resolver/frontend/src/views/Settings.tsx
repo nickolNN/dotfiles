@@ -6,6 +6,7 @@ import {
 } from '../stores/queries';
 import type { CleanupResult } from '../api/client';
 import QueryBoundary from '../components/QueryBoundary';
+import RetroRunModal from '../components/RetroRunModal';
 
 const FIELD_CLASS =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
@@ -82,6 +83,7 @@ function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
   const [draft, setDraft] = useState(currentHostname);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retroOpen, setRetroOpen] = useState(false);
   const savedTimer = useRef<number | null>(null);
 
   const saving = saveMutation.isPending;
@@ -177,6 +179,27 @@ function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
         </p>
         <CleanupButton />
       </section>
+
+      <hr className="my-8 max-w-md border-[#008F11]/20" />
+
+      <section className="max-w-md">
+        <h2 className="mb-2 text-sm font-semibold">Память и ретро</h2>
+        <p className="mb-3 text-xs text-[#00FF41]/50">
+          Запускает maintenance-сессию: компакция памяти агента и ретро по
+          скиллу retro. Итог — markdown-отчёт, который можно отдать агенту,
+          чтобы он поправил пайплайн по найденным кандидатам.
+        </p>
+        <button
+          type="button"
+          data-testid="settings-retro-open"
+          className="rounded-none border border-[#00FF41] px-4 py-2 text-sm font-medium text-[#00FF41] transition-colors hover:bg-[#00FF41]/10"
+          onClick={() => setRetroOpen(true)}
+        >
+          Открыть ретро
+        </button>
+      </section>
+
+      <RetroRunModal open={retroOpen} onClose={() => setRetroOpen(false)} />
     </section>
   );
 }

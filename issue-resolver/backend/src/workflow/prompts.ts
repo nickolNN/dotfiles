@@ -4,7 +4,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  DEFAULT_MAX_ROOM_EXECUTORS,
+  maxExecutorsFor,
+  MAX_PIPELINE_ATTEMPTS,
+  REFINED_PLAN_CHAR_LIMIT,
   type DesiredResult,
   type NormalizedStage,
   type PipelineStep,
@@ -107,7 +109,6 @@ function outputContract(workingDir?: string): string {
   if (!workingDir) return contract;
   return [
     `Output contract — write exactly \`${join(workingDir, '.issue-step-result.json')}\` (absolute path).`,
-    'A copy inside a repository working copy is ignored by the engine.',
     '',
     contract,
   ].join('\n');
@@ -196,6 +197,16 @@ function devServerBlock(devServerPort?: number | null): string {
     `The app is already running at http://localhost:${devServerPort} — the system`,
     'started it from the repository `DEV_SERVER.sh`. Verify against this URL;',
     'restart the script only if the server is dead.',
+  ].join('\n');
+}
+
+function attemptLimitBlock(): string {
+  return [
+    'A `fail` sends the pipeline back to development with your findings. The',
+    `iteration gets ${MAX_PIPELINE_ATTEMPTS} development attempts in total; when`,
+    'they are used up the run stops and asks the human (`needs_input`) instead of',
+    'starting another cycle. Report the honest verdict even on the last attempt —',
+    'exhausting the budget is the system\'s problem, not a reason to soften it.',
   ].join('\n');
 }
 
@@ -365,13 +376,33 @@ function workerDownstreamAwareness(pipelineSteps?: PipelineStep[]): string[] {
 
 type StepBodyBuilder = (input: StepPromptInput) => string;
 
+function parallelismBlock(cap: number): string {
+  return cap <= 1
+    ? [
+        'Parallel executors: 1 — only one agent runs at a time, so `room` is out of reach.',
+        'Volume still splits: order the work into `stages` with one executor per stage',
+        '(2+ stages) instead of handing a single agent a change that outgrows its working set.',
+      ].join('\n')
+    : [
+        `Parallel executors: at most ${cap} at a time — the engine clamps a higher number down.`,
+        'When the work needs more hands than that, add a stage rather than oversubscribing one.',
+      ].join('\n');
+}
+
+function grouped(value: number): string {
+  return value.toLocaleString('en-US').replace(/,/g, ' ');
+}
+
 const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
-  refine: (input) =>
-    render(readPrompt('step-refine.md'), {
-      MAX_EXECUTORS: String(DEFAULT_MAX_ROOM_EXECUTORS),
-      WORKER_COUNT: String(input.workerCount ?? 1),
+  refine: (input) => {
+    const cap = maxExecutorsFor(input.workerCount);
+    return render(readPrompt('step-refine.md'), {
+      MAX_EXECUTORS: String(cap),
+      PLAN_CHAR_LIMIT: grouped(REFINED_PLAN_CHAR_LIMIT),
+      PARALLELISM: parallelismBlock(cap),
       DOWNSTREAM_AWARENESS: refinePipelineAwareness(input.pipelineSteps).join('\n'),
-    }),
+    });
+  },
 
   resolve: (input) =>
     render(readPrompt('step-resolve-single.md'), {
@@ -392,6 +423,7 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
   test: (input) =>
     render(readPrompt('step-test.md'), {
       DEV_SERVER: devServerBlock(input.devServerPort),
+      ATTEMPT_LIMIT: attemptLimitBlock(),
     }),
 
   pr: (input) =>
@@ -406,6 +438,8 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
       ITERATION_NARRATIVES: iterationNarrativesBlock(iterationCount),
     });
   },
+
+  devops: () => 'DevOps step — prompt built by loadDevOpsPrompt in devops.ts',
 };
 
 export function buildStepPrompt(input: StepPromptInput): string {
@@ -438,7 +472,7 @@ export function buildStepPrompt(input: StepPromptInput): string {
   if (previousOutcome) lines.push('', previousOutcome);
 
   lines.push('', outputContract(input.workingDir));
-  return withMemoryRules(lines.join('\n'));
+  return withSharedFragments(lines.join('\n'));
 }
 
 function roomValues(
@@ -472,8 +506,13 @@ function workerSummariesBlock(files: (index: number) => string, workers: WorkerS
     .join('\n');
 }
 
-function withMemoryRules(prompt: string): string {
-  return `${prompt}\n\n${readPrompt('memory-rules.md')}`;
+const SHARED_FRAGMENTS = ['capabilities.md', 'memory-rules.md'];
+
+function withSharedFragments(prompt: string): string {
+  return [
+    prompt,
+    ...SHARED_FRAGMENTS.map((name) => readPrompt(name).trim()),
+  ].join('\n\n');
 }
 
 export const STEP_SYSTEM_APPEND = [
@@ -488,7 +527,7 @@ export function buildRoomWorkerPrompt(
   total: number,
 ): string {
   const worker = item.index + 1;
-  return withMemoryRules(
+  return withSharedFragments(
     render(
       readPrompt('resolve-room-worker.md'),
       roomValues(input, {
@@ -509,7 +548,7 @@ export function buildRoomCoordinatorPrompt(
     (index) => `.issue-worker-result-${index}.json`,
     workers,
   );
-  return withMemoryRules(
+  return withSharedFragments(
     `${render(
       readPrompt('resolve-room-lead.md'),
       roomValues(input, {
@@ -528,7 +567,7 @@ export function buildStageWorkerPrompt(
   total: number,
 ): string {
   const worker = item.index + 1;
-  return withMemoryRules(
+  return withSharedFragments(
     render(readPrompt('resolve-stages-worker.md'), {
       ...roomValues(input),
       STAGE_INDEX: String(stage.index),
@@ -551,7 +590,7 @@ export function buildStageCoordinatorPrompt(
     (index) => `.issue-stage-${stage.index}-worker-${index}.json`,
     workers,
   );
-  return withMemoryRules(
+  return withSharedFragments(
     render(readPrompt('resolve-stages-lead.md'), {
       ...roomValues(input),
       STAGE_INDEX: String(stage.index),
@@ -568,7 +607,7 @@ export function buildStageSoloPrompt(
   input: RoomPromptInput,
   stage: NormalizedStage,
 ): string {
-  return withMemoryRules(
+  return withSharedFragments(
     render(readPrompt('resolve-stages-solo.md'), {
       ...roomValues(input),
       STAGE_INDEX: String(stage.index),
@@ -588,7 +627,7 @@ export function buildStagedFinalCoordinatorPrompt(
         `- stage ${stage.index} (${stage.name}) → \`.issue-stage-${stage.index}.json\`: ${outcome}`,
     )
     .join('\n');
-  return withMemoryRules(
+  return withSharedFragments(
     `${render(
       readPrompt('resolve-stages-final.md'),
       roomValues(input, {

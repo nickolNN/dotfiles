@@ -114,26 +114,28 @@ merely compile `.<step>.md` files:
 
 ## Report style — `glyph` shapes both report files
 
-The report is an **artifact**: chat-style brevity skills do not apply. The
-report agent is **not governed by `caveman` (nor its `ultracave` / `megacave`
-variants) or `ponytail`** and never compresses the artifact for chat economy —
-full sentences, headings and evidence stay, however terse the chat is.
+The report is an **artifact**, so the output contract's rule holds here with full
+force: however terse the chat is, full sentences, headings and evidence stay in
+both report files.
 
 Both files follow the **`glyph`** structure — the reference for what a good
 answer looks like:
 
 - verdict first, supporting shape after;
-- one render per answer section; every entity that has a form (comparison,
-  comparison, flow, ranking) gets its own diagram, not only prose;
+- a shape is drawn, never only narrated — what counts as a shape and which
+  artifact carries it is decided by **`Drawing a shape`** below, the only place
+  this prompt states that rule;
 - each status is an icon **paired with its word** (pass/fail/blocked), and
   every diagram carries a legend of its values.
 
-The medium differs, the shape does not: the SAME diagram appears in both
-files. In `report.md` (text for agents) render it as monospace ASCII art or
-a Markdown table; `report.json` declares the same diagram, and the engine
-draws it as
-inline `<svg>`, never as an ASCII block in `<pre>`. A diagram in one file
-with no counterpart in the other is a contract violation.
+The medium differs, the shape does not: a shape reaches the reader twice — as
+text in `report.md` (monospace ASCII art or a Markdown table, because an agent
+reading the file cannot see SVG) and as a picture on the page (the engine draws
+`report.json` diagrams as inline `<svg>`, never as an ASCII block in `<pre>`).
+One shape has exactly one carrier per artifact: declaring a diagram in
+`report.json` *and* redrawing it as an ASCII block in `report.md` is the one
+combination the engine refuses — it drops such a diagram and the page loses the
+picture. See **`Drawing a shape`** below.
 
 Visual craft comes from the **`frontend-design`** and **`theme-factory`**
 skills — palette, typography, spacing, "not a template". The artifact
@@ -300,12 +302,18 @@ decides **how**:
 | `matrix` | `title`, `columns`, `rows` | criterion × option, module × responsibility |
 | `svg` | `title`, `body` | a shape the kinds above cannot express |
 
-**No diagram is the default.** The report is prose, tables and ASCII drawings
-first; a `diagrams` entry is worth adding only when a picture does work the text
-cannot. Do not repeat in a diagram what you already drew as an ASCII block in
-`report.md`, and do not add a diagram of a mechanism you described in two
-sentences — the engine drops a diagram whose shape is already in the ASCII
-figures, and a duplicate is a defect either way.
+**Drawing a shape.** A comparison, a mechanism, a flow, a ranking — anything
+with a form — is drawn, not left in prose: two or more diagrams in one report is
+normal, and a shape that lives only in sentences is a missing diagram. What is
+not a diagram: decoration, a picture of a table you already printed, and the
+same shape twice — once as an ASCII block in `report.md`, once declared in
+`report.json`. Pick one carrier per shape: ASCII/table in `report.md` **or** a
+declared diagram for the page. When the carrier is the page, keep the markdown
+self-sufficient anyway — state the structure in words or a table, because an
+agent reading `report.md` never sees the SVG. The engine drops a declared
+diagram whose title words reappear inside an ASCII figure of `report.md` and
+warns with that title, so a duplicate is not harmless redundancy: it is a
+picture the reader never gets.
 
 **A diagram explains the answer.** Draw the thing the task was about — how a
 mechanism works, where a value travels, which option wins on which criterion,
@@ -321,8 +329,6 @@ block at the end of this report; on the first screen it is noise.
   `{ label, cells: ["pass", "fail"] }` in column order.
 - `status` is always one of `pass | fail | blocked | running | na`; colour is
   never the only carrier, the renderer writes the word next to it.
-- Two or more diagrams are normal — one per Answer section that has a shape.
-  A comparison or a mechanism that lives only in prose is a missing diagram.
 
 **Screenshots go where they are proof.** A screenshot is a markdown image on
 its own line, directly after the claim, table or step it proves:
@@ -438,8 +444,8 @@ and check again.
    provenance, MR links, reproduction, metrology).
 9. **Nothing unverified stated as fact** — any number not re-checked in the
    code is marked unverified with its source named.
-10. **No model or provider name** — no `provider/model-id`, no `model:`
-    line, no "this run ran on …"; provenance is step + iteration.
+10. **No model or provider name** — see *Never name the model* above;
+    provenance is step + iteration.
 11. **No previous report was read as a source** — sources were
     `report-<n>.md`, `iterations/<n>/.<step>.md`, `.issue-step-result.json`
     and the repository; not `.iteration-results/**/report.*`, not `reports/**`.

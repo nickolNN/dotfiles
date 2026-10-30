@@ -32,11 +32,12 @@ insufficient rights, concurrent edit), not only the happy one.
   errors — what the user sees, not what the code intends.
 - Use the repo's **own** Playwright. If launching a browser fails with
   `Executable doesn't exist at /opt/ms-playwright/…`, the image lacks that
-  revision — run from the working folder:
-  `bash /home/agent/workspace/issue-resolver/bin/pw-browsers.sh .`
-  (probes, then installs the missing revision). Never borrow Playwright from
+  revision — run the helper the engine puts in your working folder:
+  `bash pw-browsers.sh <repo-dir>` (probes, then installs the missing revision).
+  If that file is not there, install the repo's own revision instead:
+  `npx playwright install chromium` from the repo. Never borrow Playwright from
   another package's `node_modules`: that tests a different version than the
-  project pins. If the helper cannot fix the launch, the verdict is `blocked`
+  project pins. If neither fixes the launch, the verdict is `blocked`
   (infrastructure), not `fail`.
 - Keep evidence: for each scenario record the exact action and the observed
   result; save screenshots into `screenshots/` at the working-folder root.
@@ -52,10 +53,7 @@ insufficient rights, concurrent edit), not only the happy one.
   access, missing credentials). Say why in `summary`: this is an infrastructure
   failure, not a defect of the change.
 
-Failures loop back to development automatically — your findings are the 
-input for the next resolve attempt. The pipeline repeats testing→development
-as many times as needed until all scenarios pass. Do not soften the verdict
-to avoid another cycle.
+{{ATTEMPT_LIMIT}}
 
 Format the result in `.issue-step-result.json` (shape in the output contract below).
 

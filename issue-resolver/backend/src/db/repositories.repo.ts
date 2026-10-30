@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  RepoConnectionStatus,
-  RepoPlatform,
-  RunInstructionsStatus,
-  SavedRepo,
+import {
+  isSameRepository,
+  type RepoConnectionStatus,
+  type RepoPlatform,
+  type RunInstructionsStatus,
+  type SavedRepo,
 } from '@issue-resolver/shared';
-import { asc, eq, sql } from 'drizzle-orm';
+import { asc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { repositories } from './schema';
 
@@ -118,15 +119,32 @@ export function updateRepository(
   return getRepository(db, id);
 }
 
+function findRowsByUrl(db: Db, url: string): typeof repositories.$inferSelect[] {
+  if (!url.trim()) return [];
+
+  const exact = db
+    .select()
+    .from(repositories)
+    .where(or(eq(repositories.url, url), eq(repositories.clone_url, url)))
+    .all();
+  if (exact.length > 0) return exact;
+
+  return db
+    .select()
+    .from(repositories)
+    .all()
+    .filter(
+      (row) =>
+        isSameRepository(row.url, url) ||
+        (row.clone_url !== null && isSameRepository(row.clone_url, url)),
+    );
+}
+
 export function getRepositoryByUrl(
   db: Db,
   url: string,
 ): SavedRepo | undefined {
-  const row = db
-    .select()
-    .from(repositories)
-    .where(eq(repositories.url, url))
-    .get();
+  const [row] = findRowsByUrl(db, url);
   return row ? toSavedRepo(row) : undefined;
 }
 
@@ -134,15 +152,19 @@ export function updateRepositoryRunInstructions(
   db: Db,
   url: string,
   patch: { instructions: string | null; status: RunInstructionsStatus },
-): void {
+): boolean {
+  const ids = findRowsByUrl(db, url).map((row) => row.id);
+  if (ids.length === 0) return false;
+
   db.update(repositories)
     .set({
       run_instructions: patch.instructions,
       run_instructions_status: patch.status,
       updated_at: new Date().toISOString(),
     })
-    .where(eq(repositories.url, url))
+    .where(inArray(repositories.id, ids))
     .run();
+  return true;
 }
 
 export function deleteRepository(db: Db, id: string): boolean {

@@ -37,8 +37,13 @@ Two to five concrete options, the recommended one first.
 
 ## Step input
 
-- `title`, `description` (additional_context), `jira_text` (when present),
-  `repositories`, `iteration_context` (on a repeated refine), `pipeline_steps`.
+- Delivered to you by `taskContext` (`backend/src/workflow/prompts.ts`), as
+  labeled lines, not as fields: `Task:` (the issue title), `Issue description:`
+  (the API's `additional_context`), `Jira text:` when the issue came from Jira,
+  `Iteration context:` (the iteration's own context — this is what a repeated
+  refine gets to work against), repository working paths, `attachments/…` paths
+  when any, and `Previous step feedback (fix exactly this):` when a step is
+  retried. Pipeline order arrives as `Enabled pipeline for this run: …`.
 
 ## Artifacts (output contract)
 
@@ -69,9 +74,11 @@ What goes into `execution` and the worker limits is defined by the step prompt
   it is, does the capability already exist, which file goes to which worker when
   splitting. Opened a file to work out the edit itself — you have left the
   step's boundary.
-- Judge size before writing anything: one coherent change in one area is
-  `single`. Splitting into a room or stages is a cost paid for genuinely
-  independent or genuinely ordered parts, never a default.
+- Judge size before writing anything, on two axes. **Shape**: one coherent
+  change in one area is `single`; a room or stages is a cost paid for genuinely
+  independent or genuinely ordered parts, never a default. **Capacity**: a change
+  that outgrows one executor's working set — on the order of a dozen files plus
+  one test loop — becomes ordered stages even when its parts are not independent.
 - Do not write code — implementation belongs to resolve.
 - Do not commit or push — that is the PR step.
 - Do not duplicate review/test when they are in `pipeline_steps`.

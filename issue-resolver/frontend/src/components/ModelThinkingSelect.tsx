@@ -32,6 +32,8 @@ export interface ModelThinkingSelectProps {
 
   modelSelectClassName?: string;
   thinkingSelectClassName?: string;
+  /** Class of the label text; defaults to the form-sized label. */
+  labelClassName?: string;
 
   className?: string;
 
@@ -58,6 +60,7 @@ export default function ModelThinkingSelect({
   thinkingAriaLabel,
   modelSelectClassName,
   thinkingSelectClassName,
+  labelClassName = 'text-sm text-[#00FF41]/80',
   className = '',
   onModelChange,
   onThinkingChange,
@@ -104,7 +107,7 @@ export default function ModelThinkingSelect({
   const labelled = (label: string | undefined, select: typeof modelSelect) =>
     label ? (
       <label className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
-        <span className="text-sm text-[#00FF41]/80">{label}</span>
+        <span className={labelClassName}>{label}</span>
         {select}
       </label>
     ) : (

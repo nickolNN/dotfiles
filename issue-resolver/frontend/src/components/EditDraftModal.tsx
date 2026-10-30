@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import type {
-  CreateIssueRequest,
-  Issue,
-  SavedRepo,
+import {
+  isSameRepository,
+  type CreateIssueRequest,
+  type Issue,
+  type SavedRepo,
 } from '@issue-resolver/shared';
 import { updateIssue } from '../api/client';
 import { useSavedRepos } from '../stores/queries';
@@ -26,8 +27,9 @@ function toInitialData(
     repositories: issue.repositories.map((repository) => {
       const saved = savedRepos.find(
         (candidate) =>
-          candidate.url === repository.repository_url ||
-          candidate.cloneUrl === repository.repository_url,
+          isSameRepository(candidate.url, repository.repository_url) ||
+          (candidate.cloneUrl !== null &&
+            isSameRepository(candidate.cloneUrl, repository.repository_url)),
       );
       return {
         repo_id: saved?.id ?? '',

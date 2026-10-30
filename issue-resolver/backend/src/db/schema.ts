@@ -3,6 +3,7 @@ import type {
   PipelineStep,
   RepoConnectionStatus,
   RepoPlatform,
+  RetroRunStatus,
   RunInstructionsStatus,
   SessionEvent,
   StepModels,
@@ -244,6 +245,26 @@ export const stepOutputs = sqliteTable('step_outputs', {
   events: text('events').notNull().default('[]'),
   stats: text('stats'),
   screenshots_dir: text('screenshots_dir'),
+  created_at: text('created_at').notNull(),
+  updated_at: text('updated_at').notNull(),
+});
+
+export const retroRuns = sqliteTable('retro_runs', {
+  id: text('id').primaryKey(),
+  status: text('status').$type<RetroRunStatus>().notNull(),
+  model: text('model'),
+  instructions: text('instructions'),
+  session_limit: integer('session_limit'),
+  thinking_level: text('thinking_level').$type<ThinkingLevel>(),
+  report: text('report'),
+  error: text('error'),
+  stdout: text('stdout').notNull().default(''),
+  stderr: text('stderr').notNull().default(''),
+  events: text('events', { mode: 'json' })
+    .$type<SessionEvent[]>()
+    .notNull()
+    .default([]),
+  stats: text('stats'),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
 });

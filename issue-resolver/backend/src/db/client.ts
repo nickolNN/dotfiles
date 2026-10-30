@@ -171,6 +171,26 @@ CREATE TABLE IF NOT EXISTS step_outputs (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS retro_runs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  model TEXT,
+  instructions TEXT,
+  session_limit INTEGER,
+  thinking_level TEXT,
+  report TEXT,
+  error TEXT,
+  stdout TEXT NOT NULL DEFAULT '',
+  stderr TEXT NOT NULL DEFAULT '',
+  events TEXT NOT NULL DEFAULT '[]',
+  stats TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS retro_runs_created_at_idx
+  ON retro_runs(created_at);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT '',
@@ -392,6 +412,26 @@ function ensureStepOutputColumns(sqlite: Database.Database): void {
   }
 }
 
+function ensureRetroRunColumns(sqlite: Database.Database): void {
+  const columns = new Set(
+    (sqlite.pragma('table_info(retro_runs)') as { name: string }[]).map(
+      (column) => column.name,
+    ),
+  );
+  if (!columns.has('model')) {
+    sqlite.exec('ALTER TABLE retro_runs ADD COLUMN model TEXT');
+  }
+  if (!columns.has('instructions')) {
+    sqlite.exec('ALTER TABLE retro_runs ADD COLUMN instructions TEXT');
+  }
+  if (!columns.has('session_limit')) {
+    sqlite.exec('ALTER TABLE retro_runs ADD COLUMN session_limit INTEGER');
+  }
+  if (!columns.has('thinking_level')) {
+    sqlite.exec('ALTER TABLE retro_runs ADD COLUMN thinking_level TEXT');
+  }
+}
+
 function ensureStepRunIssueColumn(sqlite: Database.Database): void {
   const columns = sqlite.pragma('table_info(step_runs)') as {
     name: string;
@@ -453,6 +493,7 @@ export function createDb(file: string = DEFAULT_DB_PATH): Db {
   ensureIterationColumns(sqlite);
   ensureIssueColumns(sqlite);
   ensureIssueRepositoryColumns(sqlite);
+  ensureRetroRunColumns(sqlite);
   ensureStepRunColumns(sqlite);
   ensureStepRunIssueColumn(sqlite);
   sqlite.exec(`

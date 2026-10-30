@@ -10,7 +10,8 @@ against the task, the task brief and the reviewer context below.
 2. The full source of every touched file — not just the diff hunks.
 3. `.issue-step-result.json` at the working-folder root: the execution step's
    report. Its `scenarios` are the claims to check, its `findings` the risks
-   already known. You overwrite this file with your own report at the end.
+   already known. At the end you replace its contents with your own verdict —
+   reading that file is not a reason to keep it.
 
 ## What to check
 
@@ -20,8 +21,9 @@ against the task, the task brief and the reviewer context below.
 - Consistency with the conventions of the file you are in.
 - The reviewer context below, point by point.
 
-This is a READ-ONLY step: read source files and inspect the change set. Builds,
-tests and browsers belong to the `test` step — stay fast.
+READ-ONLY means the **change set**: you do not edit source, do not run builds,
+tests or browsers — those belong to the `test` step, stay fast. You write only
+your own artifacts: `.issue-step-result.json` and `iterations/<n>/.review.md`.
 
 {{REVIEW_CONTEXT}}
 

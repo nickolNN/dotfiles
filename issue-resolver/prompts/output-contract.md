@@ -27,8 +27,10 @@ this file the step counts as incomplete.
 - `findings`: defects and risks you hand downstream, each with a file:line or a
   flow, so the next agent can go straight to it. Empty array when there are none.
 
-Publishing is the backend's job: after the pipeline succeeds it commits the
-working copy, pushes a feature branch and opens the MR. Your deliverable is the
+Publishing is the backend's job: once the `pr` step succeeds it commits the
+working copy, pushes a feature branch and opens the MR — and only when a `pr`
+step exists and passed, so nothing is published when the pipeline stops earlier.
+Your deliverable is the
 files in the working folder plus this JSON — leave the working copy uncommitted.
 
 ## Artifact style

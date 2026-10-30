@@ -2,6 +2,7 @@ import type {
   DesiredResult,
   Iteration,
   PipelineStep,
+  RunInstructionsStatus,
   SSEEvent,
   SessionEvent,
   SessionStats,
@@ -24,6 +25,7 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   copyFileSync,
@@ -36,8 +38,10 @@ import {
 } from 'node:fs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Db } from '../db/client';
 import { startAgentSession } from '../pi/agent-session';
+import type { AgentSession } from '../pi/agent-session';
 import {
   resolveAgentStallTimeoutMs,
   withAgentStallGuard,
@@ -49,7 +53,7 @@ import { STEP_SYSTEM_APPEND } from './prompts';
 import { renderReportArtifacts } from './report-render';
 import { embedReportScreenshots } from './embed-screenshots';
 import { capSessionEvents } from '../pi/session-events-cap';
-import { allocateDevPort, releaseIssueDevPorts } from '../port-allocator';
+import { allocateDevPort, releaseIssueDevPorts, reserveDevPort } from '../port-allocator';
 import { listAttachableRelPaths } from '../db/issue-files.repo';
 import {
   getRepositoryByUrl,
@@ -87,14 +91,23 @@ import { buildStepPrompt } from '../workflow/prompts';
 import {
   ALL_RESULT_ARTIFACTS,
   DEFAULT_WORKSPACE_ROOT,
+  containerNameFor,
   iterationResultDirFor,
   workspaceContainerDirFor,
   workspaceHostDirFor,
 } from '../workspace/paths';
+import { RUN_INSTRUCTIONS_FILE } from './devops';
 
 const DEV_SERVER_SCRIPT = 'DEV_SERVER.sh';
+const DEV_SERVER_PID_FILE = '.dev-server.pid';
+const DEV_SERVER_LOG_FILE = '.dev-server.log';
 
-const INFRA_FILES = ['RUN_INSTRUCTIONS.md', DEV_SERVER_SCRIPT];
+const INFRA_FILES = [
+  'RUN_INSTRUCTIONS.md',
+  DEV_SERVER_SCRIPT,
+  DEV_SERVER_PID_FILE,
+  DEV_SERVER_LOG_FILE,
+];
 
 const ENGINE_FILES = [
   '.issue-step-result.json',
@@ -123,16 +136,102 @@ function excludeInfraFiles(workspaceDir: string, repoName: string): void {
   }
 }
 
-function startRepoDevServer(
+function devServerPidPath(workspaceDir: string, repoName: string): string {
+  return join(workspaceDir, repoName, DEV_SERVER_PID_FILE);
+}
+
+export function readDevServerPid(
   workspaceDir: string,
   repoName: string,
 ): number | null {
+  try {
+    const pid = Number.parseInt(
+      readFileSync(devServerPidPath(workspaceDir, repoName), 'utf8').trim(),
+      10,
+    );
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeDevServerPid(
+  workspaceDir: string,
+  repoName: string,
+  pid: number,
+): void {
+  try {
+    writeFileSync(devServerPidPath(workspaceDir, repoName), `${pid}\n`);
+  } catch (error) {
+    console.error('failed to write dev server pid file', error);
+  }
+}
+
+export function clearDevServerPid(
+  workspaceDir: string,
+  repoName: string,
+): void {
+  rmSync(devServerPidPath(workspaceDir, repoName), { force: true });
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function devServerResponds(
+  port: number,
+  attempts = 1,
+  delayMs = 500,
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      return true;
+    } catch {
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  return false;
+}
+
+function readDevServerLogTail(
+  workspaceDir: string,
+  repoName: string,
+  lines = 6,
+): string {
+  try {
+    const raw = readFileSync(
+      join(workspaceDir, repoName, DEV_SERVER_LOG_FILE),
+      'utf8',
+    );
+    return raw.trim().split('\n').slice(-lines).join(' | ');
+  } catch {
+    return '';
+  }
+}
+
+export function startRepoDevServer(
+  workspaceDir: string,
+  repoName: string,
+  port: number,
+): number | null {
   const repoDir = join(workspaceDir, repoName);
   const scriptPath = join(repoDir, DEV_SERVER_SCRIPT);
+  clearDevServerPid(workspaceDir, repoName);
   if (!existsSync(scriptPath)) return null;
   try {
     const child = spawn(scriptPath, [], {
       cwd: repoDir,
+      env: { ...process.env, PORT: String(port) },
       detached: true,
       stdio: 'ignore',
     });
@@ -140,6 +239,7 @@ function startRepoDevServer(
       console.error('failed to start DEV_SERVER.sh', error);
     });
     child.unref();
+    if (child.pid) writeDevServerPid(workspaceDir, repoName, child.pid);
     return child.pid ?? null;
   } catch (error) {
     console.error('failed to spawn DEV_SERVER.sh', error);
@@ -225,19 +325,38 @@ function dbStepRunStore(db: Db): StepRunStore {
 }
 
 function dbRunInstructionsStore(db: Db): RunInstructionsPort {
+  const warnUnmatched = (
+    url: string,
+    status: RunInstructionsStatus,
+    matched: boolean,
+  ): void => {
+    if (matched) return;
+    console.warn(
+      `run instructions not saved: no repository row matches ${JSON.stringify(url)} (status ${status})`,
+    );
+  };
+
   return {
     getStatus: (url) => getRepositoryByUrl(db, url)?.runInstructionsStatus,
     getInstructions: (url) => getRepositoryByUrl(db, url)?.runInstructions ?? null,
     saveGenerated: (url, instructions) =>
-      updateRepositoryRunInstructions(db, url, {
-        instructions,
-        status: 'generated',
-      }),
+      warnUnmatched(
+        url,
+        'generated',
+        updateRepositoryRunInstructions(db, url, {
+          instructions,
+          status: 'generated',
+        }),
+      ),
     saveFailed: (url) =>
-      updateRepositoryRunInstructions(db, url, {
-        instructions: null,
-        status: 'failed',
-      }),
+      warnUnmatched(
+        url,
+        'failed',
+        updateRepositoryRunInstructions(db, url, {
+          instructions: null,
+          status: 'failed',
+        }),
+      ),
   };
 }
 
@@ -504,6 +623,214 @@ export interface PrepareIssueWorkspaceDeps {
   control?: StepSessionRegistry;
 }
 
+export interface DevOpsRunRepos {
+  repository_url: string;
+  bootstrap_enabled?: boolean;
+}
+
+export interface DevOpsContext {
+  tagInstructions: string | null;
+  reposNames: string | null;
+  reposRequireDevServer: string | null;
+  reposInstructions: string | null;
+}
+
+export function collectDevOpsContext(
+  db: Db,
+  issueId: string,
+  repositories: DevOpsRunRepos[],
+): DevOpsContext {
+  const issueRow = db
+    .select({ tag_id: issues.tag_id })
+    .from(issues)
+    .where(eq(issues.id, issueId))
+    .get();
+  const tag = issueRow?.tag_id ? getTag(db, issueRow.tag_id) : undefined;
+
+  if (tag) {
+    return {
+      tagInstructions: tag.run_instructions ?? null,
+      reposNames:
+        tag.repositories
+          .map((tr) => extractRepoNameFromUrl(tr.repository.url))
+          .join(', ') || null,
+      reposRequireDevServer:
+        tag.repositories
+          .filter((tr) => tr.bootstrap_enabled)
+          .map((tr) => extractRepoNameFromUrl(tr.repository.url))
+          .join(', ') || null,
+      reposInstructions: tag.repositories
+        .map((tr) => {
+          const name = extractRepoNameFromUrl(tr.repository.url);
+          const instr = tr.repository.runInstructions?.trim();
+          return `### ${name}\n${instr || '(no instructions)'}`;
+        })
+        .join('\n\n'),
+    };
+  }
+
+  return {
+    tagInstructions: null,
+    reposNames:
+      repositories
+        .map((r) => extractRepoNameFromUrl(r.repository_url))
+        .join(', ') || null,
+    reposRequireDevServer:
+      repositories
+        .filter((r) => r.bootstrap_enabled !== false)
+        .map((r) => extractRepoNameFromUrl(r.repository_url))
+        .join(', ') || null,
+    reposInstructions: null,
+  };
+}
+
+const activeDevopsRuns = new Set<string>();
+
+export function isDevopsRunActive(issueId: string): boolean {
+  return activeDevopsRuns.has(issueId);
+}
+
+export const DEVOPS_RUN_HEARTBEAT_MS = SESSION_HEARTBEAT_MS;
+
+interface DevopsSessionHandle {
+  stepRunId: string;
+  sessionId: string;
+  startedAt: number;
+  session: AgentSession;
+}
+
+async function startDevopsSession(
+  db: Db,
+  deps: { sse: SseHub; control?: StepSessionRegistry; devopsModel?: string },
+  input: {
+    issueId: string;
+    iterationId?: string;
+    sessionId: string;
+    context: string;
+    enabled: boolean;
+  },
+): Promise<DevopsSessionHandle | null> {
+  if (!input.enabled) return null;
+
+  const previous = await listStepRunsByIssue(db, input.issueId);
+  const stepRun = await createStepRun(db, {
+    issueId: input.issueId,
+    iterationId: null,
+    step: 'devops',
+    attempt: previous.filter((run) => run.step === 'devops').length + 1,
+    context: input.context,
+  });
+  await updateStepRun(db, stepRun.id, { status: 'running' });
+
+  const session = startAgentSession(
+    {
+      sse: deps.sse,
+      control: deps.control,
+      store: {
+        appendStepRunEvent: (id, event) =>
+          appendStepRunEvent(db, id, event),
+        updateStepRun: (id, patch) => updateStepRun(db, id, patch),
+      },
+    },
+    {
+      issueId: input.issueId,
+      ...(input.iterationId ? { iterationId: input.iterationId } : {}),
+      sessionId: input.sessionId,
+      persistStepRunId: stepRun.id,
+      heartbeatMs: DEVOPS_RUN_HEARTBEAT_MS,
+    },
+  );
+
+  deps.sse.publish({
+    type: 'step_status',
+    issueId: input.issueId,
+    stepRunId: input.sessionId,
+    data: JSON.stringify({
+      status: 'running',
+      step: 'devops',
+      model: deps.devopsModel ?? null,
+    }),
+    ts: new Date().toISOString(),
+  });
+
+  activeDevopsRuns.add(input.issueId);
+  return {
+    stepRunId: stepRun.id,
+    sessionId: input.sessionId,
+    startedAt: Date.now(),
+    session,
+  };
+}
+
+async function finishDevopsSession(
+  db: Db,
+  deps: { sse: SseHub },
+  handle: DevopsSessionHandle | null,
+  input: {
+    issueId: string;
+    status: StepRunStatus;
+    summary: string;
+    feedback?: string | null;
+    stats?: SessionStats | null;
+  },
+): Promise<void> {
+  if (!handle) return;
+  activeDevopsRuns.delete(input.issueId);
+  handle.session.stop();
+
+  const snapshot = handle.session.snapshot();
+  try {
+    await updateStepRun(db, handle.stepRunId, {
+      status: input.status,
+      feedback: input.feedback ?? null,
+    });
+    await createStepOutput(db, {
+      stepRunId: handle.stepRunId,
+      report: JSON.stringify({
+        status: input.status === 'success' ? 'pass' : 'fail',
+        summary: input.summary,
+      }),
+      stdout: snapshot.stdout,
+      stderr: snapshot.stderr,
+      events: capSessionEvents(snapshot.events),
+      stats: input.stats ?? snapshot.stats,
+    });
+  } catch (error) {
+    console.error('devops run persistence failed', {
+      stepRunId: handle.stepRunId,
+      error,
+    });
+  }
+
+  deps.sse.publish({
+    type: 'step_status',
+    issueId: input.issueId,
+    stepRunId: handle.sessionId,
+    data: input.status,
+    ts: new Date().toISOString(),
+  });
+}
+
+const WORKSPACE_HELPERS = ['pw-browsers.sh'];
+
+export function installWorkspaceHelpers(workspaceDir: string): void {
+  if (!existsSync(workspaceDir)) return;
+  const binDir = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    '..',
+    '..',
+    'bin',
+  );
+  for (const name of WORKSPACE_HELPERS) {
+    const source = join(binDir, name);
+    if (!existsSync(source)) continue;
+    const target = join(workspaceDir, name);
+    copyFileSync(source, target);
+    chmodSync(target, 0o755);
+  }
+}
+
 export async function prepareIssueWorkspace(
   db: Db,
   deps: PrepareIssueWorkspaceDeps,
@@ -541,6 +868,7 @@ export async function prepareIssueWorkspace(
     repos.forEach((repo) =>
       excludeInfraFiles(workspaceDir, extractRepoNameFromUrl(repo.repository_url)),
     );
+    installWorkspaceHelpers(workspaceDir);
     return repos.map((repo) => ({
       repoUrl: repo.repository_url,
       path: join(dir, extractRepoNameFromUrl(repo.repository_url)),
@@ -555,43 +883,24 @@ export async function prepareIssueWorkspace(
     ? await allocateDevPort(input.issueId)
     : undefined;
 
-  const issueRow = db
-    .select({ tag_id: issues.tag_id })
-    .from(issues)
-    .where(eq(issues.id, input.issueId))
-    .get();
-  const tag = issueRow?.tag_id ? getTag(db, issueRow.tag_id) : undefined;
-  const tagInstructions: string | null = tag?.run_instructions ?? null;
+  const {
+    tagInstructions,
+    reposNames,
+    reposRequireDevServer,
+    reposInstructions,
+  } = collectDevOpsContext(db, input.issueId, input.repositories);
 
-  const reposNames =
-    tag
-      ? tag.repositories
-          .map((tr) => extractRepoNameFromUrl(tr.repository.url))
-          .join(', ')
-      : input.repositories
-          .map((r) => extractRepoNameFromUrl(r.repository_url))
-          .join(', ');
-
-  const reposRequireDevServer =
-    tag
-      ? tag.repositories
-          .filter((tr) => tr.bootstrap_enabled)
-          .map((tr) => extractRepoNameFromUrl(tr.repository.url))
-          .join(', ')
-      : input.repositories
-          .filter((r) => r.bootstrap_enabled !== false)
-          .map((r) => extractRepoNameFromUrl(r.repository_url))
-          .join(', ');
-
-  const reposInstructions = tag
-    ? tag.repositories
-        .map((tr) => {
-          const name = extractRepoNameFromUrl(tr.repository.url);
-          const instr = tr.repository.runInstructions?.trim();
-          return `### ${name}\n${instr || '(no instructions)'}`;
-        })
-        .join('\n\n')
-    : null;
+  const devopsRunId = SessionAddress.forIssueRun(
+    input.issueId,
+    'devops',
+  ).toString();
+  const devopsSession = await startDevopsSession(db, deps, {
+    issueId: input.issueId,
+    iterationId: input.iterationId,
+    sessionId: devopsRunId,
+    context: 'post-prepare',
+    enabled: Boolean(deps.devopsFactory),
+  });
 
   const prepareDeps = {
     container: deps.container,
@@ -614,31 +923,11 @@ export async function prepareIssueWorkspace(
       : {}),
     runInstructions: dbRunInstructionsStore(db),
     onDevOpsStdout: (_repo: string, chunk: string): void =>
-      deps.sse.publish({
-        type: 'log',
-        issueId: input.issueId,
-        iterationId: input.iterationId,
-        stepRunId: SessionAddress.forIssueRun(
-          input.issueId,
-          'devops',
-        ).toString(),
-        stream: 'stdout',
-        data: chunk,
-        ts: new Date().toISOString(),
-      }),
+      devopsSession?.session.callbacks.onStdout(chunk),
     onDevOpsStderr: (_repo: string, chunk: string): void =>
-      deps.sse.publish({
-        type: 'log',
-        issueId: input.issueId,
-        iterationId: input.iterationId,
-        stepRunId: SessionAddress.forIssueRun(
-          input.issueId,
-          'devops',
-        ).toString(),
-        stream: 'stderr',
-        data: chunk,
-        ts: new Date().toISOString(),
-      }),
+      devopsSession?.session.callbacks.onStderr(chunk),
+    onDevOpsEvent: (_repo: string, event: SessionEvent): void =>
+      devopsSession?.session.callbacks.onEvent(event),
   };
 
   const publishWorkspaceProgress = (progress: WorkspaceProgress): void => {
@@ -667,10 +956,17 @@ export async function prepareIssueWorkspace(
     repos.forEach((repo) =>
       excludeInfraFiles(workspaceDir, extractRepoNameFromUrl(repo.repository_url)),
     );
+    installWorkspaceHelpers(workspaceDir);
 
     if (devServerPort !== undefined && devRepo) {
       const repoName = extractRepoNameFromUrl(devRepo.repository_url);
-      const pid = startRepoDevServer(workspaceDir, repoName);
+      const adopted = readDevServerPid(workspaceDir, repoName);
+      const pid =
+        adopted !== null &&
+        isProcessAlive(adopted) &&
+        (await devServerResponds(devServerPort, 2, 250))
+          ? adopted
+          : startRepoDevServer(workspaceDir, repoName, devServerPort);
       if (pid !== null) {
         db.update(issues)
           .set({ dev_server_port: devServerPort, dev_server_pid: pid })
@@ -681,18 +977,30 @@ export async function prepareIssueWorkspace(
       }
     }
 
-    if (issueRow?.tag_id) {
+    const tagId = db
+      .select({ tag_id: issues.tag_id })
+      .from(issues)
+      .where(eq(issues.id, input.issueId))
+      .get()?.tag_id;
+
+    if (tagId) {
       const workspaceInstructionsPath = join(workspaceDir, 'WORKSPACE_INSTRUCTIONS.md');
       if (existsSync(workspaceInstructionsPath)) {
         const wsInstructions = readFileSync(workspaceInstructionsPath, 'utf-8');
         if (wsInstructions.trim()) {
-          updateTagRunInstructions(db, issueRow.tag_id, {
+          updateTagRunInstructions(db, tagId, {
             instructions: wsInstructions,
             status: 'generated',
           });
         }
       }
     }
+
+    await finishDevopsSession(db, deps, devopsSession, {
+      issueId: input.issueId,
+      status: 'success',
+      summary: 'DevOps completed during workspace preparation',
+    });
 
     return prepared;
   } catch (error) {
@@ -708,6 +1016,14 @@ export async function prepareIssueWorkspace(
       .set({ status: 'failed', updated_at: failedAt })
       .where(eq(issues.id, input.issueId))
       .run();
+
+    await finishDevopsSession(db, deps, devopsSession, {
+      issueId: input.issueId,
+      status: 'failed',
+      summary: `Workspace preparation failed: ${message}`,
+      feedback: message,
+    });
+
     deps.sse.publish({
       type: 'iteration_status',
       issueId: input.issueId,
@@ -721,6 +1037,231 @@ export async function prepareIssueWorkspace(
       ts: failedAt,
     });
     throw error;
+  }
+}
+
+export interface DevopsRunDeps {
+  db: Db;
+  sse: SseHub;
+  devopsFactory: DevOpsFactory;
+  control?: StepSessionRegistry;
+  workspaceRoot?: string;
+  local?: boolean;
+  devopsModel?: string;
+  devopsThinkingLevel?: ThinkingLevel;
+  devopsTimeoutMs?: number;
+}
+
+export interface RunDevopsAgentInput {
+  issueId: string;
+  repositories: DevOpsRunRepos[];
+  trigger?: string;
+}
+
+function clearDevOpsArtifacts(hostDir: string, repoName: string): void {
+  const repoDir = join(hostDir, repoName);
+  rmSync(join(repoDir, RUN_INSTRUCTIONS_FILE), { force: true });
+  rmSync(join(repoDir, DEV_SERVER_SCRIPT), { force: true });
+  rmSync(join(repoDir, DEV_SERVER_PID_FILE), { force: true });
+  rmSync(join(repoDir, DEV_SERVER_LOG_FILE), { force: true });
+}
+
+export async function runDevopsAgent(
+  deps: DevopsRunDeps,
+  input: RunDevopsAgentInput,
+): Promise<void> {
+  const sessionId = SessionAddress.forIssueRun(
+    input.issueId,
+    'devops',
+  ).toString();
+
+  if (isDevopsRunActive(input.issueId)) {
+    console.error('devops agent skipped: run already active', {
+      issueId: input.issueId,
+      trigger: input.trigger ?? 'manual',
+    });
+    return;
+  }
+
+  const handle = await startDevopsSession(deps.db, deps, {
+    issueId: input.issueId,
+    sessionId,
+    context: input.trigger ?? 'manual',
+    enabled: true,
+  });
+  if (!handle) return;
+
+  const hostDir = workspaceHostDirFor(
+    deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+    input.issueId,
+  );
+  const containerDir = deps.local
+    ? hostDir
+    : workspaceContainerDirFor(input.issueId);
+  const runStore = dbRunInstructionsStore(deps.db);
+  const storedPort =
+    deps.db
+      .select({ port: issues.dev_server_port })
+      .from(issues)
+      .where(eq(issues.id, input.issueId))
+      .get()?.port ?? undefined;
+  let devPort = storedPort;
+  let portAllocatedNow = false;
+
+  const startedAt = Date.now();
+  console.log(
+    `devops agent started: issue=${input.issueId} trigger=${input.trigger ?? 'manual'} at=${new Date(startedAt).toISOString()}`,
+  );
+
+  try {
+    const targets = input.repositories.filter(
+      (repo) => repo.bootstrap_enabled !== false,
+    );
+    if (targets.length === 0) {
+      await finishDevopsSession(deps.db, deps, handle, {
+        issueId: input.issueId,
+        status: 'failed',
+        summary: 'нет репозиториев с включённым bootstrap',
+        feedback: 'все репозитории исключены из сборки',
+      });
+      return;
+    }
+
+    const missing = targets.filter(
+      (repo) =>
+        !existsSync(
+          join(hostDir, extractRepoNameFromUrl(repo.repository_url), '.git'),
+        ),
+    );
+    if (missing.length > 0) {
+      const names = missing
+        .map((repo) => extractRepoNameFromUrl(repo.repository_url))
+        .join(', ');
+      await finishDevopsSession(deps.db, deps, handle, {
+        issueId: input.issueId,
+        status: 'failed',
+        summary: 'рабочая папка не подготовлена',
+        feedback: `клон отсутствует: ${names}`,
+      });
+      return;
+    }
+
+    const context = collectDevOpsContext(deps.db, input.issueId, targets);
+    if (devPort === undefined) {
+      devPort = await allocateDevPort(input.issueId);
+      portAllocatedNow = true;
+      deps.db
+        .update(issues)
+        .set({ dev_server_port: devPort })
+        .where(eq(issues.id, input.issueId))
+        .run();
+    }
+    const results: Array<{ repo: string; ok: boolean; error?: string }> = [];
+
+    for (const repo of targets) {
+      const repoName = extractRepoNameFromUrl(repo.repository_url);
+      const agent = deps.devopsFactory({
+        containerName: containerNameFor(input.issueId),
+        hostWorkspaceDir: hostDir,
+        containerWorkspaceDir: containerDir,
+        issueId: input.issueId,
+        stepRunId: sessionId,
+        registry: deps.control,
+        tagInstructions: context.tagInstructions,
+        reposNames: context.reposNames,
+        reposRequireDevServer: context.reposRequireDevServer,
+        reposInstructions: context.reposInstructions,
+        model: deps.devopsModel,
+        thinkingLevel: deps.devopsThinkingLevel,
+        timeoutMs: deps.devopsTimeoutMs,
+        onStdout: (chunk) => handle.session.callbacks.onStdout(chunk),
+        onStderr: (chunk) => handle.session.callbacks.onStderr(chunk),
+        onEvent: (event) => handle.session.callbacks.onEvent(event),
+      });
+
+      clearDevOpsArtifacts(hostDir, repoName);
+
+      const result = await agent.runDevOps(
+        containerDir,
+        repo.repository_url,
+        repoName,
+        devPort,
+      );
+      if (result.stats) handle.session.setStats(result.stats);
+
+      if (result.success && result.instructions) {
+        runStore.saveGenerated(repo.repository_url, result.instructions);
+        results.push({ repo: repoName, ok: true });
+      } else {
+        runStore.saveFailed(repo.repository_url);
+        results.push({
+          repo: repoName,
+          ok: false,
+          error: result.error ?? 'не удалось собрать инструкции',
+        });
+      }
+    }
+
+    const entryRepo = targets[0];
+    if (devPort !== undefined && entryRepo && results[0]) {
+      const entryName = extractRepoNameFromUrl(entryRepo.repository_url);
+      const pid = readDevServerPid(hostDir, entryName);
+      const serving = pid !== null && (await devServerResponds(devPort, 5, 600));
+      if (serving && pid !== null) {
+        deps.db
+          .update(issues)
+          .set({ dev_server_port: devPort, dev_server_pid: pid })
+          .where(eq(issues.id, input.issueId))
+          .run();
+      } else if (
+        results[0].ok &&
+        existsSync(join(hostDir, entryName, DEV_SERVER_SCRIPT))
+      ) {
+        const logTail = readDevServerLogTail(hostDir, entryName);
+        results[0].ok = false;
+        results[0].error = `dev server не отвечает на :${devPort}${
+          logTail ? ` (${logTail})` : ''
+        }`;
+        clearDevServerPid(hostDir, entryName);
+      }
+    }
+
+    const failed = results.filter((item) => !item.ok);
+    const ok = results.length - failed.length;
+    const status: StepRunStatus = failed.length === 0 ? 'success' : 'failed';
+    if (portAllocatedNow && ok === 0) {
+      deps.db
+        .update(issues)
+        .set({ dev_server_port: null })
+        .where(eq(issues.id, input.issueId))
+        .run();
+      releaseIssueDevPorts(input.issueId);
+    }
+    await finishDevopsSession(deps.db, deps, handle, {
+      issueId: input.issueId,
+      status,
+      summary: `DevOps: ${ok}/${results.length} репозиториев`,
+      feedback:
+        failed.length > 0
+          ? failed.map((item) => `${item.repo}: ${item.error}`).join('; ')
+          : null,
+    });
+    console.log(
+      `devops agent finished: issue=${input.issueId} status=${status} durationMs=${Date.now() - startedAt}`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await finishDevopsSession(deps.db, deps, handle, {
+      issueId: input.issueId,
+      status: 'failed',
+      summary: `DevOps прерван: ${message}`,
+      feedback: message,
+    });
+    console.error('devops agent failed', {
+      issueId: input.issueId,
+      durationMs: Date.now() - startedAt,
+      error,
+    });
   }
 }
 
@@ -1398,7 +1939,12 @@ export async function runIssueIteration(
       (repo) => repo.bootstrap_enabled !== false,
     );
     if (devRepo) {
-      const port = await allocateDevPort(input.issue.id);
+      const preferredPort = issueRow.dev_server_port ?? undefined;
+      const port =
+        preferredPort !== undefined &&
+        (await reserveDevPort(input.issue.id, preferredPort))
+          ? preferredPort
+          : await allocateDevPort(input.issue.id);
       const workspaceDir = workspaceHostDirFor(
         deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
         input.issue.id,
@@ -1406,6 +1952,7 @@ export async function runIssueIteration(
       const pid = startRepoDevServer(
         workspaceDir,
         extractRepoNameFromUrl(devRepo.repository_url),
+        port,
       );
       if (pid !== null) {
         db.update(issues)
