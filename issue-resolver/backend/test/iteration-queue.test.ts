@@ -9,7 +9,7 @@ import type {
   TaskStatus,
 } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app';
 import type { Db } from '../src/db/client';
 import { createDb } from '../src/db/client';
@@ -668,10 +668,55 @@ describe('worker_count доезжает до refine-промпта', () => {
     await waitFor(() => (pi.calls.length > 0 ? pi.calls.length : undefined));
     const refinePrompt = pi.calls
       .map((call) => call.prompt)
-      .find((text) => text.includes('Maximum parallel agents'));
+      .find((text) => text.includes('Parallel executors'));
     expect(refinePrompt).toBeDefined();
-    expect(refinePrompt).toContain('Maximum parallel agents: 3');
-    expect(refinePrompt).not.toContain('Maximum parallel agents: 1 (');
+    expect(refinePrompt).toContain('Parallel executors: at most 3 at a time');
+    expect(refinePrompt).not.toContain('room` is out of reach');
+  });
+
+  it('worker_count=1 → планировщик видит «room недоступен, дели объём в stages»', async () => {
+    const { db, pi, app } = makeEnv();
+    const issueId = seedIssue(db);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `${ISSUES}/${issueId}/iterations`,
+      payload: { context: 'ctx', steps: ['refine'], worker_count: 1 },
+    });
+    expect(res.statusCode).toBe(201);
+
+    await waitFor(() => (pi.calls.length > 0 ? pi.calls.length : undefined));
+    const refinePrompt = pi.calls
+      .map((call) => call.prompt)
+      .find((text) => text.includes('Parallel executors'));
+    expect(refinePrompt).toContain('Parallel executors: 1');
+    expect(refinePrompt).toContain('room` is out of reach');
+    expect(refinePrompt).toContain('one executor per stage');
+  });
+});
+
+describe('refine без execution-плана не скатывается в single молча', () => {
+  it('console.warn, когда в отчёте планировщика нет execution, а resolve в шагах есть', async () => {
+    const { db, app } = makeEnv();
+    const issueId = seedIssue(db, ['refine', 'resolve']);
+    const warnings: string[] = [];
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...args) => {
+      warnings.push(String(args[0]));
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `${ISSUES}/${issueId}/iterations`,
+      payload: { context: 'ctx', steps: ['refine', 'resolve'] },
+    });
+    expect(res.statusCode).toBe(201);
+
+    await waitFor(() =>
+      warnings.some((line) => line.includes('no execution plan'))
+        ? true
+        : undefined,
+    );
+    spy.mockRestore();
   });
 });
 

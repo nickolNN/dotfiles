@@ -6,6 +6,8 @@ passed. You are also the one who writes the deliverable.
 
 {{REPOS}}
 
+{{WORKING_STATE}}
+
 {{REFINED_PLAN}}
 
 {{ATTACHMENTS}}

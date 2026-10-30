@@ -91,10 +91,17 @@
   `dotfiles-agent/Dockerfile` only touches `packages`, so the key survives the
   image build. New sessions see it immediately; a live one after `/reload`
 - `pi/sync-thinking-rules.sh` — syncs `reasoning` / `thinkingLevelMap` in
-  `models.json` from pi's model catalog (`models-store.json`, refreshed by
-  `pi update --models`); matches custom-provider models by normalized
-  id/name plus an `ALIASES` map and touches no other field; run `--dry-run`
-  first
+  `models.json` from pi's baked provider catalogs
+  (`@earendil-works/pi-ai/dist/providers/data/*.json`; `models-store.json` stays
+  `{}` for custom providers, so `pi update --models` is irrelevant here).
+  Matching: catalog provider by identical `baseUrl` first, then an `ALIASES`
+  map, then model id/name across all catalogs — but only when every catalog
+  entry for that id agrees; otherwise the model is reported unmapped and left
+  alone (a wrong map sends an effort value the provider rejects). An `OVERRIDES`
+  table in the script pins levels verified by hand against a live gateway when
+  the catalogs disagree or lag. Touches no other field. Default is `--dry-run`;
+  `--write` applies. `provider1` is
+  Aliyun token-plan, so its models track the `qwen-token-plan*` catalogs
 - Long-term memory is `pi-memory` (listed in `pi/settings.json`): the host
   store is `~/.config/pi/memory`, set via `PI_MEMORY_DIR` in `~/.zshrc`;
   container agents write to the shared `agent-memory` Docker volume
@@ -152,7 +159,8 @@ Full docs: `dotfiles-agent/README.md`. Quick reference:
   `.DS_Store`, `kilo/opencode.jsonc`, `kilo/kilo.jsonc`,
   `pi/sessions/`, `pi/memory/`, `pi/npm/node_modules/`, `pi/auth.json`,
   `pi/models.json`, `pi/mcp.json`, `pi/mcp-auth.json`, `pi/mcp.log*`,
-  `pi/models-store.json`, `pi/trust.json`, `pi/*.sh`,
+  `pi/models-store.json`, `pi/trust.json`, `pi/*.sh`
+  (except `pi/sync-thinking-rules.sh`),
   `dotfiles-agent/certs/*` (except `.gitkeep`, which must stay tracked so the
   folder exists for the image build), `.agents`
 

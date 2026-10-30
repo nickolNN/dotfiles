@@ -3,19 +3,29 @@ name: issue-resolver-ops
 description: >
   Runtime ops/debugging for the issue-resolver backend — live
   SQLite DB, iteration/step status, restart safety, which prompt reached a
-  step agent, a report that did not improve. Use when it misbehaves:
+  step agent, a report that did not improve, DevOps run and run-instructions
+  status. Use when it misbehaves:
   empty/stale report, stuck step, wrong DB, prompt edit with no effect, tests.
 ---
 
 # issue-resolver ops
 
-`<task>` = `/home/agent/workspace/.issue-resolver/workspaces/<id>`.
+`<task>` = `<workspaceRoot>/<issueId>`. `workspaceRoot` is
+`$ISSUE_RESOLVER_DATA_DIR/workspaces` when that env is set, otherwise the
+hard-coded local default
+`/home/agent/workspace/.issue-resolver/workspaces`
+(`backend/src/deps.ts:65-66`). In the container image the same tree is
+`/workspaces` (`backend/src/workspace/paths.ts:3`).
 
 ## Live DB and restart safety
 
-No `sqlite3`; use `python3`. Live DB = the absolute path below (default when
-`ISSUE_RESOLVER_DATA_DIR` unset); env `<dir>` holds `<dir>/issue-resolver.db` +
-`<dir>/workspaces`; `…/.issue-resolver/issue-resolver.db` is a 0-table trap.
+No `sqlite3` CLI, but Node 24 ships `node:sqlite` — use it. The DB is
+`backend/data/issue-resolver.db` (`DEFAULT_DB_PATH`,
+`backend/src/db/client.ts:8-11`), or `$ISSUE_RESOLVER_DATA_DIR/issue-resolver.db`
+when set (`dbPathFromEnv`, same file, lines 13-16). That env moves the **DB
+only**; workspaces keep their own root (above). A same-named file elsewhere
+(`…/.issue-resolver/issue-resolver.db`) can exist with zero tables — it is a
+trap, not the live store.
 
 On restart `reconcileInterruptedRuns` (`backend/src/db/reconcile.ts`) fails
 `step_runs` pending/running/needs_input, `iterations` running/preparing
@@ -23,24 +33,84 @@ On restart `reconcileInterruptedRuns` (`backend/src/db/reconcile.ts`) fails
 `iterations.draft`/`step_runs.aborted` are inert — "non-terminal" ≠ active.
 
 ```bash
-python3 - <<'PY'
-import sqlite3
-live = "/home/agent/workspace/issue-resolver/backend/data/issue-resolver.db"
-c = sqlite3.connect(f"file:{live}?mode=ro", uri=True)
-for t, s in [("step_runs", "('pending','running','needs_input')"),
-             ("iterations", "('running','preparing','pending')"),
-             ("issues", "('running','preparing','question')")]:
-    rows = c.execute(f"select id,status from {t} where status in {s}")
-    print(t, rows.fetchall())
-PY
+cd /home/agent/workspace/issue-resolver/backend && node -e "
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync('data/issue-resolver.db', { readOnly: true });
+const left = (t, s) =>
+  console.log(t, db.prepare('select id, status from ' + t + ' where status in ' + s).all());
+left('step_runs', "('pending','running','needs_input')");
+left('iterations', "('running','preparing','pending')");
+left('issues', "('running','preparing','question')");
+"
 ```
 
-Empty lists = safe. `tsx watch` watches `backend/src/**`, not `prompts/**`.
+Empty lists = safe. `bin/service.sh` starts `npm run start` = `tsx src/server.ts`
+— **no watch**: `backend/src/**` edits need `./bin/service.sh restart`. Only
+`npm run dev` (`tsx watch src/server.ts`) reloads sources. `prompts/**` is in
+neither watch set, but needs no restart: `readPrompt` re-reads on mtime+size
+change (`backend/src/workflow/prompts.ts:17-27`), so the text ships on the next
+spawn of any step agent.
+
+## API prefix
+
+Every route lives under `/issue-resolver/api/v1` — declared per router, not in
+one place: `routes/issues.ts:75`, `routes/repos.ts:29`, `routes/admin.ts:12`,
+`routes/models.ts:8`, `routes/settings.ts:6`, `routes/stream.ts:13-20`. There is
+**no `/api/...` alias**: `GET /api/issues` → 404 while `GET /ping` → 200 (health
+is `/ping`, unprefixed). A 404 on a remembered `/api/...` path is a prefix
+mistake, not a missing feature — re-read the `API_PATH` constant of that router
+before concluding anything is unimplemented.
+
+## DevOps run (workspace preparation)
+
+Issue-level, like report, and **not** a pipeline step: `PIPELINE_STEPS` stays
+`refine, resolve, review, test, pr` (`backend/src/validation.ts:3-8`); `'devops'`
+exists in `shared` `PipelineStep` only so the run has a step label.
+
+- `POST /issue-resolver/api/v1/issues/:id/devops` → `202 {ok, devopsRunId}`
+  (`routes/issues.ts:749`), id = `<issueId>/devops`
+  (`SessionAddress.forIssueRun(issueId, 'devops')`); while a run is active the
+  second POST gets `409 {error:'devops run already active'}`.
+- `GET …/devops/status` (`:783`) → `running` (`isDevopsRunActive`) else the
+  newest `devops` `step_runs` row: `success` / `failed` / `idle`.
+- `GET …/devops/run` (`:834`) → that row with stdout, stderr, session events and
+  per-model stats (`getStepRunWithLog`); `404 {error:'issue not found'}` or
+  `{error:'devops run not found'}`.
+- What it does: for every issue repository with `bootstrap_enabled` (NULL counts
+  as enabled) whose clone exists (`<task>/<repo>/.git`), it deletes the old
+  `RUN_INSTRUCTIONS.md` + `DEV_SERVER.sh`, runs the agent, and writes
+  `repositories.run_instructions` + `run_instructions_status` =
+  `generated` | `failed` — a run that inherits a previous `generated` would be a
+  lie. Those are the only records of the outcome: there is **no
+  `issues.bootstrap_error` column** (grep finds none in the whole repo).
+   Diagnose via the status column, the `devops` step run, and
+  `<task>/WORKSPACE_INSTRUCTIONS.md` (the port map the agent writes).
+- `<task>/pw-browsers.sh` is copied into every task workspace by
+  `installWorkspaceHelpers` (`backend/src/workflow/run-iteration.service.ts`).
+  A step agent sees only the `/workspaces/<issueId>` bind, so prompts call it by
+  name (`bash pw-browsers.sh <repo-dir>`), never by the host path under
+  `/home/agent/…`.
+- The entry port belongs to the system, never to the agent: `allocateDevPort`
+  (`backend/src/port-allocator.ts`, range 5100–5299) → `issues.dev_server_port`.
+  A manual run allocates when the row is empty and releases the port + clears the
+  column if the run generated nothing. The backend starts `DEV_SERVER.sh` with
+  `PORT` in its environment, so the entry script must honor
+  `"${PORT:-<written port>}"`; `{{DEV_SERVER_PORT}}` in `prompts/devops.md` is
+  always a concrete number (there is no `AUTO` any more). Repositories other than
+  the entry point are upstreams on their own ports, outside 5100–5299.
+- Template: `prompts/devops.md` with `{{REPO_DIR}} {{REPO_NAME}}
+  {{DEV_SERVER_PORT}} {{TAG_INSTRUCTIONS}} {{REPOS_NAMES}}
+  {{REPOS_REQUIRE_DEV_SERVER}} {{REPOS_INSTRUCTIONS}}` —
+  `renderDevOpsPrompt` (`backend/src/workflow/devops.ts`).
+- Frontend: the `DevOps задачи` card on the task page
+  (`frontend/src/views/TaskDetail.tsx`, `data-testid="devops-section"`) polls
+  `/devops/status` and opens the saved run in a modal.
 
 ## Report artifacts
 
 Post-iteration, fire-and-forget (`spawnReportAgent` in
-`workflow/run-iteration.service.ts`); `POST /api/issues/:id/report` →
+`workflow/run-iteration.service.ts`); `POST
+/issue-resolver/api/v1/issues/:id/report` →
 `202 {ok, reportRunId}`. The agent writes `report.md` + `report.json` at
 `<task>/` root (`report-<n>.md` = engine summaries); **`report.html` is
 rendered by the engine** from those two (`workflow/report-render`) right after
@@ -57,7 +127,7 @@ flagged via `x-artifact-source`/`x-artifact-mtime` (mtime is ISO-Z, no
 milliseconds: `toISOString().replace(/\.\d{3}Z$/, 'Z')`, the shape D16 pins;
 404 only if neither).
 
-**Status** (`GET /api/issues/:id/report/status`): `running` while a run is
+**Status** (`GET /issue-resolver/api/v1/issues/:id/report/status`): `running` while a run is
 active (`isReportRunActive`); else `success` if `report.md` exists, `failed`
 if `lastReportFailed`, else `idle`. `activeReportRuns`/`lastReportFailed` are
 process-local: a restart resets `failed` to `idle`. The archive empties the
@@ -95,11 +165,19 @@ leading `<h1>` and the `Status/Generated/Iterations` line are dropped, merge/
 pull-request links are lifted into the header (the section that mentions them
 stays in the details), and diagrams land after the answer text.
 
-Diagrams are opt-in and drawn from numbers: `flow` (nodes may carry a status,
-edges may carry a label), `bars`, `matrix`, plus a sanitized `svg` escape
-hatch. There is no `timeline` kind — a process chart above the answer hides the
-answer, and iteration timing already lives on the task page. A diagram whose
-title duplicates an ASCII figure in `report.md` is dropped with a warning.
+Diagrams — the doctrine lives in exactly one place: `prompts/step-report.md`,
+the block **“Drawing a shape”**. This skill does not restate it on purpose: a
+second copy is how the “opt-in” and “one per section” wordings ended up
+contradicting each other. When a report has too few or too many diagrams, read
+that section. What the engine does regardless of the doctrine: kinds are
+`flow | bars | matrix | svg` (`report-render/schema.ts:19-61`), there is no
+`timeline`; a declared diagram is dropped when `duplicatesAscii` (`layout.ts:166`)
+finds `max(2, ⌈half the title words⌉)` of them inside an ASCII figure of
+`report.md`, warning
+`report.json: диаграмма "<title>" пропущена — та же схема уже нарисована ASCII в report.md`
+(`page.ts:185-189`) — so a shape drawn twice loses its picture on the page; a
+diagram whose title or labels match `EXECUTION_LABEL` (`layout.ts:20-21`,`diagramIsExecution:124`)
+goes to the collapsed block instead of the answer (`page.ts:192`).
 
 **Screenshots are inlined as the last step.** A screenshot is cited where it
 proves something — a markdown image, or the file name mentioned in a
@@ -136,8 +214,10 @@ f=$(ls -t /home/agent/.pi/agent/sessions/\
 jq -s -r '[.[]|select(.type=="message" and .message.role=="user")][0]
   | .message.content
   | if type=="array" then map(.text//"")|join("\n") else . end' "$f" \
-  | python3 -c 'import sys;t=sys.stdin.read();print(len(t),
-    {k:t.count(k) for k in ["Rebuild, never patch","Final self-check"]})'
+  | node -e "let t='';process.stdin.on('data',d=>t+=d).on('end',()=>{
+      console.log(t.length, ['Rebuild, never patch','Final self-check']
+        .map(k=>k+':'+(t.split(k).length-1)));
+    })"
 jq -r 'select(.type=="message" and .message.role=="assistant")
   | .message.content[]? | select(.type=="toolCall").name' "$f" | sort | uniq -c
 ```
@@ -149,18 +229,15 @@ marker, not mtime: stale cache and ignored rule look alike. Heavy
 ## Inspecting generated HTML
 
 ```bash
-python3 - <<'PY'
-from html.parser import HTMLParser
-n, ext = {}, []
-def h(tag, attrs):
-    n[tag] = n.get(tag, 0) + 1
-    d = dict(attrs)
-    if tag == "a" and (d.get("href") or "").startswith("http"): ext.append(d)
-p = HTMLParser(); p.handle_starttag = h
-path = "/home/agent/workspace/.issue-resolver/workspaces/<id>/report.html"
-p.feed(open(path, encoding="utf-8").read())
-print({k: n.get(k, 0) for k in ("svg", "table", "details")}, ext)
-PY
+node -e "
+const fs = require('fs');
+const html = fs.readFileSync(process.argv[1], 'utf8');
+const count = (tag) => (html.match(new RegExp('<' + tag + '[ >]', 'g')) || []).length;
+console.log(
+  'svg', count('svg'), 'table', count('table'), 'details', count('details'),
+  'links', (html.match(/href="http/g) || []).length,
+);
+" /home/agent/workspace/.issue-resolver/workspaces/<id>/report.html
 ```
 
 ## Tests and the quiet window

@@ -1,5 +1,5 @@
 import type { NormalizedStage, PipelineStep } from '@issue-resolver/shared';
-import { DEFAULT_MAX_ROOM_EXECUTORS } from '@issue-resolver/shared';
+import { DEFAULT_MAX_ROOM_EXECUTORS, MAX_PIPELINE_ATTEMPTS, REFINED_PLAN_CHAR_LIMIT } from '@issue-resolver/shared';
 import { describe, expect, it } from 'vitest';
 import { STEP_SYSTEM_APPEND, buildRoomCoordinatorPrompt, buildRoomWorkerPrompt, buildStageCoordinatorPrompt, buildStageSoloPrompt, buildStageWorkerPrompt, buildStagedFinalCoordinatorPrompt, buildStepPrompt, type PrTarget, type RoomPromptInput } from '../src/workflow/prompts';
 
@@ -48,11 +48,42 @@ describe('buildStepPrompt', () => {
     );
   });
 
-  it('refine: WORKER_COUNT уходит планировщику (дефолт 1)', () => {
-    expect(prompt('refine')).toContain('Maximum parallel agents: 1');
-    expect(prompt('refine', { workerCount: 3 })).toContain(
-      'Maximum parallel agents: 3',
+  it('refine: потолок параллелизма = clamp движка, а не жёсткая единица', () => {
+    expect(prompt('refine')).toContain(
+      `Parallel executors: at most ${DEFAULT_MAX_ROOM_EXECUTORS} at a time`,
     );
+    expect(prompt('refine', { workerCount: 3 })).toContain(
+      'Parallel executors: at most 3 at a time',
+    );
+    expect(prompt('refine', { workerCount: 9 })).toContain(
+      `at most ${DEFAULT_MAX_ROOM_EXECUTORS}`,
+    );
+    expect(prompt('refine')).not.toContain('Maximum parallel agents');
+  });
+
+  it('refine: лимит брифа в промпте = константа движка, а не цифра в тексте', () => {
+    const text = prompt('refine');
+
+    expect(text).not.toContain('{{PLAN_CHAR_LIMIT}}');
+    expect(text).toContain(
+      `capped at ${REFINED_PLAN_CHAR_LIMIT.toLocaleString('en-US').replace(/,/g, ' ')} characters`,
+    );
+  });
+
+  it('refine: при worker_count=1 объём всё равно делится — промпт ведёт в stages', () => {
+    const text = prompt('refine', { workerCount: 1 });
+
+    expect(text).toContain('Parallel executors: 1');
+    expect(text).toContain('room` is out of reach');
+    expect(text).toContain('one executor per stage');
+  });
+
+  it('refine: working set — вторая ось оценки размера', () => {
+    const text = prompt('refine');
+
+    expect(text).toContain('Does the change fit one executor');
+    expect(text).toContain('working set');
+    expect(text).toContain('dozen files');
   });
 
   it('refine/resolve: репозитории помечены create MR из задачи, а не спрашиваются', () => {
@@ -282,7 +313,9 @@ describe('buildStepPrompt', () => {
 
     expect(text).toContain('independent code reviewer');
     expect(text).toContain('source code');
-    expect(text).toContain('READ-ONLY step');
+    expect(text).toContain('READ-ONLY means the');
+    expect(text).toContain('you do not edit source');
+    expect(text).toContain('iterations/<n>/.review.md');
     expect(text).toContain('.issue-step-result.json');
     expect(text).not.toContain('You are allowed to run');
     expect(text).not.toContain('Playwright');
@@ -599,6 +632,14 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     desiredResult: 'md',
     previousOutcome: 'Previous iteration #1 (status fail): кэш не сброшен.',
     attachmentPaths: ['attachments/spec.pdf'],
+    stateDigest: [
+      {
+        repoPath: '/workspaces/issue-1/app',
+        changedFiles: ['src/login.ts'],
+        diffSummary: '1 file changed, 12 insertions(+)',
+        omittedFiles: 0,
+      },
+    ],
     pipelineSteps: steps,
     devServerPort: 4321,
   };
@@ -610,6 +651,27 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     buildStageSoloPrompt(full, stage),
     buildStagedFinalCoordinatorPrompt(full, [{ stage, outcome: 'stage done' }]),
   ];
+
+  it('каждая роль комнаты видит рабочее состояние', () => {
+    for (const text of roomTexts()) {
+      expect(text).toContain('Working copy right now');
+    }
+  });
+
+  it('общие фрагменты доезжают до каждой роли ровно один раз', () => {
+    const texts = [
+      ...steps.map((step) => prompt(step, { pipelineSteps: steps })),
+      ...roomTexts(),
+    ];
+
+    for (const text of texts) {
+      expect(text).toContain('## Tools you have');
+      expect(text).toContain('web-search');
+      expect(text).toContain('## Memory');
+      expect(text.match(/## Tools you have/g)).toHaveLength(1);
+      expect(text.match(/## Memory/g)).toHaveLength(1);
+    }
+  });
 
   it.each(steps)('%s: пути репозиториев и место в конвейере', (step) => {
     const text = prompt(step, { pipelineSteps: steps });
@@ -712,6 +774,15 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     expect(prompt('test')).toContain('No dev server is running');
   });
 
+  it('test: лимит попыток рендерится из кода, а не «as many times as needed»', () => {
+    const text = prompt('test');
+
+    expect(text).toContain(`${MAX_PIPELINE_ATTEMPTS} development attempts`);
+    expect(text).toContain('needs_input');
+    expect(text).not.toContain('as many times as needed');
+    expect(text).not.toContain('{{');
+  });
+
   it('pr: диф рабочего дерева (коммитит бэкенд после шага) + цели публикации', () => {
     const text = prompt('pr', {
       prTargets: [
@@ -740,7 +811,7 @@ describe('prompt hygiene — роль видит всё, что нужно им�
   it('refine: число параллельных исполнителей из shared, без противоречивых «prefer»', () => {
     const text = prompt('refine');
 
-    expect(text).toContain('Maximum parallel agents: 1');
+    expect(text).toContain(`at most ${DEFAULT_MAX_ROOM_EXECUTORS} at a time`);
     expect(text).toContain(`1..${DEFAULT_MAX_ROOM_EXECUTORS} workers`);
     expect(text).not.toContain('MAX 3 AGENTS PARALLEL');
     expect(text).not.toContain('Prefer `single`');
@@ -852,10 +923,12 @@ describe('buildStepPrompt — report агент (E18–E21)', () => {
     expect(text).toContain('`frontend-design`');
     expect(text).toContain('`theme-factory`');
     expect(text).toMatch(/no external\s+fonts/);
-    expect(text).toMatch(/not governed by `caveman`/);
+    expect(text).toMatch(/caveman/);
+    expect(text.match(/caveman/g)).toHaveLength(1);
     expect(text).toContain('ultracave');
     expect(text).toContain('megacave');
     expect(text).toContain('ponytail');
+    expect(text).toContain("the output contract's rule holds here");
     expect(text).toContain('machine-readable Markdown or');
     expect(text).toContain('telegraphic');
   });

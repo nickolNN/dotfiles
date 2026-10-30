@@ -28,6 +28,8 @@ pi/mcp.log
 pi/models-store.json
 pi/trust.json
 pi/*.sh
+# The thinking-rules sync is documented in AGENTS.md and carries no secrets.
+!pi/sync-thinking-rules.sh
 pi/web-search-cache/
 # Хостовые CA-сертификаты: содержимое игнорируется, но ПУСТАЯ папка обязана
 # оставаться в репо — на ней держится `COPY dotfiles-agent/certs/` в образ.

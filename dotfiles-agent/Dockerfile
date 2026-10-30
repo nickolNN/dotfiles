@@ -212,7 +212,16 @@ RUN for i in 1 2 3; do \
 # ── qmd (BM25 search backend for pi-memory) ─────────────────────
 # npm (not bun): better-sqlite3 ships prebuilt N-API binaries that real
 # Node 24 resolves, while bun's node-ABI handling fails its install script.
-RUN npm install -g @tobilu/qmd \
+#
+# npm_config_nodedir: on linux/arm64 the `tree-sitter-typescript` tarball's
+# `prebuilds/linux-arm64/` binary is mislabeled upstream — it is actually
+# x86-64 (same BuildID as the linux-x64 one). node-gyp-build cannot load it
+# and falls back to compiling from source, for which node-gyp otherwise
+# fetches headers from nodejs.org — a download that times out on corporate
+# networks. The node image already ships matching headers at
+# /usr/local/include/node, so point node-gyp at those instead. On x64 the
+# prebuild loads fine and the variable is unused.
+RUN npm_config_nodedir=/usr/local npm install -g @tobilu/qmd \
   && npm cache clean --force
 
 # ── Browser-automation browsers ────────────────────────────────

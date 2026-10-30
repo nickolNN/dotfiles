@@ -23,10 +23,12 @@ import type {
   PipelineStep,
   PromptMode,
   SessionCommand,
+  SessionModelInfo,
   StepModels,
   StepRunWithLog,
   StepThinkingLevels,
   StepRunStatus,
+  ThinkingLevel,
   WorkspaceFile,
 } from "@issue-resolver/shared";
 import {
@@ -63,6 +65,10 @@ import {
   queueIteration,
   repeatIteration,
   runReportAgent,
+  runDevopsAgent,
+  getDevopsRun,
+  getDevopsStatus,
+  type DevopsStatus,
   type ReportStatus,
   startIssue,
   resultFilesArchiveUrl,
@@ -136,6 +142,7 @@ const STEP_LABELS: Record<PipelineStep, string> = {
   test: "Тест",
   pr: "PR",
   report: "Отчёт",
+  devops: "DevOps",
 };
 
 const PIPELINE_ORDER: readonly PipelineStep[] = [
@@ -455,6 +462,20 @@ function filterArtifacts(files: IssueFile[]): IssueFile[] {
   });
 }
 
+/** Live-control model list: session models plus the "switch to next" entry. */
+const CYCLE_MODEL_ID = "__cycle__";
+
+function controlModelList(models: SessionModelInfo[]): ModelDescriptor[] {
+  return [
+    ...models.map((model) => ({
+      id: model.id,
+      provider: model.provider,
+      ...(model.name ? { name: model.name } : {}),
+    })),
+    { id: CYCLE_MODEL_ID, name: "↻ следующая" },
+  ];
+}
+
 export default function TaskDetail(props: TaskDetailProps) {
   return (
     <TaskDetailQueryBoundary>
@@ -612,6 +633,15 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
   const reportPollRef = useRef<() => void>(() => {});
   const [reportModel, setReportModel] = useState<string>("");
   const [reportThinkingLevel, setReportThinkingLevel] = useState<string>("");
+
+  const [devopsRunning, setDevopsRunning] = useState(false);
+  const [devopsStarting, setDevopsStarting] = useState(false);
+  const [devopsError, setDevopsError] = useState<string | null>(null);
+  const [devopsStatusInfo, setDevopsStatusInfo] = useState<DevopsStatus | null>(null);
+  const [devopsRunLog, setDevopsRunLog] = useState<StepRunWithLog | null>(null);
+  const [devopsExpanded, setDevopsExpanded] = useState(false);
+  const devopsPollRef = useRef<() => void>(() => {});
+
   const [iterationErrors, setIterationErrors] = useState<
     Record<string, string>
   >({});
@@ -830,6 +860,12 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
     setReportReady(false);
     setReportRunning(false);
     setReportError(null);
+    setDevopsRunning(false);
+    setDevopsStarting(false);
+    setDevopsError(null);
+    setDevopsStatusInfo(null);
+    setDevopsRunLog(null);
+    setDevopsExpanded(false);
     setIterationErrors({});
     setDeleting(false);
     setDeleteTimeoutError(null);
@@ -1162,11 +1198,26 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
           startedAt: reportStartedAt,
           sessionId: reportRunId,
         }
-      : null;
+      : devopsExpanded && devopsRunLog
+        ? {
+            title: STEP_LABELS.devops,
+            attempt: devopsRunLog.attempt,
+            status: statusOf(devopsRunLog),
+            active: false,
+            events: sessionEventsOf(devopsRunLog),
+            stats: devopsRunLog.stats ?? null,
+            stdout: devopsRunLog.stdout,
+            stderr: devopsRunLog.stderr,
+            report: null,
+            startedAt: devopsRunLog.created_at,
+            sessionId: devopsRunId,
+          }
+        : null;
 
   function closeModal() {
     setExpandedStepRunId(null);
     setReportExpanded(false);
+    setDevopsExpanded(false);
   }
 
   const handleModalScroll = useCallback(() => {
@@ -1478,6 +1529,48 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
       if (timer) clearInterval(timer);
     };
   }, [issueId]);
+  useEffect(() => {
+    if (!issueId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    const hydrateRun = () => {
+      getDevopsRun(issueId)
+        .then((run) => {
+          if (!cancelled) setDevopsRunLog(run);
+        })
+        .catch(() => {
+          if (!cancelled) setDevopsRunLog(null);
+        });
+    };
+
+    const poll = () => {
+      getDevopsStatus(issueId)
+        .then((next) => {
+          if (cancelled) return;
+          setDevopsError(null);
+          setDevopsStatusInfo(next);
+          setDevopsRunning(next.status === "running");
+          if (next.status !== "running") hydrateRun();
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setDevopsError("не удалось узнать статус DevOps");
+        });
+    };
+
+    devopsPollRef.current = poll;
+    poll();
+    timer = setInterval(poll, 4000);
+    return () => {
+      cancelled = true;
+      devopsPollRef.current = () => {};
+      if (timer) clearInterval(timer);
+    };
+  }, [issueId]);
+
+  const devopsPhase: DevopsStatus["status"] = devopsStatusInfo?.status ?? "idle";
+
   const roomIteration =
     stepRuns.status === "ready" && isRoomIteration(stepRuns.stepRuns);
   const hint = !hasIterationSteps
@@ -1545,6 +1638,9 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
           .slice(0, 12)
       : [];
   const controlState = controlSnapshot?.state ?? null;
+  const controlModelOptions = controlModelList(controlSnapshot?.models ?? []);
+  const controlThinkingLevels = (controlSnapshot?.thinkingLevels ??
+    []) as ThinkingLevel[];
   const currentModelValue =
     controlState?.provider && controlState.modelId
       ? modelOptionValue(controlState.provider, controlState.modelId)
@@ -2007,6 +2103,24 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
     }
   }
 
+  async function handleRefreshDevops() {
+    if (state.status !== "ready" || devopsStarting || devopsRunning) return;
+    setDevopsError(null);
+    setDevopsStarting(true);
+    try {
+      await runDevopsAgent(state.issue.id);
+      devopsPollRef.current();
+    } catch (error) {
+      setDevopsError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось запустить DevOps",
+      );
+    } finally {
+      setDevopsStarting(false);
+    }
+  }
+
   async function openJiraPreview() {
     setJiraPreviewOpen(true);
     setJiraPreviewText(null);
@@ -2293,6 +2407,88 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
                     )}
                   </div>
                 )}
+                {state.status === "ready" && (
+                  <div
+                    data-testid="devops-section"
+                    className="mt-3 border border-[#008F11] bg-[#002B00]/30 px-3 py-2"
+                  >
+                    <div
+                      data-testid="devops-controls"
+                      className="flex flex-wrap items-center gap-2 text-xs"
+                    >
+                      <h4 className="uppercase tracking-wider text-[#00FF41]/60">
+                        DevOps задачи
+                      </h4>
+                      {devopsPhase === "idle" && (
+                        <span data-testid="devops-idle" className="text-[#00FF41]/40">
+                          инструкции не собирались
+                        </span>
+                      )}
+                      {devopsPhase === "running" && (
+                        <span data-testid="devops-running" className="animate-pulse text-[#FFB000]">
+                          собирает RUN_INSTRUCTIONS.md…
+                        </span>
+                      )}
+                      {devopsPhase === "success" && (
+                        <span data-testid="devops-success" className="text-[#00FF41]">
+                          ✓ инструкции собраны
+                          {devopsRunLog ? ` (попытка ${devopsRunLog.attempt})` : ""}
+                        </span>
+                      )}
+                      {devopsPhase === "failed" && (
+                        <span data-testid="devops-failed" className="text-[#FF0033]">
+                          ✗ {devopsStatusInfo?.feedback ?? "сборка не удалась"}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        data-testid="devops-restart"
+                        disabled={devopsStarting || devopsPhase === "running"}
+                        onClick={() => void handleRefreshDevops()}
+                        className="ml-auto border border-[#9D7CFF] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#9D7CFF] hover:bg-[#9D7CFF] hover:text-[#0D0208] disabled:cursor-not-allowed disabled:opacity-40 transition-base"
+                      >
+                        {devopsStarting || devopsPhase === "running"
+                          ? "Запущено…"
+                          : "⟳ Пересобрать"}
+                      </button>
+                      {devopsRunLog && devopsPhase !== "running" && (
+                        <button
+                          type="button"
+                          data-testid="devops-expand"
+                          onClick={() => {
+                            setExpandedStepRunId(null);
+                            setReportExpanded(false);
+                            setDevopsExpanded(true);
+                          }}
+                          className="border border-[#008F11] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/70 hover:border-[#00FF41] hover:text-[#00FF41] transition-base"
+                        >
+                          ⤤ Вывод
+                        </button>
+                      )}
+                    </div>
+                    {devopsError && (
+                      <p
+                        role="alert"
+                        data-testid="devops-error"
+                        className="mt-1 text-xs font-medium text-[#FF0033]"
+                      >
+                        {devopsError}
+                      </p>
+                    )}
+                    {devopsPhase === "running" && devopsEvents.length > 0 && (
+                      <AutoScrollBox
+                        scrollKey={devopsEvents.length}
+                        className="mt-2 h-[220px] overflow-auto border border-[#008F11] bg-[#000200] p-2"
+                      >
+                        <div data-testid="devops-live">
+                          <SessionView events={devopsEvents} running showFooter={false} />
+                        </div>
+                      </AutoScrollBox>
+                    )}
+                  </div>
+                )}
+
+
                 {state.issue.jira_issue_url && (
                   <div className="mt-3">
                     <button
@@ -3541,55 +3737,32 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
                     data-testid="live-controls"
                     className="mb-3 flex flex-wrap items-center gap-2 text-xs"
                   >
-                    <label className="flex items-center gap-1 text-[#00FF41]/70">
-                      модель
-                      <select
-                        data-testid="control-model"
-                        aria-label="Модель сессии"
-                        className={`${inputClass} w-auto py-1`}
-                        value={currentModelValue}
-                        disabled={controlBusy}
-                        onChange={(event) =>
-                          handleModelChange(event.target.value)
-                        }
-                      >
-                        {currentModelValue === "" && (
-                          <option value="">{controlState?.model ?? "—"}</option>
-                        )}
-                        {controlSnapshot?.models?.map((model) => (
-                          <option
-                            key={modelOptionValue(model.provider, model.id)}
-                            value={modelOptionValue(model.provider, model.id)}
-                          >
-                            {model.name ?? model.id}
-                          </option>
-                        ))}
-                        <option value="__cycle__">↻ следующая</option>
-                      </select>
-                    </label>
-
-                    <label className="flex items-center gap-1 text-[#00FF41]/70">
-                      thinking
-                      <select
-                        data-testid="control-thinking"
-                        aria-label="Уровень размышления"
-                        className={`${inputClass} w-auto py-1`}
-                        value={controlState?.thinkingLevel ?? ""}
-                        disabled={controlBusy}
-                        onChange={(event) =>
-                          handleThinkingChange(event.target.value)
-                        }
-                      >
-                        {controlState?.thinkingLevel === null && (
-                          <option value="">—</option>
-                        )}
-                        {controlSnapshot?.thinkingLevels?.map((level) => (
-                          <option key={level} value={level}>
-                            {level}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <ModelThinkingSelect
+                      models={controlModelOptions}
+                      thinkingLevels={controlThinkingLevels}
+                      modelValue={currentModelValue}
+                      thinkingValue={controlState?.thinkingLevel ?? ""}
+                      disabled={controlBusy}
+                      modelOptionValue={(model) =>
+                        model.id === CYCLE_MODEL_ID
+                          ? CYCLE_MODEL_ID
+                          : modelOptionValue(model.provider ?? "", model.id)
+                      }
+                      modelPlaceholder={controlState?.model ?? "—"}
+                      thinkingPlaceholder="—"
+                      modelLabel="модель"
+                      thinkingLabel="thinking"
+                      labelClassName="text-xs text-[#00FF41]/70"
+                      modelTestId="control-model"
+                      thinkingTestId="control-thinking"
+                      modelAriaLabel="Модель сессии"
+                      thinkingAriaLabel="Уровень размышления"
+                      modelSelectClassName={`${inputClass} w-auto py-1`}
+                      thinkingSelectClassName={`${inputClass} w-auto py-1`}
+                      className="contents"
+                      onModelChange={handleModelChange}
+                      onThinkingChange={handleThinkingChange}
+                    />
 
                     <button
                       type="button"

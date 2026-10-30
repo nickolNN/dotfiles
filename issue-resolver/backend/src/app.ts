@@ -10,6 +10,7 @@ import type {
 import { FakeContainerController } from './docker/controller';
 import { FakeGitService } from './git/service';
 import { FakePiRunner } from './pi/runner';
+import type { PiRunner } from './pi/runner';
 import { FakeMrClient } from './pr/mr';
 import { InMemorySseHub } from './sse/hub';
 import { FakeJiraClient, type JiraClient } from './jira/client';
@@ -76,6 +77,8 @@ export interface AppDeps extends Partial<IterationRunDeps> {
   repos?: ReposValidator;
   repoResolverFactory?: RepoResolverFactory;
   roomsRoot?: string;
+  /** Maintenance sessions always run in the backend's own environment. */
+  retroPi?: PiRunner;
 }
 
 export function buildApp(
@@ -87,6 +90,7 @@ export function buildApp(
     repos,
     repoResolverFactory,
     roomsRoot,
+    retroPi,
     ...runOverrides
   } = deps;
   const runDeps: IterationRunDeps = { ...defaultRunDeps(), ...runOverrides };
@@ -144,7 +148,11 @@ export function buildApp(
       resolverFactory: repoResolverFactory,
     });
     await tagsRoutes(instance, db);
-    await settingsRoutes(instance, db);
+    await settingsRoutes(instance, db, {
+      pi: retroPi ?? runDeps.pi,
+      sse: runDeps.sse,
+      registry: runDeps.control,
+    });
     await adminRoutes(instance, db, runDeps.workspaceRoot, roomsRoot);
     await iterationsRoutes(instance, db, runDeps);
     await controlRoutes(instance, runDeps.control);

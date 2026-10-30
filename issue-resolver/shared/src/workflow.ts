@@ -14,7 +14,9 @@ export interface StepTransitionInput {
   maxAttempts?: number;
 }
 
-const DEFAULT_MAX_ATTEMPTS = 3;
+export const MAX_PIPELINE_ATTEMPTS = 5;
+
+export const REFINED_PLAN_CHAR_LIMIT = 12_000;
 
 export const SELF_RETRY_STEPS: ReadonlySet<PipelineStep> = new Set([
   'refine',
@@ -30,7 +32,7 @@ const TERMINAL_FAILURE_STEPS: readonly PipelineStep[] = ['refine', 'resolve', 'p
 
 export function nextStepDecision(input: StepTransitionInput): StepTransition {
   const { steps, currentStep, result, attempt } = input;
-  const maxAttempts = input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const maxAttempts = input.maxAttempts ?? MAX_PIPELINE_ATTEMPTS;
 
   if (result === 'success') {
     const index = steps.indexOf(currentStep);

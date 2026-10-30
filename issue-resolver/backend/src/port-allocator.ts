@@ -1,7 +1,9 @@
 import { createServer } from 'node:net';
 
-const PORT_RANGE_START = 5100;
-const PORT_RANGE_END = 5299;
+export const PORT_RANGE_START = 5100;
+export const PORT_RANGE_END = 5299;
+
+export const PORT_RANGE_LABEL = `${PORT_RANGE_START}–${PORT_RANGE_END}`;
 
 const issuePorts = new Map<string, Set<number>>();
 
@@ -33,8 +35,22 @@ export async function allocateDevPort(
   }
 
   throw new Error(
-    `Нет свободных портов в диапазоне ${PORT_RANGE_START}–${PORT_RANGE_END}`,
+    `Нет свободных портов в диапазоне ${PORT_RANGE_LABEL}`,
   );
+}
+
+export async function reserveDevPort(
+  issueId: string,
+  port: number,
+): Promise<boolean> {
+  const owner = portOwner.get(port);
+  if (owner !== undefined && owner !== issueId) return false;
+  if (!(await isPortFree(port))) return false;
+  const set = issuePorts.get(issueId) ?? new Set<number>();
+  set.add(port);
+  issuePorts.set(issueId, set);
+  portOwner.set(port, issueId);
+  return true;
 }
 
 export function releaseDevPort(port: number): void {

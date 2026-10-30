@@ -13,12 +13,15 @@ import type {
   PromptResult,
   RepoBranchesResponse,
   RepoValidationResult,
+  RetroRun,
+  RetroRunWithLog,
   RoomAgent,
   SavedRepo,
   SessionCommand,
   SessionControlSnapshot,
   StepRunWithLog,
   Tag,
+  ThinkingLevel,
   UpdateRepoRequest,
   UpdateTagRequest,
   WorkspaceFile,
@@ -34,6 +37,7 @@ async function readErrorMessage(response: Response): Promise<string> {
       return data.error;
     }
   } catch {
+    // JSON parse failed — use status text
   }
   return `Запрос завершился со статусом ${response.status}`;
 }
@@ -970,6 +974,48 @@ export async function getReportRun(issueId: string): Promise<StepRunWithLog> {
   return payload as StepRunWithLog;
 }
 
+export async function runDevopsAgent(issueId: string): Promise<{ ok: boolean }> {
+  const url = `${API_BASE}/issues/${encodeURIComponent(issueId)}/devops`;
+  const response = await fetch(url, { method: 'POST' });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as { ok: boolean };
+}
+
+export interface DevopsStatus {
+  status: 'idle' | 'running' | 'success' | 'failed';
+  runId?: string;
+  runStatus?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  feedback?: string;
+}
+
+export async function getDevopsStatus(issueId: string): Promise<DevopsStatus> {
+  const response = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(issueId)}/devops/status`,
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as DevopsStatus;
+}
+
+export async function getDevopsRun(issueId: string): Promise<StepRunWithLog> {
+  const response = await fetch(
+    `${API_BASE}/issues/${encodeURIComponent(issueId)}/devops/run`,
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const payload = (await response.json()) as Partial<StepRunWithLog> | null;
+  if (typeof payload?.id !== 'string' || payload?.step !== 'devops') {
+    throw new Error('некорректный ответ прогона devops');
+  }
+  return payload as StepRunWithLog;
+}
+
 export async function cleanupOrphans(): Promise<CleanupResult> {
   const response = await fetch(`${API_BASE}/admin/cleanup-orphans`, {
     method: 'POST',
@@ -978,4 +1024,54 @@ export async function cleanupOrphans(): Promise<CleanupResult> {
     throw new Error(await readErrorMessage(response));
   }
   return (await response.json()) as CleanupResult;
+}
+
+export interface StartRetroRunInput {
+  model?: string;
+  thinking_level?: ThinkingLevel;
+  session_limit?: number;
+  instructions?: string;
+}
+
+const RETRO_PATH = `${API_BASE}/settings/retro`;
+
+export async function startRetroRun(
+  input: StartRetroRunInput = {},
+): Promise<RetroRun> {
+  const response = await fetch(RETRO_PATH, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as RetroRun;
+}
+
+export async function getRetroRuns(): Promise<RetroRun[]> {
+  const response = await fetch(RETRO_PATH);
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  const payload = (await response.json()) as { runs?: RetroRun[] } | null;
+  return Array.isArray(payload?.runs) ? payload.runs : [];
+}
+
+export async function getRetroRun(id: string): Promise<RetroRunWithLog> {
+  const response = await fetch(`${RETRO_PATH}/${encodeURIComponent(id)}`);
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
+  return (await response.json()) as RetroRunWithLog;
+}
+
+export async function abortRetroRun(id: string): Promise<void> {
+  const response = await fetch(
+    `${RETRO_PATH}/${encodeURIComponent(id)}/abort`,
+    { method: 'POST' },
+  );
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response));
+  }
 }

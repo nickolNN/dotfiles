@@ -50,7 +50,12 @@ starting and after finishing.
   correct a drifting agent with a steer.
 - **Steer for urgency, followUp otherwise.** `delivery="steer"` interrupts a
   busy agent — spend it only on time-sensitive corrections.
-- **Compact at ≥20% context** (`room_control_agent` → `compact`). Aborting
+- **Compact early, by the number the room shows.** `room_list_agents` prints
+  `ctx:<N>%` — the percent of the context window **used** (tokens ÷ window,
+  `extensions/agent-room/index.ts:225-236`), not what is left. Compact a peer
+  (`room_control_agent` → `compact`) once its `ctx` reaches 20% — do not wait for
+  the window to fill, a compacted agent keeps working with the same history in
+  half the space. Aborting
   an agent is the user's call: ask first. Control off → ask for
   `/room control on`.
 - **Scale through the user.** Workload beyond the room's capacity → ask the

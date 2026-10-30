@@ -1,4 +1,3 @@
-import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -15,6 +14,10 @@ import type { Db } from '../db/client';
 import { issueRepositories, issues, iterations } from '../db/schema';
 import type { ContainerController } from '../docker/controller';
 import { releaseIssueDevPorts } from '../port-allocator';
+import {
+  killWorkspaceProcesses,
+  removeWorkspaceDir,
+} from '../processes/workspace-processes';
 import type { SseHub } from '../sse/hub';
 import { createTarGz, type ArchiveEntry } from '../workspace/archive';
 import {
@@ -246,23 +249,16 @@ async function deleteIssueInBackground(
     const wsPath = workspaceHostDirFor(workspaceRoot, id);
     publishDeleting(sse, id, 'stopping_processes');
     try {
-      execSync(
-        `pids=$(for p in /proc/*/cwd; do [ "$(readlink "$p" 2>/dev/null)" = "${wsPath}" ] && echo "$(basename $(dirname "$p"))"; done); ` +
-          `[ -n "$pids" ] && echo "$pids" | xargs -r kill 2>/dev/null; ` +
-          `pkill -f '${wsPath}' 2>/dev/null || true`,
-        { stdio: 'ignore' },
-      );
-    } catch {
-    }
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      execSync(
-        `pids=$(for p in /proc/*/cwd; do [ "$(readlink "$p" 2>/dev/null)" = "${wsPath}" ] && echo "$(basename $(dirname "$p"))"; done); ` +
-          `[ -n "$pids" ] && echo "$pids" | xargs -r kill -9 2>/dev/null; ` +
-          `pkill -9 -f '${wsPath}' 2>/dev/null || true`,
-        { stdio: 'ignore' },
-      );
-    } catch {
+      const { killed, remaining } = await killWorkspaceProcesses(wsPath);
+      if (killed.length > 0 || remaining.length > 0) {
+        console.error('issue delete: workspace processes', {
+          issueId: id,
+          killed: killed.length,
+          remaining,
+        });
+      }
+    } catch (error) {
+      console.error('issue delete: stopping processes failed', error);
     }
 
     releaseIssueDevPorts(id);
@@ -278,7 +274,10 @@ async function deleteIssueInBackground(
     }
     publishDeleting(sse, id, 'removing_workspace');
     try {
-      await rm(wsPath, { recursive: true, force: true });
+      const { removed, remaining } = await removeWorkspaceDir(wsPath);
+      if (!removed) {
+        console.error('remove workspace failed', { issueId: id, remaining });
+      }
     } catch (error) {
       console.error('remove workspace failed', error);
     }

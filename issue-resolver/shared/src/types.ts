@@ -9,7 +9,7 @@ export type TaskStatus =
   | 'cancelled'
   | 'question';
 
-export type PipelineStep = 'refine' | 'resolve' | 'review' | 'test' | 'pr' | 'report';
+export type PipelineStep = 'refine' | 'resolve' | 'review' | 'test' | 'pr' | 'report' | 'devops';
 
 export type DesiredResult = 'md' | 'html';
 
@@ -322,6 +322,32 @@ export interface StepRunWithLog extends StepRun {
   stats: SessionStats | null;
   report: string | null;
   screenshots_dir: string | null;
+}
+
+export type RetroRunStatus = 'running' | 'success' | 'failed';
+
+/** A maintenance run started from the settings page: memory compaction + retro. */
+export interface RetroRun {
+  id: string;
+  status: RetroRunStatus;
+  model: string | null;
+  /** Operator instructions appended to the prompt (stored to reproduce a run). */
+  instructions: string | null;
+  /** How many pi sessions the prompt asked the agent to analyse. */
+  session_limit: number | null;
+  /** Thinking effort of the run; null means the model's own default. */
+  thinking_level: ThinkingLevel | null;
+  report: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RetroRunWithLog extends RetroRun {
+  stdout: string;
+  stderr: string;
+  events: SessionEvent[];
+  stats: SessionStats | null;
 }
 
 export type StepReportStatus = 'pass' | 'fail' | 'blocked';

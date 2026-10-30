@@ -208,6 +208,10 @@ allow-list enforcement'ится на мутирующих методах (`POST`
 | `DELETE /tags/:id` | — | `204` / `404`; связи `tag_repositories` снимаются каскадом |
 | `GET /settings/hostname` | — | `{ hostname }` (пустая строка, если не задан) |
 | `PUT /settings/hostname` | `{ hostname }` (≤ 100 символов) | `{ hostname }` / `400 { error }` |
+| `POST /settings/retro` | `{ model?, thinking_level?, session_limit?, instructions? }` (JSON; `thinking_level` — `off…max`, `session_limit` 1–50, `instructions` ≤ 4000) | `202 RetroRun` (`status: 'running'`, прогон идёт в фоне) / `400 { error }` / `409 { error, id }`, если прогон уже идёт / `503 { error }`, если запуск не сконфигурирован. Живой вывод — SSE `log`/`step_event`/`step_status` с `issueId: '__settings__'` и `stepRunId` = id прогона (глобальный поток `GET /stream`) |
+| `GET /settings/retro` | — | `{ runs: RetroRun[] }` (последние 20, новые первыми) |
+| `POST /settings/retro/:id/abort` | — | `202 { ok: true }` — останавливает идущий прогон (SIGKILL сессии), строка получает `status: 'failed'`, `error: 'прогон остановлен оператором'` / `404 { error }` / `409 { error }` — прогон уже завершён / `503 { error }` — сессия недоступна |
+| `GET /settings/retro/:id` | — | `RetroRunWithLog` (`report`, `stdout`, `stderr`, `events`, `stats`) / `404 { error }` |
 | `POST /admin/cleanup-orphans` | — | `{ orphaned_workspaces, killed_processes, deleted_dirs, deleted_rooms, errors }` / `500 { error: 'cannot read workspace root' }` |
 
 Встроенные интерактивные команды pi на `POST /iterations/:id/prompt`
@@ -390,7 +394,28 @@ URL (`RepoUrlInput`) живёт на экране «Репозитории» и 
 тянет ветки **live** через резолвер (`{ branches: string[] }`), не из БД.
 Поля `runInstructions*` валидация не трогает: их заполняет агент-анализатор
 (`backend/src/workflow/devops.ts`) на этапе разовой подготовки рабочей
-папки. После clone и ДО `install`, для каждого репозитория со статусом НЕ
+папки.
+
+**Сопоставление URL репозитория.** В `repositories.url` лежит тот URL, который
+пользователь вставил в реестр (для Bitbucket Server — browse-страница
+`.../projects/KOS/repos/x/browse`), а задача хранит **клон**
+(`issues` → `issue_repositories.repository_url` = `saved.cloneUrl ?? saved.url`,
+то есть `.../scm/kos/x.git`). Поэтому поиск строки реестра по URL идёт не по
+tочному совпадению строк, а по канонической идентичности
+(`shared/src/domain.ts:repositoryIdentity` / `isSameRepository` — разбор
+`projects/<P>/repos/<R>`, `scm/<P>/<R>`, `<org>/<proj>/_git/<R>` и scp-like
+`git@host:path`; регистр хоста/проекта/имени незначим, `.git` и хвостовой
+слэш отбрасываются). Реализовано в `db/repositories.repo.ts:findRowsByUrl`
+(сначала точный `url`/`clone_url`, затем канонический проход) —
+`getRepositoryByUrl` и `updateRepositoryRunInstructions` обновляют **по id**
+все подошедшие строки и возвращают `boolean`; если не подошла ни одна,
+`dbRunInstructionsStore` пишет `console.warn` (молчаливый no-op ровно этим багом
+и прятался: статус `run_instructions_status` не обновлялся никогда). Тот же
+разбор чинит `extractRepoNameFromUrl`: для browse-URL он возвращает имя
+репозитория, а не хвостовой сегмент `browse`, — раньше имена репозиториев в
+контексте DevOps-промпта для тегов выглядели как «browse, browse». Пути
+рабочей папки так и строятся из clone-URL задачи, поэтому имена каталогов
+существующих воркспейсов не меняются. После clone и ДО `install`, для каждого репозитория со статусом НЕ
 `generated`, `PiDevOpsAgent` запускает pi-агента с промптом
 `prompts/devops.md` (плейсхолдеры `{{REPO_DIR}}`/`{{REPO_NAME}}`/
 `{{DEV_SERVER_PORT}}`/`{{TAG_INSTRUCTIONS}}`): агент смотрит проект, пробует
@@ -438,6 +463,16 @@ DevOps-агента в `prepareIssueWorkspace`, и новые тег-инстр�
 клон остаётся: агент пишет в порт-карту `⛔ clone-only`, а его `location`-блок в
 прокси — закомментированным.
 
+**Файлы в корне рабочей папки.** Помимо `WORKSPACE_INSTRUCTIONS.md`, генерируемых
+агентом, `prepareIssueWorkspace` вызывает `installWorkspaceHelpers`
+(`backend/src/workflow/run-iteration.service.ts`): он копирует `bin/pw-browsers.sh`
+в корень рабочей папки задачи с правами `0755`. Контейнер агента видит только
+бинд `/workspaces/<issueId>`, поэтому хостовый путь
+`…/issue-resolver/bin/pw-browsers.sh` внутри него не существует — в промптах
+скрипт называется по имени (`bash pw-browsers.sh <repo-dir>`), а тест
+`backend/test/workspace-helpers.test.ts` следит и за копированием, и за тем,
+чтобы в `prompts/*.md` не вернулись домашние пути хоста.
+
 **Порт-контракт.** `allocateDevPort` выдаёт ОДИН порт на задачу
 (диапазон `5100–5299`), и движок передаёт одно и то же значение каждому
 анализатору в цикле, а `DEV_SERVER.sh` система поднимает только у первого
@@ -448,6 +483,24 @@ DevOps-агента в `prepareIssueWorkspace`, и новые тег-инстр�
 `WORKSPACE_INSTRUCTIONS.md`. До этого закрепления анализатор сажал все
 репозитории набора на один порт и резюмировал «запускать строго по очереди»,
 что для микрофронтендов неработоспособно (шелл грузится без единого ремоута).
+Владелец entry-порта — система, а сервер поднимает и оставляет жить
+devops-агент: он стартует `DEV_SERVER.sh` через `setsid nohup … &` и пишет pid
+в `<repo>/.dev-server.pid`. Без `setsid` процесс остаётся в process group
+своего tool-вызова, а pi на завершении сессии добивает такие группы
+(`killTrackedDetachedChildren` → `SIGKILL`), поэтому сервер «мелькал и гас».
+После прогона движок читает pid-файл, проверяет `http://127.0.0.1:<port>/` и
+пишет `dev_server_pid`; если скрипт есть, а порт молчит — репозиторий помечается
+`failed` с хвостом `.dev-server.log` вместо ложного success. Ручной
+`POST /issues/:id/devops`
+тоже аллоцирует порт и пишет его в `issues.dev_server_port` (пустое значение
+означало бы `AUTO` в промпте и мёртвый URL в UI), а при старте `DEV_SERVER.sh`
+порт передаётся скрипту в `PORT` — поэтому entry-скрипт обязан читать
+`"${PORT:-<записанный порт>}"`, а апстримы `PORT` игнорируют. На старте новой
+итерации прежний порт переиспользуется (`reserveDevPort`), новый выдаётся
+только если старый реально занят — иначе перезапуск сдвигал адрес, который
+человек уже открыл. Если прогон не сгенерировал ни одной `RUN_INSTRUCTIONS.md`, порт
+возвращается аллокатору, а `dev_server_port` задачи очищается: UI не должен
+предлагать адрес, где никого нет.
 
 **Микрофронтенды без docker-in-docker.** Промпт учит агента распознавать набор
 шелл+сервисы (`nginx-local/`, `docker-compose.yaml`, `servePath`/`baseHref` с
@@ -510,7 +563,9 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   `message` и `iteration_status` со `status: 'failed'` + `error`. Живой
   stdout/stderr DevOps-агента идёт обычными SSE `log`-событиями с
   адресом `issue.<issueId>.devops` (`stream` — `stdout`/`stderr`,
-  `data` — чанк вывода); UI конвертирует чанки в `text`-события и рендерит их
+  `data` — чанк вывода); прогон параллельно пишется в `step_runs` /
+  `step_outputs` (`context: 'post-prepare'`), так что его исход и сессия
+  переживают рестарт backend. UI конвертирует чанки в `text`-события и рендерит их
   тем же `SessionView`, что и шаги, в скроллируемом окне ~300px под панелью
   подготовки. Пару
   «задача `preparing` / итерация `pending`», пережившую рестарт backend,
@@ -621,6 +676,29 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   прошлый HTML из снапшота с пометкой `iteration-snapshot`, а не markdown — вот
   почему важно смотреть и на `content-type`, и на `x-artifact-source`. После
   успеха новый отчёт попадает и в снапшот итерации.
+- **DevOps задачи (`devops`-агент)**: DevOps привязан к задаче, а не к
+  репозиторию и не к итерации — это уровень задачи целиком. Раньше агент жил
+  только внутри разовой подготовки воркспейса, и после её окончания вывод
+  терялся. Теперь прогон пишется в `step_runs`/`step_outputs` так же, как
+  отчёт: `issue_id`, `iteration_id = NULL`, `step = 'devops'`,
+  `attempt` = число прошлых прогонов + 1, `context` — `post-prepare` или
+  `manual`. Сессия регистрируется под адресом `issue.<issueId>.devops`, оттуда
+  идут `log`/`step_event`/`step_status`; на финише в `step_outputs` ложятся
+  накопленные `stdout`/`stderr`, события сессии и `stats` (`SessionStats`), а
+  в `step_runs` — итоговый `status` и `feedback` с причиной по каждому репо.
+  Ручной перезапуск: `POST /issues/:id/devops` → `202 { ok, devopsRunId }`;
+  `409 { error: 'devops run already active' }`, если прогон уже идёт; `400`,
+  если devops-агент не настроен; `404` — нет задачи. Прогон перегенерирует
+  `RUN_INSTRUCTIONS.md` и `DEV_SERVER.sh` репозиториев с включённым bootstrap
+  (старые файлы стираются **до** запуска, чтобы упавший агент не мог
+  «унаследовать» успех предыдущего), сохраняет инструкции в строку
+  репозитория и пропускает репозиторий без клона с внятной причиной.
+  `GET /issues/:id/devops/status` отвечает `idle`/`running`/`success`/`failed`
+  по **последнему прогону из БД** (после рестарта backend статус не сбрасывается
+  в `idle`; зависший без активности прогон доводится до `failed`) и несёт
+  `runId`, `runStatus`, `startedAt`, `finishedAt`, `feedback`.
+  `GET /issues/:id/devops/run` отдаёт `StepRunWithLog` целиком — UI поднимает
+  из него панель вывода после перезагрузки страницы.
 - **Управление report-агентом как шагом**: живая report-сессия
   регистрируется в реестре под адресом `issue.<issueId>.report`
   (SSE и control-роуты работают с этим id), но сам прогон живёт в БД обычной
@@ -720,7 +798,11 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   свою проверку локальными self-checks (то же — у координатора комнаты и
   финального lead staged-режима).
 - **Промпты шагов** (`prompts/*.md` + сборка в `backend/src/workflow/prompts.ts`):
-  у каждого шага одна и та же шапка контекста — `Pipeline step: <step>`,
+  к каждому промпту — шаговому и роли комнаты — в конце добавляются общие
+  фрагменты `SHARED_FRAGMENTS` (`capabilities.md` о доступном агенту,
+  `memory-rules.md` о тегах и ссылках): правило живёт в одном файле и не
+  копируется по ролям, а тест проверяет, что фрагмент доехал ровно один раз.
+  У каждого шага одна и та же шапка контекста — `Pipeline step: <step>`,
   `Enabled pipeline for this run: …` (где я в конвейере), задача/описание/Jira/
   контекст итерации, пути рабочих копий репозиториев, живой dev-сервер
   (`http://localhost:<dev_server_port>`, если он поднят), загруженные файлы,
@@ -752,7 +834,15 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   'stages', executors?, decomposition?, stages?, rationale? }`), а также пишет
   человекочитаемый план в `plan.md` в корне рабочей папки. Топологию
   детерминированно решает движок (`planExecutionMode`, потолок
-  `DEFAULT_MAX_ROOM_EXECUTORS = 4`), а не сами агенты:
+  `DEFAULT_MAX_ROOM_EXECUTORS = 4`), а не сами агенты. Планировщик выбирает
+  топологию по двум осям (`prompts/step-refine.md` §3): **форма** — независимые
+  части → `room`, упорядоченные → `stages`; **ёмкость** — изменение больше одного
+  *working set* исполнителя (порядка десятка файлов плюс один тест-цикл) уходит в
+  `stages`, даже когда части независимы. `iteration.worker_count` рендерится в
+  `{{PARALLELISM}}` через `maxExecutorsFor`, поэтому потолок, который видит
+  планировщик, равен реальному потолку движка (при `worker_count=1` текст говорит
+  прямо: параллелизма нет, объём всё равно делится в `stages` по одному
+  исполнителю на этап):
   - `room` валиден только при `executors >= 2`; N исполнителей параллельно решают
     подзадачи и пишут каждый свой `.issue-worker-result-<n>.json` (`n` — 1-based
     номер подзадачи, как в подписи исполнителя), затем
@@ -775,7 +865,10 @@ Node-reverse-proxy (node в образе всегда), без попыток е
     Координатор этапа и финальный lead дополнительно читают итоги предыдущих
     этапов через общую память комнаты (`memory_read`/`memory_search`) и пишут
     свой итог (`memory_write`, теги `#issue-resolver`/`[[stage-N]]`).
-  - иначе (нет плана, битый, `single`, < 2 валидных этапов) — один агент.
+  - иначе (нет плана, битый, `single`, < 2 валидных этапов) — один агент, и это
+    заметно: движок отдаёт warning-notice в ленту шага и пишет `console.warn`
+    («no execution plan — resolve runs as single»), чтобы недописанный
+    `.issue-step-result.json` не выглядел как осознанный `single`.
   В `room`/`stages` у каждого агента свой `RoomAgent.id` (`<stepRunId>` у
   финального координатора, `run.<stepRunId>.w<i>` у исполнителей комнаты,
   `run.<stepRunId>.s<s>.w<w>` и `run.<stepRunId>.s<s>.lead` у
@@ -785,7 +878,10 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   сессии).
 - **Цикл фидбека**: провал `review`/`test` откатывает конвейер на `resolve`
   (разработку) с `attempt + 1` и передаёт фидбек; сам `test` код не чинит.
-  Максимум 3 попытки, дальше — итерация завершается `failed` с `needs_input`.
+  Максимум `MAX_PIPELINE_ATTEMPTS` попыток (`shared/src/workflow.ts`, сейчас 5),
+  дальше — `needs_input` с причиной `max_attempts`: итерация останавливается и
+  спрашивает человека. Test-шаг получает это число в промпте через
+  `{{ATTEMPT_LIMIT}}`, поэтому лимит не живёт отдельным числом в markdown.
   Провал `refine`/`resolve`/`pr` завершает итерацию сразу.
 - **Терминальность сбоя агента**: reject/таймаут `pi.run` (spawn ENOENT,
   timeout, child error, зависание) ловится движком вокруг single/room/stages
@@ -942,6 +1038,19 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   `SessionView` с `log`-чанками адреса `issue.<issueId>.report` показывается
   там же в шапке, пока идёт генерация. Старого блока с сырым `devops_log`
   и его `onDevOpsLog`-колбэка в карточке больше нет.
+- **Карточка «DevOps задачи»** (`data-testid="devops-section"`) — отдельный
+  блок уровня задачи сразу под панелью «Репозитории» (прогон один на всю
+  задачу: он перечитывает все её репозитории, поэтому в строке репозитория его
+  кнопки нет). В одной строке: лейбл, статус (`devops-idle` /
+  `devops-running` / `devops-success` / `devops-failed` — при `failed` рядом
+  `feedback` с причиной по репозиторию), «⟳ Пересобрать»
+  (`POST /issues/:id/devops`, заблокирована на время прогона) и «⤤ Вывод» — ту
+  же модалку прогона (`step-log-modal`), что у шагов и отчёта: сохранённая
+  сессия, `stdout`/`stderr` и статистика из `step_outputs`. Пока прогон идёт,
+  под строкой статуса живёт накопительный `SessionView` из SSE-чанков адреса
+  `issue.<issueId>.devops` (`devops-live`). Статус и лог берутся из
+  `GET /devops/status` и `GET /devops/run` (опрос раз в 4 с), поэтому
+  перезагрузка страницы и рестарт backend не теряют ни исход, ни вывод.
 - **Английские промпты**: тексты шагов конвейера (`workflow/prompts.ts`) и
   `pr`-скилл переведены на английский.
 - **Персистентный лог шагов**: сырой `stdout`/`stderr`, структурированные
@@ -1066,11 +1175,33 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   красный баннер шага. Если рабочая папка
   задачи удалена, а issue в БД осталась (`Issue.workspace_missing === true`), в
   шапке задачи показывается бейдж «Файлы задачи отсутствуют»; issue при этом
-  НЕ удаляется автоматически. Экран «Настройки» (`#/settings`) — hostname
+  НЕ удаляется автоматически. Удаление задачи гасит всё, что живёт в её папке
+  (`backend/src/processes/workspace-processes.ts`): обход `/proc` ищет процессы с
+  `cwd` **внутри** папки на любой глубине (бывшая проверка сравнивала `cwd` с
+  корнем папки на равенство и не видела `ng serve`, запущенный из подкаталога
+  репозитория), путь папки в командной строке и открытые файлы внутри неё.
+  Сначала `SIGTERM` по группе процесса (`setsid`-дев-серверы живут в своей),
+  через паузу `SIGKILL` по оставшимся; свой процесс и его предки из выборки
+  исключены. Снос папки повторяется до 4 раз с новой сессией убийства между
+  попытками — иначе процесс, переоткрывающий файл, оставлял её `ENOTEMPTY`.
+  Экран «Настройки» (`#/settings`) — hostname
   инстанса (`GET`/`PUT /settings/hostname`) и кнопка очистки
   орфанед-воркспейсов (`POST /admin/cleanup-orphans`), она же убирает
   брошенные комнаты задач (`issue-*` без живых агентов; корень комнат —
   `PI_CODING_AGENT_DIR`/`~/.pi/agent` + `/rooms`, см. `backend/src/pi/rooms.ts`);
+  оттуда же запускается maintenance-сессия **«Память и ретро»**
+  (`POST`/`GET /settings/retro`): кнопка открывает модалку с выбором модели и её
+  thinking effort, числа анализируемых pi-сессий и произвольными инструкциями;
+  пару «модель + thinking effort» рисует общий `ModelThinkingSelect` — тот же,
+  что в форме задачи, шагах пайплайна и живых контролах сессии. Сессия компактит
+  память агента (`PI_MEMORY_DIR`: `MEMORY.md`, `SCRATCHPAD.md`, `daily/*`) и
+  проводит ретро по скиллу `retro` (логи сессий `~/.pi/agent/sessions`, БД
+  приложения, репозиторий), пишет markdown-отчёт в таблицу `retro_runs` —
+  отчёт можно открыть и скачать `.md`, историю прогонов — в той же модалке;
+  модель, её thinking effort, лимит сессий и свои инструкции сохраняются в строке
+  прогона (клик по
+  истории подставляет их в форму, чтобы повторить запуск), а идущий прогон
+  останавливается кнопкой «Остановить» (`POST /settings/retro/:id/abort`);
   сохранённый hostname
   задаёт заголовок вкладки на всех страницах и переживает перезагрузку
   (значение грузит `App`, а не только сама страница настроек). В шапке формы и

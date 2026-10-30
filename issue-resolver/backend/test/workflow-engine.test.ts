@@ -14,7 +14,7 @@ import type {
   StepRun,
   StepRunStatus,
 } from '@issue-resolver/shared';
-import { parseStepReport } from '@issue-resolver/shared';
+import { MAX_PIPELINE_ATTEMPTS, parseStepReport } from '@issue-resolver/shared';
 import { FakeContainerController } from '../src/docker/controller';
 import { FakeGitService } from '../src/git/service';
 import { FakePiRunner } from '../src/pi/runner';
@@ -731,27 +731,22 @@ describe('runIteration — цикл фидбека', () => {
     ]);
   });
 
-  it('review падает 3 раза → needsInput, iteration failed', async () => {
+  it('review исчерпывает MAX_PIPELINE_ATTEMPTS попыток → needsInput, iteration failed', async () => {
     const { deps, store, pi } = makeDeps();
-    pi.enqueue(pass('resolve'));
-    pi.enqueue(fail('review'));
-    pi.enqueue(pass('resolve'));
-    pi.enqueue(fail('review'));
-    pi.enqueue(pass('resolve'));
-    pi.enqueue(fail('review'));
+    for (let attempt = 1; attempt <= MAX_PIPELINE_ATTEMPTS; attempt += 1) {
+      pi.enqueue(pass('resolve'));
+      pi.enqueue(fail('review'));
+    }
 
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
 
     expect(result).toEqual({ iterationStatus: 'failed', needsInput: true });
-    expect(trace(store)).toEqual([
-      'resolve#1:success',
-      'review#1:failed',
-      'resolve#2:success',
-      'review#2:failed',
-      'resolve#3:success',
-      'review#3:failed',
-    ]);
-    expect(pi.calls).toHaveLength(6);
+    expect(trace(store)).toEqual(
+      Array.from({ length: MAX_PIPELINE_ATTEMPTS }, (_, i) => i + 1).flatMap(
+        (n) => [`resolve#${n}:success`, `review#${n}:failed`],
+      ),
+    );
+    expect(pi.calls).toHaveLength(MAX_PIPELINE_ATTEMPTS * 2);
   });
 
   it('model пробрасывается в pi.run вместе с cwd воркспейса', async () => {
@@ -1816,12 +1811,10 @@ describe('runIteration — onIterationTerminal (A1–A5)', () => {
 
   it('A4: review→resolve retry, финал needs_input → колбэк НЕ вызывается', async () => {
     const { deps, pi } = makeDeps();
-    pi.enqueue(pass('resolve'));
-    pi.enqueue(fail('review'));
-    pi.enqueue(pass('resolve'));
-    pi.enqueue(fail('review'));
-    pi.enqueue(pass('resolve'));
-    pi.enqueue(fail('review'));
+    for (let attempt = 1; attempt <= MAX_PIPELINE_ATTEMPTS; attempt += 1) {
+      pi.enqueue(pass('resolve'));
+      pi.enqueue(fail('review'));
+    }
     const seen = collect(deps);
 
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
