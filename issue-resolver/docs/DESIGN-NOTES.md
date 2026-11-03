@@ -278,11 +278,39 @@ future reader could break without noticing, add it here instead of a comment.
   changes.
 - Jira uses API v2: v3 breaks on Server with 404.
 - Bitbucket auth: Bearer for a PAT, Basic for an app password.
+- An empty repository (no commits) is a state, not an error: the remote listing
+  returns zero branches, so `RepoInfo.defaultBranch` is `''` and
+  `SavedRepo.defaultBranch` is `NULL`. Bitbucket Server answers
+  `/branches/default` with `204` and an empty body — `response.json()` on that
+  throws `Unexpected end of JSON input` and used to make such a repo impossible
+  to add; every remote branch read now goes through `readJson`/`fetchBranchList`,
+  which return `null` for empty or non-JSON bodies. A declared default branch is
+  only trusted when the branch list is unavailable: a successfully read empty
+  list wins over it. Such a repo can be registered and shown (the UI marks
+  «нет веток — пустой репозиторий»), but a task needs a real base branch, and
+  the write-access probe is skipped because there is no start point to create a
+  test branch from.
 
 ## 10. Tooling notes
 
 - `bin/pw-browsers.sh <repo>` makes Playwright work for an arbitrary repo: it
   tries the repo's own Playwright first and only then installs the matching
-  chromium. Never substitute another Playwright copy for the repo's pinned one.
+  chromium. A repo that pins none (a CSS/docs package with `node:test`) does not
+  need one installed into its manifest: the image's own Playwright is on `PATH`
+  (`playwright screenshot`), importable via
+  `NODE_PATH=/opt/bun/install/global/node_modules`, and resolves browsers from
+  `/opt/ms-playwright`. The substitution ban applies to a *different version of
+  the repo's own* Playwright, not to a repo that has none.
+- The retry `feedback` carries the failed step's `findings`, not only its
+  `summary` (`previousAttemptFeedback` in `workflow/prompts.ts`). The next
+  `resolve` overwrites `.issue-step-result.json`, so without that list a later
+  `test` round can only recover the previous defects by reading
+  `iterations/<n>/.test.md` — a whole agent turn spent rebuilding what the
+  engine already had.
+- `{{VERIFICATION_MODE}}` in the test prompt is a function of the attempt
+  number, not a static paragraph: on attempt 1 the matrix is the full sweep, on
+  later rounds the previous findings and the paths they name come first. The
+  number lives in `attemptLimitBlock`/`verificationModeBlock`, so
+  `MAX_PIPELINE_ATTEMPTS` never appears as a literal in markdown.
 - `bin/embed-screenshots.mjs` is idempotent and exits 1 when placeholders or a
   screenshot file survive — the caller turns that into a warning, not a failure.

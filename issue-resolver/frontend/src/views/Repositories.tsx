@@ -441,13 +441,22 @@ function RepositoriesView({ createSignal }: RepositoriesProps) {
                     </div>
                   </div>
 
-                  {repo.defaultBranch && (
+                  {repo.defaultBranch ? (
                     <div className="mt-1 flex items-center gap-1 text-xs text-[#00FF41]/50">
                       <BranchIcon className="h-3 w-3 shrink-0" />
                       <span data-testid="repo-default-branch" className="truncate">
                         {repo.defaultBranch}
                       </span>
                     </div>
+                  ) : (
+                    repo.connectionStatus === 'ok' && (
+                      <div className="mt-1 flex items-center gap-1 text-xs text-[#FFB000]">
+                        <BranchIcon className="h-3 w-3 shrink-0" />
+                        <span data-testid="repo-empty">
+                          нет веток — пустой репозиторий
+                        </span>
+                      </div>
+                    )
                   )}
 
                   <div className="mt-0.5 text-[10px] text-[#00FF41]/40">

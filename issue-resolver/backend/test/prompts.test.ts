@@ -20,6 +20,7 @@ const base = {
   prTargets: undefined as PrTarget[] | undefined,
   workerCount: undefined as number | undefined,
   iterationCount: undefined as number | undefined,
+  attempt: undefined as number | undefined,
 };
 
 function flat(text: string): string {
@@ -328,7 +329,7 @@ describe('buildStepPrompt', () => {
     expect(text).toContain('final verification only');
     expect(text).toContain('Playwright');
     expect(text.toLowerCase()).toContain('do not fix');
-    expect(text.toLowerCase()).toContain('re-run development');
+    expect(text.toLowerCase()).toContain('re-runs development');
     expect(text).toContain('fail/blocked');
     expect(text).toContain('.issue-step-result.json');
   });
@@ -571,7 +572,8 @@ describe('staged prompts', () => {
     expect(text).toContain('## Memory');
     expect(text).toContain('memory_search');
     expect(text).toContain('#decision');
-    expect(text).toContain('[[stage-1]]');
+    expect(text).toContain('[[stage-N]]');
+    expect(text).toContain('verdict does not go to memory');
   });
 
   it('stage solo (executors=1): роль единственного исполнителя, файл этапа, память; без интеграции исполнителей', () => {
@@ -584,7 +586,8 @@ describe('staged prompts', () => {
     expect(text).toContain('## Memory');
     expect(text).toContain('memory_search');
     expect(text).toContain('#decision');
-    expect(text).toContain('[[stage-1]]');
+    expect(text).toContain('[[stage-N]]');
+    expect(text).toContain('verdict does not go to memory');
     expect(text).not.toContain('Role: coordinator');
     expect(text).not.toContain("Integrate the workers' changes");
     expect(text).toContain('This is NOT the step result');
@@ -609,6 +612,7 @@ describe('staged prompts', () => {
     expect(text).toContain('## Memory');
     expect(text).toContain('#decision');
     expect(text).toContain('[[resolve]]');
+    expect(text).toContain('not in memory');
   });
 });
 
@@ -781,6 +785,52 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     expect(text).toContain('needs_input');
     expect(text).not.toContain('as many times as needed');
     expect(text).not.toContain('{{');
+  });
+
+  it('test: первая попытка — полная матрица, повторная — сначала прошлые находки', () => {
+    const first = prompt('test');
+
+    expect(first).toContain('verification attempt 1 of');
+    expect(first).toContain('FULL matrix');
+    expect(first).not.toContain('re-verification round');
+
+    const retry = prompt('test', { attempt: 3 });
+
+    expect(retry).toContain(
+      `verification attempt 3 of ${MAX_PIPELINE_ATTEMPTS}`,
+    );
+    expect(retry).toContain('re-verification round');
+    expect(retry).toContain('previous-step');
+    expect(retry).toContain('only when the round changed executable code');
+    expect(retry).not.toContain('{{');
+  });
+
+  it('test/review: проход обязан отдать ВЕСЬ список дефектов', () => {
+    for (const step of ['test', 'review'] as const) {
+      const text = prompt(step);
+
+      expect(text).toContain('COMPLETE list of what is wrong');
+      expect(text).toContain('not its first');
+    }
+  });
+
+  it('test: браузер — свой Playwright, иначе общий из образа (без установки в репо)', () => {
+    const text = prompt('test');
+
+    expect(text).toContain('playwright screenshot --full-page');
+    expect(text).toContain('NODE_PATH=/opt/bun/install/global/node_modules');
+    expect(text).toContain('/opt/ms-playwright');
+    expect(text).toContain('pw-browsers.sh');
+    expect(text).not.toContain("Never borrow Playwright");
+  });
+
+  it('память: вердикты раундов не пишутся, решение живёт в [[resolve]]', () => {
+    const text = prompt('test');
+
+    expect(text).toContain('round verdicts');
+    expect(text).toContain('The verdict belongs in the result file this');
+    expect(text).toContain('`[[resolve]]` entry');
+    expect(text).toContain('per task at most');
   });
 
   it('pr: диф рабочего дерева (коммитит бэкенд после шага) + цели публикации', () => {

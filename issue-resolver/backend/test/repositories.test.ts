@@ -111,6 +111,32 @@ describe('POST /repositories', () => {
     expect(fake.calls).toEqual([GITHUB_URL]);
   });
 
+  it('пустой репозиторий без веток → 201, defaultBranch null, status ok', async () => {
+    const fake = controllable();
+    fake.setInfo({
+      ...GITHUB_INFO,
+      defaultBranch: '',
+      branches: [],
+      writeAccess: false,
+    });
+    const app = makeApp(fake.factory);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: ROUTE,
+      payload: { url: GITHUB_URL },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      url: GITHUB_URL,
+      fullName: 'acme/app',
+      defaultBranch: null,
+      connectionStatus: 'ok',
+      writeAccess: false,
+    });
+  });
+
   it('writeAccess резолвера сохраняется в БД (false)', async () => {
     const fake = controllable();
     fake.setInfo({ ...GITHUB_INFO, writeAccess: false });

@@ -107,6 +107,29 @@ describe('RepoUrlInput', () => {
     expect(onChange).toHaveBeenCalledWith(GITHUB_URL, reactInfo);
   });
 
+  it('пустой репозиторий → карточка с пометкой «нет веток»', async () => {
+    const emptyInfo: RepoInfo = {
+      ...reactInfo,
+      defaultBranch: '',
+      branches: [],
+      writeAccess: false,
+    };
+    stubValidateFetch([validResult(GITHUB_URL, emptyInfo)]);
+
+    render(<Harness />);
+    typeUrl(GITHUB_URL);
+
+    await waitFor(
+      () => expect(screen.getByTestId('repo-url-valid')).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+
+    expect(screen.queryByTestId('repo-branch')).toBeNull();
+    expect(screen.getByTestId('repo-empty')).toHaveTextContent(
+      'нет веток — пустой репозиторий',
+    );
+  });
+
   it('показывает ❌ и красный текст ошибки после неудачной валидации', async () => {
     stubValidateFetch([invalidResult(GITHUB_URL)]);
 

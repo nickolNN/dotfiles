@@ -102,7 +102,13 @@ function RepoInfoCard({ info }: { info: RepoInfo }) {
           <span data-testid="repo-language">{info.language}</span>
         )}
         <span data-testid="repo-stars">★ {info.stars}</span>
-        <span data-testid="repo-branch">ветка: {info.defaultBranch}</span>
+        {info.branches.length > 0 ? (
+          <span data-testid="repo-branch">ветка: {info.defaultBranch}</span>
+        ) : (
+          <span data-testid="repo-empty">
+            нет веток — пустой репозиторий
+          </span>
+        )}
       </div>
     </div>
   );

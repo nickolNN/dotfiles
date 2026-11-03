@@ -122,6 +122,23 @@ describe('Repositories', () => {
     expect(screen.getAllByTestId('repo-card')).toHaveLength(2);
   });
 
+  it('пустой репозиторий (ok без веток) → пометка «нет веток»', async () => {
+    const empty = savedRepo('empty', {
+      connectionStatus: 'ok',
+      defaultBranch: null,
+      writeAccess: false,
+    });
+    stubRepositoriesApi({ repos: [empty] });
+
+    render(<Repositories />);
+
+    expect(await screen.findByText('acme/empty')).toBeInTheDocument();
+    expect(screen.getByTestId('repo-empty')).toHaveTextContent(
+      'нет веток — пустой репозиторий',
+    );
+    expect(screen.queryByTestId('repo-default-branch')).toBeNull();
+  });
+
   it('writeAccess:false → бейдж «только чтение», true → без бейджа', async () => {
     const readOnly = savedRepo('ro', { writeAccess: false });
     const writable = savedRepo('rw', { writeAccess: true });

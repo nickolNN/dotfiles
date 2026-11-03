@@ -64,6 +64,7 @@ import {
 import {
   STEP_SYSTEM_APPEND,
   buildStepPrompt,
+  previousAttemptFeedback,
   type PrTarget,
 } from './prompts';
 import type { DevOpsAgent } from './devops';
@@ -755,6 +756,7 @@ export async function runIteration(
       workerCount: iteration.worker_count ?? undefined,
       stateDigest,
       workingDir: agentWorkingDir,
+      attempt,
     };
     let stepActivity = 0;
     const runOptions = {
@@ -1145,7 +1147,7 @@ export async function runIteration(
         stepRetries = 0;
         break;
       case 'retry_resolve':
-        feedback = report?.summary ?? null;
+        feedback = previousAttemptFeedback(step, report);
         attempt = decision.attempt;
         pipelineAttempt = decision.attempt;
         stepIndex = steps.indexOf('resolve');

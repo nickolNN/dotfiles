@@ -63,7 +63,7 @@ function writeFromResult(
     url,
     platform: info.platform,
     fullName: info.fullName,
-    defaultBranch: info.defaultBranch,
+    defaultBranch: info.defaultBranch || null,
     cloneUrl: info.cloneUrl,
     language: info.language,
     description: info.description,
