@@ -11,6 +11,7 @@ import {
   type NormalizedStage,
   type PipelineStep,
   type RoomWorkItem,
+  type StepReport,
 } from '@issue-resolver/shared';
 import type { RepoChangeDigest } from '../git/service';
 
@@ -79,6 +80,7 @@ export interface StepPromptInput {
   iterationCount?: number;
   iterationNarrativesDir?: string;
   workingDir?: string;
+  attempt?: number;
 }
 
 export interface RoomPromptInput {
@@ -208,6 +210,63 @@ function attemptLimitBlock(): string {
     'starting another cycle. Report the honest verdict even on the last attempt —',
     'exhausting the budget is the system\'s problem, not a reason to soften it.',
   ].join('\n');
+}
+
+function verificationModeBlock(attempt?: number): string {
+  const current = attempt ?? 1;
+  if (current <= 1) {
+    return [
+      '## Verification mode',
+      '',
+      `This is verification attempt 1 of ${MAX_PIPELINE_ATTEMPTS}: run the FULL matrix`,
+      'in one pass — every scenario, the responsive extremes, the unhappy paths — and',
+      'put every defect it produces into the `findings` of this same report.',
+    ].join('\n');
+  }
+  return [
+    '## Verification mode',
+    '',
+    `This is verification attempt ${current} of ${MAX_PIPELINE_ATTEMPTS} — a`,
+    're-verification round, not a fresh audit:',
+    '',
+    '1. Re-check the findings the previous round handed you (the previous-step',
+    '   feedback above lists them), one by one: fixed or not.',
+    '2. Check the paths those findings name and what this round changed around them.',
+    "3. Run the repository's own build and tests.",
+    '',
+    'Re-run the full matrix (responsive extremes, JS off, clean clone, guard',
+    'mutations) only when the round changed executable code; a round that touched',
+    'only prose gets the prose re-check plus the build and tests above. When the',
+    'feedback lists no findings, treat this as the first round and run the full',
+    'matrix. Say in `summary` what you re-ran and what came from the earlier pass.',
+  ].join('\n');
+}
+
+const MAX_FEEDBACK_FINDINGS = 20;
+
+export function previousAttemptFeedback(
+  step: PipelineStep,
+  report: StepReport | null,
+): string | null {
+  if (report === null) return null;
+  const lines = [`Previous ${step} attempt FAILED.`];
+  const summary = report.summary.trim();
+  if (summary.length > 0) lines.push(`Summary: ${summary}`);
+  const findings = report.findings ?? [];
+  if (findings.length > 0) {
+    lines.push('', 'Findings from that attempt — close each of them first:');
+    for (const finding of findings.slice(0, MAX_FEEDBACK_FINDINGS)) {
+      const title = finding.title ?? finding.description ?? '(untitled)';
+      const detail = finding.detail ? ` — ${finding.detail}` : '';
+      lines.push(`- [${finding.severity}] ${title}${detail}`);
+    }
+    if (findings.length > MAX_FEEDBACK_FINDINGS) {
+      lines.push(
+        `- … ${findings.length - MAX_FEEDBACK_FINDINGS} more in that attempt's report`,
+      );
+    }
+  }
+  return lines.join('\n');
 }
 
 function prTargetsBlock(targets?: PrTarget[]): string {
@@ -424,6 +483,7 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
     render(readPrompt('step-test.md'), {
       DEV_SERVER: devServerBlock(input.devServerPort),
       ATTEMPT_LIMIT: attemptLimitBlock(),
+      VERIFICATION_MODE: verificationModeBlock(input.attempt),
     }),
 
   pr: (input) =>

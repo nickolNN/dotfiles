@@ -13,6 +13,15 @@ against the task, the task brief and the reviewer context below.
    already known. At the end you replace its contents with your own verdict —
    reading that file is not a reason to keep it.
 
+## One pass, every defect
+
+A review exists to produce the COMPLETE list of what is wrong, not its first
+item. Do not stop at the first problem and do not narrow the review because the
+previous round found little: read every touched file to its end, check every
+requirement, then write `findings` — one entry per defect with file:line. A
+round that reports one defect and leaves the next one for the following round
+costs a whole development cycle per leftover finding.
+
 ## What to check
 
 - Every requirement of the task and of the plan accounted for, including the
@@ -30,8 +39,9 @@ your own artifacts: `.issue-step-result.json` and `iterations/<n>/.review.md`.
 ## Verdict
 
 - `pass` — the change is sound.
-- `fail` — it must go back to development: put every defect in `findings` with
-  file:line and what is wrong, so the next agent starts from your list.
+- `fail` — it must go back to development: put EVERY defect this round found in
+  `findings` with file:line and what is wrong, so the next agent starts from
+your complete list instead of rediscovering the rest one round later.
 - `blocked` — you cannot review it (no change set, code inaccessible).
 
 Format the result in `.issue-step-result.json` (shape in the output contract below).

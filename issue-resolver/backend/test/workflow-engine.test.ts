@@ -731,6 +731,55 @@ describe('runIteration — цикл фидбека', () => {
     ]);
   });
 
+  it('fail → в feedback уходят все находки раунда, а не только summary', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue({
+      step: 'review',
+      exitCode: 1,
+      report: {
+        status: 'fail',
+        summary: 'README counts are stale',
+        findings: [
+          {
+            severity: 'major',
+            title: 'count drift',
+            detail: 'README.md:12 — three groups, not two',
+          },
+          { severity: 'minor', description: 'wrong anchor in GLOSSARY.md' },
+        ],
+      },
+      stdout: '',
+      stderr: '',
+    });
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('review'));
+
+    await runIteration(deps, makeInput(['resolve', 'review']));
+
+    const retryPrompt = pi.calls[2].prompt;
+    expect(retryPrompt).toContain('Previous review attempt FAILED.');
+    expect(retryPrompt).toContain('README counts are stale');
+    expect(retryPrompt).toContain(
+      '[major] count drift — README.md:12 — three groups, not two',
+    );
+    expect(retryPrompt).toContain('- [minor] wrong anchor in GLOSSARY.md');
+  });
+
+  it('второй раунд test знает номер попытки из движка', async () => {
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(fail('test'));
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('test'));
+
+    await runIteration(deps, makeInput(['resolve', 'test']));
+
+    expect(pi.calls[3].prompt).toContain(
+      `verification attempt 2 of ${MAX_PIPELINE_ATTEMPTS}`,
+    );
+  });
+
   it('review исчерпывает MAX_PIPELINE_ATTEMPTS попыток → needsInput, iteration failed', async () => {
     const { deps, store, pi } = makeDeps();
     for (let attempt = 1; attempt <= MAX_PIPELINE_ATTEMPTS; attempt += 1) {
