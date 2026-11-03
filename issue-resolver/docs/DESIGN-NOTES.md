@@ -278,6 +278,18 @@ future reader could break without noticing, add it here instead of a comment.
   changes.
 - Jira uses API v2: v3 breaks on Server with 404.
 - Bitbucket auth: Bearer for a PAT, Basic for an app password.
+- An empty repository (no commits) is a state, not an error: the remote listing
+  returns zero branches, so `RepoInfo.defaultBranch` is `''` and
+  `SavedRepo.defaultBranch` is `NULL`. Bitbucket Server answers
+  `/branches/default` with `204` and an empty body — `response.json()` on that
+  throws `Unexpected end of JSON input` and used to make such a repo impossible
+  to add; every remote branch read now goes through `readJson`/`fetchBranchList`,
+  which return `null` for empty or non-JSON bodies. A declared default branch is
+  only trusted when the branch list is unavailable: a successfully read empty
+  list wins over it. Such a repo can be registered and shown (the UI marks
+  «нет веток — пустой репозиторий»), but a task needs a real base branch, and
+  the write-access probe is skipped because there is no start point to create a
+  test branch from.
 
 ## 10. Tooling notes
 

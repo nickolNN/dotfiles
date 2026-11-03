@@ -81,7 +81,11 @@ export default function RepoRow({
           >
             {branchOptions.length === 0 && (
               <option value="">
-                {repo.repo_id ? 'Загружаем…' : '—'}
+                {repo.branchesLoading
+                  ? 'Загружаем…'
+                  : repo.repo_id
+                    ? 'нет веток'
+                    : '—'}
               </option>
             )}
             {branchOptions.map((branch) => (
@@ -105,6 +109,11 @@ export default function RepoRow({
           {selectedRepo.defaultBranch
             ? ` · ветка по умолчанию: ${selectedRepo.defaultBranch}`
             : ''}
+        </p>
+      )}
+      {selectedRepo && !repo.branchesLoading && branchOptions.length === 0 && (
+        <p data-testid="repo-row-empty" className="text-xs text-[#FFB000]">
+          У репозитория нет веток — дождитесь первого коммита.
         </p>
       )}
       {!selectedRepo && repo.repository_url && (

@@ -94,6 +94,52 @@ function bitbucketProjectRepo(url: string): { project: string; repo: string } {
   throw new Error(`cannot parse bitbucket repository: ${url}`);
 }
 
+async function readJson<T>(response: Response): Promise<T | null> {
+  if (!response.ok) return null;
+  const body = await response.text().catch(() => '');
+  if (!body.trim()) return null;
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBranchList<T>(
+  url: string,
+  init: RequestInit,
+  extract: (payload: T) => string[] | undefined,
+): Promise<string[] | null> {
+  try {
+    const payload = await readJson<T>(await fetch(url, init));
+    if (!payload) return null;
+    return extract(payload) ?? [];
+  } catch {
+    return null;
+  }
+}
+
+interface BranchChoice {
+  defaultBranch: string;
+  branches: string[];
+}
+
+function chooseBranches(
+  declared: string | null | undefined,
+  listed: string[] | null,
+): BranchChoice {
+  const fallback = declared ?? '';
+  if (listed === null) {
+    return fallback
+      ? { defaultBranch: fallback, branches: [fallback] }
+      : { defaultBranch: '', branches: [] };
+  }
+  if (listed.length === 0) {
+    return { defaultBranch: '', branches: [] };
+  }
+  return { defaultBranch: fallback || listed[0], branches: listed };
+}
+
 export function detectPlatform(url: string): RepoPlatform {
   const host = hostOf(url);
   if (!host) {
@@ -166,29 +212,27 @@ export class GitHubResolver implements RepoResolver {
 
     const data = (await response.json()) as GitHubRepoResponse;
 
-    let branches: string[] = [data.default_branch];
-    try {
-      const branchesResp = await fetch(
-        `${repoUrl}/branches?per_page=100`,
-        {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            'User-Agent': 'issue-resolver',
-            ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
-          },
+    const listed = await fetchBranchList<Array<{ name: string }>>(
+      `${repoUrl}/branches?per_page=100`,
+      {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'issue-resolver',
+          ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
         },
-      );
-      if (branchesResp.ok) {
-        const list = (await branchesResp.json()) as Array<{ name: string }>;
-        branches = list.map((b) => b.name);
-      }
-    } catch {
-    }
+      },
+      (list) => list.map((b) => b.name),
+    );
+
+    const { defaultBranch, branches } = chooseBranches(
+      data.default_branch,
+      listed,
+    );
 
     return {
       platform: 'github',
       fullName: data.full_name,
-      defaultBranch: data.default_branch,
+      defaultBranch,
       branches,
       language: data.language,
       description: data.description,
@@ -241,27 +285,25 @@ export class GitLabResolver implements RepoResolver {
 
     const data = (await response.json()) as GitLabRepoResponse;
 
-    let branches: string[] = [data.default_branch];
-    try {
-      const branchesResp = await fetch(
-        `https://${this.host}/api/v4/projects/${encodeURIComponent(path)}/repository/branches?per_page=100`,
-        {
-          headers: {
-            ...(this.token ? { 'PRIVATE-TOKEN': this.token } : {}),
-          },
+    const listed = await fetchBranchList<Array<{ name: string }>>(
+      `https://${this.host}/api/v4/projects/${encodeURIComponent(path)}/repository/branches?per_page=100`,
+      {
+        headers: {
+          ...(this.token ? { 'PRIVATE-TOKEN': this.token } : {}),
         },
-      );
-      if (branchesResp.ok) {
-        const list = (await branchesResp.json()) as Array<{ name: string }>;
-        branches = list.map((b) => b.name);
-      }
-    } catch {
-    }
+      },
+      (list) => list.map((b) => b.name),
+    );
+
+    const { defaultBranch, branches } = chooseBranches(
+      data.default_branch,
+      listed,
+    );
 
     return {
       platform: 'gitlab',
       fullName: data.path_with_namespace,
-      defaultBranch: data.default_branch,
+      defaultBranch,
       branches,
       language: data.language,
       description: data.description,
@@ -333,14 +375,11 @@ export class BitbucketResolver implements RepoResolver {
         body: JSON.stringify({ name: testBranch, startPoint }),
       });
       if (!createResp.ok) return false;
-      try {
-        await fetch(`${base}/branches`, {
-          method: 'DELETE',
-          headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: `refs/heads/${testBranch}` }),
-        });
-      } catch {
-      }
+      await fetch(`${base}/branches`, {
+        method: 'DELETE',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `refs/heads/${testBranch}` }),
+      }).catch(() => null);
       return true;
     } catch {
       return false;
@@ -374,31 +413,24 @@ export class BitbucketResolver implements RepoResolver {
     const branchResponse = await fetch(`${base}/branches/default`, {
       headers: this.headers(),
     });
-    const branch = branchResponse.ok
-      ? ((await branchResponse.json()) as BitbucketBranchResponse)
-      : null;
+    const branch = await readJson<BitbucketBranchResponse>(branchResponse);
 
     const httpClone = data.links?.clone?.find(
       (link) => link.name === 'http',
     );
 
-    let branches: string[] = [branch?.displayId ?? 'main'];
-    try {
-      const branchesResp = await fetch(`${base}/branches?limit=100`, {
-        headers: this.headers(),
-      });
-      if (branchesResp.ok) {
-        const list = (await branchesResp.json()) as {
-          values?: Array<{ displayId: string }>;
-        };
-        if (list.values) {
-          branches = list.values.map((b) => b.displayId);
-        }
-      }
-    } catch {
-    }
+    const listed = await fetchBranchList<{
+      values?: Array<{ displayId: string }>;
+    }>(
+      `${base}/branches?limit=100`,
+      { headers: this.headers() },
+      (payload) => payload.values?.map((b) => b.displayId),
+    );
 
-    const defaultBranch = branch?.displayId ?? 'main';
+    const { defaultBranch, branches } = chooseBranches(
+      branch?.displayId,
+      listed,
+    );
 
     return {
       platform: 'bitbucket',
@@ -411,11 +443,13 @@ export class BitbucketResolver implements RepoResolver {
       isPrivate: !data.public,
       cloneUrl:
         httpClone?.href ?? `https://${this.host}/scm/${project}/${repo}.git`,
-      writeAccess: await this.hasWriteAccess(
-        project,
-        repo,
-        `refs/heads/${defaultBranch}`,
-      ),
+      writeAccess: defaultBranch
+        ? await this.hasWriteAccess(
+            project,
+            repo,
+            `refs/heads/${defaultBranch}`,
+          )
+        : false,
     };
   }
 }
@@ -457,23 +491,16 @@ export class BitbucketCloudResolver implements RepoResolver {
     }
     const data = (await response.json()) as BitbucketCloudRepoResponse;
 
-    const defaultBranch = data.mainbranch?.name ?? 'main';
+    const listed = await fetchBranchList<{ values?: Array<{ name: string }> }>(
+      `${base}/refs/branches?pagelen=100`,
+      { headers },
+      (payload) => payload.values?.map((b) => b.name),
+    );
 
-    let branches: string[] = [defaultBranch];
-    try {
-      const branchesResp = await fetch(`${base}/refs/branches?pagelen=100`, {
-        headers,
-      });
-      if (branchesResp.ok) {
-        const list = (await branchesResp.json()) as {
-          values?: Array<{ name: string }>;
-        };
-        if (list.values) {
-          branches = list.values.map((b) => b.name);
-        }
-      }
-    } catch {
-    }
+    const { defaultBranch, branches } = chooseBranches(
+      data.mainbranch?.name,
+      listed,
+    );
 
     const httpsClone = data.links?.clone?.find(
       (link) => link.name === 'https',

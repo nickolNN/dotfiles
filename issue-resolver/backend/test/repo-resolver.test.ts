@@ -304,6 +304,23 @@ describe('GitLabResolver', () => {
     );
   });
 
+  it('пустой проект: default_branch=null и нет веток → valid без веток', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ path_with_namespace: 'g/p', default_branch: null }),
+      )
+      .mockResolvedValueOnce(jsonResponse([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const info = await new GitLabResolver('', 'gitlab.example.com').resolve(
+      'https://gitlab.example.com/g/p.git',
+    );
+
+    expect(info.defaultBranch).toBe('');
+    expect(info.branches).toEqual([]);
+  });
+
   it('404 → "Repository not found"', async () => {
     vi.stubGlobal(
       'fetch',
@@ -549,6 +566,25 @@ describe('BitbucketResolver', () => {
     expect(info.writeAccess).toBe(false);
     expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST' });
     expect(fetchMock.mock.calls).toHaveLength(4);
+  });
+
+  it('пустой репозиторий: /branches/default → 204, веток нет → valid без веток и без теста на запись', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(REPO_BODY))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse({ size: 0, values: [], isLastPage: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const info = await new BitbucketResolver(
+      'pat',
+      'bitbucket.company.com',
+    ).resolve('https://bitbucket.company.com/scm/project/repo.git');
+
+    expect(info.defaultBranch).toBe('');
+    expect(info.branches).toEqual([]);
+    expect(info.writeAccess).toBe(false);
+    expect(fetchMock.mock.calls).toHaveLength(3);
   });
 
   it('branch-create 409 (ветка уже существует) → writeAccess:false', async () => {
