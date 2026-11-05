@@ -11,6 +11,7 @@ import {
 import type { RoomAgent, SessionStats } from '@issue-resolver/shared';
 import type { SessionEvent } from '../api/session-events';
 import RoomAgentTabs from './RoomAgentTabs';
+import { RoomAgentStatus } from '@issue-resolver/shared';
 
 function makeAgent(overrides: Partial<RoomAgent> = {}): RoomAgent {
   return {
@@ -18,7 +19,7 @@ function makeAgent(overrides: Partial<RoomAgent> = {}): RoomAgent {
     role: 'worker',
     index: 1,
     label: 'Исполнитель 1',
-    status: 'running',
+    status: RoomAgentStatus.running,
     startedAt: null,
     stats: null,
     ...overrides,
@@ -30,14 +31,14 @@ const WORKER_2 = makeAgent({
   id: 'run-1/worker/1',
   index: 2,
   label: 'Исполнитель 2',
-  status: 'finished',
+  status: RoomAgentStatus.finished,
 });
 const COORDINATOR = makeAgent({
   id: 'run-1',
   role: 'coordinator',
   index: null,
   label: 'Координатор',
-  status: 'running',
+  status: RoomAgentStatus.running,
 });
 const AGENTS: RoomAgent[] = [WORKER_1, WORKER_2, COORDINATOR];
 
@@ -313,7 +314,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     expect(tabs[0]).toHaveAttribute('data-status', 'running');
 
     agents = [
-      makeAgent({ ...WORKER_1, status: 'finished' }),
+      makeAgent({ ...WORKER_1, status: RoomAgentStatus.finished }),
       WORKER_2,
       COORDINATOR,
     ];
@@ -339,7 +340,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
     const initial = calls.agents;
 
     agents = [
-      makeAgent({ ...WORKER_1, status: 'finished' }),
+      makeAgent({ ...WORKER_1, status: RoomAgentStatus.finished }),
       WORKER_2,
       COORDINATOR,
     ];
@@ -378,7 +379,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
         id: 'run-1/worker/1',
         index: 2,
         label: 'Исполнитель 2',
-        status: 'finished',
+        status: RoomAgentStatus.finished,
         stats: makeStats({
           tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 2000 },
           cost: 0.02,
@@ -415,7 +416,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
         label: 'Этап 1 · Исполнитель 1',
         stage: 1,
         stageName: 'Сбор',
-        status: 'finished',
+        status: RoomAgentStatus.finished,
         startedAt: new Date(Date.now() - 20_000).toISOString(),
         endedAt: new Date(Date.now() - 5_000).toISOString(),
         stats: makeStats({
@@ -438,7 +439,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
         label: 'Этап 1 · Координатор',
         stage: 1,
         stageName: 'Сбор',
-        status: 'finished',
+        status: RoomAgentStatus.finished,
         startedAt: new Date(Date.now() - 10_000).toISOString(),
         endedAt: new Date(Date.now() - 2_000).toISOString(),
         stats: makeStats({
@@ -460,7 +461,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
         label: 'Этап 2 · Исполнитель 1',
         stage: 2,
         stageName: 'Реализация',
-        status: 'running',
+        status: RoomAgentStatus.running,
         stats: makeStats({
           model: 'Claude Sonnet 4',
           tokens: {
@@ -531,7 +532,7 @@ describe('RoomAgentTabs — вкладки агентов комнаты', () =>
         label: 'Этап 3 · Исполнитель 1',
         stage: 3,
         stageName: 'Проверка',
-        status: 'finished',
+        status: RoomAgentStatus.finished,
         stats: null,
       } as Partial<RoomAgent>),
     ]);

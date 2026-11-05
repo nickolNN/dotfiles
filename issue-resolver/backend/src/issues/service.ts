@@ -1,14 +1,8 @@
 import { existsSync } from 'node:fs';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type {
-  DesiredResult,
-  Issue,
-  IssueDeletingPhase,
-  Iteration,
-  WorkspaceFile,
-} from '@issue-resolver/shared';
-import { statusOfIssue } from '@issue-resolver/shared';
+import type { DesiredResult, Issue, IssueDeletingPhase, Iteration, WorkspaceFile } from '@issue-resolver/shared';
+import { statusOfIssue, TaskStatus } from '@issue-resolver/shared';
 import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { issueRepositories, issues, iterations } from '../db/schema';
@@ -159,7 +153,7 @@ function toIssue(
     status:
       statusOfIssue(iterationRows.map(toIteration), row.status) ??
       row.status ??
-      'pending',
+      TaskStatus.pending,
     created_at: row.created_at,
     updated_at: row.updated_at,
     workspace_missing: !existsSync(workspaceHostDirFor(workspaceRoot, row.id)),

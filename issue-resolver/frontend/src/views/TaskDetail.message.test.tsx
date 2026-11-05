@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type {
-  Issue,
-  Iteration,
-  StepRunWithLog,
-} from '@issue-resolver/shared';
+import type { Issue, Iteration, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -14,7 +11,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -30,7 +27,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -46,7 +43,7 @@ function makeStepRun(
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
-    status: 'running',
+    status: StepRunStatus.running,
     context: '',
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
@@ -201,7 +198,7 @@ describe('TaskDetail — отправка сообщения агенту', () =
 
   it('модалка: у завершённого шага нет steer-формы и «Прервать»', async () => {
     stubFetch(() => Promise.resolve(jsonResponse({ ok: true })), [
-      makeStepRun({ id: 'run-success', status: 'success', stdout: 'done' }),
+      makeStepRun({ id: 'run-success', status: StepRunStatus.success, stdout: 'done' }),
     ]);
 
     render(<TaskDetail issueId="issue-1" />);

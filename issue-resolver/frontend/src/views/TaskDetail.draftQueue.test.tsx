@@ -10,6 +10,7 @@ import {
 import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 import { getMarkdownEditorValue, setMarkdownEditorValue } from '../test/markdown-editor';
+import { TaskStatus } from '@issue-resolver/shared';
 
 async function openIterationModal() {
   fireEvent.click(await screen.findByTestId('open-iteration-modal'));
@@ -23,7 +24,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -39,7 +40,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -154,14 +155,14 @@ afterEach(() => {
 
 describe('TaskDetail — draft-итерации и очередь', () => {
   it('при running-итерации кнопка «Создать черновик» создаёт draft', async () => {
-    let list = [makeIteration({ id: 'iter-1', number: 1, status: 'running' })];
+    let list = [makeIteration({ id: 'iter-1', number: 1, status: TaskStatus.running })];
     const fetchMock = stubFetch({
       iterations: () => list,
       createIteration: () => {
         const created = makeIteration({
           id: 'iter-2',
           number: 2,
-          status: 'draft',
+          status: TaskStatus.draft,
           context: 'draft plan',
         });
         list = [...list, created];
@@ -197,11 +198,11 @@ describe('TaskDetail — draft-итерации и очередь', () => {
   });
 
   it('draft можно поставить в очередь: POST /queue → pending', async () => {
-    let list = [makeIteration({ id: 'iter-1', number: 1, status: 'draft' })];
+    let list = [makeIteration({ id: 'iter-1', number: 1, status: TaskStatus.draft })];
     const fetchMock = stubFetch({
       iterations: () => list,
       queue: () => {
-        list = [makeIteration({ id: 'iter-1', number: 1, status: 'pending' })];
+        list = [makeIteration({ id: 'iter-1', number: 1, status: TaskStatus.pending })];
         return Promise.resolve(jsonResponse(list[0]));
       },
     });
@@ -231,7 +232,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
   it('pending-итерация разрешает создать черновик (активная, нет draft)', async () => {
     stubFetch({
       iterations: () => [
-        makeIteration({ id: 'iter-1', number: 1, status: 'pending' }),
+        makeIteration({ id: 'iter-1', number: 1, status: TaskStatus.pending }),
       ],
     });
 
@@ -252,8 +253,8 @@ describe('TaskDetail — draft-итерации и очередь', () => {
 
   it('при running+draft модалка редактирует черновик, а не создаёт новый', async () => {
     let list = [
-      makeIteration({ id: 'iter-1', number: 1, status: 'running' }),
-      makeIteration({ id: 'iter-2', number: 2, status: 'draft', context: 'original context' }),
+      makeIteration({ id: 'iter-1', number: 1, status: TaskStatus.running }),
+      makeIteration({ id: 'iter-2', number: 2, status: TaskStatus.draft, context: 'original context' }),
     ];
     const fetchMock = stubFetch({
       iterations: () => list,
@@ -296,7 +297,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
         makeIteration({
           id: 'iter-1',
           number: 1,
-          status: 'completed',
+          status: TaskStatus.completed,
           steps: ['resolve', 'pr'],
         }),
       ],
@@ -319,7 +320,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
         makeIteration({
           id: 'iter-1',
           number: 1,
-          status: 'completed',
+          status: TaskStatus.completed,
           steps: ['resolve', 'pr'],
         }),
       ],
@@ -363,7 +364,7 @@ describe('TaskDetail — draft-итерации и очередь', () => {
         makeIteration({
           id: 'iter-1',
           number: 1,
-          status: 'completed',
+          status: TaskStatus.completed,
           steps: ['resolve', 'pr'],
         }),
       ],
@@ -391,14 +392,14 @@ describe('TaskDetail — draft-итерации и очередь', () => {
   });
 
   it('без активной итерации форма работает как раньше: «Запустить новую итерацию»', async () => {
-    let list = [makeIteration({ id: 'iter-1', number: 1, status: 'completed' })];
+    let list = [makeIteration({ id: 'iter-1', number: 1, status: TaskStatus.completed })];
     const fetchMock = stubFetch({
       iterations: () => list,
       createIteration: () => {
         const created = makeIteration({
           id: 'iter-2',
           number: 2,
-          status: 'pending',
+          status: TaskStatus.pending,
           context: 'again',
         });
         list = [...list, created];

@@ -14,6 +14,7 @@ import { createDb } from '../src/db/client';
 import { iterations } from '../src/db/schema';
 import { insertMany, listByIssue, listByIteration } from '../src/db/issue-files.repo';
 import { FakePiRunner } from '../src/pi/runner';
+import { TaskStatus } from '@issue-resolver/shared';
 
 const ENDPOINT = '/issue-resolver/api/v1/issues';
 
@@ -186,7 +187,7 @@ describe('multipart-загрузка файлов', () => {
           .where(eq(iterations.issue_id, issueId))
           .all()
           .find((iteration) => iteration.number === 1);
-        return first && first.status === 'completed' ? true : undefined;
+        return first && first.status === TaskStatus.completed ? true : undefined;
       });
 
       const { payload, headers } = multipart(

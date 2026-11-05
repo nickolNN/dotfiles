@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+
+import type { TaskStatus } from '../src/status';
+import type { TaskStatus } from '../src/status';import { describe, expect, it } from 'vitest';
 
 import {
   canStartIteration,

@@ -1,9 +1,5 @@
-import type {
-  SSEEvent,
-  SessionEvent,
-  SessionStats,
-  StepRunStatus,
-} from '@issue-resolver/shared';
+import { StepRunStatus } from '@issue-resolver/shared';
+import type { SSEEvent, SessionEvent, SessionStats } from '@issue-resolver/shared';
 import { capSessionEvents } from './session-events-cap';
 import type { SseHub } from '../sse/hub';
 import type {
@@ -144,7 +140,7 @@ export function startAgentSession(
       ? setInterval(() => {
           void deps.store
             ?.updateStepRun(input.persistStepRunId as string, {
-              status: 'running',
+              status: StepRunStatus.running,
             })
             .catch(() => {});
         }, input.heartbeatMs)

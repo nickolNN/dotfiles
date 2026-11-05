@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { WorkspaceProgressStatus } from '@issue-resolver/shared';
 import type { SessionStats } from '@issue-resolver/shared';
 import AgentMarkdown from './AgentMarkdown';
 import SessionStatsBar from './SessionStatsBar';
@@ -679,12 +680,12 @@ function ToolUseBlock({
         className="flex items-center gap-2 px-2 pb-0.5 text-[10px] uppercase tracking-wider text-[#00FF41]/50"
       >
         <span aria-hidden="true">
-          {status === 'done' ? '✓' : status === 'running' ? '◐' : '…'}
+          {status === WorkspaceProgressStatus.done ? '✓' : status === WorkspaceProgressStatus.running ? '◐' : '…'}
         </span>
         <span>
-          {status === 'done'
+          {status === WorkspaceProgressStatus.done
             ? `готово${duration ? ` · ${duration}` : ''}`
-            : status === 'running'
+            : status === WorkspaceProgressStatus.running
               ? 'выполняется'
               : 'ожидание'}
         </span>

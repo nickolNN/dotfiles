@@ -1,11 +1,5 @@
-import type {
-  ControlResult,
-  PipelineStep,
-  PromptMode,
-  PromptResult,
-  SessionEvent,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
+import type { ControlResult, PipelineStep, PromptMode, PromptResult, SessionEvent, StepExecutionResult } from '@issue-resolver/shared';
+import { StepReportStatus } from '@issue-resolver/shared';
 
 export interface PiRunOptions {
   model?: string;
@@ -74,7 +68,7 @@ const DEMO_EVENTS: SessionEvent[] = [
 const defaultSuccess = (): StepExecutionResult => ({
   step: DEFAULT_STEP,
   exitCode: 0,
-  report: { status: 'pass', summary: 'ok' },
+  report: { status: StepReportStatus.pass, summary: 'ok' },
   stdout: '',
   stderr: '',
 });

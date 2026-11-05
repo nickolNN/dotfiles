@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
 import { setMarkdownEditorValue } from '../test/markdown-editor';
+import { TaskStatus } from '@issue-resolver/shared';
 
 async function openIterationModal() {
   fireEvent.click(await screen.findByTestId('open-iteration-modal'));
@@ -50,7 +51,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: makeRepositories(),
     pipeline_steps: ['resolve', 'pr'],
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: '2026-10-16T00:00:00.000Z',
     updated_at: '2026-10-16T00:00:00.000Z',
     ...overrides,
@@ -66,7 +67,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve', 'pr'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-16T00:00:00.000Z',
     updated_at: '2026-10-16T00:00:00.000Z',
     ...overrides,

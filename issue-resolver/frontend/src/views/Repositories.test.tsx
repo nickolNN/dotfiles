@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { RepoInfo, SavedRepo } from '@issue-resolver/shared';
 import Repositories from './Repositories';
+import { RepoConnectionStatus, RunInstructionsStatus } from '@issue-resolver/shared';
 
 const REPO_INFO: RepoInfo = {
   platform: 'github',
@@ -30,11 +31,11 @@ function savedRepo(
     language: 'TypeScript',
     description: null,
     isPrivate: false,
-    connectionStatus: 'ok',
+    connectionStatus: RepoConnectionStatus.ok,
     lastValidatedAt: '2026-10-12T10:00:00.000Z',
     writeAccess: true,
     runInstructions: null,
-    runInstructionsStatus: 'unknown',
+    runInstructionsStatus: RunInstructionsStatus.unknown,
     createdAt: '2026-10-12T00:00:00.000Z',
     updatedAt: '2026-10-12T00:00:00.000Z',
     ...overrides,
@@ -106,7 +107,7 @@ describe('Repositories', () => {
   it('рендерит список с платформой, веткой и статусом', async () => {
     const ok = savedRepo('one');
     const failed = savedRepo('two', {
-      connectionStatus: 'error',
+      connectionStatus: RepoConnectionStatus.error,
       fullName: null,
       defaultBranch: null,
       platform: null,
@@ -124,7 +125,7 @@ describe('Repositories', () => {
 
   it('пустой репозиторий (ok без веток) → пометка «нет веток»', async () => {
     const empty = savedRepo('empty', {
-      connectionStatus: 'ok',
+      connectionStatus: RepoConnectionStatus.ok,
       defaultBranch: null,
       writeAccess: false,
     });
@@ -257,10 +258,10 @@ describe('Repositories', () => {
   });
 
   it('проверка соединения обновляет статус карточки', async () => {
-    const repo = savedRepo('repo-1', { connectionStatus: 'error' });
+    const repo = savedRepo('repo-1', { connectionStatus: RepoConnectionStatus.error });
     stubRepositoriesApi({
       repos: [repo],
-      validated: { ...repo, connectionStatus: 'ok' },
+      validated: { ...repo, connectionStatus: RepoConnectionStatus.ok },
     });
 
     render(<Repositories />);

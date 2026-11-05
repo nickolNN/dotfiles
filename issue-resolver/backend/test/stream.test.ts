@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { SSEEvent, StepRunStatus } from '@issue-resolver/shared';
+import { StepRunStatus } from '@issue-resolver/shared';
+import type { SSEEvent } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
@@ -198,7 +199,7 @@ describe('POST /iterations/:id/abort', () => {
     const db = createDb(':memory:');
     const issueId = insertIssue(db);
     const iterationId = insertIteration(db, issueId, 'running');
-    const stepRunId = insertStepRun(db, iterationId, 'running');
+    const stepRunId = insertStepRun(db, iterationId, StepRunStatus.running);
     const hub = new InMemorySseHub();
     const events: SSEEvent[] = [];
     hub.subscribe(iterationId, (event) => events.push(event));
@@ -238,7 +239,7 @@ describe('POST /iterations/:id/abort', () => {
     const db = createDb(':memory:');
     const issueId = insertIssue(db);
     const iterationId = insertIteration(db, issueId, 'completed');
-    const stepRunId = insertStepRun(db, iterationId, 'success');
+    const stepRunId = insertStepRun(db, iterationId, StepRunStatus.success);
     const hub = new InMemorySseHub();
     const events: SSEEvent[] = [];
     hub.subscribe(iterationId, (event) => events.push(event));

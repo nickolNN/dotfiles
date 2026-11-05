@@ -1,12 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  CreateTagRequest,
-  RunInstructionsStatus,
-  Tag,
-  TagRepository,
-  TagRepositoryWithRepo,
-  UpdateTagRequest,
-} from '@issue-resolver/shared';
+import { RunInstructionsStatus } from '@issue-resolver/shared';
+import type { CreateTagRequest, Tag, TagRepository, TagRepositoryWithRepo, UpdateTagRequest } from '@issue-resolver/shared';
 import { asc, eq, inArray } from 'drizzle-orm';
 import type { Db } from './client';
 import { toSavedRepo } from './repositories.repo';
@@ -149,7 +143,7 @@ export function updateTag(
   }
   if (input.run_instructions !== undefined) {
     patch.run_instructions = input.run_instructions;
-    patch.run_instructions_status = input.run_instructions ? 'generated' : 'unknown';
+    patch.run_instructions_status = input.run_instructions ? RunInstructionsStatus.generated : RunInstructionsStatus.unknown;
   }
   const nextRepositories = input.repositories;
   const instructionsChanged =

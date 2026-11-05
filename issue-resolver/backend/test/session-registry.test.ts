@@ -10,6 +10,7 @@ import {
   type StepSessionControl,
   type UiResponsePayload,
 } from '../src/pi/session-registry';
+import { RoomAgentStatus } from '@issue-resolver/shared';
 
 function seedIteration(db: ReturnType<typeof createDb>, id: string): void {
   const now = new Date().toISOString();
@@ -256,7 +257,7 @@ describe('InMemoryStepSessionRegistry', () => {
       },
     ]);
 
-    registry.unregister('base.w0', 'failed');
+    registry.unregister('base.w0', RoomAgentStatus.failed);
     expect(registry.listAgents('iter-1')[0].status).toBe('failed');
     expect(registry.steer('base.w0', 'x')).toBe(false);
     expect(registry.listAgents('iter-1')).toHaveLength(3);

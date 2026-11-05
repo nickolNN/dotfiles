@@ -9,6 +9,7 @@ import {
 } from '@testing-library/react';
 import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus } from '@issue-resolver/shared';
 
 const noArtifact = { present: false, bytes: 0, mtime: null };
 
@@ -27,7 +28,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -43,7 +44,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,

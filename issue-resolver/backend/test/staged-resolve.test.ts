@@ -1,11 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';import type {
-  ExecutionPlan,
-  PipelineStep,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
+import { afterEach, describe, expect, it } from 'vitest';import type { ExecutionPlan, PipelineStep, StepExecutionResult } from '@issue-resolver/shared';
 import { FakePiRunner } from '../src/pi/runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import {
@@ -13,6 +9,7 @@ import {
   type RoomResolveInput,
   type RoomResolveOptions,
 } from '../src/workflow/room';
+import { StepReportStatus } from '@issue-resolver/shared';
 
 const STEP: PipelineStep = 'resolve';
 
@@ -51,7 +48,7 @@ const options = (
 const pass = (summary: string): StepExecutionResult => ({
   step: STEP,
   exitCode: 0,
-  report: { status: 'pass', summary },
+  report: { status: StepReportStatus.pass, summary },
   stdout: '',
   stderr: '',
 });
@@ -59,7 +56,7 @@ const pass = (summary: string): StepExecutionResult => ({
 const aborted = (summary: string): StepExecutionResult => ({
   step: STEP,
   exitCode: 1,
-  report: { status: 'fail', summary },
+  report: { status: StepReportStatus.fail, summary },
   stdout: '',
   stderr: '',
   aborted: true,

@@ -3,11 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import type {
-  PipelineStep,
-  SessionEvent,
-  SessionStats,
-} from '@issue-resolver/shared';
+import type { PipelineStep, SessionEvent, SessionStats } from '@issue-resolver/shared';
 import Database from 'better-sqlite3';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -24,6 +20,7 @@ import {
   listStepRunsWithLog,
   updateStepRun,
 } from '../src/db/step-runs.repo';
+import { StepRunStatus } from '@issue-resolver/shared';
 
 function makeDb(): Db {
   return createDb(':memory:');
@@ -135,14 +132,14 @@ describe('updateStepRun', () => {
     });
 
     const updated = await updateStepRun(db, run.id, {
-      status: 'success',
+      status: StepRunStatus.success,
       feedback: 'выглядит хорошо',
     });
 
     expect(updated.status).toBe('success');
     expect(updated.feedback).toBe('выглядит хорошо');
 
-    const again = await updateStepRun(db, run.id, { status: 'running' });
+    const again = await updateStepRun(db, run.id, { status: StepRunStatus.running });
 
     expect(again.status).toBe('running');
     expect(again.feedback).toBe('выглядит хорошо');

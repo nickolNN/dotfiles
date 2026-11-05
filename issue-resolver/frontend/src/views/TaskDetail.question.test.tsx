@@ -8,13 +8,9 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import type {
-  Issue,
-  Iteration,
-  SessionQuestion,
-  StepRunWithLog,
-} from '@issue-resolver/shared';
+import type { Issue, Iteration, SessionQuestion, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -23,7 +19,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -39,7 +35,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -65,7 +61,7 @@ function makeStepRun(
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
-    status: 'running',
+    status: StepRunStatus.running,
     context: '',
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
@@ -370,11 +366,11 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
       undefined,
       [
         makeStepRun({
-          status: 'pending',
+          status: StepRunStatus.pending,
           events: [{ type: 'question', ...question() }],
         }),
       ],
-      { status: 'running' },
+      { status: TaskStatus.running },
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -396,11 +392,11 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
       undefined,
       [
         makeStepRun({
-          status: 'success',
+          status: StepRunStatus.success,
           events: [{ type: 'question', ...question() }],
         }),
       ],
-      { status: 'completed' },
+      { status: TaskStatus.completed },
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -415,11 +411,11 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
       undefined,
       [
         makeStepRun({
-          status: 'running',
+          status: StepRunStatus.running,
           events: [{ type: 'question', ...question({ id: 'q-1' }) }],
         }),
       ],
-      { status: 'running' },
+      { status: TaskStatus.running },
       ['q-1'],
     );
 
@@ -442,11 +438,11 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
       undefined,
       [
         makeStepRun({
-          status: 'success',
+          status: StepRunStatus.success,
           events: [{ type: 'question', ...question({ id: 'q-done' }) }],
         }),
       ],
-      { status: 'running' },
+      { status: TaskStatus.running },
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -461,11 +457,11 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
       undefined,
       [
         makeStepRun({
-          status: 'running',
+          status: StepRunStatus.running,
           events: [{ type: 'question', ...question({ id: 'q-active' }) }],
         }),
       ],
-      { status: 'running' },
+      { status: TaskStatus.running },
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -479,11 +475,11 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
       undefined,
       [
         makeStepRun({
-          status: 'needs_input',
+          status: StepRunStatus.needs_input,
           events: [{ type: 'question', ...question({ id: 'q-blocked' }) }],
         }),
       ],
-      { status: 'running' },
+      { status: TaskStatus.running },
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -495,7 +491,7 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
 
   it('SSE iteration_status:question перечитывает step runs', async () => {
     const fetchMock = stubFetch(undefined, [
-      makeStepRun({ status: 'running', events: [] }),
+      makeStepRun({ status: StepRunStatus.running, events: [] }),
     ]);
 
     render(<TaskDetail issueId="issue-1" />);

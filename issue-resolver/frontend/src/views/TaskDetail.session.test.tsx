@@ -9,6 +9,7 @@ import {
 } from '@testing-library/react';
 import type { Issue, Iteration, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -17,7 +18,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -33,7 +34,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -49,7 +50,7 @@ function makeStepRun(
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
-    status: 'success',
+    status: StepRunStatus.success,
     context: '',
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
@@ -127,7 +128,7 @@ describe('TaskDetail — результат шага', () => {
   it('карточка рендерит session-события (step-session), report/stdout скрыты', async () => {
     stubFetch([
       makeStepRun({
-        status: 'running',
+        status: StepRunStatus.running,
         stdout: 'raw-fallback',
         stderr: 'raw-error',
         report: '## Итог\nвсё хорошо',
@@ -148,7 +149,7 @@ describe('TaskDetail — результат шага', () => {
   });
 
   it('карточка running-шага без событий → пустой session-вывод', async () => {
-    stubFetch([makeStepRun({ status: 'running', stdout: 'raw-fallback' })]);
+    stubFetch([makeStepRun({ status: StepRunStatus.running, stdout: 'raw-fallback' })]);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
@@ -160,7 +161,7 @@ describe('TaskDetail — результат шага', () => {
   });
 
   it('карточка завершённого шага без отчёта → «Результат отсутствует.»', async () => {
-    stubFetch([makeStepRun({ status: 'success', report: null })]);
+    stubFetch([makeStepRun({ status: StepRunStatus.success, report: null })]);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
@@ -175,7 +176,7 @@ describe('TaskDetail — результат шага', () => {
   it('карточка pending-шага → живой session + inline-вопрос, без «Результат отсутствует.»', async () => {
     stubFetch([
       makeStepRun({
-        status: 'pending',
+        status: StepRunStatus.pending,
         stdout: 'raw-fallback',
         events: [
           {
@@ -198,7 +199,7 @@ describe('TaskDetail — результат шага', () => {
   });
 
   it('карточка failed-шага без отчёта → «Результат отсутствует.»', async () => {
-    stubFetch([makeStepRun({ status: 'failed', report: null })]);
+    stubFetch([makeStepRun({ status: StepRunStatus.failed, report: null })]);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
@@ -241,7 +242,7 @@ describe('TaskDetail — результат шага', () => {
   });
 
   it('SSE step_event доходит до SessionView модалки по stepRunId (live)', async () => {
-    stubFetch([makeStepRun({ id: 'run-1', status: 'running' })]);
+    stubFetch([makeStepRun({ id: 'run-1', status: StepRunStatus.running })]);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
@@ -268,7 +269,7 @@ describe('TaskDetail — результат шага', () => {
   });
 
   it('step_event для неизвестного stepRunId не роняет карточку', async () => {
-    stubFetch([makeStepRun({ id: 'run-1', status: 'running', stdout: 'raw-fallback' })]);
+    stubFetch([makeStepRun({ id: 'run-1', status: StepRunStatus.running, stdout: 'raw-fallback' })]);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
@@ -294,7 +295,7 @@ describe('TaskDetail — результат шага', () => {
   });
 
   it('битый data у step_event не роняет live-лог', async () => {
-    stubFetch([makeStepRun({ id: 'run-1', status: 'running', stdout: 'raw-fallback' })]);
+    stubFetch([makeStepRun({ id: 'run-1', status: StepRunStatus.running, stdout: 'raw-fallback' })]);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');

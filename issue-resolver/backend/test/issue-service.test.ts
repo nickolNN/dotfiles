@@ -9,11 +9,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import type {
-  DesiredResult,
-  SSEEvent,
-  TaskStatus,
-} from '@issue-resolver/shared';
+import { TaskStatus } from '@issue-resolver/shared';
+import type { DesiredResult, SSEEvent } from '@issue-resolver/shared';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createDb } from '../src/db/client';
 import type { Db } from '../src/db/client';
@@ -192,7 +189,7 @@ describe('listIssues', () => {
       title: 'Hello',
       description: 'world',
       desired_result: 'html',
-      status: 'pending',
+      status: TaskStatus.pending,
     });
 
     const list = service.listIssues(db, config);
@@ -245,7 +242,7 @@ describe('getIssue', () => {
       jira_issue_url: 'https://jira.example/browse/ABC-1',
       source: 'jira',
       dev_server_port: 5101,
-      status: 'pending',
+      status: TaskStatus.pending,
     });
     const now = new Date().toISOString();
     db.insert(issueRepositories)
@@ -260,7 +257,7 @@ describe('getIssue', () => {
         updated_at: now,
       })
       .run();
-    const iterationId = seedIteration(db, id, { status: 'completed' });
+    const iterationId = seedIteration(db, id, { status: TaskStatus.completed });
 
     const found = service.getIssue(db, config, id);
 
@@ -299,7 +296,7 @@ describe('getResultArtifact', () => {
     const db = newDb();
     const { config } = makeConfig(makeRoot());
     const id = seedIssue(db);
-    seedIteration(db, id, { status: 'pending' });
+    seedIteration(db, id, { status: TaskStatus.pending });
 
     expect(await service.getResultArtifact(db, config, id)).toBeNull();
   });
@@ -315,7 +312,7 @@ describe('getResultArtifact', () => {
     const db = newDb();
     const { config } = makeConfig(makeRoot());
     const id = seedIssue(db, { desired_result: 'md' });
-    seedIteration(db, id, { status: 'completed' });
+    seedIteration(db, id, { status: TaskStatus.completed });
 
     expect(await service.getResultArtifact(db, config, id)).toBeNull();
   });
@@ -325,7 +322,7 @@ describe('getResultArtifact', () => {
     const root = makeRoot();
     const { config } = makeConfig(root);
     const id = seedIssue(db, { desired_result: 'md' });
-    const iterationId = seedIteration(db, id, { status: 'completed' });
+    const iterationId = seedIteration(db, id, { status: TaskStatus.completed });
     const dir = iterationResultDirFor(root, id, iterationId);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'report.md'), '# Result\n');
@@ -344,7 +341,7 @@ describe('getResultArtifact', () => {
     const root = makeRoot();
     const { config } = makeConfig(root);
     const id = seedIssue(db, { desired_result: 'html' });
-    const iterationId = seedIteration(db, id, { status: 'completed' });
+    const iterationId = seedIteration(db, id, { status: TaskStatus.completed });
     const dir = iterationResultDirFor(root, id, iterationId);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'report.html'), '<h1>done</h1>');
@@ -363,7 +360,7 @@ describe('getResultArtifact', () => {
     const root = makeRoot();
     const { config } = makeConfig(root);
     const id = seedIssue(db, { desired_result: 'html' });
-    const iterationId = seedIteration(db, id, { status: 'completed' });
+    const iterationId = seedIteration(db, id, { status: TaskStatus.completed });
     const iterDir = iterationResultDirFor(root, id, iterationId);
     mkdirSync(iterDir, { recursive: true });
     writeFileSync(join(iterDir, 'report.html'), '<h1>OLD</h1>');
@@ -382,7 +379,7 @@ describe('getResultFiles', () => {
     const root = makeRoot();
     const { config } = makeConfig(root);
     const id = seedIssue(db, { desired_result: 'md' });
-    const iterationId = seedIteration(db, id, { status: 'completed' });
+    const iterationId = seedIteration(db, id, { status: TaskStatus.completed });
     const dir = join(root, id);
     mkdirSync(join(dir, '.iteration-results', iterationId), {
       recursive: true,
@@ -437,7 +434,7 @@ describe('getResultArchive', () => {
     const root = makeRoot();
     const { config } = makeConfig(root);
     const id = seedIssue(db, { desired_result: 'md' });
-    const iterationId = seedIteration(db, id, { status: 'completed' });
+    const iterationId = seedIteration(db, id, { status: TaskStatus.completed });
     const dir = join(root, id);
     const resultDir = iterationResultDirFor(root, id, iterationId);
     mkdirSync(resultDir, { recursive: true });
@@ -466,7 +463,7 @@ describe('getResultArchive', () => {
     const db = newDb();
     const { config } = makeConfig(makeRoot());
     const id = seedIssue(db);
-    seedIteration(db, id, { status: 'pending' });
+    seedIteration(db, id, { status: TaskStatus.pending });
 
     await expect(service.getResultArchive(db, config, id)).rejects.toThrow(
       'result not found',
@@ -477,7 +474,7 @@ describe('getResultArchive', () => {
     const db = newDb();
     const { config } = makeConfig(makeRoot());
     const id = seedIssue(db);
-    seedIteration(db, id, { status: 'completed' });
+    seedIteration(db, id, { status: TaskStatus.completed });
 
     await expect(service.getResultArchive(db, config, id)).rejects.toThrow(
       'result not found',

@@ -6,13 +6,9 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react';
-import type {
-  Issue,
-  Iteration,
-  RoomAgent,
-  StepRunWithLog,
-} from '@issue-resolver/shared';
+import type { Issue, Iteration, RoomAgent, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, StepRunStatus, RoomAgentStatus } from '@issue-resolver/shared';
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -21,7 +17,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['refine', 'resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -37,7 +33,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['refine', 'resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -51,7 +47,7 @@ function makeStepRun(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog {
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
-    status: 'running',
+    status: StepRunStatus.running,
     context: '',
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
@@ -70,7 +66,7 @@ function makeRefineRun(mode: 'single' | 'room'): StepRunWithLog {
   return makeStepRun({
     id: 'run-refine',
     step: 'refine',
-    status: 'success',
+    status: StepRunStatus.success,
     attempt: 1,
     report: JSON.stringify({
       status: 'pass',
@@ -86,7 +82,7 @@ const AGENTS: RoomAgent[] = [
     role: 'worker',
     index: 1,
     label: 'Исполнитель 1',
-    status: 'running',
+    status: RoomAgentStatus.running,
     startedAt: null,
     stats: null,
   },
@@ -95,7 +91,7 @@ const AGENTS: RoomAgent[] = [
     role: 'worker',
     index: 2,
     label: 'Исполнитель 2',
-    status: 'running',
+    status: RoomAgentStatus.running,
     startedAt: null,
     stats: null,
   },

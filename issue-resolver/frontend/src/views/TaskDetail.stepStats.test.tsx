@@ -1,12 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
-import type {
-  Issue,
-  Iteration,
-  SessionSpeed,
-  SessionStats,
-  StepRunWithLog,
-} from '@issue-resolver/shared';
+import type { Issue, Iteration, SessionSpeed, SessionStats, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail, {
   formatStepDuration,
   shortPath,
@@ -17,6 +11,7 @@ import {
   formatInstantSpeed,
 } from '../components/SessionStatsBar';
 import type { SessionEvent } from '../api/session-events';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 function makeIssue(): Issue {
   return {
@@ -25,7 +20,7 @@ function makeIssue(): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
   };
@@ -40,7 +35,7 @@ function makeIteration(): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
   };
@@ -76,7 +71,7 @@ function makeStepRun(
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
-    status: 'success',
+    status: StepRunStatus.success,
     context: '',
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
@@ -224,7 +219,7 @@ describe('TaskDetail — статистика карточки шага', () => 
   it('running-шаг: live stats-событие показывает строку без run.stats', async () => {
     stubFetch([
       makeStepRun({
-        status: 'running',
+        status: StepRunStatus.running,
         stats: null,
         events: [
           { type: 'stats', stats: makeStats({ model: 'Claude Sonnet 4' }) },
@@ -247,7 +242,7 @@ describe('TaskDetail — статистика карточки шага', () => 
   it('running-шаг: live usage-событие даёт токены, вызовы деградируют до 0', async () => {
     stubFetch([
       makeStepRun({
-        status: 'running',
+        status: StepRunStatus.running,
         stats: null,
         events: [
           {
@@ -278,7 +273,7 @@ describe('TaskDetail — статистика карточки шага', () => 
 
   it('чёрный блок шага не содержит session-stats, статистика — в футере', async () => {
     stubFetch([
-      makeStepRun({ status: 'running', stats: makeStats(), report: null }),
+      makeStepRun({ status: StepRunStatus.running, stats: makeStats(), report: null }),
     ]);
     render(<TaskDetail issueId="issue-1" />);
 
@@ -304,7 +299,7 @@ describe('TaskDetail — статистика карточки шага', () => 
   it('терминальная длительность из updated_at - created_at', async () => {
     stubFetch([
       makeStepRun({
-        status: 'success',
+        status: StepRunStatus.success,
         created_at: '2026-10-09T00:00:00.000Z',
         updated_at: '2026-10-09T00:00:45.000Z',
       }),
@@ -317,7 +312,7 @@ describe('TaskDetail — статистика карточки шага', () => 
   it('aborted-шаг тоже показывает длительность', async () => {
     stubFetch([
       makeStepRun({
-        status: 'aborted',
+        status: StepRunStatus.aborted,
         created_at: '2026-10-09T00:00:00.000Z',
         updated_at: '2026-10-09T00:03:12.000Z',
       }),
@@ -414,7 +409,7 @@ describe('TaskDetail — статистика карточки шага', () => 
   it('live usage со speed → step-speed с мгновенной и средней', async () => {
     stubFetch([
       makeStepRun({
-        status: 'running',
+        status: StepRunStatus.running,
         stats: null,
         events: [
           {
@@ -447,7 +442,7 @@ describe('TaskDetail — статистика карточки шага', () => 
   it('speed только с мгновенной (avg null) → без «avg»', async () => {
     stubFetch([
       makeStepRun({
-        status: 'running',
+        status: StepRunStatus.running,
         stats: null,
         events: [
           {
@@ -501,7 +496,7 @@ describe('TaskDetail — статистика карточки шага', () => 
     const refine = makeStepRun({
       id: 'run-refine',
       step: 'refine',
-      status: 'success',
+      status: StepRunStatus.success,
       report: JSON.stringify({
         status: 'pass',
         summary: 'room',
@@ -509,7 +504,7 @@ describe('TaskDetail — статистика карточки шага', () => 
       }),
     });
     const resolve = makeStepRun({
-      status: 'success',
+      status: StepRunStatus.success,
       stats: makeStats({
         toolCalls: 7,
         tokens: { input: 2400, output: 500, cacheRead: 10, cacheWrite: 5, total: 2915 },
@@ -548,7 +543,7 @@ describe('TaskDetail — статистика карточки шага', () => 
   it('single-шаг: футер показывает exec-время, модель и CTX одновременно', async () => {
     stubFetch([
       makeStepRun({
-        status: 'success',
+        status: StepRunStatus.success,
         created_at: '2026-10-09T00:00:00.000Z',
         updated_at: '2026-10-09T00:01:00.000Z',
         stats: makeStats({

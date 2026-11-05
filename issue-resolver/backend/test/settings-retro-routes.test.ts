@@ -8,6 +8,7 @@ import { getRetroRun } from '../src/db/retro-runs.repo';
 import type { PiRunOptions, PiRunner } from '../src/pi/runner';
 import { retroRuns } from '../src/db/schema';
 import { retroReportPath } from '../src/retro/service';
+import { RetroRunStatus } from '@issue-resolver/shared';
 
 const ENDPOINT = '/issue-resolver/api/v1/settings/retro';
 
@@ -50,7 +51,7 @@ function makeApp(db: Db, pi: PiRunner) {
 async function waitForTerminal(db: Db, id: string): Promise<string> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const run = getRetroRun(db, id);
-    if (run && run.status !== 'running') return run.status;
+    if (run && run.status !== RetroRunStatus.running) return run.status;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error('прогон не завершился за отведённое время');

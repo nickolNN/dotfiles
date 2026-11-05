@@ -1,4 +1,6 @@
-import type { Iteration, TaskStatus } from './types';
+import { TaskStatus } from './status';
+import type { Iteration } from './types';
+
 
 export function extractIssueKeyFromUrl(url: string): string | null {
   const trimmed = url.trim();
@@ -155,7 +157,7 @@ export function statusOfIssue(
   iterations: Iteration[],
   issueStatus?: TaskStatus,
 ): TaskStatus | null {
-  if (issueStatus === 'question') return 'question';
+  if (issueStatus === TaskStatus.question) return 'question';
   if (iterations.length === 0) return null;
 
   const latest = iterations.reduce((max, current) =>
@@ -165,11 +167,11 @@ export function statusOfIssue(
 }
 
 export function isIterationActive(status: TaskStatus): boolean {
-  return status === 'running' || status === 'pending' || status === 'preparing';
+  return status === TaskStatus.running || status === TaskStatus.pending || status === TaskStatus.preparing;
 }
 
 export function canStartDraft(status: TaskStatus, iterationsCount: number): boolean {
-  return status === 'draft' && iterationsCount === 0;
+  return status === TaskStatus.draft && iterationsCount === 0;
 }
 
 export function canStartIteration(iterations: Iteration[]): boolean {

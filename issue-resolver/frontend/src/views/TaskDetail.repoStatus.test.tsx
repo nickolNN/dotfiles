@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { Issue, IssueRepository, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, WorkspaceProgressStatus } from '@issue-resolver/shared';
 
 function makeRepo(overrides: Partial<IssueRepository> = {}): IssueRepository {
   return {
@@ -23,7 +24,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [makeRepo()],
     pipeline_steps: ['resolve'],
-    status: 'preparing',
+    status: TaskStatus.preparing,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -39,7 +40,7 @@ function makeIteration(): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
   };
@@ -127,7 +128,7 @@ describe('TaskDetail — сводка репозиториев в шапке', (
       source.workspaceProgress({
         step: 'cloning',
         repo: 'Hello-World',
-        status: 'running',
+        status: WorkspaceProgressStatus.running,
       });
     });
     await waitFor(() => expect(row).toHaveAttribute('data-status', 'cloning'));
@@ -136,12 +137,12 @@ describe('TaskDetail — сводка репозиториев в шапке', (
       source.workspaceProgress({
         step: 'cloning',
         repo: 'Hello-World',
-        status: 'done',
+        status: WorkspaceProgressStatus.done,
       });
       source.workspaceProgress({
         step: 'devops',
         repo: 'Hello-World',
-        status: 'running',
+        status: WorkspaceProgressStatus.running,
       });
     });
     await waitFor(() =>
@@ -152,13 +153,13 @@ describe('TaskDetail — сводка репозиториев в шапке', (
       source.workspaceProgress({
         step: 'installing',
         repo: 'Hello-World',
-        status: 'done',
+        status: WorkspaceProgressStatus.done,
       });
     });
     await waitFor(() => expect(row).toHaveAttribute('data-status', 'installed'));
 
     act(() => {
-      source.workspaceProgress({ step: 'ready', status: 'done' });
+      source.workspaceProgress({ step: 'ready', status: WorkspaceProgressStatus.done });
     });
     await waitFor(() => expect(row).toHaveAttribute('data-status', 'ready'));
   });
@@ -172,12 +173,12 @@ describe('TaskDetail — сводка репозиториев в шапке', (
       source.workspaceProgress({
         step: 'installing',
         repo: 'Hello-World',
-        status: 'done',
+        status: WorkspaceProgressStatus.done,
       });
       source.workspaceProgress({
         step: 'dev_server',
         repo: 'Hello-World',
-        status: 'running',
+        status: WorkspaceProgressStatus.running,
       });
     });
     await waitFor(() => expect(row).toHaveAttribute('data-status', 'dev_server'));
@@ -186,11 +187,11 @@ describe('TaskDetail — сводка репозиториев в шапке', (
       source.workspaceProgress({
         step: 'dev_server',
         repo: 'Hello-World',
-        status: 'done',
+        status: WorkspaceProgressStatus.done,
         message: 'localhost:5173',
         devPort: 5173,
       });
-      source.workspaceProgress({ step: 'ready', status: 'done' });
+      source.workspaceProgress({ step: 'ready', status: WorkspaceProgressStatus.done });
     });
     await waitFor(() => expect(row).toHaveAttribute('data-status', 'ready'));
     expect(screen.getByTestId('repo-dev-port')).toHaveTextContent(
@@ -207,12 +208,12 @@ describe('TaskDetail — сводка репозиториев в шапке', (
       source.workspaceProgress({
         step: 'installing',
         repo: 'Hello-World',
-        status: 'done',
+        status: WorkspaceProgressStatus.done,
       });
       source.workspaceProgress({
         step: 'dev_server',
         repo: 'Hello-World',
-        status: 'warning',
+        status: WorkspaceProgressStatus.warning,
         message: 'порт не найден',
       });
     });
@@ -227,7 +228,7 @@ describe('TaskDetail — сводка репозиториев в шапке', (
     FakeEventSource.instances[0].workspaceProgress({
       step: 'devops',
       repo: 'Hello-World',
-      status: 'done',
+      status: WorkspaceProgressStatus.done,
       message: 'пропущен',
     });
     await waitFor(() => expect(row).toHaveAttribute('data-status', 'skipped'));
@@ -241,14 +242,14 @@ describe('TaskDetail — сводка репозиториев в шапке', (
     FakeEventSource.instances[0].workspaceProgress({
       step: 'cloning',
       repo: 'Hello-World',
-      status: 'error',
+      status: WorkspaceProgressStatus.error,
       message: 'boom',
     });
     await waitFor(() => expect(row).toHaveAttribute('data-status', 'failed'));
   });
 
   it('после перезагрузки задачи вне подготовки репозиторий считается готовым', async () => {
-    stubFetch(makeIssue({ status: 'running' }));
+    stubFetch(makeIssue({ status: TaskStatus.running }));
     const row = await renderAndGetRow();
 
     expect(row).toHaveAttribute('data-status', 'ready');

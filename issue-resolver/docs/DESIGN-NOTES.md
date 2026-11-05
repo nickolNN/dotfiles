@@ -36,6 +36,14 @@ future reader could break without noticing, add it here instead of a comment.
   what the task already states.
 - After a terminal status the backend spawns the report agent fire-and-forget;
   such a run must never take the iteration down (`backend/src/workflow/run-iteration.service.ts`).
+- Status values are declared once in `shared/src/status.ts` as frozen objects and
+  never written as literals in code (see `CODING_STANDARDS.md`). Three statuses
+  coexist here and are easy to mix: `TaskStatus` on an issue or iteration,
+  `StepRunStatus` on one step run, `StepReportStatus` on the report a step
+  writes. The wire values are the keys, so a value is greppable
+  (`StepRunStatus.needs_input` ↔ `"needs_input"`); `StepRunOutcome`
+  (`shared/src/step-result.ts`) is the only place that maps evidence to a
+  status, and `aborted` outranks everything else in it.
 
 ## 3. pi processes and sessions
 
@@ -59,6 +67,30 @@ future reader could break without noticing, add it here instead of a comment.
   process that will never settle is not an option.
 - Every run must terminate: a crashed or hung pi must never leave a step
   `running` forever.
+- A step's status is derived from evidence, never from silence
+  (`stepRunOutcome` in `shared/src/step-result.ts`). Two absences are failures:
+  the model never answered, and the step left no **fresh**
+  `.issue-step-result.json`. Exit code 0 with a missing report used to read as
+  `success`, which is how a task whose agent could not reach pi at all ended as
+  «Completed» with nothing done. A run that produces artifacts instead of a step
+  report says so explicitly with `requiresStepReport: false` (the report agent);
+  no other caller may relax the default. `aborted` is part of the same input and
+  outranks every other signal: an aborted run is `aborted`, never `failed` or
+  `success`, whatever the exit code or the report says.
+- `modelReplied` means "some evidence the model answered": an assistant stream
+  event from the parser (`sawAssistantReply`) **or** `stats.assistantMessages >
+  0`, since either alone can be missing while the other is present. `undefined`
+  means unknown and is never treated as silence — a fake runner, an older pi or
+  a stats payload without that field must not turn into a failure
+  (`backend/src/pi/rpc-runner.ts`).
+- A failed run without a report persists a synthesized `fail` report carrying
+  the reason (`STEP_FAILURE_TEXT` / `failureReportOverride` in
+  `backend/src/workflow/step-failure.ts`) and publishes it as an error notice.
+  An empty report field is what made these failures invisible to the step card,
+  the retry feedback and the report agent. A `pass` report from a run whose
+  model never answered is overwritten the same way: the verdict cannot be
+  trusted when the writer never spoke. Any other failure keeps the report the
+  agent wrote — only the agent can say what it found.
 
 ## 4. Database
 

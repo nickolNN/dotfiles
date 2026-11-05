@@ -8,6 +8,7 @@ import { formatTokens, TokenDownIcon, TokenUpIcon } from './SessionStatsBar';
 import { CacheIcon } from './TokenStats';
 import SessionView from './SessionView';
 import { formatDuration, useNow } from '../lib/time';
+import { RoomAgentStatus } from '@issue-resolver/shared';
 
 export interface RoomAgentTabsProps {
   iterationId: string;
@@ -89,7 +90,7 @@ export function groupAgentsByStage(
         if (start !== null) {
           firstStart = Math.min(firstStart, start);
           const endMs =
-            agent.status === 'running'
+            agent.status === RoomAgentStatus.running
               ? now
               : endMillis(agent);
           if (endMs !== null) {
@@ -154,7 +155,7 @@ function startMillis(agent: RoomAgent): number | null {
 }
 
 function endMillis(agent: RoomAgent): number | null {
-  if (agent.status === 'running' || !agent.endedAt) return null;
+  if (agent.status === RoomAgentStatus.running || !agent.endedAt) return null;
   const parsed = Date.parse(agent.endedAt);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -165,7 +166,7 @@ function agentDurationMs(
 ): number | null {
   const start = startMillis(agent);
   if (start === null) return null;
-  if (agent.status === 'running') return Math.max(0, now - start);
+  if (agent.status === RoomAgentStatus.running) return Math.max(0, now - start);
   const end = endMillis(agent);
   if (end === null) return null;
   return Math.max(0, end - start);
@@ -177,10 +178,10 @@ function pickDefaultAgentId(
 ): string | null {
   if (current) {
     const currentAgent = agents.find((agent) => agent.id === current);
-    if (currentAgent && currentAgent.status === 'running') return current;
+    if (currentAgent && currentAgent.status === RoomAgentStatus.running) return current;
   }
   return (
-    agents.find((agent) => agent.status === 'running')?.id ?? agents[0]?.id ?? null
+    agents.find((agent) => agent.status === RoomAgentStatus.running)?.id ?? agents[0]?.id ?? null
   );
 }
 
@@ -258,7 +259,7 @@ export default function RoomAgentTabs({
 
   const hasRunningAgent =
     agentsState.status === 'ready' &&
-    agentsState.agents.some((agent) => agent.status === 'running');
+    agentsState.agents.some((agent) => agent.status === RoomAgentStatus.running);
 
   const now = useNow(hasRunningAgent);
 
@@ -330,13 +331,13 @@ export default function RoomAgentTabs({
       if (start !== null) {
         firstStart = Math.min(firstStart, start);
         const endMs =
-          agent.status === 'running'
+          agent.status === RoomAgentStatus.running
             ? now
             : endMillis(agent);
         if (endMs !== null) {
           lastEnd = Math.max(lastEnd, Math.max(start, endMs));
-          if (agent.status === 'running') anyRunning = true;
-        } else if (agent.status === 'running') {
+          if (agent.status === RoomAgentStatus.running) anyRunning = true;
+        } else if (agent.status === RoomAgentStatus.running) {
           anyRunning = true;
         }
       }
@@ -527,7 +528,7 @@ export default function RoomAgentTabs({
           <SessionView
             events={events}
             stats={selected.stats ?? statsByAgent?.[selected.id] ?? null}
-            running={selected.status === 'running'}
+            running={selected.status === RoomAgentStatus.running}
             showFooter
             emptyMessage={emptyMessage}
           />

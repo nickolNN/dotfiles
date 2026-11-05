@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { Issue, IssueRepository, Iteration, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 function makeRepository(
   overrides: Partial<IssueRepository> = {},
@@ -26,7 +27,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     repositories: [makeRepository()],
     pipeline_steps: ['resolve', 'pr'],
     desired_result: 'md',
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: '2026-10-16T00:00:00.000Z',
     updated_at: '2026-10-16T00:00:00.000Z',
     ...overrides,
@@ -42,7 +43,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve', 'pr'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-16T00:00:00.000Z',
     updated_at: '2026-10-16T00:00:00.000Z',
     ...overrides,
@@ -56,7 +57,7 @@ function makePrStepRun(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog 
     iteration_id: 'iter-1',
     step: 'pr',
     attempt: 1,
-    status: 'success',
+    status: StepRunStatus.success,
     context: '',
     feedback: null,
     created_at: '2026-10-16T00:00:00.000Z',

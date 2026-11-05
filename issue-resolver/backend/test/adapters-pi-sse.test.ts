@@ -7,6 +7,7 @@ import {
   iterationTarget,
 } from '../src/pi/session-registry';
 import { InMemorySseHub } from '../src/sse/hub';
+import { StepReportStatus } from '@issue-resolver/shared';
 
 const sseEvent = (iterationId: string, data = 'chunk'): SSEEvent => ({
   type: 'log',
@@ -34,14 +35,14 @@ describe('FakePiRunner', () => {
     const first: StepExecutionResult = {
       step: 'resolve',
       exitCode: 0,
-      report: { status: 'pass', summary: 'first' },
+      report: { status: StepReportStatus.pass, summary: 'first' },
       stdout: 'one',
       stderr: '',
     };
     const second: StepExecutionResult = {
       step: 'test',
       exitCode: 0,
-      report: { status: 'pass', summary: 'second' },
+      report: { status: StepReportStatus.pass, summary: 'second' },
       stdout: 'two',
       stderr: '',
     };
@@ -77,7 +78,7 @@ describe('FakePiRunner', () => {
     const failure: StepExecutionResult = {
       step: 'resolve',
       exitCode: 1,
-      report: { status: 'fail', summary: 'nope' },
+      report: { status: StepReportStatus.fail, summary: 'nope' },
       stdout: '',
       stderr: 'boom',
     };
@@ -93,7 +94,7 @@ describe('FakePiRunner', () => {
     runner.enqueue({
       step: 'resolve',
       exitCode: 0,
-      report: { status: 'pass', summary: 'ok' },
+      report: { status: StepReportStatus.pass, summary: 'ok' },
       stdout: 'live-out',
       stderr: 'live-err',
     });

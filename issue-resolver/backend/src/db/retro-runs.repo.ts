@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import {
   parseSessionStats,
+  RetroRunStatus,
   type RetroRun,
-  type RetroRunStatus,
   type RetroRunWithLog,
   type SessionEvent,
   type SessionStats,
   type ThinkingLevel,
 } from '@issue-resolver/shared';
+
+
+
+
 import { desc, eq } from 'drizzle-orm';
 import type { Db } from './client';
 import { retroRuns } from './schema';
@@ -55,7 +59,7 @@ export interface CreateRetroRunInput {
 export function failStaleRetroRuns(db: Db): void {
   db.update(retroRuns)
     .set({
-      status: 'failed',
+      status: RetroRunStatus.failed,
       error: 'прогон прерван перезапуском бэкенда',
       updated_at: nowIso(),
     })
@@ -71,7 +75,7 @@ export function createRetroRun(
   const now = nowIso();
   const row = {
     id: randomUUID(),
-    status: 'running' as const,
+    status: RetroRunStatus.running,
     model: input.model ?? null,
     instructions: input.instructions ?? null,
     session_limit: input.sessionLimit ?? null,

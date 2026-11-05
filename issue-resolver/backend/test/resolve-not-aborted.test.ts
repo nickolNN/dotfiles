@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  ExecutionPlan,
-  PipelineStep,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
-import { stepRunStatusFromResult } from '@issue-resolver/shared';
+import type { ExecutionPlan, PipelineStep, StepExecutionResult } from '@issue-resolver/shared';
+import { stepRunOutcome, StepReportStatus } from '@issue-resolver/shared';
 import { FakePiRunner } from '../src/pi/runner';
 import {
   runRoomResolve,
@@ -44,7 +40,7 @@ const options = (): RoomResolveOptions => ({
 const pass = (summary: string): StepExecutionResult => ({
   step: STEP,
   exitCode: 0,
-  report: { status: 'pass', summary },
+  report: { status: StepReportStatus.pass, summary },
   stdout: '',
   stderr: '',
 });
@@ -54,7 +50,7 @@ function expectSuccessfulResolve(result: StepExecutionResult): void {
   expect(Object.prototype.hasOwnProperty.call(result, 'aborted')).toBe(false);
   expect(result.exitCode).toBe(0);
   expect(result.report?.status).toBe('pass');
-  expect(stepRunStatusFromResult(result.exitCode, result.report)).toBe(
+  expect(stepRunOutcome({ exitCode: result.exitCode, report: result.report }).status).toBe(
     'success',
   );
 }
@@ -126,7 +122,7 @@ describe('resolve не становится aborted, когда все аген�
     pi.enqueue({
       step: STEP,
       exitCode: 1,
-      report: { status: 'fail', summary: 'aborted' },
+      report: { status: StepReportStatus.fail, summary: 'aborted' },
       stdout: '',
       stderr: '',
       aborted: true,
@@ -135,8 +131,9 @@ describe('resolve не становится aborted, когда все аген�
     const result = await runRoomResolve(pi, input(ROOM_PLAN), options());
 
     expect(result.aborted).toBe(true);
-    expect(stepRunStatusFromResult(result.exitCode, result.report)).toBe(
-      'failed',
-    );
+    expect(
+      stepRunOutcome({ exitCode: result.exitCode, report: result.report })
+        .status,
+    ).toBe('failed');
   });
 });

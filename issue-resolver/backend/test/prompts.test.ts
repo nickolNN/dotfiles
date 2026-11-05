@@ -13,6 +13,7 @@ const base = {
   repoPaths: ['/workspaces/issue-1/app', '/workspaces/issue-1/lib'],
   desiredResult: undefined as 'md' | 'html' | undefined,
   attachmentPaths: undefined as string[] | undefined,
+  workingDir: undefined as string | undefined,
   previousOutcome: null as string | null,
   reviewContext: null as string | null,
   pipelineSteps: undefined as PipelineStep[] | undefined,
@@ -136,6 +137,16 @@ describe('buildStepPrompt', () => {
 
     expect(text).toContain('There are no repositories');
     expect(text).not.toContain('— create MR:');
+  });
+
+  it('каждый шаг конвейера требует отчёт шага по контрактному пути', () => {
+    const steps: PipelineStep[] = ['refine', 'resolve', 'review', 'test', 'pr'];
+
+    for (const step of steps) {
+      const text = prompt(step, { workingDir: '/workspaces/issue-1' });
+      expect(text).toContain('/workspaces/issue-1/.issue-step-result.json');
+      expect(text).toContain('Output contract');
+    }
   });
 
   it('pr: разметка create MR сосуществует с блоком целей (base-ветка не потеряна)', () => {

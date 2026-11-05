@@ -1,12 +1,13 @@
-import type { StepRunStatus } from '@issue-resolver/shared';
+import { StepRunStatus, TaskStatus } from '@issue-resolver/shared';
+
 import { and, eq, inArray, or } from 'drizzle-orm';
 import type { Db } from './client';
 import { issues, iterations, stepRuns } from './schema';
 
 const INTERRUPTED_STEP_STATUSES: StepRunStatus[] = [
-  'pending',
-  'running',
-  'needs_input',
+  StepRunStatus.pending,
+  StepRunStatus.running,
+  StepRunStatus.needs_input,
 ];
 
 export function reconcileInterruptedRuns(db: Db): void {
@@ -21,7 +22,7 @@ export function reconcileInterruptedRuns(db: Db): void {
   if (interrupted.length > 0) {
     db.update(stepRuns)
       .set({
-        status: 'failed',
+        status: StepRunStatus.failed,
         feedback: 'interrupted by server restart',
         updated_at: now,
       })
@@ -35,15 +36,15 @@ export function reconcileInterruptedRuns(db: Db): void {
     .innerJoin(issues, eq(issues.id, iterations.issue_id))
     .where(
       or(
-        inArray(iterations.status, ['running', 'preparing']),
-        and(eq(iterations.status, 'pending'), eq(issues.status, 'preparing')),
+        inArray(iterations.status, [TaskStatus.running, TaskStatus.preparing]),
+        and(eq(iterations.status, TaskStatus.pending), eq(issues.status, TaskStatus.preparing)),
       ),
     )
     .all();
 
   if (interruptedIterations.length > 0) {
     db.update(iterations)
-      .set({ status: 'failed', updated_at: now })
+      .set({ status: StepRunStatus.failed, updated_at: now })
       .where(
         inArray(
           iterations.id,
@@ -57,11 +58,11 @@ export function reconcileInterruptedRuns(db: Db): void {
     ];
     if (issueIds.length > 0) {
       db.update(issues)
-        .set({ status: 'failed', updated_at: now })
+        .set({ status: StepRunStatus.failed, updated_at: now })
         .where(
           and(
             inArray(issues.id, issueIds),
-            inArray(issues.status, ['running', 'preparing', 'question']),
+            inArray(issues.status, [TaskStatus.running, TaskStatus.preparing, TaskStatus.question]),
           ),
         )
         .run();
@@ -80,8 +81,8 @@ export function reconcileInterruptedRuns(db: Db): void {
     .innerJoin(issues, eq(issues.id, iterations.issue_id))
     .where(
       and(
-        eq(iterations.status, 'pending'),
-        inArray(issues.status, ['completed', 'failed']),
+        eq(iterations.status, TaskStatus.pending),
+        inArray(issues.status, [TaskStatus.completed, TaskStatus.failed]),
       ),
     )
     .all();
@@ -89,7 +90,7 @@ export function reconcileInterruptedRuns(db: Db): void {
   if (stalePending.length > 0) {
     const ids = [...new Set(stalePending.map((row) => row.issueId))];
     db.update(issues)
-      .set({ status: 'pending', updated_at: now })
+      .set({ status: TaskStatus.pending, updated_at: now })
       .where(inArray(issues.id, ids))
       .run();
     console.error(

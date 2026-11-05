@@ -1,32 +1,6 @@
-import type {
-  ControlResult,
-  CreateIssueRequest,
-  CreateIterationRequest,
-  CreateRepoRequest,
-  CreateTagRequest,
-  Issue,
-  IssueFile,
-  Iteration,
-  JiraValidationResult,
-  ModelDescriptor,
-  PromptMode,
-  PromptResult,
-  RepoBranchesResponse,
-  RepoValidationResult,
-  RetroRun,
-  RetroRunWithLog,
-  RoomAgent,
-  SavedRepo,
-  SessionCommand,
-  SessionControlSnapshot,
-  StepRunWithLog,
-  Tag,
-  ThinkingLevel,
-  UpdateRepoRequest,
-  UpdateTagRequest,
-  WorkspaceFile,
-} from '@issue-resolver/shared';
+import type { ControlResult, CreateIssueRequest, CreateIterationRequest, CreateRepoRequest, CreateTagRequest, Issue, IssueFile, Iteration, JiraValidationResult, ModelDescriptor, PromptMode, PromptResult, RepoBranchesResponse, RepoValidationResult, RetroRun, RetroRunWithLog, RoomAgent, SavedRepo, SessionCommand, SessionControlSnapshot, StepRunWithLog, Tag, ThinkingLevel, UpdateRepoRequest, UpdateTagRequest, WorkspaceFile } from '@issue-resolver/shared';
 import type { StepRunWithEvents } from './session-events';
+import { RoomAgentStatus } from '@issue-resolver/shared';
 
 export const API_BASE = '/issue-resolver/api/v1';
 
@@ -268,10 +242,10 @@ function isRoomAgent(value: unknown): value is RoomAgent {
     typeof agent.id === 'string' &&
     (agent.role === 'worker' || agent.role === 'coordinator') &&
     typeof agent.label === 'string' &&
-    (agent.status === 'running' ||
-      agent.status === 'finished' ||
-      agent.status === 'aborted' ||
-      agent.status === 'failed')
+    (agent.status === RoomAgentStatus.running ||
+      agent.status === RoomAgentStatus.finished ||
+      agent.status === RoomAgentStatus.aborted ||
+      agent.status === RoomAgentStatus.failed)
   );
 }
 

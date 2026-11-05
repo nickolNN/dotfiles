@@ -5,6 +5,7 @@ import {
   repoPrepStatus,
   type RepoPrepStep,
 } from './repoPrep';
+import { WorkspaceProgressStatus } from '@issue-resolver/shared';
 
 const step = (
   s: string,
@@ -47,32 +48,32 @@ describe('repoPrepStatus', () => {
   });
 
   it('клонирование running/done → cloning/cloned', () => {
-    expect(repoPrepStatus('Hello-World', true, [step('cloning', 'running')])).toBe(
+    expect(repoPrepStatus('Hello-World', true, [step('cloning', WorkspaceProgressStatus.running)])).toBe(
       'cloning',
     );
-    expect(repoPrepStatus('Hello-World', true, [step('cloning', 'done')])).toBe(
+    expect(repoPrepStatus('Hello-World', true, [step('cloning', WorkspaceProgressStatus.done)])).toBe(
       'cloned',
     );
   });
 
   it('проверка инструкции → cloned', () => {
     expect(
-      repoPrepStatus('Hello-World', true, [step('checking_instructions', 'done')]),
+      repoPrepStatus('Hello-World', true, [step('checking_instructions', WorkspaceProgressStatus.done)]),
     ).toBe('cloned');
   });
 
   it('DevOps и установка', () => {
     expect(
-      repoPrepStatus('Hello-World', true, [step('devops', 'running')]),
+      repoPrepStatus('Hello-World', true, [step('devops', WorkspaceProgressStatus.running)]),
     ).toBe('devops');
-    expect(repoPrepStatus('Hello-World', true, [step('installing', 'done')])).toBe(
+    expect(repoPrepStatus('Hello-World', true, [step('installing', WorkspaceProgressStatus.done)])).toBe(
       'installed',
     );
   });
 
   it('терминальный ready → ready', () => {
     expect(
-      repoPrepStatus('Hello-World', true, [step('installing', 'done')], true),
+      repoPrepStatus('Hello-World', true, [step('installing', WorkspaceProgressStatus.done)], true),
     ).toBe('ready');
   });
 
@@ -81,7 +82,7 @@ describe('repoPrepStatus', () => {
       repoPrepStatus(
         'Hello-World',
         false,
-        [step('devops', 'done', 'пропущен'), step('installing', 'done', 'пропущен')],
+        [step('devops', WorkspaceProgressStatus.done, 'пропущен'), step('installing', WorkspaceProgressStatus.done, 'пропущен')],
       ),
     ).toBe('skipped');
     expect(repoPrepStatus('Hello-World', false, [], true)).toBe('skipped');
@@ -92,7 +93,7 @@ describe('repoPrepStatus', () => {
       repoPrepStatus(
         'Hello-World',
         true,
-        [step('cloning', 'error', 'clone failed')],
+        [step('cloning', WorkspaceProgressStatus.error, 'clone failed')],
         true,
       ),
     ).toBe('failed');
@@ -102,7 +103,7 @@ describe('repoPrepStatus', () => {
     const foreign: RepoPrepStep = {
       step: 'installing',
       repo: 'Other-Repo',
-      status: 'done',
+      status: WorkspaceProgressStatus.done,
     };
     expect(repoPrepStatus('Hello-World', true, [foreign])).toBe('pending');
   });
@@ -110,8 +111,8 @@ describe('repoPrepStatus', () => {
   it('берёт последний шаг, а не первый', () => {
     expect(
       repoPrepStatus('Hello-World', true, [
-        step('cloning', 'running'),
-        step('cloning', 'done'),
+        step('cloning', WorkspaceProgressStatus.running),
+        step('cloning', WorkspaceProgressStatus.done),
       ]),
     ).toBe('cloned');
   });
@@ -119,14 +120,14 @@ describe('repoPrepStatus', () => {
   it('dev_server running → dev_server, warning → installed (не failed)', () => {
     expect(
       repoPrepStatus('Hello-World', true, [
-        step('installing', 'done'),
-        step('dev_server', 'running'),
+        step('installing', WorkspaceProgressStatus.done),
+        step('dev_server', WorkspaceProgressStatus.running),
       ]),
     ).toBe('dev_server');
     expect(
       repoPrepStatus('Hello-World', true, [
-        step('installing', 'done'),
-        step('dev_server', 'warning', 'порт не найден'),
+        step('installing', WorkspaceProgressStatus.done),
+        step('dev_server', WorkspaceProgressStatus.warning, 'порт не найден'),
       ]),
     ).toBe('installed');
   });
@@ -136,19 +137,19 @@ describe('repoDevPort', () => {
   it('возвращает порт из done-шага dev_server', () => {
     expect(
       repoDevPort('Hello-World', [
-        step('installing', 'done'),
-        step('dev_server', 'done', 'localhost:5173', 5173),
+        step('installing', WorkspaceProgressStatus.done),
+        step('dev_server', WorkspaceProgressStatus.done, 'localhost:5173', 5173),
       ]),
     ).toBe(5173);
   });
 
   it('нет порта/warning/чужой репозиторий → undefined', () => {
-    expect(repoDevPort('Hello-World', [step('dev_server', 'running')])).toBeUndefined();
+    expect(repoDevPort('Hello-World', [step('dev_server', WorkspaceProgressStatus.running)])).toBeUndefined();
     expect(
-      repoDevPort('Hello-World', [step('dev_server', 'warning', 'нет')]),
+      repoDevPort('Hello-World', [step('dev_server', WorkspaceProgressStatus.warning, 'нет')]),
     ).toBeUndefined();
     expect(
-      repoDevPort('Other-Repo', [step('dev_server', 'done', 'x', 5173)]),
+      repoDevPort('Other-Repo', [step('dev_server', WorkspaceProgressStatus.done, 'x', 5173)]),
     ).toBeUndefined();
   });
 });

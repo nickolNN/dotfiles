@@ -1,9 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type {
-  SessionQuestion,
-  StepExecutionResult,
-  StepReport,
-} from '@issue-resolver/shared';
+import type { SessionQuestion, StepExecutionResult, StepReport } from '@issue-resolver/shared';
 import {
   allSuccessScenario,
   builtinScenario,
@@ -16,6 +12,7 @@ import { FakeGitService } from '../src/git/service';
 import type { PiRunCall, PiRunner, PiRunOptions } from '../src/pi/runner';
 import type { UiResponsePayload } from '../src/pi/session-registry';
 import type { DevOpsFactory } from '../src/workflow/engine';
+import { StepReportStatus } from '@issue-resolver/shared';
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -201,7 +198,7 @@ export class ScenarioPiRunner implements PiRunner {
     mock: MockPiStep,
   ): StepExecutionResult {
     const report: StepReport = {
-      status: 'pass',
+      status: StepReportStatus.pass,
       summary: `E2E: ${step} ok`,
       ...(mock.reportData ?? {}),
     } as StepReport;
@@ -221,7 +218,7 @@ export class ScenarioPiRunner implements PiRunner {
     mock: MockPiStep,
   ): StepExecutionResult {
     const report: StepReport = {
-      status: 'fail',
+      status: StepReportStatus.fail,
       summary: `E2E: ${step} failed`,
       ...(mock.reportData ?? {}),
     } as StepReport;

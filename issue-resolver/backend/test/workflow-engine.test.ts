@@ -2,19 +2,15 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type {
-  ExecutionPlan,
-  Iteration,
-  PipelineStep,
-  SessionEvent,
-  SessionStats,
-  SSEEvent,
-  StepExecutionResult,
-  StepOutput,
-  StepRun,
+import type { ExecutionPlan, Iteration, PipelineStep, SessionEvent, SessionStats, SSEEvent, StepExecutionResult, StepOutput, StepRun } from '@issue-resolver/shared';
+import {
+  MAX_PIPELINE_ATTEMPTS,
+  MAX_SELF_RETRIES,
+  parseStepReport,
+  TaskStatus,
+  StepReportStatus,
   StepRunStatus,
 } from '@issue-resolver/shared';
-import { MAX_PIPELINE_ATTEMPTS, parseStepReport } from '@issue-resolver/shared';
 import { FakeContainerController } from '../src/docker/controller';
 import { FakeGitService } from '../src/git/service';
 import { FakePiRunner } from '../src/pi/runner';
@@ -28,6 +24,7 @@ import type {
   WorkflowDeps,
 } from '../src/workflow/engine';
 import { runIteration } from '../src/workflow/engine';
+import { STEP_FAILURE_TEXT } from '../src/workflow/step-failure';
 import { featureBranchName } from '../src/workflow/engine';
 
 const NOW = '2026-01-01T00:00:00.000Z';
@@ -57,7 +54,7 @@ class InMemoryStepRunStore implements StepRunStore {
       iteration_id: input.iterationId,
       step: input.step,
       attempt: input.attempt,
-      status: 'pending',
+      status: StepRunStatus.pending,
       context: input.context,
       feedback: null,
       created_at: NOW,
@@ -136,7 +133,7 @@ const makeInput = (
     review_context: '',
     is_review_need: false,
     steps,
-    status: 'running',
+    status: TaskStatus.running,
     created_at: NOW,
     updated_at: NOW,
   } satisfies Iteration,
@@ -167,7 +164,7 @@ const noReport = (
 const pass = (step: PipelineStep): StepExecutionResult => ({
   step,
   exitCode: 0,
-  report: { status: 'pass', summary: `${step} ok` },
+  report: { status: StepReportStatus.pass, summary: `${step} ok` },
   stdout: `${step} out`,
   stderr: '',
 });
@@ -175,7 +172,7 @@ const pass = (step: PipelineStep): StepExecutionResult => ({
 const fail = (step: PipelineStep): StepExecutionResult => ({
   step,
   exitCode: 1,
-  report: { status: 'fail', summary: `${step} no` },
+  report: { status: StepReportStatus.fail, summary: `${step} no` },
   stdout: '',
   stderr: `${step} err`,
 });
@@ -187,6 +184,23 @@ const aborted = (step: PipelineStep): StepExecutionResult => ({
 
 const trace = (store: InMemoryStepRunStore): string[] =>
   store.runs.map((run) => `${run.step}#${run.attempt}:${run.status}`);
+
+const enqueueSelfRetries = (
+  pi: FakePiRunner,
+  result: StepExecutionResult,
+): void => {
+  const attempts = (MAX_SELF_RETRIES.resolve ?? 0) + 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    pi.enqueue({ ...result });
+  }
+};
+
+const errorNotices = (events: SSEEvent[]): SessionEvent[] =>
+  events
+    .filter((event) => event.type === 'step_event')
+    .map((event) => JSON.parse(event.data) as { event: SessionEvent })
+    .map((payload) => payload.event)
+    .filter((event) => event.type === 'notice' && event.level === 'error');
 
 describe('runIteration — один шаг', () => {
   it('resolve успех → completed, stepRun success, output создан, SSE-события', async () => {
@@ -249,7 +263,7 @@ describe('runIteration — один шаг', () => {
     const observed: StepRunStatus[] = [];
     deps.pi = {
       run: async () => {
-        observed.push(store.runs[store.runs.length - 1]?.status ?? 'pending');
+        observed.push(store.runs[store.runs.length - 1]?.status ?? StepRunStatus.pending);
         return fail('resolve');
       },
     };
@@ -420,7 +434,7 @@ describe('runIteration — один шаг', () => {
     pi.enqueue({
       step: 'resolve',
       exitCode: 0,
-      report: { status: 'pass', summary: 'ok' },
+      report: { status: StepReportStatus.pass, summary: 'ok' },
       stdout: 'hi',
       stderr: '',
       events: sessionEvents,
@@ -452,7 +466,7 @@ describe('runIteration — один шаг', () => {
     pi.enqueue({
       step: 'resolve',
       exitCode: 0,
-      report: { status: 'pass', summary: 'ok' },
+      report: { status: StepReportStatus.pass, summary: 'ok' },
       stdout: '',
       stderr: '',
       events: [
@@ -482,7 +496,7 @@ describe('runIteration — один шаг', () => {
     pi.enqueue({
       step: 'resolve',
       exitCode: 0,
-      report: { status: 'pass', summary: 'ok' },
+      report: { status: StepReportStatus.pass, summary: 'ok' },
       stdout: '',
       stderr: '',
       stats,
@@ -498,7 +512,7 @@ describe('runIteration — один шаг', () => {
     pi.enqueue({
       step: 'resolve',
       exitCode: 0,
-      report: { status: 'blocked', summary: 'need input' },
+      report: { status: StepReportStatus.blocked, summary: 'need input' },
       stdout: '',
       stderr: '',
     });
@@ -571,17 +585,109 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     };
   };
 
-  it('нет файла и result.report=null → report хранится пустой строкой, exit0 success', async () => {
-    const { deps, store, pi } = makeDeps();
+  it('нет файла и result.report=null → шаг failed с причиной no_report, а не success', async () => {
+    const { deps, store, pi, sse } = makeDeps();
     const { root } = await withWorkspace();
     deps.workspaceRoot = root;
+    enqueueSelfRetries(pi, noReport('resolve'));
+    const events: SSEEvent[] = [];
+    sse.subscribe('iter-1', (event) => events.push(event));
+
+    const result = await runIteration(deps, makeInput(['resolve']));
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(trace(store)).toEqual([
+      'resolve#1:failed',
+      'resolve#2:failed',
+      'resolve#3:failed',
+      'resolve#4:failed',
+    ]);
+    expect(JSON.parse(store.outputs[0].report)).toEqual({
+      status: 'fail',
+      summary: STEP_FAILURE_TEXT.no_report,
+    });
+    expect(errorNotices(events)).toContainEqual({
+      type: 'notice',
+      level: 'error',
+      message: STEP_FAILURE_TEXT.no_report,
+    });
+  });
+
+  it('модель не отвечала → failed с причиной no_model_reply и notice в живой лог', async () => {
+    const { deps, store, pi, sse } = makeDeps();
+    const { root } = await withWorkspace();
+    deps.workspaceRoot = root;
+    enqueueSelfRetries(pi, { ...noReport('resolve'), modelReplied: false });
+    const events: SSEEvent[] = [];
+    sse.subscribe('iter-1', (event) => events.push(event));
+
+    await runIteration(deps, makeInput(['resolve']));
+
+    expect(trace(store)[0]).toBe('resolve#1:failed');
+    expect(JSON.parse(store.outputs[0].report)).toEqual({
+      status: 'fail',
+      summary: STEP_FAILURE_TEXT.no_model_reply,
+    });
+    expect(errorNotices(events)).toContainEqual({
+      type: 'notice',
+      level: 'error',
+      message: STEP_FAILURE_TEXT.no_model_reply,
+    });
+  });
+
+  it('отчёт pass от агента, который не получил ответа модели, перекрывается fail', async () => {
+    const { deps, store, pi } = makeDeps();
+    const { root, dir } = await withWorkspace();
+    deps.workspaceRoot = root;
+    piWritesDuringRun(pi, () => [
+      [
+        join(dir, '.issue-step-result.json'),
+        JSON.stringify({ status: 'pass', summary: 'всё хорошо' }),
+      ],
+    ]);
+    enqueueSelfRetries(pi, { ...noReport('resolve'), modelReplied: false });
+
+    await runIteration(deps, makeInput(['resolve']));
+
+    expect(JSON.parse(store.outputs[0].report)).toEqual({
+      status: 'fail',
+      summary: `${STEP_FAILURE_TEXT.no_model_reply} (отчёт шага: всё хорошо)`,
+    });
+  });
+
+  it('свежий отчёт без modelReplied → success (неизвестность не считается молчанием)', async () => {
+    const { deps, store, pi } = makeDeps();
+    const { root, dir } = await withWorkspace();
+    deps.workspaceRoot = root;
+    piWritesDuringRun(pi, () => [
+      [
+        join(dir, '.issue-step-result.json'),
+        JSON.stringify({ status: 'pass', summary: 'готово' }),
+      ],
+    ]);
     pi.enqueue(noReport('resolve'));
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
     expect(trace(store)).toEqual(['resolve#1:success']);
-    expect(store.outputs[0].report).toBe('');
+  });
+
+  it('отчёт предыдущего шага не считается свежим → failed/no_report', async () => {
+    const { deps, store, pi } = makeDeps();
+    const { root } = await withWorkspace(
+      JSON.stringify({ status: 'pass', summary: 'отчёт прошлого шага' }),
+    );
+    deps.workspaceRoot = root;
+    enqueueSelfRetries(pi, noReport('resolve'));
+
+    await runIteration(deps, makeInput(['resolve']));
+
+    expect(trace(store)[0]).toBe('resolve#1:failed');
+    expect(JSON.parse(store.outputs[0].report)).toEqual({
+      status: 'fail',
+      summary: STEP_FAILURE_TEXT.no_report,
+    });
   });
 
   it('каталог screenshots/ шага → screenshots_dir в output (строка UI «Скриншоты»)', async () => {
@@ -656,18 +762,23 @@ describe('runIteration — отчёт из файла .issue-step-result.json', 
     });
   });
 
-  it('битый JSON не роняет прогон: report пустой, exit0 → success', async () => {
+  it('битый JSON не роняет прогон, но шаг failed: отчёта нет — проверять нечего', async () => {
     const { deps, store, pi } = makeDeps();
     const { root, dir } = await withWorkspace();
     deps.workspaceRoot = root;
     piWritesDuringRun(pi, () => [[join(dir, '.issue-step-result.json'), '{not json']]);
-    pi.enqueue(noReport('resolve'));
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      pi.enqueue(noReport('resolve'));
+    }
 
     const result = await runIteration(deps, makeInput(['resolve']));
 
-    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    expect(trace(store)).toEqual(['resolve#1:success']);
-    expect(store.outputs[0].report).toBe('');
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(trace(store)[0]).toBe('resolve#1:failed');
+    expect(JSON.parse(store.outputs[0].report)).toEqual({
+      status: 'fail',
+      summary: STEP_FAILURE_TEXT.no_report,
+    });
   });
 
   it('отчёт, записанный в клон репозитория, читается: клон — тоже рабочая папка', async () => {
@@ -738,7 +849,7 @@ describe('runIteration — цикл фидбека', () => {
       step: 'review',
       exitCode: 1,
       report: {
-        status: 'fail',
+        status: StepReportStatus.fail,
         summary: 'README counts are stale',
         findings: [
           {
@@ -990,7 +1101,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       review_context: '',
       is_review_need: false,
       steps,
-      status: 'running',
+      status: TaskStatus.running,
       created_at: NOW,
       updated_at: NOW,
     } satisfies Iteration,
@@ -1396,7 +1507,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       step: 'resolve',
       exitCode: 0,
       report: {
-        status: 'pass',
+        status: StepReportStatus.pass,
         summary: 'resolve ok',
         title: 'stale per-iteration title',
         description: 'describes only this iteration',
@@ -1408,7 +1519,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
       step: 'pr',
       exitCode: 0,
       report: {
-        status: 'pass',
+        status: StepReportStatus.pass,
         summary: 'pr ok',
         title: 'KOS-1: whole task, all iterations',
         description: '## Summary\nfull payload\n',
@@ -1493,7 +1604,7 @@ describe('runIteration — pr-шаг (git commit/push + MR)', () => {
         review_context: '',
         is_review_need: false,
         steps: ['resolve', 'pr'],
-        status: 'running',
+        status: TaskStatus.running,
         created_at: NOW,
         updated_at: NOW,
       },
@@ -1528,7 +1639,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
   const refineWith = (execution: ExecutionPlan): StepExecutionResult => ({
     step: 'refine',
     exitCode: 0,
-    report: { status: 'pass', summary: 'plan', execution },
+    report: { status: StepReportStatus.pass, summary: 'plan', execution },
     stdout: '',
     stderr: '',
   });
@@ -1536,7 +1647,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
   const resolveWith = (summary: string): StepExecutionResult => ({
     step: 'resolve',
     exitCode: 0,
-    report: { status: 'pass', summary },
+    report: { status: StepReportStatus.pass, summary },
     stdout: `${summary} out`,
     stderr: '',
   });
@@ -1707,7 +1818,7 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     pi.enqueue({
       ...resolveWith('worker0'),
       exitCode: 1,
-      report: { status: 'fail', summary: 'aborted' },
+      report: { status: StepReportStatus.fail, summary: 'aborted' },
       aborted: true,
     });
     pi.enqueue(resolveWith('worker1'));

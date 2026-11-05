@@ -1,20 +1,5 @@
-import type {
-  ExecutionPlan,
-  NormalizedStage,
-  RoomWorkItem,
-  SessionEvent,
-  SessionStats,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
-import {
-  SessionAddress,
-  clampExecutors,
-  DEFAULT_MAX_ROOM_EXECUTORS,
-  parseStepReport,
-  planExecutionStages,
-  planRoomWorkItems,
-  sumSessionStats,
-} from '@issue-resolver/shared';
+import type { ExecutionPlan, NormalizedStage, RoomWorkItem, SessionEvent, SessionStats, StepExecutionResult } from '@issue-resolver/shared';
+import { SessionAddress, clampExecutors, DEFAULT_MAX_ROOM_EXECUTORS, parseStepReport, planExecutionStages, planRoomWorkItems, sumSessionStats, StepReportStatus } from '@issue-resolver/shared';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PiRunner } from '../pi/runner';
@@ -108,7 +93,7 @@ const coordinatorAgent = (
 const abortedResolveResult = (): StepExecutionResult => ({
   step: 'resolve',
   exitCode: 1,
-  report: { status: 'fail', summary: 'aborted' },
+  report: { status: StepReportStatus.fail, summary: 'aborted' },
   stdout: '',
   stderr: '',
   events: [],

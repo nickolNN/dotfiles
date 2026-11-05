@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type {
-  Issue,
-  Iteration,
-  StepRunWithLog,
-} from '@issue-resolver/shared';
+import type { Issue, Iteration, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -14,7 +11,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -30,7 +27,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -46,7 +43,7 @@ function makeStepRun(
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
-    status: 'success',
+    status: StepRunStatus.success,
     context: '',
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
@@ -120,8 +117,8 @@ describe('TaskDetail — шаги выбранной итерации', () => {
     stubFetch(() =>
       Promise.resolve(
         jsonResponse([
-          makeStepRun({ id: 'run-1', step: 'resolve', attempt: 1, status: 'success' }),
-          makeStepRun({ id: 'run-2', step: 'test', attempt: 2, status: 'failed' }),
+          makeStepRun({ id: 'run-1', step: 'resolve', attempt: 1, status: StepRunStatus.success }),
+          makeStepRun({ id: 'run-2', step: 'test', attempt: 2, status: StepRunStatus.failed }),
         ]),
       ),
     );
@@ -172,7 +169,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
           issue_id: 'issue-1',
           iteration_id: 'iter-1',
           step: 'resolve',
-          status: 'success',
+          status: StepRunStatus.success,
         }),
       ],
       'iter-2': [
@@ -180,7 +177,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
           id: 'run-b',
           iteration_id: 'iter-2',
           step: 'test',
-          status: 'running',
+          status: StepRunStatus.running,
         }),
       ],
     });
@@ -205,7 +202,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
         jsonResponse([
           makeStepRun({
             id: 'run-1',
-            status: 'running',
+            status: StepRunStatus.running,
             stdout: 'building...\nok',
             stderr: 'warning: deprecated',
             report: '## Итог\nвсё хорошо',
@@ -230,7 +227,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
   it('шаг без событий: running → пустой session-вывод, без текста результата', async () => {
     stubFetch(() =>
       Promise.resolve(
-        jsonResponse([makeStepRun({ id: 'run-1', status: 'running' })]),
+        jsonResponse([makeStepRun({ id: 'run-1', status: StepRunStatus.running })]),
       ),
     );
 
@@ -245,7 +242,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
   it('завершённый шаг без отчёта → «Результат отсутствует.»', async () => {
     stubFetch(() =>
       Promise.resolve(
-        jsonResponse([makeStepRun({ id: 'run-1', status: 'success' })]),
+        jsonResponse([makeStepRun({ id: 'run-1', status: StepRunStatus.success })]),
       ),
     );
 
@@ -264,7 +261,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
         jsonResponse([
           makeStepRun({
             id: 'run-1',
-            status: 'success',
+            status: StepRunStatus.success,
             events: [{ type: 'text', text: 'сырой вывод агента' }],
             report: JSON.stringify({
               status: 'pass',
@@ -289,7 +286,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
     stubFetch(() =>
       Promise.resolve(
         jsonResponse([
-          makeStepRun({ id: 'run-1', status: 'failed', report: 'null' }),
+          makeStepRun({ id: 'run-1', status: StepRunStatus.failed, report: 'null' }),
         ]),
       ),
     );
@@ -310,7 +307,7 @@ describe('TaskDetail — шаги выбранной итерации', () => {
           makeStepRun({
             id: 'run-1',
             step: 'pr',
-            status: 'failed',
+            status: StepRunStatus.failed,
             report: JSON.stringify({
               status: 'pass',
               summary: 'PR-описание готово',

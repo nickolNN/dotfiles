@@ -1,9 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  CreateTagRequest,
-  RunInstructionsStatus,
-  UpdateTagRequest,
-} from '@issue-resolver/shared';
+import { RunInstructionsStatus } from '@issue-resolver/shared';
+import type { CreateTagRequest, UpdateTagRequest } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
@@ -26,7 +23,7 @@ function makeDb(): Db {
 function seedRepo(
   db: Db,
   url: string,
-  status: RunInstructionsStatus = 'generated',
+  status: RunInstructionsStatus = RunInstructionsStatus.generated,
 ): string {
   const id = randomUUID();
   const now = new Date().toISOString();
@@ -156,7 +153,7 @@ describe('updateTag — смена тег-инструкций инвалиди�
 
     updateTagRunInstructions(db, tag.id, {
       instructions: '# Workspace\nwritten by agent',
-      status: 'generated',
+      status: RunInstructionsStatus.generated,
     });
 
     expect(repoRunInstructions(db, repoId)).toMatchObject({

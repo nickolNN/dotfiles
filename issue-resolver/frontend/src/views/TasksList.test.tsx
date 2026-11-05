@@ -8,14 +8,9 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import type {
-  Issue,
-  Iteration,
-  SavedRepo,
-  SessionStats,
-  StepRunWithLog,
-} from '@issue-resolver/shared';
+import type { Issue, Iteration, SavedRepo, SessionStats, StepRunWithLog } from '@issue-resolver/shared';
 import TasksList from './TasksList';
+import { TaskStatus, StepRunStatus, RepoConnectionStatus, RunInstructionsStatus } from '@issue-resolver/shared';
 
 function makeIssue(id: string, title: string): Issue {
   return {
@@ -24,7 +19,7 @@ function makeIssue(id: string, title: string): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
   };
@@ -78,7 +73,7 @@ function makeRepoIssue(
 function makeIteration(
   id: string,
   number: number,
-  status: Iteration['status'] = 'completed',
+  status: Iteration['status'] = TaskStatus.completed,
 ): Iteration {
   return {
     id,
@@ -127,7 +122,7 @@ function makeStepRun(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog {
     iteration_id: 'it-1',
     step: 'resolve',
     attempt: 1,
-    status: 'success',
+    status: StepRunStatus.success,
     context: '',
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
@@ -265,7 +260,7 @@ describe('TasksList', () => {
         },
       ],
       pipeline_steps: ['resolve'],
-      status: 'running',
+      status: TaskStatus.running,
       created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
       updated_at: '2026-10-09T00:00:00.000Z',
     };
@@ -874,14 +869,14 @@ describe('TasksList', () => {
   it('running: таймер — время работы step-runs, статистика без токенов', async () => {
     const issue: Issue = {
       ...makeIssue('1', 'Running task'),
-      status: 'running',
+      status: TaskStatus.running,
       created_at: new Date(Date.now() - 600_000).toISOString(),
       updated_at: new Date().toISOString(),
     };
     stubRoutedFetch({
       issues: [issue],
       iterations: {
-        '1': [makeIteration('it-1', 1, 'completed'), makeIteration('it-2', 2, 'running')],
+        '1': [makeIteration('it-1', 1, TaskStatus.completed), makeIteration('it-2', 2, TaskStatus.running)],
       },
       stepRuns: {
         'it-1': [
@@ -896,7 +891,7 @@ describe('TasksList', () => {
           makeStepRun({
             id: 'b',
             iteration_id: 'it-2',
-            status: 'running',
+            status: StepRunStatus.running,
             created_at: new Date(Date.now() - 60_000).toISOString(),
             updated_at: new Date().toISOString(),
           }),
@@ -918,7 +913,7 @@ describe('TasksList', () => {
   it('completed: таймер суммирует step-runs, не считая простой между итерациями', async () => {
     const issue: Issue = {
       ...makeIssue('1', 'Done task'),
-      status: 'completed',
+      status: TaskStatus.completed,
       created_at: '2026-10-09T00:00:00.000Z',
       updated_at: '2026-10-09T01:00:00.000Z',
     };
@@ -970,7 +965,7 @@ describe('TasksList', () => {
   it('пока step-runs не загружены — таймера нет, остаётся относительное время', async () => {
     const issue: Issue = {
       ...makeIssue('1', 'Running task'),
-      status: 'running',
+      status: TaskStatus.running,
       created_at: new Date(Date.now() - 600_000).toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -985,7 +980,7 @@ describe('TasksList', () => {
         if (url.endsWith('/iterations')) {
           return Promise.resolve({
             ok: true,
-            json: async () => [makeIteration('it-1', 1, 'running')],
+            json: async () => [makeIteration('it-1', 1, TaskStatus.running)],
           });
         }
         if (url.endsWith('/step-runs')) {
@@ -1022,7 +1017,7 @@ describe('TasksList', () => {
   });
 
   it('ререндер не перезапрашивает статистику (кеш в состоянии)', async () => {
-    const issue: Issue = { ...makeIssue('1', 'Done task'), status: 'completed' };
+    const issue: Issue = { ...makeIssue('1', 'Done task'), status: TaskStatus.completed };
     const routes = stubRoutedFetch({
       issues: [issue],
       iterations: { '1': [makeIteration('it-1', 1)] },
@@ -1045,7 +1040,7 @@ describe('TasksList', () => {
   });
 
   it('completed: средняя скорость последней итерации — ⚡N t/s', async () => {
-    const issue: Issue = { ...makeIssue('1', 'Done task'), status: 'completed' };
+    const issue: Issue = { ...makeIssue('1', 'Done task'), status: TaskStatus.completed };
     stubRoutedFetch({
       issues: [issue],
       iterations: { '1': [makeIteration('it-1', 1), makeIteration('it-2', 2)] },
@@ -1093,11 +1088,11 @@ describe('TasksList', () => {
       'git@github.com:org/c.git',
     ];
     const { calls } = stubRoutedFetch({
-      issues: [makeRepoIssue('1', 'pending', urls)],
+      issues: [makeRepoIssue('1', TaskStatus.pending, urls)],
       repositories: [
-        makeSavedRepo(urls[0], 'ok', 'generated'),
-        makeSavedRepo(urls[1], 'ok', 'unknown'),
-        makeSavedRepo(urls[2], 'unknown', 'unknown'),
+        makeSavedRepo(urls[0], RepoConnectionStatus.ok, RunInstructionsStatus.generated),
+        makeSavedRepo(urls[1], RepoConnectionStatus.ok, RunInstructionsStatus.unknown),
+        makeSavedRepo(urls[2], RepoConnectionStatus.unknown, RunInstructionsStatus.unknown),
       ],
     });
 
@@ -1120,10 +1115,10 @@ describe('TasksList', () => {
       'git@github.com:org/missing.git',
     ];
     stubRoutedFetch({
-      issues: [makeRepoIssue('1', 'preparing', urls)],
+      issues: [makeRepoIssue('1', TaskStatus.preparing, urls)],
       repositories: [
-        makeSavedRepo(urls[0], 'ok', 'generated'),
-        makeSavedRepo(urls[1], 'error', 'failed'),
+        makeSavedRepo(urls[0], RepoConnectionStatus.ok, RunInstructionsStatus.generated),
+        makeSavedRepo(urls[1], RepoConnectionStatus.error, RunInstructionsStatus.failed),
       ],
     });
 
@@ -1143,10 +1138,10 @@ describe('TasksList', () => {
     const shared = ['git@github.com:org/shared.git'];
     const { calls } = stubRoutedFetch({
       issues: [
-        makeRepoIssue('1', 'pending', shared),
-        makeRepoIssue('2', 'pending', shared),
+        makeRepoIssue('1', TaskStatus.pending, shared),
+        makeRepoIssue('2', TaskStatus.pending, shared),
       ],
-      repositories: [makeSavedRepo(shared[0], 'ok', 'generated')],
+      repositories: [makeSavedRepo(shared[0], RepoConnectionStatus.ok, RunInstructionsStatus.generated)],
     });
 
     render(<TasksList />);
@@ -1163,9 +1158,9 @@ describe('TasksList', () => {
     const urls = ['git@github.com:org/a.git'];
     const { calls } = stubRoutedFetch({
       issues: [
-        { ...makeRepoIssue('1', 'completed', urls), desired_result: 'md' },
+        { ...makeRepoIssue('1', TaskStatus.completed, urls), desired_result: 'md' },
       ],
-      repositories: [makeSavedRepo(urls[0], 'ok', 'generated')],
+      repositories: [makeSavedRepo(urls[0], RepoConnectionStatus.ok, RunInstructionsStatus.generated)],
     });
 
     render(<TasksList />);
@@ -1191,7 +1186,7 @@ describe('TasksList', () => {
         }
         return Promise.resolve({
           ok: true,
-          json: async () => [makeRepoIssue('1', 'pending', urls)],
+          json: async () => [makeRepoIssue('1', TaskStatus.pending, urls)],
         });
       }),
     );
@@ -1206,7 +1201,7 @@ describe('TasksList', () => {
   it('время создания перенесено в строку с кнопками действий', async () => {
     const issue: Issue = {
       ...makeIssue('1', 'Done task'),
-      status: 'completed',
+      status: TaskStatus.completed,
       created_at: new Date(Date.now() - 300_000).toISOString(),
       updated_at: new Date().toISOString(),
     };

@@ -8,6 +8,7 @@ import {
 } from '@testing-library/react';
 import type { SavedRepo, Tag, TagRepositoryWithRepo } from '@issue-resolver/shared';
 import Tags from './Tags';
+import { RepoConnectionStatus, RunInstructionsStatus } from '@issue-resolver/shared';
 
 function savedRepo(id: string): SavedRepo {
   return {
@@ -20,11 +21,11 @@ function savedRepo(id: string): SavedRepo {
     language: 'TypeScript',
     description: null,
     isPrivate: false,
-    connectionStatus: 'ok',
+    connectionStatus: RepoConnectionStatus.ok,
     lastValidatedAt: '2026-10-12T10:00:00.000Z',
     writeAccess: true,
     runInstructions: null,
-    runInstructionsStatus: 'unknown',
+    runInstructionsStatus: RunInstructionsStatus.unknown,
     createdAt: '2026-10-12T00:00:00.000Z',
     updatedAt: '2026-10-12T00:00:00.000Z',
   };
@@ -47,7 +48,7 @@ function makeTag(id: string, repositories: TagRepositoryWithRepo[] = []): Tag {
     name: 'Frontend',
     description: null,
     run_instructions: null,
-    run_instructions_status: 'unknown',
+    run_instructions_status: RunInstructionsStatus.unknown,
     repositories,
     created_at: '2026-10-12T00:00:00.000Z',
     updated_at: '2026-10-12T00:00:00.000Z',

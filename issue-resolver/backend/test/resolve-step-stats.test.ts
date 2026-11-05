@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  ExecutionPlan,
-  PipelineStep,
-  SessionStats,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
+import type { ExecutionPlan, PipelineStep, SessionStats, StepExecutionResult } from '@issue-resolver/shared';
 import { FakePiRunner } from '../src/pi/runner';
 import {
   runRoomResolve,
@@ -13,6 +8,7 @@ import {
   type RoomResolveOptions,
 } from '../src/workflow/room';
 import { COMPLEX_STAGES_PLAN, ROOM_PLAN } from './execution-plans.example';
+import { StepReportStatus } from '@issue-resolver/shared';
 
 const STEP: PipelineStep = 'resolve';
 
@@ -57,7 +53,7 @@ const statsWith = (n: number): SessionStats => ({
 const pass = (summary: string, stats: SessionStats | null): StepExecutionResult => ({
   step: STEP,
   exitCode: 0,
-  report: { status: 'pass', summary },
+  report: { status: StepReportStatus.pass, summary },
   stdout: '',
   stderr: '',
   stats,

@@ -13,6 +13,7 @@ import {
 } from '../src/db/issue-files.repo';
 import { FakePiRunner } from '../src/pi/runner';
 import { issues, iterations } from '../src/db/schema';
+import { TaskStatus } from '@issue-resolver/shared';
 
 const ISSUES = '/issue-resolver/api/v1/issues';
 const ITERATIONS = '/issue-resolver/api/v1/iterations';
@@ -81,7 +82,7 @@ async function waitForTerminalIteration(
       .where(eq(iterations.id, iterationId))
       .get();
     const status = row?.status;
-    return status && status !== 'running' && status !== 'pending'
+    return status && status !== TaskStatus.running && status !== TaskStatus.pending
       ? status
       : undefined;
   });
@@ -153,7 +154,7 @@ describe('POST /iterations/:id/repeat', () => {
           .where(eq(iterations.issue_id, issueId))
           .all()
           .find((iteration) => iteration.number === 1);
-        return first && first.status === 'completed' ? true : undefined;
+        return first && first.status === TaskStatus.completed ? true : undefined;
       });
 
       const created = await app.inject({
@@ -241,7 +242,7 @@ describe('POST /iterations/:id/repeat', () => {
           .where(eq(iterations.issue_id, issueId))
           .all()
           .find((iteration) => iteration.number === 1);
-        return first && first.status === 'completed' ? true : undefined;
+        return first && first.status === TaskStatus.completed ? true : undefined;
       });
 
       const { payload, headers } = multipart(

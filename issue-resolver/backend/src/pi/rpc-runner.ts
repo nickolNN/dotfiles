@@ -1,23 +1,7 @@
 import { spawn } from 'node:child_process';
-import {
-  parseSessionStats,
-  type CompactionReason,
-  type ControlResult,
-  type PipelineStep,
-  type PromptMode,
-  type PromptResult,
-  type SessionCost,
-  type SessionEvent,
-  type SessionQuestion,
-  type SessionSpeed,
-  type SessionStats,
-  type SessionUsage,
-  type StepExecutionResult,
-  type StepReport,
-  isValidPiSessionId,
-} from '@issue-resolver/shared';
+import { parseSessionStats, type CompactionReason, type ControlResult, type PipelineStep, type PromptMode, type PromptResult, type SessionCost, type SessionEvent, type SessionQuestion, type SessionSpeed, type SessionStats, type SessionUsage, type StepExecutionResult, type StepReport, isValidPiSessionId, RoomAgentStatus, StepReportStatus } from '@issue-resolver/shared';
 import type { PiRunOptions, PiRunner } from './runner';
-import type { RoomAgentStatus, UiResponsePayload } from './session-registry';
+import type { UiResponsePayload } from './session-registry';
 
 interface RpcAssistantMessageEvent {
   type?: string;
@@ -151,8 +135,8 @@ const questionAnswerText = (payload: UiResponsePayload): string => {
 };
 
 const agentStatusFor = (result: StepExecutionResult): RoomAgentStatus => {
-  if (result.aborted) return 'aborted';
-  return result.exitCode !== 0 ? 'failed' : 'finished';
+  if (result.aborted) return RoomAgentStatus.aborted;
+  return result.exitCode !== 0 ? RoomAgentStatus.failed : RoomAgentStatus.finished;
 };
 
 const toolResultText = (result: unknown): string => {
@@ -187,6 +171,7 @@ export class RpcSessionParser {
   private readonly collected: SessionEvent[] = [];
   private statsValue: SessionStats | null = null;
   private modelValue: string | null = null;
+  private assistantReplySeen = false;
   private lastUsageTotal: number | null = null;
   private sessionStartMs: number | null = null;
   private speedSample: { output: number; tsMs: number } | null = null;
@@ -212,6 +197,10 @@ export class RpcSessionParser {
 
   stats(): SessionStats | null {
     return this.statsValue;
+  }
+
+  sawAssistantReply(): boolean {
+    return this.assistantReplySeen;
   }
 
   handle(event: RpcEvent): void {
@@ -314,6 +303,7 @@ export class RpcSessionParser {
     if (event.type === 'message_start') {
       const role = asRecord(event.message)?.role;
       if (typeof role === 'string' && role !== 'assistant') return;
+      this.assistantReplySeen = true;
       this.markSessionStart();
       this.flush();
       this.textByIndex.clear();
@@ -326,6 +316,7 @@ export class RpcSessionParser {
     }
 
     if (event.type === 'message_update') {
+      this.assistantReplySeen = true;
       this.handleUsage(event.usage);
       this.handleAssistantMessage(event.assistantMessageEvent);
       return;
@@ -333,6 +324,9 @@ export class RpcSessionParser {
 
     if (event.type === 'message_end') {
       const message = asRecord(event.message);
+      if (message?.role === 'assistant') {
+        this.assistantReplySeen = true;
+      }
       if (message?.role === 'assistant' && message.stopReason === 'length') {
         this.flush();
         this.push({
@@ -847,7 +841,7 @@ export class RpcPiRunner implements PiRunner {
       >();
       let requestSeq = 0;
 
-      const cleanup = (status: RoomAgentStatus = 'finished') => {
+      const cleanup = (status: RoomAgentStatus = RoomAgentStatus.finished) => {
         if (timer) clearTimeout(timer);
         if (statsTimer) clearTimeout(statsTimer);
         if (statsPollTimer) clearInterval(statsPollTimer);
@@ -873,7 +867,8 @@ export class RpcPiRunner implements PiRunner {
           if (child.stdin?.writable) {
             child.stdin.write(`${JSON.stringify({ type: 'exit' })}\n`);
           }
-        } catch {
+        } catch (error) {
+          console.error('pi: exit command not delivered', error);
         }
         if (!child.killed) child.kill('SIGTERM');
         resolve(finalResult);
@@ -922,7 +917,13 @@ export class RpcPiRunner implements PiRunner {
           clearTimeout(statsTimer);
           statsTimer = undefined;
         }
-        finish({ ...result, stats: parser.stats() ?? null });
+        const stats = parser.stats() ?? null;
+        finish({
+          ...result,
+          stats,
+          modelReplied:
+            parser.sawAssistantReply() || (stats?.assistantMessages ?? 0) > 0,
+        });
       };
 
       const requestStatsThenFinish = (result: StepExecutionResult) => {
@@ -981,7 +982,7 @@ export class RpcPiRunner implements PiRunner {
         timer = setTimeout(() => {
           if (settled) return;
           settled = true;
-          cleanup('failed');
+          cleanup(RoomAgentStatus.failed);
           child.kill('SIGKILL');
           reject(
             new Error(
@@ -1057,7 +1058,7 @@ export class RpcPiRunner implements PiRunner {
       child.on('error', (error) => {
         if (settled) return;
         settled = true;
-        cleanup('failed');
+        cleanup(RoomAgentStatus.failed);
         reject(error);
       });
 
@@ -1094,7 +1095,7 @@ export class RpcPiRunner implements PiRunner {
 
   private resultFor(aborted: boolean, stderr: string): StepExecutionResult {
     const report: StepReport | null = aborted
-      ? { status: 'fail', summary: 'aborted' }
+      ? { status: StepReportStatus.fail, summary: 'aborted' }
       : null;
     return {
       step: this.step,

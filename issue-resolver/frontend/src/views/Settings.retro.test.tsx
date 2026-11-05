@@ -8,13 +8,14 @@ import {
 } from '@testing-library/react';
 import type { RetroRun, RetroRunWithLog } from '@issue-resolver/shared';
 import Settings from './Settings';
+import { RetroRunStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-10-30T07:00:00.000Z';
 
 function retroRun(overrides: Partial<RetroRun> = {}): RetroRun {
   return {
     id: 'run-1',
-    status: 'success',
+    status: RetroRunStatus.success,
     model: 'qwen-test',
     instructions: null,
     session_limit: null,
@@ -70,7 +71,7 @@ function stubApi(options: StubOptions = {}) {
       ]);
     }
     if (url.endsWith('/settings/retro') && method === 'POST') {
-      return jsonOk(options.created ?? retroRun({ status: 'running' }));
+      return jsonOk(options.created ?? retroRun({ status: RetroRunStatus.running }));
     }
     if (/\/settings\/retro\/[^/]+\/abort$/.test(url)) {
       return jsonOk({ ok: true });
@@ -187,9 +188,9 @@ describe('Settings — память и ретро', () => {
 
   it('«Остановить» шлёт abort и показывает причину из прогона', async () => {
     const fetchMock = stubApi({
-      created: retroRun({ status: 'running' }),
+      created: retroRun({ status: RetroRunStatus.running }),
       detail: retroRunWithLog({
-        status: 'failed',
+        status: RetroRunStatus.failed,
         error: 'прогон остановлен оператором',
       }),
     });

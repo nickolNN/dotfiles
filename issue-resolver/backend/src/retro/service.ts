@@ -2,13 +2,8 @@ import { readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type {
-  RetroRunStatus,
-  SessionEvent,
-  SessionStats,
-  SSEEvent,
-  ThinkingLevel,
-} from '@issue-resolver/shared';
+import { RetroRunStatus } from '@issue-resolver/shared';
+import type { SessionEvent, SessionStats, SSEEvent, ThinkingLevel } from '@issue-resolver/shared';
 import type { Db } from '../db/client';
 import { dbPathFromEnv } from '../db/client';
 import { getRetroRun, updateRetroRun } from '../db/retro-runs.repo';
@@ -299,7 +294,7 @@ export async function runRetroSession(
   const reportPath = retroReportPath(runId);
   rmSync(reportPath, { force: true });
   activeRetroRuns.add(runId);
-  publishStatus(deps, runId, 'running');
+  publishStatus(deps, runId, RetroRunStatus.running);
 
   let stdout = '';
   let stderr = '';
@@ -355,7 +350,7 @@ export async function runRetroSession(
     const aborted = result.aborted === true;
     const failed = aborted || result.exitCode !== 0 || report === null;
     updateRetroRun(deps.db, runId, {
-      status: failed ? 'failed' : 'success',
+      status: failed ? RetroRunStatus.failed : RetroRunStatus.success,
       report,
       error: reportErrorText(
         result.exitCode,
@@ -370,7 +365,7 @@ export async function runRetroSession(
     });
   } catch (error) {
     updateRetroRun(deps.db, runId, {
-      status: 'failed',
+      status: RetroRunStatus.failed,
       error: messageOf(error),
       stdout,
       stderr,
@@ -383,7 +378,7 @@ export async function runRetroSession(
   }
 
   const run = getRetroRun(deps.db, runId);
-  const status: RetroRunStatus = run?.status ?? 'failed';
+  const status: RetroRunStatus = run?.status ?? RetroRunStatus.failed;
   publishStatus(deps, runId, status);
   return { status, report: run?.report ?? null, error: run?.error ?? null };
 }

@@ -1,5 +1,6 @@
+import { StepRunStatus } from '@issue-resolver/shared';
 import { randomUUID } from 'node:crypto';
-import type { StepRunStatus } from '@issue-resolver/shared';
+
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/client';
@@ -88,11 +89,11 @@ describe('reconcileInterruptedRuns', () => {
     const db = createDb(':memory:');
     const issueId = insertIssue(db, 'running');
     const iterationId = insertIteration(db, issueId, 'running');
-    insertStepRun(db, iterationId, 'running', 1);
-    insertStepRun(db, iterationId, 'pending', 2);
-    insertStepRun(db, iterationId, 'needs_input', 3);
-    insertStepRun(db, iterationId, 'success', 4);
-    insertStepRun(db, iterationId, 'failed', 5);
+    insertStepRun(db, iterationId, StepRunStatus.running, 1);
+    insertStepRun(db, iterationId, StepRunStatus.pending, 2);
+    insertStepRun(db, iterationId, StepRunStatus.needs_input, 3);
+    insertStepRun(db, iterationId, StepRunStatus.success, 4);
+    insertStepRun(db, iterationId, StepRunStatus.failed, 5);
 
     reconcileInterruptedRuns(db);
 
@@ -106,12 +107,12 @@ describe('reconcileInterruptedRuns', () => {
       (row) => row.feedback === 'interrupted by server restart',
     );
     expect(interrupted).toHaveLength(3);
-    expect(interrupted.every((row) => row.status === 'failed')).toBe(true);
+    expect(interrupted.every((row) => row.status === StepRunStatus.failed)).toBe(true);
 
-    const success = runStatuses.find((row) => row.status === 'success');
+    const success = runStatuses.find((row) => row.status === StepRunStatus.success);
     expect(success?.feedback).toBeNull();
     const preexistingFailed = runStatuses.filter(
-      (row) => row.status === 'failed' && row.feedback === null,
+      (row) => row.status === StepRunStatus.failed && row.feedback === null,
     );
     expect(preexistingFailed).toHaveLength(1);
 
@@ -134,7 +135,7 @@ describe('reconcileInterruptedRuns', () => {
     const db = createDb(':memory:');
     const issueId = insertIssue(db, 'completed');
     const iterationId = insertIteration(db, issueId, 'completed');
-    insertStepRun(db, iterationId, 'success', 1);
+    insertStepRun(db, iterationId, StepRunStatus.success, 1);
     const otherIssueId = insertIssue(db, 'completed');
     insertIteration(db, otherIssueId, 'completed');
 
@@ -152,7 +153,7 @@ describe('reconcileInterruptedRuns', () => {
       .from(stepRuns)
       .where(eq(stepRuns.iteration_id, iterationId))
       .all();
-    expect(runs.every((row) => row.status === 'success')).toBe(true);
+    expect(runs.every((row) => row.status === StepRunStatus.success)).toBe(true);
 
     const issue = db
       .select()
@@ -166,8 +167,8 @@ describe('reconcileInterruptedRuns', () => {
     const db = createDb(':memory:');
     const issueId = insertIssue(db, 'running');
     const iterationId = insertIteration(db, issueId, 'running');
-    const doneStep = insertStepRun(db, iterationId, 'success', 1);
-    insertStepRun(db, iterationId, 'running', 2);
+    const doneStep = insertStepRun(db, iterationId, StepRunStatus.success, 1);
+    insertStepRun(db, iterationId, StepRunStatus.running, 2);
 
     reconcileInterruptedRuns(db);
 

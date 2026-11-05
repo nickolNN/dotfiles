@@ -9,6 +9,7 @@ import {
 } from '@testing-library/react';
 import type { Issue, Iteration, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 const RESULT_URL = '/issue-resolver/api/v1/issues/issue-1/result';
 
@@ -19,7 +20,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -35,7 +36,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -49,7 +50,7 @@ function makeStepRun(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog {
     iteration_id: 'iter-1',
     step: 'resolve',
     attempt: 1,
-    status: 'success',
+    status: StepRunStatus.success,
     context: '',
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
@@ -141,7 +142,7 @@ describe('TaskDetail — просмотр отчёта', () => {
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
       [makeStepRun({ report: '' })],
-      [makeIteration({ status: 'failed' })],
+      [makeIteration({ status: TaskStatus.failed })],
     );
 
     render(<TaskDetail issueId="issue-1" />);
@@ -171,7 +172,7 @@ describe('TaskDetail — просмотр отчёта', () => {
       makeIssue({ desired_result: 'md' }),
       () => textResponse('# Итог'),
       [makeStepRun({ report: '' })],
-      [makeIteration({ status: 'completed' })],
+      [makeIteration({ status: TaskStatus.completed })],
     );
 
     render(<TaskDetail issueId="issue-1" />);

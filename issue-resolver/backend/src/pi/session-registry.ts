@@ -1,12 +1,7 @@
-import type {
-  ControlResult,
-  PromptMode,
-  PromptResult,
-  RoomAgent,
-  SessionEvent,
-  SessionStats,
-  SessionUsage,
-} from '@issue-resolver/shared';
+import type { ControlResult, PromptMode, PromptResult, RoomAgent, SessionEvent, SessionStats, SessionUsage } from '@issue-resolver/shared';
+import { RoomAgentStatus } from '@issue-resolver/shared';
+
+export type { RoomAgentStatus };
 
 export interface StepSessionControl {
   steer(text: string): void;
@@ -22,8 +17,6 @@ export interface UiResponsePayload {
   confirmed?: boolean;
   cancelled?: boolean;
 }
-
-export type RoomAgentStatus = RoomAgent['status'];
 
 export interface RoomAgentInfo {
   id: string;
@@ -183,7 +176,7 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
           label: agent.label,
           stage: agent.stage ?? null,
           stageName: agent.stageName ?? null,
-          status: 'running',
+          status: RoomAgentStatus.running,
           startedAt: new Date().toISOString(),
           endedAt: null,
           stats: null,
@@ -200,7 +193,7 @@ export class InMemoryStepSessionRegistry implements StepSessionRegistry {
     }
   }
 
-  unregister(stepRunId: string, status: RoomAgentStatus = 'finished'): void {
+  unregister(stepRunId: string, status: RoomAgentStatus = RoomAgentStatus.finished): void {
     const entry = this.byStepRun.get(stepRunId);
     if (!entry) return;
     this.byStepRun.delete(stepRunId);

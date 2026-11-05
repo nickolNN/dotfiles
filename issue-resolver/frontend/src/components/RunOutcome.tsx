@@ -1,8 +1,5 @@
-import type {
-  SessionStats,
-  StepRunStatus,
-} from '@issue-resolver/shared';
-import { parseStepReport } from '@issue-resolver/shared';
+import type { SessionStats } from '@issue-resolver/shared';
+import { parseStepReport, StepRunStatus } from '@issue-resolver/shared';
 import type { SessionEvent } from '../api/session-events';
 import { CacheIcon } from './TokenStats';
 import AutoScrollBox from './AutoScrollBox';
@@ -44,7 +41,7 @@ export function RunOutcome({
   startedAt,
   liveView,
   outcome,
-  live = status === 'running' || status === 'pending',
+  live = status === StepRunStatus.running || status === StepRunStatus.pending,
 }: RunOutcomeProps) {
   if (live) {
     return (
@@ -71,7 +68,7 @@ export function RunOutcome({
 
   if (outcome) return <>{outcome}</>;
 
-  if ((status as string) === 'aborted') {
+  if (status === StepRunStatus.aborted) {
     return (
       <div
         data-testid={`${prefix}-aborted`}

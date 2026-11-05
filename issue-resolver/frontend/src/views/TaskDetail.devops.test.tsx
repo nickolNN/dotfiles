@@ -9,6 +9,7 @@ import {
 } from '@testing-library/react';
 import type { Issue, Iteration, StepRunWithLog } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 const DEVOPS_SESSION = 'issue.issue-1.devops';
 
@@ -29,7 +30,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
       },
     ],
     pipeline_steps: ['resolve'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -45,7 +46,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -72,7 +73,7 @@ function makeRunLog(overrides: Partial<StepRunWithLog> = {}): StepRunWithLog {
     step: 'devops',
     attempt: 2,
     context: 'manual',
-    status: 'success',
+    status: StepRunStatus.success,
     feedback: null,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:01:00.000Z',

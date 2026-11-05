@@ -1,3 +1,4 @@
+import { StepRunStatus } from '@issue-resolver/shared';
 import { useEffect, useState } from 'react';
 
 export function useNow(active: boolean): number {
@@ -28,7 +29,7 @@ export function sumStepRunWorkMs(
     const start = Date.parse(run.created_at);
     if (!Number.isFinite(start)) continue;
     const end =
-      run.status === 'running' ? now : Date.parse(run.updated_at);
+      run.status === StepRunStatus.running ? now : Date.parse(run.updated_at);
     if (Number.isFinite(end)) total += Math.max(0, end - start);
   }
   return total;
