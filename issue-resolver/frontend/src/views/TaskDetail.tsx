@@ -1,3 +1,4 @@
+import { TaskStatus, StepRunStatus, WorkspaceProgressStatus } from '@issue-resolver/shared';
 import {
   useCallback,
   useContext,
@@ -14,36 +15,9 @@ import {
   QueryClientProvider,
   useQueryClient,
 } from "@tanstack/react-query";
-import type {
-  CreateIterationRequest,
-  Issue,
-  IssueFile,
-  Iteration,
-  ModelDescriptor,
-  PipelineStep,
-  PromptMode,
-  SessionCommand,
-  SessionModelInfo,
-  StepModels,
-  StepRunWithLog,
-  StepThinkingLevels,
-  StepRunStatus,
-  ThinkingLevel,
-  WorkspaceFile,
-} from "@issue-resolver/shared";
-import {
-  SessionAddress,
-  extractRepoNameFromUrl,
-  formatDateTime,
-  formatRelativeTime,
-  SESSION_STALE_MS,
-} from "@issue-resolver/shared";
-import {
-  canStartIteration,
-  extractIssueKeyFromUrl,
-  isIterationActive,
-  parseStepReport,
-} from "@issue-resolver/shared";
+import type { CreateIterationRequest, Issue, IssueFile, Iteration, ModelDescriptor, PipelineStep, PromptMode, SessionCommand, SessionModelInfo, StepModels, StepRunWithLog, StepThinkingLevels, ThinkingLevel, WorkspaceFile } from "@issue-resolver/shared";
+import { SessionAddress, extractRepoNameFromUrl, formatDateTime, formatRelativeTime, SESSION_STALE_MS } from '@issue-resolver/shared';
+import { canStartIteration, extractIssueKeyFromUrl, isIterationActive, parseStepReport } from "@issue-resolver/shared";
 import {
   API_BASE,
   abortIteration,
@@ -689,7 +663,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
   ): StepRunStatus => liveStatusByRun[run.id] ?? run.status;
 
   const isActiveStatus = (status: StepRunStatus) =>
-    status === "running" || status === "pending";
+    status === StepRunStatus.running || status === "pending";
 
   const isQuestionEligibleStatus = (status: StepRunStatus) =>
     isActiveStatus(status) || status === "needs_input";
@@ -973,7 +947,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
       onWorkspaceProgress: (payload) => {
         if (!WORKSPACE_STEP_STATUSES.has(payload.status)) return;
         const status = payload.status as WorkspaceStepStatus;
-        const fresh = payload.step === "creating_dirs" && status === "running";
+        const fresh = payload.step === "creating_dirs" && status === WorkspaceProgressStatus.running;
         if (fresh && progressTimerRef.current) {
           clearTimeout(progressTimerRef.current);
           progressTimerRef.current = null;
@@ -1000,10 +974,10 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
                 )
               : [...entry.steps, next];
           const finished =
-            entry.finished || payload.step === "ready" || status === "error";
+            entry.finished || payload.step === "ready" || status === WorkspaceProgressStatus.error;
           return { ...entry, steps, finished };
         });
-        if (payload.step === "ready" || status === "error") {
+        if (payload.step === "ready" || status === WorkspaceProgressStatus.error) {
           scheduleProgressFade();
         }
       },
@@ -1183,12 +1157,12 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
           attempt: 1,
           status:
             reportPhase === "running"
-              ? "running"
+              ? StepRunStatus.running
               : reportPhase === "failed"
-                ? "failed"
+                ? StepRunStatus.failed
                 : reportPhase === "success"
-                  ? "success"
-                  : "pending",
+                  ? StepRunStatus.success
+                  : StepRunStatus.pending,
           active: reportPhase === "running",
           events: reportModalEvents,
           stats: reportRunLog?.stats ?? null,
@@ -1323,7 +1297,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
       : false;
   const hasDraftIteration =
     state.status === "ready"
-      ? state.iterations.some((it) => it.status === "draft")
+      ? state.iterations.some((it) => it.status === TaskStatus.draft)
       : false;
   const canStartDraftForm = hasActiveIteration && !hasDraftIteration;
   const canStart = canStartNormal || canStartDraftForm;
@@ -1361,14 +1335,14 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
 
   const resultReady =
     state.status === "ready" &&
-    state.iterations.some((iteration) => iteration.status === "completed");
+    state.iterations.some((iteration) => iteration.status === TaskStatus.completed);
   const workspaceReady =
     workspaceProgress !== null
       ? workspaceProgress.steps.some(
-          (step) => step.step === "ready" && step.status === "done",
+          (step) => step.step === "ready" && step.status === WorkspaceProgressStatus.done,
         )
       : state.status === "ready" &&
-        state.issue.status !== "pending" &&
+        state.issue.status !== TaskStatus.pending &&
         state.issue.status !== "preparing";
   const repoRows =
     state.status === "ready"
@@ -1397,7 +1371,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
           .filter(
             (iteration) =>
               iteration.steps.includes("pr") &&
-              iteration.status !== "running" &&
+              iteration.status !== TaskStatus.running &&
               iteration.status !== "pending" &&
               iteration.status !== "preparing",
           )
@@ -1604,12 +1578,12 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
         : null;
   const reportOutcomeStatus: StepRunStatus =
     reportPhase === "running"
-      ? "running"
+      ? StepRunStatus.running
       : reportPhase === "failed"
-        ? "failed"
+        ? StepRunStatus.failed
         : reportPhase === "success"
-          ? "success"
-          : "pending";
+          ? StepRunStatus.success
+          : StepRunStatus.pending;
   const reportDuration = reportRunLog
     ? formatStepDuration(
         stepDurationMs(reportRunLog, reportPhase === "running", now),
@@ -1707,7 +1681,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
       if (hasDraftIteration) {
         const draft =
           state.status === "ready"
-            ? state.iterations.find((it) => it.status === "draft")
+            ? state.iterations.find((it) => it.status === TaskStatus.draft)
             : undefined;
         if (!draft) throw new Error("Черновик не найден");
         await updateIteration(draft.id, { context });
@@ -1916,7 +1890,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
 
   async function handleQueue(iteration: Iteration) {
     if (!issueId) return;
-    if (iteration.status !== "draft") return;
+    if (iteration.status !== TaskStatus.draft) return;
     setQueueingId(iteration.id);
     try {
       await queueIteration(iteration.id);
@@ -1980,7 +1954,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
         current.status === "ready"
           ? {
               ...current,
-              issue: { ...current.issue, status: "pending" },
+              issue: { ...current.issue, status: TaskStatus.pending },
               iterations: [...iterations].sort((a, b) => a.number - b.number),
             }
           : current,
@@ -2784,7 +2758,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
           )}
         </div>
 
-        {state.status === "ready" && state.issue.status === "draft" && (
+        {state.status === "ready" && state.issue.status === TaskStatus.draft && (
           <section className="rounded-none border border-[#008F11] p-4">
             <h3 className="glow mb-1 text-lg font-semibold text-[#00FF41]">
               Черновик
@@ -2827,14 +2801,14 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
               У черновика своя кнопка «Редактировать» в блоке выше. */}
         {canStart &&
           state.status === "ready" &&
-          state.issue.status !== "draft" && (
+          state.issue.status !== TaskStatus.draft && (
             <button
               type="button"
               data-testid="open-iteration-modal"
               onClick={() => {
                 if (hasDraftIteration && state.status === "ready") {
                   const draft = state.iterations.find(
-                    (it) => it.status === "draft",
+                    (it) => it.status === TaskStatus.draft,
                   );
                   if (draft) setContext(draft.context ?? "");
                 }
@@ -2995,7 +2969,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
                       <span
                         style={{
                           color:
-                            step.status === "warning" ? "#FFB000" : "#FF0033",
+                            step.status === WorkspaceProgressStatus.warning ? "#FFB000" : "#FF0033",
                         }}
                       >
                         {step.message}
@@ -3070,7 +3044,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
                         >
                           {formatRelativeTime(iteration.created_at)}
                         </time>
-                        {iteration.status === "running" && (
+                        {iteration.status === TaskStatus.running && (
                           <button
                             type="button"
                             data-testid="abort-iteration"
@@ -3101,7 +3075,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
                             ? "Повторяем…"
                             : "↻ Повторить"}
                         </button>
-                        {iteration.status === "draft" && (
+                        {iteration.status === TaskStatus.draft && (
                           <button
                             type="button"
                             data-testid="queue-iteration"
@@ -3119,7 +3093,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
                         )}
                       </div>
 
-                      {iteration.status === "running" && abortError && (
+                      {iteration.status === TaskStatus.running && abortError && (
                         <p
                           role="alert"
                           className="mt-2 text-xs font-medium text-[#FF0033]"
@@ -3730,7 +3704,7 @@ function TaskDetailView({ issueId, autoOpenResult }: TaskDetailProps) {
                 )}
             </div>
 
-            {(modalTarget.active || modalTarget.status === "needs_input") && (
+            {(modalTarget.active || modalTarget.status === StepRunStatus.needs_input) && (
               <div className="border-t border-[#008F11] py-3 px-2 sm:px-4">
                 {controlSnapshot && (
                   <div

@@ -14,6 +14,7 @@ import {
   getMarkdownEditorValue,
   setMarkdownEditorValue,
 } from '../test/markdown-editor';
+import { TaskStatus } from '@issue-resolver/shared';
 
 async function openIterationModal() {
   fireEvent.click(await screen.findByTestId('open-iteration-modal'));
@@ -27,7 +28,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -43,7 +44,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -98,7 +99,7 @@ afterEach(() => {
 describe('TaskDetail', () => {
   it('loads and renders the issue and its iterations', async () => {
     const issue = makeIssue({ title: 'Fix login bug' });
-    const iteration = makeIteration({ number: 1, status: 'running' });
+    const iteration = makeIteration({ number: 1, status: TaskStatus.running });
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/iterations')) {
@@ -128,7 +129,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'completed',
+              status: TaskStatus.completed,
               context: 'new attempt',
             });
             iterations = [...iterations, created];
@@ -186,7 +187,7 @@ describe('TaskDetail', () => {
 
   it('canStart: completed iteration → форма новой итерации показана', async () => {
     const issue = makeIssue();
-    const iteration = makeIteration({ status: 'completed' });
+    const iteration = makeIteration({ status: TaskStatus.completed });
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
@@ -211,7 +212,7 @@ describe('TaskDetail', () => {
 
   it('canStart: running iteration → форма предлагает создать черновик', async () => {
     const issue = makeIssue();
-    const iteration = makeIteration({ status: 'running' });
+    const iteration = makeIteration({ status: TaskStatus.running });
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
@@ -259,7 +260,7 @@ describe('TaskDetail', () => {
 
   it('шаг Refine несёт компактный input «Макс. число параллельных агентов»', async () => {
     const issue = makeIssue();
-    const iteration = makeIteration({ status: 'completed' });
+    const iteration = makeIteration({ status: TaskStatus.completed });
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
@@ -289,7 +290,7 @@ describe('TaskDetail', () => {
 
   it('тогл Reviewer убран; выбор шага Код-ревью шлёт is_review_need: true', async () => {
     const issue = makeIssue();
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -298,7 +299,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
               context: 'ctx',
               is_review_need: true,
               steps: ['resolve', 'review'],
@@ -345,7 +346,7 @@ describe('TaskDetail', () => {
 
   it('«Новая итерация» шлёт steps в каноническом порядке: refine перед resolve', async () => {
     const issue = makeIssue();
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -354,7 +355,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
               context: 'ctx',
               steps: ['refine', 'resolve'],
             });
@@ -392,7 +393,7 @@ describe('TaskDetail', () => {
 
   it('«Новая итерация» шлёт step_models для отмеченных шагов с выбранной моделью', async () => {
     const issue = makeIssue();
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const models = [
       { id: 'm1', name: 'Model One' },
       { id: 'm2' },
@@ -408,7 +409,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
               context: 'ctx',
             });
             iterations = [...iterations, created];
@@ -455,7 +456,7 @@ describe('TaskDetail', () => {
 
   it('«По умолчанию» у отмеченного шага не кладёт модель в step_models', async () => {
     const issue = makeIssue();
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const models = [{ id: 'm1', name: 'Model One' }];
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
@@ -468,7 +469,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
             });
             iterations = [...iterations, created];
             return Promise.resolve(jsonResponse(created, { status: 201 }));
@@ -506,7 +507,7 @@ describe('TaskDetail', () => {
 
   it('«Новая итерация»: thinking level disabled без модели, с моделью — её уровни', async () => {
     const issue = makeIssue();
-    const iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    const iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/models')) {
@@ -546,7 +547,7 @@ describe('TaskDetail', () => {
 
   it('«Новая итерация» шлёт step_thinking_levels для модели с выбранным уровнем', async () => {
     const issue = makeIssue();
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -558,7 +559,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
               context: 'ctx',
             });
             iterations = [...iterations, created];
@@ -606,7 +607,7 @@ describe('TaskDetail', () => {
 
   it('«Новая итерация»: смена модели сбрасывает несовместимый thinking level', async () => {
     const issue = makeIssue();
-    const iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    const iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/models')) {
@@ -644,7 +645,7 @@ describe('TaskDetail', () => {
 
   it('«По умолчанию» и снятый шаг не попадают в step_thinking_levels', async () => {
     const issue = makeIssue();
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -656,7 +657,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
               context: 'ctx',
             });
             iterations = [...iterations, created];
@@ -712,7 +713,7 @@ describe('TaskDetail', () => {
     const withReviewer = makeIteration({
       id: 'iter-1',
       number: 1,
-      status: 'running',
+      status: TaskStatus.running,
       steps: ['resolve', 'review'],
       is_review_need: true,
       review_context: 'проверь UI',
@@ -720,7 +721,7 @@ describe('TaskDetail', () => {
     const withoutReviewer = makeIteration({
       id: 'iter-2',
       number: 2,
-      status: 'pending',
+      status: TaskStatus.pending,
       is_review_need: false,
     });
     const stepRun = {
@@ -784,7 +785,7 @@ describe('TaskDetail', () => {
     const iteration = makeIteration({
       id: 'iter-1',
       number: 1,
-      status: 'running',
+      status: TaskStatus.running,
       steps: ['refine', 'resolve', 'review'],
     });
     const refineRun = makeStepRun({
@@ -830,7 +831,7 @@ describe('TaskDetail', () => {
     const iteration = makeIteration({
       id: 'iter-1',
       number: 1,
-      status: 'cancelled',
+      status: TaskStatus.cancelled,
       steps: ['resolve'],
     });
     const abortedRun = makeStepRun({
@@ -860,7 +861,7 @@ describe('TaskDetail', () => {
 
   it('итерация cancelled отображается серым статусом', async () => {
     const issue = makeIssue();
-    const iteration = makeIteration({ status: 'cancelled' });
+    const iteration = makeIteration({ status: TaskStatus.cancelled });
     vi.stubGlobal(
       'fetch',
       vi.fn((input: RequestInfo | URL) => {
@@ -956,7 +957,7 @@ describe('TaskDetail', () => {
         },
       ],
     });
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -965,7 +966,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
               context: 'ctx',
             });
             iterations = [...iterations, created];
@@ -1004,7 +1005,7 @@ describe('TaskDetail', () => {
       repositories: [],
       pipeline_steps: ['resolve', 'pr'],
     });
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -1013,7 +1014,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
               context: 'ctx',
             });
             iterations = [...iterations, created];
@@ -1068,7 +1069,7 @@ describe('TaskDetail', () => {
         },
       ],
     });
-    let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+    let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
     const fetchMock = vi.fn(
       (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -1077,7 +1078,7 @@ describe('TaskDetail', () => {
             const created = makeIteration({
               id: 'iter-2',
               number: 2,
-              status: 'pending',
+              status: TaskStatus.pending,
               context: 'ctx',
             });
             iterations = [...iterations, created];
@@ -1189,7 +1190,7 @@ describe('TaskDetail', () => {
         const url = String(input);
         if (url.endsWith('/iterations')) {
           return Promise.resolve(
-            jsonResponse([makeIteration({ status: 'completed' })]),
+            jsonResponse([makeIteration({ status: TaskStatus.completed })]),
           );
         }
         return Promise.resolve(jsonResponse(issue));
@@ -1215,7 +1216,7 @@ describe('TaskDetail', () => {
         const url = String(input);
         if (url.endsWith('/iterations')) {
           return Promise.resolve(
-            jsonResponse([makeIteration({ status: 'completed' })]),
+            jsonResponse([makeIteration({ status: TaskStatus.completed })]),
           );
         }
         return Promise.resolve(jsonResponse(issue));
@@ -1266,7 +1267,7 @@ describe('TaskDetail', () => {
     });
     try {
       const issue = makeIssue();
-      let iterations: Iteration[] = [makeIteration({ status: 'completed' })];
+      let iterations: Iteration[] = [makeIteration({ status: TaskStatus.completed })];
       const fetchMock = vi.fn(
         (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
@@ -1275,7 +1276,7 @@ describe('TaskDetail', () => {
               const created = makeIteration({
                 id: 'iter-2',
                 number: 2,
-                status: 'pending',
+                status: TaskStatus.pending,
                 context: 'ctx',
               });
               iterations = [...iterations, created];

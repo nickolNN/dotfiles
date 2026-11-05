@@ -1,12 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-  extractRepoNameFromUrl,
-  formatRelativeTime,
-  type RepoConnectionStatus,
-  type RepoInfo,
-  type SavedRepo,
-} from '@issue-resolver/shared';
+import { extractRepoNameFromUrl, formatRelativeTime, RepoConnectionStatus, type RepoInfo, type SavedRepo, RunInstructionsStatus } from '@issue-resolver/shared';
+
 import { validateRepository } from '../api/client';
 import {
   useCreateRepository,
@@ -290,7 +285,7 @@ function RepositoriesView({ createSignal }: RepositoriesProps) {
   function finishSave(repo: SavedRepo) {
     setDialog(null);
     setNotice(
-      repo.connectionStatus === 'ok'
+      repo.connectionStatus === RepoConnectionStatus.ok
         ? null
         : `Репозиторий ${repo.url} сохранён, но соединение не подтверждено`,
     );
@@ -449,7 +444,7 @@ function RepositoriesView({ createSignal }: RepositoriesProps) {
                       </span>
                     </div>
                   ) : (
-                    repo.connectionStatus === 'ok' && (
+                    repo.connectionStatus === RepoConnectionStatus.ok && (
                       <div className="mt-1 flex items-center gap-1 text-xs text-[#FFB000]">
                         <BranchIcon className="h-3 w-3 shrink-0" />
                         <span data-testid="repo-empty">
@@ -466,10 +461,10 @@ function RepositoriesView({ createSignal }: RepositoriesProps) {
                     </span>
                   </div>
 
-                  {(repo.runInstructionsStatus !== 'unknown' ||
+                  {(repo.runInstructionsStatus !== RunInstructionsStatus.unknown ||
                     repo.language) && (
                     <div className="mt-0.5 flex items-center gap-2 text-[10px] text-[#00FF41]/40">
-                      {repo.runInstructionsStatus !== 'unknown' && (
+                      {repo.runInstructionsStatus !== RunInstructionsStatus.unknown && (
                         <span
                           data-testid="repo-run-instructions-status"
                           className={

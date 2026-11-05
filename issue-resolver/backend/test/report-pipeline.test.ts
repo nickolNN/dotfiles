@@ -20,6 +20,7 @@ import {
   reportWarningsFor,
   runReportAgent,
 } from '../src/workflow/run-iteration.service';
+import { StepReportStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 
@@ -31,7 +32,7 @@ const PNG_1PX = Buffer.from(
 const pass = (): StepExecutionResult => ({
   step: 'report',
   exitCode: 0,
-  report: { status: 'pass', summary: 'report ok' },
+  report: { status: StepReportStatus.pass, summary: 'report ok' },
   stdout: '',
   stderr: '',
 });

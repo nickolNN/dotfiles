@@ -1,17 +1,17 @@
+import { StepRunStatus, StepReportStatus, ScenarioStatus } from './status';
 import type {
   SessionStats,
   StepReport,
   StepReportFinding,
   StepReportScenario,
-  StepReportStatus,
-  StepRunStatus,
 } from './types';
+
 import { parseExecutionPlan } from './execution';
 
 const VALID_REPORT_STATUSES: readonly StepReportStatus[] = [
-  'pass',
-  'fail',
-  'blocked',
+  StepReportStatus.pass,
+  StepReportStatus.fail,
+  StepReportStatus.blocked,
 ];
 
 const num = (value: unknown): number =>
@@ -168,13 +168,44 @@ export function parseStepReport(json: string): StepReport | null {
   };
 }
 
-export function stepRunStatusFromResult(
-  exitCode: number,
-  report: StepReport | null,
-): StepRunStatus {
-  if (exitCode === 0) {
-    if (report?.status === 'blocked') return 'needs_input';
-    if (report === null || report.status === 'pass') return 'success';
+export type StepFailureReason =
+  | 'no_model_reply'
+  | 'no_report'
+  | 'agent_exit'
+  | 'report_fail';
+
+export interface StepRunOutcome {
+  status: StepRunStatus;
+  failure: StepFailureReason | null;
+}
+
+export interface StepRunOutcomeInput {
+  exitCode: number;
+  report: StepReport | null;
+  modelReplied?: boolean;
+  requiresStepReport?: boolean;
+  aborted?: boolean;
+}
+
+export function stepRunOutcome(input: StepRunOutcomeInput): StepRunOutcome {
+  if (input.aborted === true) {
+    return { status: StepRunStatus.aborted, failure: null };
   }
-  return 'failed';
+  if (input.modelReplied === false) {
+    return { status: StepRunStatus.failed, failure: 'no_model_reply' };
+  }
+  if (input.exitCode !== 0) {
+    return { status: StepRunStatus.failed, failure: 'agent_exit' };
+  }
+  if (input.report === null) {
+    return (input.requiresStepReport ?? true)
+      ? { status: StepRunStatus.failed, failure: 'no_report' }
+      : { status: StepRunStatus.success, failure: null };
+  }
+  if (input.report.status === StepReportStatus.blocked) {
+    return { status: StepRunStatus.needs_input, failure: null };
+  }
+  return input.report.status === ScenarioStatus.fail
+    ? { status: StepRunStatus.failed, failure: 'report_fail' }
+    : { status: StepRunStatus.success, failure: null };
 }

@@ -11,6 +11,7 @@ import {
   renderDiagram,
   type ReportDoc,
 } from '../src/workflow/report-render';
+import { StepReportStatus } from '@issue-resolver/shared';
 
 function externalRefs(html: string): string[] {
   const patterns = [
@@ -61,7 +62,7 @@ const a = "<script>alert(1)</script>";
 `;
 
 const FULL_DOC: ReportDoc = {
-  verdict: 'pass',
+  verdict: StepReportStatus.pass,
   title: 'Kanban improvements',
   subtitle: 'Выполнено за 3 итерации',
   generatedAt: '2026-10-28T17:00:00Z',

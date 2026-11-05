@@ -8,6 +8,7 @@ import {
   useUpdateTag,
 } from '../stores/queries';
 import QueryBoundary from '../components/QueryBoundary';
+import { RunInstructionsStatus } from '@issue-resolver/shared';
 
 const inputClass =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
@@ -496,7 +497,7 @@ function TagsView({ createSignal }: TagsProps) {
                     data-testid="tag-instructions-label"
                     className="mt-0.5 text-xs text-[#00FF41]/60"
                   >
-                    инструкции: {tag.run_instructions_status === 'generated' ? '✅' : '⏳'} ({tag.run_instructions.length} симв.)
+                    инструкции: {tag.run_instructions_status === RunInstructionsStatus.generated ? '✅' : '⏳'} ({tag.run_instructions.length} симв.)
                   </div>
                 )}
 

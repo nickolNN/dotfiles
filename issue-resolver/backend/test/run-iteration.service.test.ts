@@ -2,12 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type {
-  Iteration,
-  PipelineStep,
-  SSEEvent,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
+import type { Iteration, PipelineStep, SSEEvent, StepExecutionResult } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app';
@@ -34,13 +29,14 @@ import {
   type IterationRunDeps,
 } from '../src/workflow/run-iteration.service';
 import { FakeDevOpsAgent } from './fixtures/fake-devops';
+import { StepReportStatus, TaskStatus, RunInstructionsStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 
 const pass = (step: PipelineStep): StepExecutionResult => ({
   step,
   exitCode: 0,
-  report: { status: 'pass', summary: `${step} ok` },
+  report: { status: StepReportStatus.pass, summary: `${step} ok` },
   stdout: `${step} out`,
   stderr: '',
 });
@@ -48,7 +44,7 @@ const pass = (step: PipelineStep): StepExecutionResult => ({
 const fail = (step: PipelineStep): StepExecutionResult => ({
   step,
   exitCode: 1,
-  report: { status: 'fail', summary: `${step} no` },
+  report: { status: StepReportStatus.fail, summary: `${step} no` },
   stdout: '',
   stderr: `${step} err`,
 });
@@ -81,7 +77,7 @@ function seedIteration(
     review_context: '',
     is_review_need: false,
     steps,
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: NOW,
     updated_at: NOW,
   };
@@ -105,7 +101,7 @@ function seedNextIteration(
     review_context: '',
     is_review_need: false,
     steps,
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: now,
     updated_at: now,
   };
@@ -249,7 +245,7 @@ describe('runIssueIteration — прямой вызов', () => {
     pi.enqueue({
       step: 'resolve',
       exitCode: 0,
-      report: { status: 'pass', summary: 'ok' },
+      report: { status: StepReportStatus.pass, summary: 'ok' },
       stdout: '',
       stderr: '',
       events: [
@@ -571,7 +567,7 @@ describe('POST /issues — фоновый прогон конвейера', () =
 
       const status = await waitFor(() => {
         const row = db.select().from(issues).where(eq(issues.id, issueId)).get();
-        return row?.status === 'completed' ? row.status : undefined;
+        return row?.status === TaskStatus.completed ? row.status : undefined;
       });
 
       expect(status).toBe('completed');
@@ -1359,7 +1355,7 @@ describe('runIssueIteration — run_instructions через анализатор
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi, sse } = makeDeps();
     deps.workspaceRoot = tempRoot();
-    seedRepository(db, repositories[0].repository_url, 'unknown');
+    seedRepository(db, repositories[0].repository_url, RunInstructionsStatus.unknown);
     const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run\nnpm ci',
@@ -1403,7 +1399,7 @@ describe('runIssueIteration — run_instructions через анализатор
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi } = makeDeps();
     deps.workspaceRoot = tempRoot();
-    seedRepository(db, repositories[0].repository_url, 'generated');
+    seedRepository(db, repositories[0].repository_url, RunInstructionsStatus.generated);
     const agent = new FakeDevOpsAgent({ success: true, instructions: 'new' });
     deps.devopsFactory = () => agent;
     pi.enqueue(pass('resolve'));
@@ -1431,7 +1427,7 @@ describe('runIssueIteration — run_instructions через анализатор
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi, sse } = makeDeps();
     deps.workspaceRoot = tempRoot();
-    seedRepository(db, repositories[0].repository_url, 'unknown');
+    seedRepository(db, repositories[0].repository_url, RunInstructionsStatus.unknown);
     const agent = new FakeDevOpsAgent({
       success: false,
       instructions: null,
@@ -1471,7 +1467,7 @@ describe('runIssueIteration — run_instructions через анализатор
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi, sse, git } = makeDeps();
     deps.workspaceRoot = tempRoot();
-    seedRepository(db, repositories[0].repository_url, 'unknown');
+    seedRepository(db, repositories[0].repository_url, RunInstructionsStatus.unknown);
     const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run\nnpm ci',
@@ -1521,7 +1517,7 @@ describe('runIssueIteration — run_instructions через анализатор
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, sse } = makeDeps();
     deps.workspaceRoot = tempRoot();
-    seedRepository(db, repositories[0].repository_url, 'unknown');
+    seedRepository(db, repositories[0].repository_url, RunInstructionsStatus.unknown);
     const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run',
@@ -1565,7 +1561,7 @@ describe('runIssueIteration — run_instructions через анализатор
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi } = makeDeps();
     deps.workspaceRoot = tempRoot();
-    seedRepository(db, repositories[0].repository_url, 'unknown');
+    seedRepository(db, repositories[0].repository_url, RunInstructionsStatus.unknown);
     const seen: Array<number | undefined> = [];
     deps.devopsTimeoutMs = 123_456;
     deps.devopsFactory = (params) => {
@@ -1655,7 +1651,7 @@ describe('spawnReportAgent (B6–B9)', () => {
     pi.enqueue({
       step: 'report',
       exitCode: 0,
-      report: { status: 'pass', summary: 'report ok' },
+      report: { status: StepReportStatus.pass, summary: 'report ok' },
       stdout: 'report out\n',
       stderr: 'report err\n',
     });

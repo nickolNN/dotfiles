@@ -10,17 +10,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type {
-  Iteration,
-  PipelineStep,
-  SSEEvent,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
+import type { Iteration, PipelineStep, SSEEvent, StepExecutionResult } from '@issue-resolver/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Db } from '../src/db/client';
 import { createDb } from '../src/db/client';
 import { eq } from 'drizzle-orm';
-import { issues, iterations } from '../src/db/schema';
+import { issues, iterations, stepRuns } from '../src/db/schema';
 import { FakeContainerController } from '../src/docker/controller';
 import { FakeGitService } from '../src/git/service';
 import {
@@ -34,6 +29,7 @@ import {
   archiveReportArtifacts,
   archiveReportSession,
   isReportRunActive,
+  lastReportFailed,
   observedModelFor,
   reportModelFor,
   reportWarningsFor,
@@ -43,13 +39,15 @@ import {
   type ReportRunDeps,
 } from '../src/workflow/run-iteration.service';
 import { buildStepPrompt } from '../src/workflow/prompts';
+import { STEP_FAILURE_TEXT } from '../src/workflow/step-failure';
+import { StepReportStatus, TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 
 const pass = (step: PipelineStep): StepExecutionResult => ({
   step,
   exitCode: 0,
-  report: { status: 'pass', summary: `${step} ok` },
+  report: { status: StepReportStatus.pass, summary: `${step} ok` },
   stdout: `${step} out`,
   stderr: '',
 });
@@ -184,7 +182,7 @@ function seedIteration(
     review_context: '',
     is_review_need: false,
     steps,
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: NOW,
     updated_at: NOW,
   };
@@ -286,6 +284,56 @@ describe('report-агент — интеграция (F22–F25)', () => {
     expect(text).toContain('iterations/2/');
     expect(text).toContain('iterations/3/');
     expect(text).toMatch(/No retelling of the run/);
+  });
+
+  it('F25b: модель не отвечала в прогоне отчёта → прогон failed даже при наличии report.md', async () => {
+    const root = tempRoot();
+    const db = createDb(':memory:');
+    const { issueId } = seedIteration(db);
+
+    class SilentModelReportPi extends ReportStubPi {
+      constructor() {
+        super(root, { 'report.md': '# Отчёт без модели\n' });
+      }
+
+      override async run(
+        containerName: string,
+        prompt: string,
+        options?: PiRunOptions,
+      ): Promise<StepExecutionResult> {
+        const result = await super.run(containerName, prompt, options);
+        return options?.stepRunId?.endsWith('.report')
+          ? { ...result, modelReplied: false }
+          : result;
+      }
+    }
+
+    const deps: ReportRunDeps = {
+      pi: new SilentModelReportPi(),
+      sse: new InMemorySseHub(),
+      control: new InMemoryStepSessionRegistry(),
+      workspaceRoot: root,
+      db,
+    };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await runReportAgent(deps, {
+        issueId,
+        containerName: 'c',
+        hostDir: join(root, issueId),
+        prompt: 'p',
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(lastReportFailed(issueId)).toBe(true);
+    const run = db
+      .select()
+      .from(stepRuns)
+      .all()
+      .find((entry) => entry.status === StepRunStatus.failed);
+    expect(run?.feedback).toContain(STEP_FAILURE_TEXT.no_model_reply);
   });
 
   it('F25: страница самодостаточна даже при враждебном markdown', async () => {

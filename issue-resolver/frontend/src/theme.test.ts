@@ -1,25 +1,26 @@
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 import { describe, expect, it } from 'vitest';
-import type { StepRunStatus, TaskStatus } from '@issue-resolver/shared';
+
 import { MATRIX, statusColor, stepStatusColor } from './theme';
 
 const STATUSES: TaskStatus[] = [
-  'cancelled',
-  'completed',
-  'draft',
-  'failed',
-  'pending',
-  'preparing',
-  'question',
-  'running',
+  TaskStatus.cancelled,
+  TaskStatus.completed,
+  TaskStatus.draft,
+  TaskStatus.failed,
+  TaskStatus.pending,
+  TaskStatus.preparing,
+  TaskStatus.question,
+  TaskStatus.running,
 ];
 
 const STEP_STATUSES: StepRunStatus[] = [
-  'pending',
-  'running',
-  'success',
-  'failed',
-  'needs_input',
-  'skipped',
+  StepRunStatus.pending,
+  StepRunStatus.running,
+  StepRunStatus.success,
+  StepRunStatus.failed,
+  StepRunStatus.needs_input,
+  StepRunStatus.skipped,
 ];
 
 const STEP_STATUS_KEYS = [...STEP_STATUSES, 'aborted'];

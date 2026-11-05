@@ -1,9 +1,10 @@
+import { RunInstructionsStatus } from '@issue-resolver/shared';
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { RunInstructionsStatus } from '@issue-resolver/shared';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeContainerController } from '../src/docker/controller';
 import { devOpsFactoryFor } from '../src/deps';
@@ -50,12 +51,12 @@ class FakeRunInstructionsStore implements RunInstructionsPort {
   saveGenerated(repoUrl: string, instructions: string): void {
     this.saved.push({ url: repoUrl, instructions });
     this.instructions.set(repoUrl, instructions);
-    this.statuses.set(repoUrl, 'generated');
+    this.statuses.set(repoUrl, RunInstructionsStatus.generated);
   }
 
   saveFailed(repoUrl: string): void {
     this.failed.push(repoUrl);
-    this.statuses.set(repoUrl, 'failed');
+    this.statuses.set(repoUrl, RunInstructionsStatus.failed);
   }
 }
 
@@ -122,7 +123,7 @@ afterEach(async () => {
 describe('prepareWorkspace — анализ run_instructions', () => {
   it('статус не generated: devops вызывается, инструкции и analyzing-прогресс сохранены', async () => {
     const store = new FakeRunInstructionsStore();
-    store.statuses.set(REPO_URL, 'unknown');
+    store.statuses.set(REPO_URL, RunInstructionsStatus.unknown);
     const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run\nnpm ci',
@@ -186,7 +187,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
 
   it('статус generated: devops не вызывается', async () => {
     const store = new FakeRunInstructionsStore();
-    store.statuses.set(REPO_URL, 'generated');
+    store.statuses.set(REPO_URL, RunInstructionsStatus.generated);
     const agent = new FakeDevOpsAgent({
       success: true,
       instructions: 'unused',
@@ -214,7 +215,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
 
   it('фейл анализа: статус failed, прогресс analyzing error', async () => {
     const store = new FakeRunInstructionsStore();
-    store.statuses.set(REPO_URL, 'failed');
+    store.statuses.set(REPO_URL, RunInstructionsStatus.failed);
     const agent = new FakeDevOpsAgent({
       success: false,
       instructions: null,
@@ -248,7 +249,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
 
   it('фейл install сбрасывает ранее generated инструкции в failed', async () => {
     const store = new FakeRunInstructionsStore();
-    store.statuses.set(REPO_URL, 'generated');
+    store.statuses.set(REPO_URL, RunInstructionsStatus.generated);
     const root = await tempRoot();
 
     await expect(
@@ -272,7 +273,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
 
   it('onDevOpsStdout/Stderr получают имя репозитория вместе с выводом', async () => {
     const store = new FakeRunInstructionsStore();
-    store.statuses.set(REPO_URL, 'unknown');
+    store.statuses.set(REPO_URL, RunInstructionsStatus.unknown);
     const agent = new FakeDevOpsAgent({
       success: true,
       instructions: '# Run',
@@ -309,7 +310,7 @@ describe('prepareWorkspace — запуск dev-сервера', () => {
 
   it('после install поднимает dev-сервер и публикует devPort', async () => {
     const store = new FakeRunInstructionsStore();
-    store.statuses.set(REPO_URL, 'generated');
+    store.statuses.set(REPO_URL, RunInstructionsStatus.generated);
     store.instructions.set(REPO_URL, '## Run\n```bash\nnpm run dev\n```');
     const git = new FakeGitService();
     const progress: WorkspaceProgress[] = [];
@@ -356,7 +357,7 @@ describe('prepareWorkspace — запуск dev-сервера', () => {
 
   it('порт не найден → warning, подготовка всё равно ready', async () => {
     const store = new FakeRunInstructionsStore();
-    store.statuses.set(REPO_URL, 'generated');
+    store.statuses.set(REPO_URL, RunInstructionsStatus.generated);
     const git = new FakeGitService();
     git.devServerResult = { port: null, message: 'порт не найден' };
     const progress: WorkspaceProgress[] = [];

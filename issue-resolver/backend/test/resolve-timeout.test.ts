@@ -1,15 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  ExecutionPlan,
-  Iteration,
-  PipelineStep,
-  SessionEvent,
-  SessionStats,
-  StepExecutionResult,
-  StepOutput,
-  StepRun,
-  StepRunStatus,
-} from '@issue-resolver/shared';
+import type { ExecutionPlan, Iteration, PipelineStep, SessionEvent, SessionStats, StepExecutionResult, StepOutput, StepRun } from '@issue-resolver/shared';
 import { FakeContainerController } from '../src/docker/controller';
 import { FakeGitService } from '../src/git/service';
 import type { PiRunCall, PiRunOptions, PiRunner } from '../src/pi/runner';
@@ -31,6 +21,7 @@ import {
   resolveAgentTimeoutMs,
   resolveDevOpsTimeoutMs,
 } from '../src/workflow/timeout';
+import { TaskStatus, StepReportStatus, StepRunStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-01-01T00:00:00.000Z';
 
@@ -59,7 +50,7 @@ class InMemoryStepRunStore implements StepRunStore {
       iteration_id: input.iterationId,
       step: input.step,
       attempt: input.attempt,
-      status: 'pending',
+      status: StepRunStatus.pending,
       context: input.context,
       feedback: null,
       created_at: NOW,
@@ -140,7 +131,7 @@ const makeInput = (
     review_context: '',
     is_review_need: false,
     steps,
-    status: 'running',
+    status: TaskStatus.running,
     created_at: NOW,
     updated_at: NOW,
   } satisfies Iteration,
@@ -178,7 +169,7 @@ class ScriptedPiRunner implements PiRunner {
 const refineResolve = (execution: ExecutionPlan): StepExecutionResult => ({
   step: 'refine',
   exitCode: 0,
-  report: { status: 'pass', summary: 'plan', execution },
+  report: { status: StepReportStatus.pass, summary: 'plan', execution },
   stdout: '',
   stderr: '',
 });
@@ -186,7 +177,7 @@ const refineResolve = (execution: ExecutionPlan): StepExecutionResult => ({
 const passResolve = (summary: string): StepExecutionResult => ({
   step: 'resolve',
   exitCode: 0,
-  report: { status: 'pass', summary },
+  report: { status: StepReportStatus.pass, summary },
   stdout: '',
   stderr: '',
 });

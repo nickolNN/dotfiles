@@ -1,4 +1,5 @@
 export * from './types';
+export * from './status';
 export * from './session';
 export * from './session-address';
 export * from './domain';

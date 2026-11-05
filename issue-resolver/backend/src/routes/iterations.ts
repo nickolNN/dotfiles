@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Iteration } from '@issue-resolver/shared';
-import { isIterationActive } from '@issue-resolver/shared';
+import { isIterationActive, TaskStatus } from '@issue-resolver/shared';
 import { and, eq, max } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/client';
@@ -149,7 +149,7 @@ export async function iterationsRoutes(
       const { id } = request.params;
       const it = db.select().from(iterations).where(eq(iterations.id, id)).get();
       if (!it) return reply.status(404).send({ error: 'iteration not found' });
-      if (it.status !== 'draft') return reply.status(409).send({ error: 'only draft iterations can be updated' });
+      if (it.status !== TaskStatus.draft) return reply.status(409).send({ error: 'only draft iterations can be updated' });
       const now = new Date().toISOString();
       db.update(iterations)
         .set({ context: request.body.context, updated_at: now })
@@ -187,15 +187,15 @@ export async function iterationsRoutes(
         thinking_level: source.thinking_level ?? null,
         step_thinking_levels: source.step_thinking_levels ?? undefined,
         worker_count: source.worker_count ?? undefined,
-        status: 'pending', created_at: now, updated_at: now,
+        status: TaskStatus.pending, created_at: now, updated_at: now,
       };
 
       const hasRunning = db.select({ id: iterations.id }).from(iterations).where(
-        and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'running')),
+        and(eq(iterations.issue_id, issue.id), eq(iterations.status, TaskStatus.running)),
       ).get();
 
       const hasPlanned = db.select({ id: iterations.id }).from(iterations).where(
-        and(eq(iterations.issue_id, issue.id), eq(iterations.status, 'pending')),
+        and(eq(iterations.issue_id, issue.id), eq(iterations.status, TaskStatus.pending)),
       ).get();
       if (hasPlanned) return reply.status(409).send({ error: 'A pending iteration already exists — wait for it to start' });
       const hasDraft = db.select({ id: iterations.id }).from(iterations).where(
@@ -243,17 +243,17 @@ export async function iterationsRoutes(
       const { id } = request.params;
       const it = db.select().from(iterations).where(eq(iterations.id, id)).get();
       if (!it) return reply.status(404).send({ error: 'iteration not found' });
-      if (it.status !== 'draft') return reply.status(409).send({ error: 'only draft iterations can be queued' });
-      const hasPending = db.select({ id: iterations.id }).from(iterations).where(and(eq(iterations.issue_id, it.issue_id), eq(iterations.status, 'pending'))).get();
+      if (it.status !== TaskStatus.draft) return reply.status(409).send({ error: 'only draft iterations can be queued' });
+      const hasPending = db.select({ id: iterations.id }).from(iterations).where(and(eq(iterations.issue_id, it.issue_id), eq(iterations.status, TaskStatus.pending))).get();
       if (hasPending) return reply.status(409).send({ error: 'A pending iteration already exists' });
       const now = new Date().toISOString();
-      db.update(iterations).set({ status: 'pending', updated_at: now }).where(eq(iterations.id, id)).run();
+      db.update(iterations).set({ status: TaskStatus.pending, updated_at: now }).where(eq(iterations.id, id)).run();
 
       const issue = db.select({ status: issues.status }).from(issues).where(eq(issues.id, it.issue_id)).get();
-      if (issue && (issue.status === 'completed' || issue.status === 'failed')) {
-        db.update(issues).set({ status: 'pending', updated_at: now }).where(eq(issues.id, it.issue_id)).run();
+      if (issue && (issue.status === TaskStatus.completed || issue.status === TaskStatus.failed)) {
+        db.update(issues).set({ status: TaskStatus.pending, updated_at: now }).where(eq(issues.id, it.issue_id)).run();
       }
-      return reply.status(200).send({ ...it, status: 'pending' });
+      return reply.status(200).send({ ...it, status: TaskStatus.pending });
     },
   );
 

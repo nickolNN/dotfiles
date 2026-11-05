@@ -3,6 +3,7 @@ import type { SavedRepo } from '@issue-resolver/shared';
 import { buildApp } from '../src/app';
 import { createDb, type Db } from '../src/db/client';
 import { insertRepository } from '../src/db/repositories.repo';
+import { RepoConnectionStatus } from '@issue-resolver/shared';
 
 const ROUTE = '/issue-resolver/api/v1/issues';
 
@@ -19,7 +20,7 @@ function seedRepo(db: Db, overrides: Partial<SavedRepo> = {}): SavedRepo {
     language: overrides.language ?? 'TypeScript',
     description: overrides.description ?? 'demo',
     isPrivate: overrides.isPrivate ?? false,
-    connectionStatus: overrides.connectionStatus ?? 'ok',
+    connectionStatus: overrides.connectionStatus ?? RepoConnectionStatus.ok,
     lastValidatedAt: overrides.lastValidatedAt ?? new Date().toISOString(),
     writeAccess: overrides.writeAccess ?? true,
   });
@@ -105,7 +106,7 @@ describe('POST /issues — repo_id', () => {
       url: 'https://github.com/acme/broken',
       fullName: 'acme/broken',
       defaultBranch: null,
-      connectionStatus: 'error',
+      connectionStatus: RepoConnectionStatus.error,
     });
 
     const response = await app.inject({

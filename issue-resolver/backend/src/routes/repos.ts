@@ -1,9 +1,4 @@
-import type {
-  RepoBranchesResponse,
-  RepoPlatform,
-  RepoValidationResult,
-  SavedRepo,
-} from '@issue-resolver/shared';
+import type { RepoBranchesResponse, RepoPlatform, RepoValidationResult, SavedRepo } from '@issue-resolver/shared';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/client';
 import {
@@ -25,6 +20,7 @@ import {
   formatZodError,
   validateReposRequestSchema,
 } from '../validation';
+import { RepoConnectionStatus } from '@issue-resolver/shared';
 
 const API_PATH = '/issue-resolver/api/v1';
 const REPOSITORIES_PATH = `${API_PATH}/repositories`;
@@ -52,7 +48,7 @@ function writeFromResult(
       language: null,
       description: null,
       isPrivate: null,
-      connectionStatus: 'error',
+      connectionStatus: RepoConnectionStatus.error,
       lastValidatedAt: new Date().toISOString(),
       writeAccess: false,
     };
@@ -68,7 +64,7 @@ function writeFromResult(
     language: info.language,
     description: info.description,
     isPrivate: info.isPrivate,
-    connectionStatus: 'ok',
+    connectionStatus: RepoConnectionStatus.ok,
     lastValidatedAt: new Date().toISOString(),
     writeAccess: info.writeAccess ?? false,
   };
@@ -107,7 +103,7 @@ export async function reposRoutes(
     const url = parsed.data.url.trim();
     const result = await resolveOne(url);
     const saved: SavedRepo = insertRepository(db, writeFromResult(url, result));
-    if (saved.connectionStatus !== 'ok') {
+    if (saved.connectionStatus !== RepoConnectionStatus.ok) {
       return reply
         .status(422)
         .send({ error: result.error ?? 'repository not accessible', repository: saved });
@@ -132,7 +128,7 @@ export async function reposRoutes(
       if (!saved) {
         return reply.status(404).send({ error: 'repository not found' });
       }
-      if (saved.connectionStatus !== 'ok') {
+      if (saved.connectionStatus !== RepoConnectionStatus.ok) {
         return reply
           .status(422)
           .send({ error: result.error ?? 'repository not accessible', repository: saved });

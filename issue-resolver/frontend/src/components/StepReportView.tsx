@@ -1,5 +1,5 @@
 import type { StepReportStatus } from '@issue-resolver/shared';
-import { parseStepReport } from '@issue-resolver/shared';
+import { parseStepReport, ScenarioStatus } from '@issue-resolver/shared';
 import AgentMarkdown from './AgentMarkdown';
 
 interface StepReportViewProps {
@@ -60,8 +60,8 @@ function prettyRaw(raw: string): string {
 }
 
 function ScenarioRow({ scenario }: { scenario: ScenarioInput }) {
-  const hasStatus = scenario.status === 'pass' || scenario.status === 'fail';
-  const pass = scenario.status === 'pass';
+  const hasStatus = scenario.status === ScenarioStatus.pass || scenario.status === ScenarioStatus.fail;
+  const pass = scenario.status === ScenarioStatus.pass;
   return (
     <li
       data-testid="step-report-scenario"

@@ -41,13 +41,26 @@ if (mode === 'hang') {
         continue;
       }
       if (command.type === 'prompt') {
+        if (mode !== 'no-model' && mode !== 'stats-only') {
+          write({
+            type: 'message_start',
+            message: { role: 'assistant', content: [] },
+          });
+          write({
+            type: 'message_end',
+            message: { role: 'assistant', content: [], stopReason: 'stop' },
+          });
+        }
         write({ type: 'agent_settled', aborted: mode === 'aborted' });
       } else if (command.type === 'get_session_stats') {
         write({
           type: 'response',
           command: 'get_session_stats',
           success: true,
-          data: STATS,
+          data:
+            mode === 'no-model' || mode === 'events-only'
+              ? { ...STATS, assistantMessages: 0, totalMessages: 1 }
+              : STATS,
         });
       } else if (command.type === 'get_state') {
         write({

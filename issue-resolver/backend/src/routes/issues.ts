@@ -2,18 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type {
-  DesiredResult,
-  Iteration,
-  PipelineStep,
-  ThinkingLevel,
-} from '@issue-resolver/shared';
-import {
-  SessionAddress,
-  extractIssueKeyFromUrl,
-  extractRepoNameFromUrl,
-  type TaskStatus,
-} from '@issue-resolver/shared';
+import type { DesiredResult, Iteration, PipelineStep, ThinkingLevel } from '@issue-resolver/shared';
+import { SessionAddress, extractIssueKeyFromUrl, extractRepoNameFromUrl, TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 import { and, eq, max } from 'drizzle-orm';
 import type { IssueService } from '../issues/service';
 import type { FastifyInstance } from 'fastify';
@@ -645,27 +635,27 @@ export async function issuesRoutes(
 
       if (
         run &&
-        run.status === 'running' &&
+        run.status === StepRunStatus.running &&
         !isReportRunActive(id) &&
         isSessionStale(run.updated_at, now)
       ) {
         const minutes = quietMinutes(run.updated_at, now);
         const feedback = `report failed: нет активности ${minutes} мин — прогон прерван`;
-        await updateStepRun(db, run.id, { status: 'failed', feedback });
-        run.status = 'failed';
+        await updateStepRun(db, run.id, { status: StepRunStatus.failed, feedback });
+        run.status = StepRunStatus.failed;
         run.feedback = feedback;
       }
 
       let status: 'idle' | 'running' | 'success' | 'failed';
-      if (isReportRunActive(id)) status = 'running';
+      if (isReportRunActive(id)) status = StepRunStatus.running;
       else if (run) {
-        if (run.status === 'success') status = 'success';
-        else if (run.status === 'failed') status = 'failed';
-        else status = 'running';
+        if (run.status === StepRunStatus.success) status = StepRunStatus.success;
+        else if (run.status === StepRunStatus.failed) status = StepRunStatus.failed;
+        else status = StepRunStatus.running;
       } else if (artifacts.md.present) {
-        status = 'success';
+        status = StepRunStatus.success;
       } else {
-        status = lastReportFailed(id) ? 'failed' : 'idle';
+        status = lastReportFailed(id) ? StepRunStatus.failed : 'idle';
       }
 
       const warnings = reportWarningsFor(id, hostDir);
@@ -677,7 +667,7 @@ export async function issuesRoutes(
               runId: run.id,
               runStatus: run.status,
               startedAt: run.created_at,
-              ...(run.status === 'success' || run.status === 'failed'
+              ...(run.status === StepRunStatus.success || run.status === StepRunStatus.failed
                 ? { finishedAt: run.updated_at }
                 : {}),
               updatedAt: run.updated_at,
@@ -792,23 +782,23 @@ export async function issuesRoutes(
 
       if (
         run &&
-        run.status === 'running' &&
+        run.status === StepRunStatus.running &&
         !isDevopsRunActive(id) &&
         isSessionStale(run.updated_at, now)
       ) {
         const minutes = quietMinutes(run.updated_at, now);
         const feedback = `devops failed: нет активности ${minutes} мин — прогон прерван`;
-        await updateStepRun(db, run.id, { status: 'failed', feedback });
-        run.status = 'failed';
+        await updateStepRun(db, run.id, { status: StepRunStatus.failed, feedback });
+        run.status = StepRunStatus.failed;
         run.feedback = feedback;
       }
 
       let status: 'idle' | 'running' | 'success' | 'failed';
-      if (isDevopsRunActive(id)) status = 'running';
+      if (isDevopsRunActive(id)) status = StepRunStatus.running;
       else if (run) {
-        if (run.status === 'success') status = 'success';
-        else if (run.status === 'failed') status = 'failed';
-        else status = 'running';
+        if (run.status === StepRunStatus.success) status = StepRunStatus.success;
+        else if (run.status === StepRunStatus.failed) status = StepRunStatus.failed;
+        else status = StepRunStatus.running;
       } else {
         status = 'idle';
       }
@@ -820,7 +810,7 @@ export async function issuesRoutes(
               runId: run.id,
               runStatus: run.status,
               startedAt: run.created_at,
-              ...(run.status === 'success' || run.status === 'failed'
+              ...(run.status === StepRunStatus.success || run.status === StepRunStatus.failed
                 ? { finishedAt: run.updated_at }
                 : {}),
               ...(run.feedback ? { feedback: run.feedback } : {}),
@@ -1049,7 +1039,7 @@ export async function issuesRoutes(
         thinking_level: body.thinking_level ?? null,
         step_thinking_levels: body.step_thinking_levels,
         worker_count: body.worker_count ?? undefined,
-        status: 'pending',
+        status: TaskStatus.pending,
         created_at: now,
         updated_at: now,
       };
@@ -1060,7 +1050,7 @@ export async function issuesRoutes(
         .where(
           and(
             eq(iterations.issue_id, id),
-            eq(iterations.status, 'running'),
+            eq(iterations.status, TaskStatus.running),
           ),
         )
         .get();
@@ -1069,7 +1059,7 @@ export async function issuesRoutes(
         .select({ id: iterations.id })
         .from(iterations)
         .where(
-          and(eq(iterations.issue_id, id), eq(iterations.status, 'pending')),
+          and(eq(iterations.issue_id, id), eq(iterations.status, TaskStatus.pending)),
         )
         .get();
       if (hasPlanned) {
@@ -1287,7 +1277,7 @@ export async function issuesRoutes(
     const now = new Date().toISOString();
     const issueId = randomUUID();
     const iterationId = runImmediately ? randomUUID() : null;
-    const issueStatus: TaskStatus = runImmediately ? 'pending' : 'draft';
+    const issueStatus: TaskStatus = runImmediately ? TaskStatus.pending : TaskStatus.draft;
 
     const repositoryRows = repositories.map((repository) => ({
       id: randomUUID(),
@@ -1350,7 +1340,7 @@ export async function issuesRoutes(
             thinking_level: body.thinking_level ?? null,
             step_thinking_levels: body.step_thinking_levels ?? null,
             worker_count: body.worker_count ?? undefined,
-            status: 'pending',
+            status: TaskStatus.pending,
             created_at: now,
             updated_at: now,
           })
@@ -1467,7 +1457,7 @@ export async function issuesRoutes(
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
-      if (issue.status !== 'draft') {
+      if (issue.status !== TaskStatus.draft) {
         return reply
           .status(409)
           .send({ error: 'only draft issues can be started' });
@@ -1508,7 +1498,7 @@ export async function issuesRoutes(
 
       db.transaction((tx) => {
         tx.update(issues)
-          .set({ status: 'pending', updated_at: now })
+          .set({ status: TaskStatus.pending, updated_at: now })
           .where(eq(issues.id, id))
           .run();
 
@@ -1525,7 +1515,7 @@ export async function issuesRoutes(
             step_models: issue.step_models ?? null,
             thinking_level: issue.thinking_level ?? null,
             step_thinking_levels: issue.step_thinking_levels ?? null,
-            status: 'pending',
+            status: TaskStatus.pending,
             created_at: now,
             updated_at: now,
           })
@@ -1583,7 +1573,7 @@ export async function issuesRoutes(
         } catch (error) {
           console.error('preparation failed, issue set to failed', error);
           db.update(issues)
-            .set({ status: 'failed', updated_at: new Date().toISOString() })
+            .set({ status: TaskStatus.failed, updated_at: new Date().toISOString() })
             .where(eq(issues.id, id))
             .run();
         }
@@ -1605,7 +1595,7 @@ export async function issuesRoutes(
       if (!issue) {
         return reply.status(404).send({ error: 'issue not found' });
       }
-      if (issue.status !== 'draft') {
+      if (issue.status !== TaskStatus.draft) {
         return reply
           .status(409)
           .send({ error: 'only draft issues can be edited' });

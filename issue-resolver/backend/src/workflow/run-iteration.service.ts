@@ -1,25 +1,15 @@
-import type {
-  DesiredResult,
-  Iteration,
-  PipelineStep,
-  RunInstructionsStatus,
-  SSEEvent,
-  SessionEvent,
-  SessionStats,
-  StepModels,
-  StepRunStatus,
-  StepRunWithLog,
-  StepThinkingLevels,
-  TaskStatus,
-  ThinkingLevel,
-} from '@issue-resolver/shared';
+import type { DesiredResult, Iteration, PipelineStep, SSEEvent, SessionEvent, SessionStats, StepModels, StepRunWithLog, StepThinkingLevels, ThinkingLevel } from '@issue-resolver/shared';
 import {
   SESSION_HEARTBEAT_MS,
   SESSION_STALE_MS,
   SessionAddress,
   extractIssueKeyFromUrl,
   extractRepoNameFromUrl,
-  stepRunStatusFromResult,
+  stepRunOutcome,
+  TaskStatus,
+  StepRunStatus,
+  RunInstructionsStatus,
+  StepReportStatus,
 } from '@issue-resolver/shared';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
@@ -87,6 +77,7 @@ import type {
 import { prepareWorkspace, runIteration } from '../workflow/engine';
 import type { IterationTerminalOutcome } from '../workflow/engine';
 import type { WorkspaceProgress } from '../workflow/engine';
+import { STEP_FAILURE_TEXT } from './step-failure';
 import { buildStepPrompt } from '../workflow/prompts';
 import {
   ALL_RESULT_ARTIFACTS,
@@ -342,19 +333,19 @@ function dbRunInstructionsStore(db: Db): RunInstructionsPort {
     saveGenerated: (url, instructions) =>
       warnUnmatched(
         url,
-        'generated',
+        RunInstructionsStatus.generated,
         updateRepositoryRunInstructions(db, url, {
           instructions,
-          status: 'generated',
+          status: RunInstructionsStatus.generated,
         }),
       ),
     saveFailed: (url) =>
       warnUnmatched(
         url,
-        'failed',
+        RunInstructionsStatus.failed,
         updateRepositoryRunInstructions(db, url, {
           instructions: null,
-          status: 'failed',
+          status: RunInstructionsStatus.failed,
         }),
       ),
   };
@@ -450,7 +441,7 @@ export async function refreshLatestResultSnapshot(
     .where(
       and(
         eq(iterations.issue_id, issueId),
-        eq(iterations.status, 'completed'),
+        eq(iterations.status, TaskStatus.completed),
       ),
     )
     .orderBy(desc(iterations.number))
@@ -464,7 +455,7 @@ export async function refreshLatestResultSnapshot(
 }
 
 function stepOutcome(run: StepRunWithLog): 'ok' | 'fail' | 'timeout' {
-  if (run.status === 'success') {
+  if (run.status === StepRunStatus.success) {
     return 'ok';
   }
   const haystack = `${run.stderr}\n${run.report ?? ''}`.toLowerCase();
@@ -720,7 +711,7 @@ async function startDevopsSession(
     attempt: previous.filter((run) => run.step === 'devops').length + 1,
     context: input.context,
   });
-  await updateStepRun(db, stepRun.id, { status: 'running' });
+  await updateStepRun(db, stepRun.id, { status: StepRunStatus.running });
 
   const session = startAgentSession(
     {
@@ -746,7 +737,7 @@ async function startDevopsSession(
     issueId: input.issueId,
     stepRunId: input.sessionId,
     data: JSON.stringify({
-      status: 'running',
+      status: StepRunStatus.running,
       step: 'devops',
       model: deps.devopsModel ?? null,
     }),
@@ -787,7 +778,7 @@ async function finishDevopsSession(
     await createStepOutput(db, {
       stepRunId: handle.stepRunId,
       report: JSON.stringify({
-        status: input.status === 'success' ? 'pass' : 'fail',
+        status: input.status === StepRunStatus.success ? StepReportStatus.pass : StepReportStatus.fail,
         summary: input.summary,
       }),
       stdout: snapshot.stdout,
@@ -990,7 +981,7 @@ export async function prepareIssueWorkspace(
         if (wsInstructions.trim()) {
           updateTagRunInstructions(db, tagId, {
             instructions: wsInstructions,
-            status: 'generated',
+            status: RunInstructionsStatus.generated,
           });
         }
       }
@@ -998,7 +989,7 @@ export async function prepareIssueWorkspace(
 
     await finishDevopsSession(db, deps, devopsSession, {
       issueId: input.issueId,
-      status: 'success',
+      status: StepRunStatus.success,
       summary: 'DevOps completed during workspace preparation',
     });
 
@@ -1009,17 +1000,17 @@ export async function prepareIssueWorkspace(
     const failedAt = new Date().toISOString();
     const message = error instanceof Error ? error.message : String(error);
     db.update(iterations)
-      .set({ status: 'failed', updated_at: failedAt })
+      .set({ status: TaskStatus.failed, updated_at: failedAt })
       .where(eq(iterations.id, input.iterationId))
       .run();
     db.update(issues)
-      .set({ status: 'failed', updated_at: failedAt })
+      .set({ status: TaskStatus.failed, updated_at: failedAt })
       .where(eq(issues.id, input.issueId))
       .run();
 
     await finishDevopsSession(db, deps, devopsSession, {
       issueId: input.issueId,
-      status: 'failed',
+      status: StepRunStatus.failed,
       summary: `Workspace preparation failed: ${message}`,
       feedback: message,
     });
@@ -1030,7 +1021,7 @@ export async function prepareIssueWorkspace(
       iterationId: input.iterationId,
       data: JSON.stringify({
         iterationId: input.iterationId,
-        status: 'failed',
+        status: TaskStatus.failed,
         needsInput: false,
         error: message,
       }),
@@ -1120,7 +1111,7 @@ export async function runDevopsAgent(
     if (targets.length === 0) {
       await finishDevopsSession(deps.db, deps, handle, {
         issueId: input.issueId,
-        status: 'failed',
+        status: StepRunStatus.failed,
         summary: 'нет репозиториев с включённым bootstrap',
         feedback: 'все репозитории исключены из сборки',
       });
@@ -1139,7 +1130,7 @@ export async function runDevopsAgent(
         .join(', ');
       await finishDevopsSession(deps.db, deps, handle, {
         issueId: input.issueId,
-        status: 'failed',
+        status: StepRunStatus.failed,
         summary: 'рабочая папка не подготовлена',
         feedback: `клон отсутствует: ${names}`,
       });
@@ -1228,7 +1219,7 @@ export async function runDevopsAgent(
 
     const failed = results.filter((item) => !item.ok);
     const ok = results.length - failed.length;
-    const status: StepRunStatus = failed.length === 0 ? 'success' : 'failed';
+    const status: StepRunStatus = failed.length === 0 ? StepRunStatus.success : StepRunStatus.failed;
     if (portAllocatedNow && ok === 0) {
       deps.db
         .update(issues)
@@ -1253,7 +1244,7 @@ export async function runDevopsAgent(
     const message = error instanceof Error ? error.message : String(error);
     await finishDevopsSession(deps.db, deps, handle, {
       issueId: input.issueId,
-      status: 'failed',
+      status: StepRunStatus.failed,
       summary: `DevOps прерван: ${message}`,
       feedback: message,
     });
@@ -1498,7 +1489,7 @@ export function isReportRunActive(issueId: string): boolean {
 }
 
 export function lastReportFailed(issueId: string): boolean {
-  return lastReportOutcome.get(issueId) === 'failed';
+  return lastReportOutcome.get(issueId) === StepRunStatus.failed;
 }
 
 const reportWarnings = new Map<string, string[]>();
@@ -1575,7 +1566,7 @@ export function reportModelFor(
         .where(
           and(
             eq(iterations.issue_id, issueId),
-            eq(iterations.status, 'completed'),
+            eq(iterations.status, TaskStatus.completed),
           ),
         )
         .orderBy(desc(iterations.number))
@@ -1609,7 +1600,7 @@ export interface RunReportAgentInput {
 function reportStepStatusEvent(
   issueId: string,
   reportRunId: string,
-  status: StepRunStatus | 'running',
+  status: StepRunStatus,
   model?: string,
 ): SSEEvent {
   return {
@@ -1617,7 +1608,7 @@ function reportStepStatusEvent(
     issueId,
     stepRunId: reportRunId,
     data:
-      status === 'running'
+      status === StepRunStatus.running
         ? JSON.stringify({ status, step: 'report', model: model ?? null })
         : status,
     ts: new Date().toISOString(),
@@ -1651,7 +1642,7 @@ export async function runReportAgent(
       attempt: previous.filter((run) => run.step === 'report').length + 1,
       context: input.trigger ?? 'report',
     });
-    await updateStepRun(deps.db, stepRun.id, { status: 'running' });
+    await updateStepRun(deps.db, stepRun.id, { status: StepRunStatus.running });
     stepRunId = stepRun.id;
   } catch (error) {
     console.error('report run record failed', {
@@ -1671,10 +1662,10 @@ export async function runReportAgent(
     });
     lastReportOutcome.set(input.issueId, 'failed');
     deps.sse.publish(
-      reportStepStatusEvent(input.issueId, reportRunId, 'failed'),
+      reportStepStatusEvent(input.issueId, reportRunId, StepRunStatus.failed),
     );
     await persistReportRun(deps.db, stepRunId, {
-      status: 'failed',
+      status: StepRunStatus.failed,
       feedback: `archive failed: ${error instanceof Error ? error.message : String(error)}`,
       stdout: '',
       stderr: '',
@@ -1713,11 +1704,11 @@ export async function runReportAgent(
     `report agent started: issue=${input.issueId} trigger=${input.trigger ?? 'unknown'}${input.origin ? ` origin=${input.origin}` : ''} archived=${archive.dir ?? 'none'} files=[${archive.files.join(', ')}] sessionReset=[${staleSessions.join(', ')}] at=${new Date(startedAt).toISOString()}`,
   );
   deps.sse.publish(
-    reportStepStatusEvent(input.issueId, reportRunId, 'running', input.model),
+    reportStepStatusEvent(input.issueId, reportRunId, StepRunStatus.running, input.model),
   );
   activeReportRuns.add(input.issueId);
 
-  let status: StepRunStatus = 'failed';
+  let status: StepRunStatus = StepRunStatus.failed;
   let failure: unknown;
   let observedModel: string | undefined;
   let anchoredPath: string | null = null;
@@ -1773,14 +1764,23 @@ export async function runReportAgent(
     });
     observedModel = result.stats?.model ?? undefined;
     session.setStats(result.stats ?? null);
-    const derived = result.aborted
-      ? 'failed'
-      : stepRunStatusFromResult(result.exitCode, result.report);
-    status = derived === 'success' ? 'success' : 'failed';
-    if (status === 'failed') failure = `exit status: ${derived}`;
+    const outcome = stepRunOutcome({
+      exitCode: result.exitCode,
+      report: result.report,
+      modelReplied: result.modelReplied,
+      requiresStepReport: false,
+      aborted: result.aborted,
+    });
+    status = outcome.status === StepRunStatus.success ? StepRunStatus.success : StepRunStatus.failed;
+    if (status === StepRunStatus.failed) {
+      failure =
+        outcome.failure === null
+          ? `exit status: ${outcome.status}`
+          : STEP_FAILURE_TEXT[outcome.failure];
+    }
   } catch (error) {
     failure = error;
-    status = 'failed';
+    status = StepRunStatus.failed;
   } finally {
     activeReportRuns.delete(input.issueId);
     session.stop();
@@ -1795,11 +1795,11 @@ export async function runReportAgent(
       });
     }
     const artifacts = reportArtifactsPresent(input.hostDir);
-    if (status === 'success' && !artifacts.md) {
-      status = 'failed';
+    if (status === StepRunStatus.success && !artifacts.md) {
+      status = StepRunStatus.failed;
       failure = 'report.md отсутствует после прогона';
     }
-    if (status === 'success') {
+    if (status === StepRunStatus.success) {
       lastReportOutcome.delete(input.issueId);
       const warnings = [
         ...detectModelLeak(input.hostDir, observedModel ?? input.model),
@@ -1826,7 +1826,7 @@ export async function runReportAgent(
         event.type === 'notice' && event.message.includes('лимитом вывода'),
     );
     let feedback: string | null = null;
-    if (status === 'failed') {
+    if (status === StepRunStatus.failed) {
       const reason =
         failure instanceof Error ? failure.message : String(failure);
       feedback = `report failed: ${reason}`;
@@ -1848,7 +1848,7 @@ export async function runReportAgent(
 
   deps.sse.publish(reportStepStatusEvent(input.issueId, reportRunId, status));
   const durationMs = Date.now() - startedAt;
-  if (status === 'success') {
+  if (status === StepRunStatus.success) {
     console.log(
       `report agent finished: issue=${input.issueId} trigger=${input.trigger ?? 'unknown'} durationMs=${durationMs} artifacts: ${describeReportArtifacts(input.hostDir)}`,
     );
@@ -1915,7 +1915,7 @@ export async function runIssueIteration(
     is_review_need: input.iteration.isReviewNeed ?? false,
     steps: input.iteration.steps,
     worker_count: input.iteration.worker_count,
-    status: 'running',
+    status: TaskStatus.running,
     created_at: now,
     updated_at: now,
   };
@@ -1967,11 +1967,11 @@ export async function runIssueIteration(
 
   const runningAt = new Date().toISOString();
   db.update(iterations)
-    .set({ status: 'running', updated_at: runningAt })
+    .set({ status: TaskStatus.running, updated_at: runningAt })
     .where(eq(iterations.id, input.iteration.id))
     .run();
   db.update(issues)
-    .set({ status: 'running', updated_at: runningAt })
+    .set({ status: TaskStatus.running, updated_at: runningAt })
     .where(eq(issues.id, input.issue.id))
     .run();
   deps.sse.publish({
@@ -1980,7 +1980,7 @@ export async function runIssueIteration(
     iterationId: input.iteration.id,
     data: JSON.stringify({
       iterationId: input.iteration.id,
-      status: 'running',
+      status: TaskStatus.running,
       needsInput: false,
     }),
     ts: runningAt,
@@ -2062,11 +2062,11 @@ export async function runIssueIteration(
     const failedAt = new Date().toISOString();
     const message = error instanceof Error ? error.message : String(error);
     db.update(iterations)
-      .set({ status: 'failed', updated_at: failedAt })
+      .set({ status: TaskStatus.failed, updated_at: failedAt })
       .where(eq(iterations.id, input.iteration.id))
       .run();
     db.update(issues)
-      .set({ status: 'failed', updated_at: failedAt })
+      .set({ status: TaskStatus.failed, updated_at: failedAt })
       .where(eq(issues.id, input.issue.id))
       .run();
     deps.sse.publish({
@@ -2075,22 +2075,22 @@ export async function runIssueIteration(
       iterationId: input.iteration.id,
       data: JSON.stringify({
         iterationId: input.iteration.id,
-        status: 'failed',
+        status: TaskStatus.failed,
         needsInput: false,
         error: message,
       }),
       ts: failedAt,
     });
-    await writeIterationReport(db, deps, input, 'failed');
+    await writeIterationReport(db, deps, input, TaskStatus.failed);
     void upsertMergeRequestsFromResultJson(
       db,
       deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
       input.issue.id,
     ).catch((error) => console.error('upsertMergeRequests failed', error));
-    return { iterationStatus: 'failed', needsInput: false };
+    return { iterationStatus: TaskStatus.failed, needsInput: false };
   }
 
-  if (result.iterationStatus === 'completed') {
+  if (result.iterationStatus === TaskStatus.completed) {
     await snapshotIterationResult(
       deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
       input.issue.id,
@@ -2114,7 +2114,7 @@ export async function runIssueIteration(
     .where(
       and(
         eq(iterations.issue_id, input.issue.id),
-        eq(iterations.status, 'pending'),
+        eq(iterations.status, TaskStatus.pending),
       ),
     )
     .get();
@@ -2164,7 +2164,7 @@ async function startNextPendingIteration(
     .select()
     .from(iterations)
     .where(
-      and(eq(iterations.issue_id, issueId), eq(iterations.status, 'pending')),
+      and(eq(iterations.issue_id, issueId), eq(iterations.status, TaskStatus.pending)),
     )
     .orderBy(asc(iterations.number))
     .get();

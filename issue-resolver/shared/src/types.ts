@@ -1,13 +1,15 @@
 
-export type TaskStatus =
-  | 'draft'
-  | 'pending'
-  | 'running'
-  | 'preparing'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'question';
+import type {
+  RepoConnectionStatus,
+  RetroRunStatus,
+  RoomAgentStatus,
+  RunInstructionsStatus,
+  ScenarioStatus,
+  StepReportStatus,
+  StepRunStatus,
+  TaskStatus,
+  WorkspaceProgressStatus,
+} from './status';
 
 export type PipelineStep = 'refine' | 'resolve' | 'review' | 'test' | 'pr' | 'report' | 'devops';
 
@@ -25,15 +27,6 @@ export type ThinkingLevel =
   | 'max';
 
 export type StepThinkingLevels = Partial<Record<PipelineStep, ThinkingLevel>>;
-
-export type StepRunStatus =
-  | 'pending'
-  | 'running'
-  | 'success'
-  | 'failed'
-  | 'needs_input'
-  | 'skipped'
-  | 'aborted';
 
 export interface IssueRepository {
   id: string;
@@ -324,8 +317,6 @@ export interface StepRunWithLog extends StepRun {
   screenshots_dir: string | null;
 }
 
-export type RetroRunStatus = 'running' | 'success' | 'failed';
-
 /** A maintenance run started from the settings page: memory compaction + retro. */
 export interface RetroRun {
   id: string;
@@ -349,8 +340,6 @@ export interface RetroRunWithLog extends RetroRun {
   events: SessionEvent[];
   stats: SessionStats | null;
 }
-
-export type StepReportStatus = 'pass' | 'fail' | 'blocked';
 
 export type ExecutionMode = 'single' | 'room' | 'stages';
 
@@ -377,7 +366,7 @@ export interface RoomAgent {
   label: string;
   stage?: number | null;
   stageName?: string | null;
-  status: 'running' | 'finished' | 'aborted' | 'failed';
+  status: RoomAgentStatus;
   startedAt: string | null;
   endedAt?: string | null;
   stats: SessionStats | null;
@@ -385,7 +374,7 @@ export interface RoomAgent {
 
 export interface StepReportScenario {
   name: string;
-  status?: 'pass' | 'fail';
+  status?: ScenarioStatus;
   details?: string;
   expected?: string;
   actual?: string;
@@ -424,6 +413,7 @@ export interface StepExecutionResult {
   stderr: string;
   events?: SessionEvent[];
   stats?: SessionStats | null;
+  modelReplied?: boolean;
   aborted?: boolean;
 }
 
@@ -470,7 +460,7 @@ export type WorkspaceProgressStep =
 export interface WorkspaceProgress {
   step: WorkspaceProgressStep;
   repo?: string;
-  status: 'running' | 'done' | 'warning' | 'error';
+  status: WorkspaceProgressStatus;
   message?: string;
   devPort?: number;
 }
@@ -557,10 +547,6 @@ export interface ValidateReposRequest {
 export interface ValidateReposResponse {
   results: RepoValidationResult[];
 }
-
-export type RepoConnectionStatus = 'ok' | 'error' | 'unknown';
-
-export type RunInstructionsStatus = 'unknown' | 'generated' | 'failed';
 
 export interface SavedRepo {
   id: string;

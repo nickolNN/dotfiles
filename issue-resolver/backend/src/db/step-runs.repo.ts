@@ -1,14 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  parseSessionStats,
-  type PipelineStep,
-  type SessionEvent,
-  type SessionStats,
-  type StepOutput,
-  type StepRun,
-  type StepRunStatus,
-  type StepRunWithLog,
-} from '@issue-resolver/shared';
+import { parseSessionStats, type PipelineStep, type SessionEvent, type SessionStats, type StepOutput, type StepRun, StepRunStatus, type StepRunWithLog } from '@issue-resolver/shared';
 import { and, asc, desc, eq, getTableColumns } from 'drizzle-orm';
 import { capSessionEvents } from '../pi/session-events-cap';
 import type { Db } from './client';
@@ -98,7 +89,7 @@ export async function createStepRun(
     iteration_id: input.iterationId,
     step: input.step,
     attempt: input.attempt,
-    status: 'pending',
+    status: StepRunStatus.pending,
     context: input.context,
     feedback: null,
     created_at: now,

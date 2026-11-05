@@ -13,6 +13,7 @@ import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import { FakeMrClient } from '../src/pr/mr';
 import { InMemorySseHub } from '../src/sse/hub';
 import { runIssueIteration } from '../src/workflow/run-iteration.service';
+import { TaskStatus } from '@issue-resolver/shared';
 
 const ENDPOINT = '/issue-resolver/api/v1/issues';
 const NOW = '2026-06-01T00:00:00.000Z';
@@ -101,7 +102,7 @@ function seedIteration(
     review_context: '',
     is_review_need: false,
     steps,
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: NOW,
     updated_at: NOW,
   };

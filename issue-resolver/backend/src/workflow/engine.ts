@@ -1,40 +1,9 @@
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type {
-  ContainerSpec,
-  DesiredResult,
-  ExecutionPlan,
-  Iteration,
-  PipelineStep,
-  RoomWorkItem,
-  RunInstructionsStatus,
-  SessionEvent,
-  SessionStats,
-  SSEEvent,
-  StepExecutionResult,
-  StepOutput,
-  StepReport,
-  StepRun,
-  StepModels,
-  StepRunStatus,
-  StepThinkingLevels,
-  TaskStatus,
-  ThinkingLevel,
-  WorkspaceProgressReporter,
-} from '@issue-resolver/shared';
-import {
-  REFINED_PLAN_CHAR_LIMIT,
-  MAX_PIPELINE_ATTEMPTS,
-  MAX_SELF_RETRIES,
-  SELF_RETRY_STEPS,
-  SessionAddress,
-  extractRepoNameFromUrl,
-  maxExecutorsFor,
-  nextStepDecision,
-  parseStepReport,
-  planExecutionMode,
-  stepRunStatusFromResult,
-} from '@issue-resolver/shared';
+import type { ContainerSpec, DesiredResult, ExecutionPlan, Iteration, PipelineStep, RoomWorkItem, SessionEvent, SessionStats, SSEEvent, StepExecutionResult, StepOutput, StepReport, StepRun, StepModels, StepThinkingLevels, ThinkingLevel, WorkspaceProgressReporter } from '@issue-resolver/shared';
+import { REFINED_PLAN_CHAR_LIMIT, MAX_PIPELINE_ATTEMPTS, MAX_SELF_RETRIES, SELF_RETRY_STEPS, SessionAddress, extractRepoNameFromUrl, maxExecutorsFor, nextStepDecision, parseStepReport, planExecutionMode, stepRunOutcome, WorkspaceProgressStatus, StepReportStatus, TaskStatus, StepRunStatus, RunInstructionsStatus } from '@issue-resolver/shared';
+import type { StepRunOutcome } from '@issue-resolver/shared';
+import { failureReportOverride } from './step-failure';
 import type { ContainerController } from '../docker/controller';
 import type {
   DevServerStartResult,
@@ -307,23 +276,23 @@ export async function prepareWorkspace(
     memoryVolumeName: process.env.ISSUE_RESOLVER_MEMORY_VOLUME || 'agent-memory',
   };
 
-  onProgress?.({ step: 'creating_dirs', status: 'running' });
+  onProgress?.({ step: 'creating_dirs', status: WorkspaceProgressStatus.running });
   try {
     await deps.container.spawn(spec);
   } catch (error) {
     onProgress?.({
       step: 'creating_dirs',
-      status: 'error',
+      status: WorkspaceProgressStatus.error,
       message: errorMessage(error),
     });
     throw error;
   }
-  onProgress?.({ step: 'creating_dirs', status: 'done' });
+  onProgress?.({ step: 'creating_dirs', status: WorkspaceProgressStatus.done });
 
   if (repositories.length === 0) {
-    onProgress?.({ step: 'checking_instructions', status: 'running' });
-    onProgress?.({ step: 'checking_instructions', status: 'done' });
-    onProgress?.({ step: 'ready', status: 'done' });
+    onProgress?.({ step: 'checking_instructions', status: WorkspaceProgressStatus.running });
+    onProgress?.({ step: 'checking_instructions', status: WorkspaceProgressStatus.done });
+    onProgress?.({ step: 'ready', status: WorkspaceProgressStatus.done });
     return [];
   }
 
@@ -348,7 +317,7 @@ export async function prepareWorkspace(
         ...(currentRepo
           ? { repo: extractRepoNameFromUrl(currentRepo) }
           : {}),
-        status: 'error',
+        status: WorkspaceProgressStatus.error,
         message: errorMessage(error),
       });
       throw error;
@@ -378,7 +347,7 @@ export async function prepareWorkspace(
 
   const generatedRepos: string[] = [];
   const runInstructions = deps.runInstructions;
-  onProgress?.({ step: 'checking_instructions', status: 'running' });
+  onProgress?.({ step: 'checking_instructions', status: WorkspaceProgressStatus.running });
   if (deps.devops && runInstructions) {
     const containerWorkspaceDir = deps.local
       ? workspaceHostDir
@@ -389,18 +358,18 @@ export async function prepareWorkspace(
         onProgress?.({
           step: 'devops',
           repo: repoName,
-          status: 'done',
+          status: WorkspaceProgressStatus.done,
           message: 'пропущен',
         });
         continue;
       }
-      if (runInstructions.getStatus(workspace.repoUrl) === 'generated') {
+      if (runInstructions.getStatus(workspace.repoUrl) === RunInstructionsStatus.generated) {
         generatedRepos.push(workspace.repoUrl);
-        onProgress?.({ step: 'checking_instructions', repo: repoName, status: 'done' });
+        onProgress?.({ step: 'checking_instructions', repo: repoName, status: WorkspaceProgressStatus.done });
         continue;
       }
-      onProgress?.({ step: 'checking_instructions', repo: repoName, status: 'running' });
-      onProgress?.({ step: 'devops', repo: repoName, status: 'running' });
+      onProgress?.({ step: 'checking_instructions', repo: repoName, status: WorkspaceProgressStatus.running });
+      onProgress?.({ step: 'devops', repo: repoName, status: WorkspaceProgressStatus.running });
       const devopsId = SessionAddress.forIssueRun(issue.id, 'devops').toString();
       const devops = deps.devops({
         containerName: spec.containerName,
@@ -439,7 +408,7 @@ export async function prepareWorkspace(
         onProgress?.({
           step: 'devops',
           repo: repoName,
-          status: 'done',
+          status: WorkspaceProgressStatus.done,
           message: 'Инструкции сохранены',
         });
       } else {
@@ -447,13 +416,13 @@ export async function prepareWorkspace(
         onProgress?.({
           step: 'devops',
           repo: repoName,
-          status: 'error',
+          status: WorkspaceProgressStatus.error,
           message: result.error ?? 'не удалось сгенерировать инструкции',
         });
       }
     }
   }
-  onProgress?.({ step: 'checking_instructions', status: 'done' });
+  onProgress?.({ step: 'checking_instructions', status: WorkspaceProgressStatus.done });
 
   for (const workspace of prepared.repoWorkspaces) {
     const repoName = extractRepoNameFromUrl(workspace.repoUrl);
@@ -461,12 +430,12 @@ export async function prepareWorkspace(
       onProgress?.({
         step: 'installing',
         repo: repoName,
-        status: 'done',
+        status: WorkspaceProgressStatus.done,
         message: 'пропущен',
       });
       continue;
     }
-    onProgress?.({ step: 'installing', repo: repoName, status: 'running' });
+    onProgress?.({ step: 'installing', repo: repoName, status: WorkspaceProgressStatus.running });
     try {
       await deps.git.installDependencies([workspace.path]);
     } catch (error) {
@@ -476,18 +445,18 @@ export async function prepareWorkspace(
       onProgress?.({
         step: 'installing',
         repo: repoName,
-        status: 'error',
+        status: WorkspaceProgressStatus.error,
         message: errorMessage(error),
       });
       throw error;
     }
-    onProgress?.({ step: 'installing', repo: repoName, status: 'done' });
+    onProgress?.({ step: 'installing', repo: repoName, status: WorkspaceProgressStatus.done });
 
     if (deps.devServerPort !== undefined) {
       continue;
     }
 
-    onProgress?.({ step: 'dev_server', repo: repoName, status: 'running' });
+    onProgress?.({ step: 'dev_server', repo: repoName, status: WorkspaceProgressStatus.running });
     const instructionsText =
       runInstructions?.getInstructions(workspace.repoUrl) ?? null;
     let devStart: DevServerStartResult;
@@ -503,21 +472,21 @@ export async function prepareWorkspace(
       onProgress?.({
         step: 'dev_server',
         repo: repoName,
-        status: 'warning',
+        status: WorkspaceProgressStatus.warning,
         message: devStart.message ?? 'не удалось определить порт',
       });
     } else {
       onProgress?.({
         step: 'dev_server',
         repo: repoName,
-        status: 'done',
+        status: WorkspaceProgressStatus.done,
         message: `localhost:${devStart.port}`,
         devPort: devStart.port,
       });
     }
   }
 
-  onProgress?.({ step: 'ready', status: 'done' });
+  onProgress?.({ step: 'ready', status: WorkspaceProgressStatus.done });
 
   return prepared.repoWorkspaces;
 }
@@ -607,7 +576,7 @@ const stepStatusEvent = (
   issueId: string,
   iterationId: string,
   stepRunId: string,
-  status: StepRunStatus | 'running',
+  status: StepRunStatus,
   runningStep?: { step: PipelineStep; model?: string },
 ): SSEEvent => ({
   type: 'step_status',
@@ -706,7 +675,7 @@ export async function runIteration(
     iterationId: iteration.id,
     issueTitle: issue.title,
     iterationNumber: iteration.number,
-    iterationStatus: outcomeStatus === 'cancelled' ? 'failed' : outcomeStatus,
+    iterationStatus: outcomeStatus === TaskStatus.cancelled ? TaskStatus.failed : outcomeStatus,
     iterationCount: iteration.number,
     workspaceHostDir,
     workspaceContainerPath,
@@ -726,12 +695,12 @@ export async function runIteration(
       attempt,
       context: iteration.context,
     });
-    await deps.store.updateStepRun(stepRun.id, { status: 'running' });
+    await deps.store.updateStepRun(stepRun.id, { status: StepRunStatus.running });
     const model = (input.step_models?.[step] ?? input.model) || undefined;
     const thinkingLevel =
       (input.step_thinking_levels?.[step] ?? input.thinking_level) || undefined;
     deps.sse.publish(
-      stepStatusEvent(issue.id, iteration.id, stepRun.id, 'running', {
+      stepStatusEvent(issue.id, iteration.id, stepRun.id, StepRunStatus.running, {
         step,
         model,
       }),
@@ -909,11 +878,11 @@ export async function runIteration(
         `workflow: pi agent for step '${step}' failed or timed out`,
         error,
       );
-      await deps.store.updateStepRun(stepRun.id, { status: 'failed' });
+      await deps.store.updateStepRun(stepRun.id, { status: StepRunStatus.failed });
       await deps.store.createStepOutput({
         stepRunId: stepRun.id,
         report: JSON.stringify({
-          status: 'fail',
+          status: StepReportStatus.fail,
           summary:
             step === 'resolve'
               ? 'resolve agent failed/hung'
@@ -925,7 +894,7 @@ export async function runIteration(
         stats: null,
       });
       deps.sse.publish(
-        stepStatusEvent(issue.id, iteration.id, stepRun.id, 'failed'),
+        stepStatusEvent(issue.id, iteration.id, stepRun.id, StepRunStatus.failed),
       );
 
       const maxSelf = MAX_SELF_RETRIES[step] ?? 0;
@@ -941,11 +910,11 @@ export async function runIteration(
       }
 
       void deps.onIterationTerminal?.(buildTerminalOutcome('failed'));
-      return { iterationStatus: 'failed', needsInput: false };
+      return { iterationStatus: TaskStatus.failed, needsInput: false };
     }
 
     const source = await readStepReportFile(workspaceHostDir, reportsBefore);
-    const report = source?.report ?? result.report;
+    const rawReport = source?.report ?? result.report;
     const contractPath = join(workspaceHostDir, STEP_REPORT_FILE);
     if (source !== null && source.path !== contractPath) {
       const message = `step result written to ${source.path} instead of ${contractPath} (the contract path)`;
@@ -953,22 +922,35 @@ export async function runIteration(
       deps.sse.publish(
         streamEvent(issue.id, iteration.id, stepRun.id, 'system', message),
       );
-    } else if (source === null && result.report === null) {
-      const message = `no fresh ${STEP_REPORT_FILE} from this step — status comes from the agent exit code (${result.exitCode})`;
-      console.error(`workflow: step '${step}' (${stepRun.id}): ${message}`);
+    }
+
+    const outcome: StepRunOutcome = stepRunOutcome({
+      exitCode: result.exitCode,
+      report: rawReport,
+      modelReplied: result.modelReplied,
+      aborted: result.aborted,
+    });
+    const failureReport = failureReportOverride(outcome, rawReport);
+    const report: StepReport | null = failureReport ?? rawReport;
+    if (failureReport !== null) {
+      console.error(
+        `workflow: step '${step}' (${stepRun.id}): ${outcome.failure}`,
+      );
       deps.sse.publish(
-        streamEvent(issue.id, iteration.id, stepRun.id, 'system', message),
+        stepEvent(issue.id, iteration.id, stepRun.id, {
+          type: 'notice',
+          level: 'error',
+          message: failureReport.summary,
+        }),
       );
     }
 
-    const status: StepRunStatus = result.aborted
-      ? 'aborted'
-      : stepRunStatusFromResult(result.exitCode, report);
+    const status: StepRunStatus = outcome.status;
     await deps.store.updateStepRun(stepRun.id, { status });
     const screenshotsDir = await screenshotsDirOf(workspaceHostDir);
 
     let prPublish: PrPublishOutcome | null = null;
-    if (step === 'pr' && status === 'success' && repoWorkspaces.length > 0) {
+    if (step === 'pr' && status === StepRunStatus.success && repoWorkspaces.length > 0) {
       try {
         prPublish = await publishPrResult(
           deps,
@@ -988,7 +970,7 @@ export async function runIteration(
 
     const prNoTargetNotice: SessionEvent | null =
       step === 'pr' &&
-      status === 'success' &&
+      status === StepRunStatus.success &&
       repoWorkspaces.length > 0 &&
       !repoWorkspaces.some((workspace) =>
         input.repositories.some(
@@ -1021,7 +1003,7 @@ export async function runIteration(
     const persistedReport: StepReport | null =
       prErrors.length > 0
         ? {
-            ...(report ?? { status: 'pass' as const, summary: '' }),
+            ...(report ?? { status: StepReportStatus.pass, summary: '' }),
             pr_error: prErrorMessage,
           }
         : report;
@@ -1043,9 +1025,9 @@ export async function runIteration(
     }
 
     if (prErrors.length > 0) {
-      await deps.store.updateStepRun(stepRun.id, { status: 'failed' });
+      await deps.store.updateStepRun(stepRun.id, { status: StepRunStatus.failed });
       deps.sse.publish(
-        stepStatusEvent(issue.id, iteration.id, stepRun.id, 'failed'),
+        stepStatusEvent(issue.id, iteration.id, stepRun.id, StepRunStatus.failed),
       );
       for (const error of prErrors) {
         deps.sse.publish(
@@ -1058,7 +1040,7 @@ export async function runIteration(
       }
     }
 
-    if (step === 'refine' && status === 'success') {
+    if (step === 'refine' && status === StepRunStatus.success) {
       const expandedPlan =
         (await readExpandedPlan(agentWorkingDir)) ??
         (await readExpandedPlan(workspaceHostDir));
@@ -1101,16 +1083,16 @@ export async function runIteration(
       }
     }
 
-    if (status === 'aborted') {
+    if (status === StepRunStatus.aborted) {
       void deps.onIterationTerminal?.(buildTerminalOutcome('cancelled'));
-      return { iterationStatus: 'cancelled', needsInput: false };
+      return { iterationStatus: TaskStatus.cancelled, needsInput: false };
     }
 
-    if (status === 'needs_input') {
-      return { iterationStatus: 'failed', needsInput: true };
+    if (status === StepRunStatus.needs_input) {
+      return { iterationStatus: TaskStatus.failed, needsInput: true };
     }
 
-    if (status === 'failed' && SELF_RETRY_STEPS.has(step)) {
+    if (status === StepRunStatus.failed && SELF_RETRY_STEPS.has(step)) {
       const maxSelf = MAX_SELF_RETRIES[step] ?? 0;
       if (stepRetries < maxSelf) {
         stepRetries += 1;
@@ -1132,7 +1114,7 @@ export async function runIteration(
     const decision = nextStepDecision({
       steps,
       currentStep: step,
-      result: status === 'success' ? 'success' : 'failed',
+      result: status === StepRunStatus.success ? StepRunStatus.success : StepRunStatus.failed,
       attempt: pipelineAttempt,
       maxAttempts: MAX_PIPELINE_ATTEMPTS,
     });
@@ -1141,7 +1123,7 @@ export async function runIteration(
       case 'advance':
         if (decision.iterationCompleted) {
           void deps.onIterationTerminal?.(buildTerminalOutcome('completed'));
-          return { iterationStatus: 'completed', needsInput: false };
+          return { iterationStatus: TaskStatus.completed, needsInput: false };
         }
         stepIndex += 1;
         stepRetries = 0;
@@ -1153,16 +1135,16 @@ export async function runIteration(
         stepIndex = steps.indexOf('resolve');
         stepRetries = 0;
         break;
-      case 'needs_input':
-        return { iterationStatus: 'failed', needsInput: true };
+      case StepRunStatus.needs_input:
+        return { iterationStatus: TaskStatus.failed, needsInput: true };
       case 'iteration_failed':
         void deps.onIterationTerminal?.(buildTerminalOutcome('failed'));
-        return { iterationStatus: 'failed', needsInput: false };
+        return { iterationStatus: TaskStatus.failed, needsInput: false };
     }
   }
 
   void deps.onIterationTerminal?.(buildTerminalOutcome('completed'));
-  return { iterationStatus: 'completed', needsInput: false };
+  return { iterationStatus: TaskStatus.completed, needsInput: false };
 }
 
 export interface MrResultArtifact {

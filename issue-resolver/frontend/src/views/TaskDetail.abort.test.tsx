@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus } from '@issue-resolver/shared';
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -10,7 +11,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -26,7 +27,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'running',
+    status: TaskStatus.running,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -70,7 +71,7 @@ afterEach(() => {
 
 describe('TaskDetail — кнопка «Прервать»', () => {
   it('видна при running и скрыта при completed', async () => {
-    stubFetch(makeIteration({ status: 'running' }), () =>
+    stubFetch(makeIteration({ status: TaskStatus.running }), () =>
       Promise.resolve(jsonResponse({ ok: true })),
     );
     const { unmount } = render(<TaskDetail issueId="issue-1" />);
@@ -78,7 +79,7 @@ describe('TaskDetail — кнопка «Прервать»', () => {
     expect(screen.getByTestId('abort-iteration')).toBeInTheDocument();
     unmount();
 
-    stubFetch(makeIteration({ status: 'completed' }), () =>
+    stubFetch(makeIteration({ status: TaskStatus.completed }), () =>
       Promise.resolve(jsonResponse({ ok: true })),
     );
     render(<TaskDetail issueId="issue-1" />);
@@ -87,7 +88,7 @@ describe('TaskDetail — кнопка «Прервать»', () => {
   });
 
   it('клик → POST /iterations/<id>/abort', async () => {
-    const fetchMock = stubFetch(makeIteration({ status: 'running' }), () =>
+    const fetchMock = stubFetch(makeIteration({ status: TaskStatus.running }), () =>
       Promise.resolve(jsonResponse({ ok: true })),
     );
 
@@ -108,7 +109,7 @@ describe('TaskDetail — кнопка «Прервать»', () => {
   });
 
   it('409 no active step session → красный alert с телом ошибки', async () => {
-    stubFetch(makeIteration({ status: 'running' }), () =>
+    stubFetch(makeIteration({ status: TaskStatus.running }), () =>
       Promise.resolve(
         jsonResponse(
           { error: 'no active step session' },
@@ -135,7 +136,7 @@ describe('TaskDetail — кнопка «Прервать»', () => {
     const pending = new Promise<Response>((resolve) => {
       resolveAbort = resolve;
     });
-    stubFetch(makeIteration({ status: 'running' }), () => pending);
+    stubFetch(makeIteration({ status: TaskStatus.running }), () => pending);
 
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');

@@ -2,13 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type {
-  ExecutionPlan,
-  Iteration,
-  PipelineStep,
-  SSEEvent,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
+import type { ExecutionPlan, Iteration, PipelineStep, SSEEvent, StepExecutionResult } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/client';
@@ -24,6 +18,7 @@ import {
   runIssueIteration,
   type IterationRunDeps,
 } from '../src/workflow/run-iteration.service';
+import { StepReportStatus, TaskStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 const STEPS: PipelineStep[] = ['refine', 'resolve'];
@@ -31,7 +26,7 @@ const STEPS: PipelineStep[] = ['refine', 'resolve'];
 const passResolve = (summary = 'resolve ok'): StepExecutionResult => ({
   step: 'resolve',
   exitCode: 0,
-  report: { status: 'pass', summary },
+  report: { status: StepReportStatus.pass, summary },
   stdout: '',
   stderr: '',
 });
@@ -39,7 +34,7 @@ const passResolve = (summary = 'resolve ok'): StepExecutionResult => ({
 const refineWithPlan = (execution: ExecutionPlan): StepExecutionResult => ({
   step: 'refine',
   exitCode: 0,
-  report: { status: 'pass', summary: 'plan', execution },
+  report: { status: StepReportStatus.pass, summary: 'plan', execution },
   stdout: '',
   stderr: '',
 });
@@ -74,7 +69,7 @@ function seedIteration(db: Db, steps: PipelineStep[] = STEPS): Seeded {
     review_context: '',
     is_review_need: false,
     steps,
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: NOW,
     updated_at: NOW,
   };

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseSessionStats,
   parseStepReport,
-  stepRunStatusFromResult,
+  stepRunOutcome,
   sumSessionStats,
 } from '../src/step-result';
 import type { SessionStats, StepReport } from '../src/types';
@@ -365,32 +365,109 @@ describe('parseSessionStats', () => {
   });
 });
 
-describe('stepRunStatusFromResult', () => {
+describe('stepRunOutcome', () => {
   const pass: StepReport = { status: 'pass', summary: 'ok' };
   const fail: StepReport = { status: 'fail', summary: 'bad' };
   const blocked: StepReport = { status: 'blocked', summary: 'hold' };
 
-  it('maps exit 0 with no report to success', () => {
-    expect(stepRunStatusFromResult(0, null)).toBe('success');
-  });
-
   it('maps exit 0 with a pass report to success', () => {
-    expect(stepRunStatusFromResult(0, pass)).toBe('success');
+    expect(stepRunOutcome({ exitCode: 0, report: pass })).toEqual({
+      status: 'success',
+      failure: null,
+    });
   });
 
-  it('maps non-zero exit with a pass report to failed', () => {
-    expect(stepRunStatusFromResult(1, pass)).toBe('failed');
+  it('maps a silent exit 0 without a report to failed/no_report', () => {
+    expect(stepRunOutcome({ exitCode: 0, report: null })).toEqual({
+      status: 'failed',
+      failure: 'no_report',
+    });
   });
 
-  it('maps exit 0 with a fail report to failed', () => {
-    expect(stepRunStatusFromResult(0, fail)).toBe('failed');
+  it('maps a negative exit without a report to failed/agent_exit', () => {
+    expect(stepRunOutcome({ exitCode: -1, report: null })).toEqual({
+      status: 'failed',
+      failure: 'agent_exit',
+    });
+  });
+
+  it('maps non-zero exit with a pass report to failed/agent_exit', () => {
+    expect(stepRunOutcome({ exitCode: 1, report: pass })).toEqual({
+      status: 'failed',
+      failure: 'agent_exit',
+    });
+  });
+
+  it('maps exit 0 with a fail report to failed/report_fail', () => {
+    expect(stepRunOutcome({ exitCode: 0, report: fail })).toEqual({
+      status: 'failed',
+      failure: 'report_fail',
+    });
   });
 
   it('maps exit 0 with a blocked report to needs_input', () => {
-    expect(stepRunStatusFromResult(0, blocked)).toBe('needs_input');
+    expect(stepRunOutcome({ exitCode: 0, report: blocked })).toEqual({
+      status: 'needs_input',
+      failure: null,
+    });
   });
 
-  it('maps a negative exit with no report to failed', () => {
-    expect(stepRunStatusFromResult(-1, null)).toBe('failed');
+  it('keeps a blocked report failed when the agent exited non-zero', () => {
+    expect(stepRunOutcome({ exitCode: 1, report: blocked })).toEqual({
+      status: 'failed',
+      failure: 'agent_exit',
+    });
+  });
+
+  it('accepts a run without a step report only when it does not require one', () => {
+    expect(
+      stepRunOutcome({ exitCode: 0, report: null, requiresStepReport: false }),
+    ).toEqual({ status: 'success', failure: null });
+    expect(
+      stepRunOutcome({ exitCode: 1, report: null, requiresStepReport: false }),
+    ).toEqual({ status: 'failed', failure: 'agent_exit' });
+  });
+
+  it('fails a run whose model never replied, whatever the exit code', () => {
+    const silent = { exitCode: 0, report: null, modelReplied: false };
+    expect(stepRunOutcome(silent)).toEqual({
+      status: 'failed',
+      failure: 'no_model_reply',
+    });
+    expect(
+      stepRunOutcome({ ...silent, exitCode: 1, report: pass }),
+    ).toEqual({ status: 'failed', failure: 'no_model_reply' });
+  });
+
+  it('does not trust a pass report when the model never replied', () => {
+    expect(
+      stepRunOutcome({ exitCode: 0, report: pass, modelReplied: false }),
+    ).toEqual({ status: 'failed', failure: 'no_model_reply' });
+  });
+
+  it('aborted важнее всего остального: прогон не становится success или failed', () => {
+    expect(
+      stepRunOutcome({
+        exitCode: 0,
+        report: pass,
+        modelReplied: false,
+        aborted: true,
+      }),
+    ).toEqual({ status: 'aborted', failure: null });
+    expect(
+      stepRunOutcome({ exitCode: 1, report: fail, aborted: true }),
+    ).toEqual({ status: 'aborted', failure: null });
+  });
+
+  it('aborted: false не меняет решения по остальным признакам', () => {
+    expect(
+      stepRunOutcome({ exitCode: 0, report: pass, aborted: false }),
+    ).toEqual({ status: 'success', failure: null });
+  });
+
+  it('treats an unknown model reply as unknown, not as silence', () => {
+    expect(
+      stepRunOutcome({ exitCode: 0, report: pass, modelReplied: undefined }),
+    ).toEqual({ status: 'success', failure: null });
   });
 });

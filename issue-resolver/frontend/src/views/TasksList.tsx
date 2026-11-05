@@ -17,11 +17,15 @@ import {
   extractIssueKeyFromUrl,
   extractRepoNameFromUrl,
   formatRelativeTime,
-  type Issue,
-  type Iteration,
-  type SavedRepo,
-  type TaskStatus,
+  Issue,
+  Iteration,
+  SavedRepo,
+  TaskStatus,
+  RepoConnectionStatus,
+  RunInstructionsStatus,
+  StepRunStatus,
 } from '@issue-resolver/shared';
+
 import {
   deleteIssue,
   devServerPortOf,
@@ -161,9 +165,9 @@ const REPO_READINESS_LABELS: Record<RepoReadiness, string> = {
 
 function repoReadiness(repo: SavedRepo | undefined): RepoReadiness {
   if (repo === undefined) return 'waiting';
-  if (repo.connectionStatus === 'error') return 'error';
+  if (repo.connectionStatus === RepoConnectionStatus.error) return 'error';
   if (repo.connectionStatus === 'ok') {
-    return repo.runInstructionsStatus === 'generated' ? 'ready' : 'connected';
+    return repo.runInstructionsStatus === RunInstructionsStatus.generated ? 'ready' : 'connected';
   }
   return 'waiting';
 }
@@ -220,7 +224,7 @@ function RepoReadinessLine({
 
 function hasViewableResult(issue: Issue): boolean {
   return (
-    issue.status === 'completed' &&
+    issue.status === TaskStatus.completed &&
     (issue.desired_result === 'md' || issue.desired_result === 'html')
   );
 }
@@ -319,8 +323,8 @@ function IssueStats({
         const speeds: number[] = [];
 
         if (
-          issue.status === 'running' ||
-          issue.status === 'completed'
+          issue.status === TaskStatus.running ||
+          issue.status === TaskStatus.completed
         ) {
           const batches = await Promise.all(
             iterations.map((iteration) => getStepRuns(iteration.id)),
@@ -328,8 +332,8 @@ function IssueStats({
           runs = batches.flat();
 
           if (
-            issue.status === 'completed' &&
-            lastIteration?.status === 'completed'
+            issue.status === TaskStatus.completed &&
+            lastIteration?.status === TaskStatus.completed
           ) {
             for (const run of runs) {
               if (run.iteration_id !== lastIteration.id) continue;
@@ -551,7 +555,7 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
 
   const now = useNow(
     state.status === 'ready' &&
-      state.issues.some((issue) => issue.status === 'running'),
+      state.issues.some((issue) => issue.status === TaskStatus.running),
   );
 
   useEffect(() => {
@@ -570,7 +574,7 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
         const issueId = event.issueId;
         if (!issueId) return;
 
-        if (payload.status === 'running' && typeof payload.step === 'string') {
+        if (payload.status === StepRunStatus.running && typeof payload.step === 'string') {
           const step = payload.step;
           const model = typeof payload.model === 'string' ? payload.model : null;
           setLocalIssues((current) =>
@@ -582,7 +586,7 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
           );
           return;
         }
-        if (payload.status && payload.status !== 'running') {
+        if (payload.status && payload.status !== StepRunStatus.running) {
           setLocalIssues((current) =>
             current.map((issue) =>
               issue.id === issueId
@@ -631,7 +635,7 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
     state.status === 'ready' &&
     state.issues.some(
       (issue) =>
-        (issue.status === 'pending' || issue.status === 'preparing') &&
+        (issue.status === TaskStatus.pending || issue.status === 'preparing') &&
         issue.repositories.length > 0,
     );
 
@@ -793,7 +797,7 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
             {state.issues.map((issue, index) => {
               const isPulsing = PULSE_STATUSES.has(issue.status);
               const isTerminal = TERMINAL_STATUSES.has(issue.status);
-              const isFailed = issue.status === 'failed';
+              const isFailed = issue.status === TaskStatus.failed;
               const isDeleting = deletingIds.has(issue.id);
               const devPort = devServerPortOf(issue);
               const accent = isTerminal
@@ -880,7 +884,7 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
                           <ParallelIcon className="h-3.5 w-3.5" />{issue.worker_count}
                         </span>
                       )}
-                      {issue.status === 'running' && issue.activeModel && (
+                      {issue.status === TaskStatus.running && issue.activeModel && (
                         <span
                           data-testid="active-model-badge"
                           className="mt-1 ml-2 inline-flex items-center gap-1 text-[#00FF41]/70 text-[11px]"
@@ -892,7 +896,7 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
                     </div>
 
                     <div className="mt-2 border-t border-[#008F11]/20 pt-2">
-                      {(issue.status === 'pending' ||
+                      {(issue.status === TaskStatus.pending ||
                         issue.status === 'preparing') &&
                         issue.repositories.length > 0 && (
                           <RepoReadinessLine
@@ -900,7 +904,7 @@ function TasksListView({ onOpenTask, onOpenResult }: TasksListProps) {
                             savedRepos={savedRepos}
                           />
                         )}
-                      {issue.status !== 'pending' && (
+                      {issue.status !== TaskStatus.pending && (
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#00FF41]/60">
                           <IssueStats
                             issue={issue}

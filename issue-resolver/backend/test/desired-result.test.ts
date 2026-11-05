@@ -1,7 +1,8 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { DesiredResult, TaskStatus } from '@issue-resolver/shared';
+import { TaskStatus } from '@issue-resolver/shared';
+import type { DesiredResult } from '@issue-resolver/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
 import { createDb } from '../src/db/client';
@@ -93,7 +94,7 @@ function seedCompletedIteration(
   issueId: string,
   number: number,
 ): string {
-  return seedIterationWithStatus(db, issueId, number, 'completed');
+  return seedIterationWithStatus(db, issueId, number, TaskStatus.completed);
 }
 
 async function writeSnapshot(
@@ -242,7 +243,7 @@ describe('GET /issues/:id/result', () => {
 
   it('running-итерация не меняет сервимый результат — берётся последняя completed', async () => {
     const { app, db } = await setupResult('md', 'report.md');
-    seedIterationWithStatus(db, 'issue-1', 2, 'running');
+    seedIterationWithStatus(db, 'issue-1', 2, TaskStatus.running);
 
     const response = await app.inject({
       method: 'GET',
@@ -258,8 +259,8 @@ describe('GET /issues/:id/result', () => {
     const app = buildApp(db, { workspaceRoot: await makeTempDir() });
     openApps.push(app);
     seedIssue(db, 'issue-1', 'md');
-    seedIterationWithStatus(db, 'issue-1', 1, 'failed');
-    seedIterationWithStatus(db, 'issue-1', 2, 'running');
+    seedIterationWithStatus(db, 'issue-1', 1, TaskStatus.failed);
+    seedIterationWithStatus(db, 'issue-1', 2, TaskStatus.running);
 
     const response = await app.inject({
       method: 'GET',

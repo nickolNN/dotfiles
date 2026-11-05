@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Issue, Iteration } from '@issue-resolver/shared';
 import TaskDetail from './TaskDetail';
+import { TaskStatus } from '@issue-resolver/shared';
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -10,7 +11,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     jira_issue_url: null,
     repositories: [],
     pipeline_steps: ['resolve'],
-    status: 'pending',
+    status: TaskStatus.pending,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -26,7 +27,7 @@ function makeIteration(overrides: Partial<Iteration> = {}): Iteration {
     review_context: '',
     is_review_need: false,
     steps: ['resolve'],
-    status: 'completed',
+    status: TaskStatus.completed,
     created_at: '2026-10-09T00:00:00.000Z',
     updated_at: '2026-10-09T00:00:00.000Z',
     ...overrides,
@@ -75,8 +76,8 @@ afterEach(() => {
 describe('TaskDetail — кнопка «↻ Повторить»', () => {
   it('видна у каждой итерации независимо от статуса', async () => {
     const list = [
-      makeIteration({ id: 'iter-1', number: 1, status: 'completed' }),
-      makeIteration({ id: 'iter-2', number: 2, status: 'running' }),
+      makeIteration({ id: 'iter-1', number: 1, status: TaskStatus.completed }),
+      makeIteration({ id: 'iter-2', number: 2, status: TaskStatus.running }),
     ];
     stubFetch(
       () => list,
@@ -94,9 +95,9 @@ describe('TaskDetail — кнопка «↻ Повторить»', () => {
 
   it('активная итерация (running/pending) — кнопка Повторить disabled', async () => {
     const list = [
-      makeIteration({ id: 'iter-1', number: 1, status: 'completed' }),
-      makeIteration({ id: 'iter-2', number: 2, status: 'running' }),
-      makeIteration({ id: 'iter-3', number: 3, status: 'pending' }),
+      makeIteration({ id: 'iter-1', number: 1, status: TaskStatus.completed }),
+      makeIteration({ id: 'iter-2', number: 2, status: TaskStatus.running }),
+      makeIteration({ id: 'iter-3', number: 3, status: TaskStatus.pending }),
     ];
     stubFetch(
       () => list,

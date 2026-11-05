@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  ExecutionPlan,
-  PipelineStep,
-  StepExecutionResult,
-} from '@issue-resolver/shared';
-import { planExecutionMode } from '@issue-resolver/shared';
+import type { ExecutionPlan, PipelineStep, StepExecutionResult } from '@issue-resolver/shared';
+import { planExecutionMode, StepReportStatus } from '@issue-resolver/shared';
 import { FakePiRunner, type PiRunCall } from '../src/pi/runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import {
@@ -46,7 +42,7 @@ const options = (): RoomResolveOptions => ({
 const pass = (summary: string): StepExecutionResult => ({
   step: STEP,
   exitCode: 0,
-  report: { status: 'pass', summary },
+  report: { status: StepReportStatus.pass, summary },
   stdout: '',
   stderr: '',
 });

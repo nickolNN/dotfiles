@@ -9,6 +9,7 @@ import { toContainerStatsPayload } from '../docker/controller';
 import type { StepSessionRegistry, UiResponsePayload } from '../pi/session-registry';
 import type { SseHub } from '../sse/hub';
 import { containerNameFor } from '../workspace/paths';
+import { TaskStatus, StepRunStatus } from '@issue-resolver/shared';
 
 const ROUTE_PATH = '/issue-resolver/api/v1/issues';
 const MESSAGE_PATH = '/issue-resolver/api/v1/iterations';
@@ -57,15 +58,15 @@ function markIterationAborted(
     .where(eq(iterations.id, iterationId))
     .run();
   db.update(issues)
-    .set({ status: 'cancelled', updated_at: now })
+    .set({ status: TaskStatus.cancelled, updated_at: now })
     .where(eq(issues.id, iteration.issue_id))
     .run();
   db.update(stepRuns)
-    .set({ status: 'aborted', updated_at: now })
+    .set({ status: StepRunStatus.aborted, updated_at: now })
     .where(
       and(
         eq(stepRuns.iteration_id, iterationId),
-        inArray(stepRuns.status, ['running', 'pending']),
+        inArray(stepRuns.status, [StepRunStatus.running, StepRunStatus.pending]),
       ),
     )
     .run();
@@ -305,9 +306,9 @@ export async function streamRoutes(
         ...(cancelled !== undefined ? { cancelled } : {}),
       });
       control.respondByIteration(request.params.id, payload);
-      if (iteration.status === 'running') {
+      if (iteration.status === TaskStatus.running) {
         db.update(issues)
-          .set({ status: 'running', updated_at: new Date().toISOString() })
+          .set({ status: TaskStatus.running, updated_at: new Date().toISOString() })
           .where(eq(issues.id, iteration.issue_id))
           .run();
       }

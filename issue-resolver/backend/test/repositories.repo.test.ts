@@ -8,6 +8,7 @@ import {
   getRepositoryByUrl,
   updateRepositoryRunInstructions,
 } from '../src/db/repositories.repo';
+import { RunInstructionsStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 const BROWSE_URL = 'https://b.yadro.com/projects/KOS/repos/metromost_web/browse';
@@ -96,7 +97,7 @@ describe('repositories repo: updateRepositoryRunInstructions', () => {
     const db = seed();
     const updated = updateRepositoryRunInstructions(db, CLONE_URL, {
       instructions: 'pnpm install && ./DEV_SERVER.sh',
-      status: 'generated',
+      status: RunInstructionsStatus.generated,
     });
 
     expect(updated).toBe(true);
@@ -110,7 +111,7 @@ describe('repositories repo: updateRepositoryRunInstructions', () => {
     const updated = updateRepositoryRunInstructions(
       db,
       'https://b.yadro.com/scm/kos/other_repo.git',
-      { instructions: null, status: 'failed' },
+      { instructions: null, status: RunInstructionsStatus.failed },
     );
 
     expect(updated).toBe(false);
@@ -134,7 +135,7 @@ describe('repositories repo: updateRepositoryRunInstructions', () => {
     expect(
       updateRepositoryRunInstructions(db, CLONE_URL, {
         instructions: 'npm start',
-        status: 'failed',
+        status: RunInstructionsStatus.failed,
       }),
     ).toBe(true);
 
@@ -143,18 +144,18 @@ describe('repositories repo: updateRepositoryRunInstructions', () => {
       .from(repositories)
       .all();
     expect(statuses).toHaveLength(2);
-    expect(statuses.every((item) => item.status === 'failed')).toBe(true);
+    expect(statuses.every((item) => item.status === RunInstructionsStatus.failed)).toBe(true);
   });
 
   it('сбрасывает инструкции в null при провальном прогоне', () => {
     const db = seed({
       run_instructions: 'старые инструкции',
-      run_instructions_status: 'generated',
+      run_instructions_status: RunInstructionsStatus.generated,
     });
 
     updateRepositoryRunInstructions(db, CLONE_URL, {
       instructions: null,
-      status: 'failed',
+      status: RunInstructionsStatus.failed,
     });
 
     const row = rowByUrl(db, BROWSE_URL);

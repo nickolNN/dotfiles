@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  ModelDescriptor,
-  RetroRun,
-  RetroRunWithLog,
-  ThinkingLevel,
-} from '@issue-resolver/shared';
+import type { ModelDescriptor, RetroRun, RetroRunWithLog, ThinkingLevel } from '@issue-resolver/shared';
 import {
   abortRetroRun,
   getModels,
@@ -17,6 +12,7 @@ import AgentMarkdown from './AgentMarkdown';
 import ModelThinkingSelect, {
   thinkingLevelsFor,
 } from './ModelThinkingSelect';
+import { RetroRunStatus } from '@issue-resolver/shared';
 
 const FIELD_CLASS =
   'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
@@ -30,8 +26,8 @@ const STATUS_LABEL: Record<RetroRun['status'], string> = {
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set(['running']);
 
 function statusColor(status: RetroRun['status']): string {
-  if (status === 'failed') return 'text-[#FF3B3B]';
-  if (status === 'running') return 'text-[#FFB000]';
+  if (status === RetroRunStatus.failed) return 'text-[#FF3B3B]';
+  if (status === RetroRunStatus.running) return 'text-[#FFB000]';
   return 'text-[#00FF41]';
 }
 
@@ -90,7 +86,7 @@ export default function RetroRunModal({ open, onClose }: RetroRunModalProps) {
   }, [open, refreshHistory]);
 
   const runId = run?.id;
-  const running = run?.status === 'running';
+  const running = run?.status === RetroRunStatus.running;
 
   useEffect(() => {
     if (!open || !runId || !running) return;
@@ -172,7 +168,7 @@ export default function RetroRunModal({ open, onClose }: RetroRunModalProps) {
       await abortRetroRun(run.id);
       const loaded = await getRetroRun(run.id);
       setRun(loaded);
-      if (loaded.status !== 'running') setLog(loaded.stdout + loaded.stderr);
+      if (loaded.status !== RetroRunStatus.running) setLog(loaded.stdout + loaded.stderr);
     } catch (err) {
       setError(messageOf(err));
     } finally {

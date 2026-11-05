@@ -2,12 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type {
-  ExecutionPlan,
-  PipelineStep,
-  StepExecutionResult,
-  TaskStatus,
-} from '@issue-resolver/shared';
+import type { ExecutionPlan, PipelineStep, StepExecutionResult } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app';
@@ -33,6 +28,7 @@ import {
   type RoomResolveInput,
   type RoomResolveOptions,
 } from '../src/workflow/room';
+import { StepReportStatus, TaskStatus } from '@issue-resolver/shared';
 
 const ISSUES = '/issue-resolver/api/v1/issues';
 const ITERATIONS = '/issue-resolver/api/v1/iterations';
@@ -164,7 +160,7 @@ class ProbeRunner implements PiRunner {
     const result: StepExecutionResult = {
       step: 'resolve',
       exitCode: 0,
-      report: { status: 'pass', summary: `${id} ok` },
+      report: { status: StepReportStatus.pass, summary: `${id} ok` },
       stdout: '',
       stderr: '',
     };
@@ -240,7 +236,7 @@ describe('POST /issues/:id/iterations — одна активная итерац
   it('при running-итерации создаёт draft, а не авто-стартует', async () => {
     const { db, pi, app } = makeEnv();
     const issueId = seedIssue(db);
-    const runningId = seedIteration(db, issueId, { number: 1, status: 'running' });
+    const runningId = seedIteration(db, issueId, { number: 1, status: TaskStatus.running });
 
     const res = await app.inject({
       method: 'POST',
@@ -268,8 +264,8 @@ describe('POST /issues/:id/iterations — одна активная итерац
   it('второй draft при running → 409, новых строк не появляется', async () => {
     const { db, pi, app } = makeEnv();
     const issueId = seedIssue(db);
-    seedIteration(db, issueId, { number: 1, status: 'running' });
-    seedIteration(db, issueId, { number: 2, status: 'draft' });
+    seedIteration(db, issueId, { number: 1, status: TaskStatus.running });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.draft });
 
     const before = iterationRows(db, issueId).length;
     const res = await app.inject({
@@ -289,8 +285,8 @@ describe('POST /issues/:id/iterations — одна активная итерац
   it('pending при running → 409, новых строк не появляется', async () => {
     const { db, pi, app } = makeEnv();
     const issueId = seedIssue(db);
-    seedIteration(db, issueId, { number: 1, status: 'running' });
-    seedIteration(db, issueId, { number: 2, status: 'pending' });
+    seedIteration(db, issueId, { number: 1, status: TaskStatus.running });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.pending });
 
     const before = iterationRows(db, issueId).length;
     const res = await app.inject({
@@ -310,8 +306,8 @@ describe('POST /issues/:id/iterations — одна активная итерац
   it('pending без running (задача простаивает) → 409, очередь не копится', async () => {
     const { db, pi, app } = makeEnv();
     const issueId = seedIssue(db);
-    seedIteration(db, issueId, { number: 1, status: 'failed' });
-    seedIteration(db, issueId, { number: 2, status: 'pending' });
+    seedIteration(db, issueId, { number: 1, status: TaskStatus.failed });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.pending });
 
     const before = iterationRows(db, issueId).length;
     const res = await app.inject({
@@ -333,9 +329,9 @@ describe('POST /issues/:id/iterations — одна активная итерац
     const issueId = seedIssue(db);
     const sourceId = seedIteration(db, issueId, {
       number: 1,
-      status: 'completed',
+      status: TaskStatus.completed,
     });
-    seedIteration(db, issueId, { number: 2, status: 'draft' });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.draft });
 
     const before = iterationRows(db, issueId).length;
     const res = await app.inject({
@@ -371,7 +367,7 @@ describe('POST /issues/:id/iterations — одна активная итерац
         .from(iterations)
         .where(eq(iterations.id, res.json().id))
         .get();
-      return row?.status === 'completed' ? 'completed' : undefined;
+      return row?.status === TaskStatus.completed ? 'completed' : undefined;
     });
     expect(status).toBe('completed');
   });
@@ -381,8 +377,8 @@ describe('POST /iterations/:id/queue — постановка draft в очер�
   it('переводит draft → pending (200)', async () => {
     const { db, app } = makeEnv();
     const issueId = seedIssue(db);
-    seedIteration(db, issueId, { number: 1, status: 'running' });
-    const draftId = seedIteration(db, issueId, { number: 2, status: 'draft' });
+    seedIteration(db, issueId, { number: 1, status: TaskStatus.running });
+    const draftId = seedIteration(db, issueId, { number: 2, status: TaskStatus.draft });
 
     const res = await app.inject({
       method: 'POST',
@@ -402,7 +398,7 @@ describe('POST /iterations/:id/queue — постановка draft в очер�
   it('не-draft итерацию поставить нельзя → 409', async () => {
     const { db, app } = makeEnv();
     const issueId = seedIssue(db);
-    const pendingId = seedIteration(db, issueId, { number: 1, status: 'pending' });
+    const pendingId = seedIteration(db, issueId, { number: 1, status: TaskStatus.pending });
 
     const res = await app.inject({
       method: 'POST',
@@ -418,9 +414,9 @@ describe('POST /iterations/:id/queue — постановка draft в очер�
   it('при уже существующем pending → 409, draft остаётся draft', async () => {
     const { db, app } = makeEnv();
     const issueId = seedIssue(db);
-    seedIteration(db, issueId, { number: 1, status: 'running' });
-    seedIteration(db, issueId, { number: 2, status: 'pending' });
-    const draftId = seedIteration(db, issueId, { number: 3, status: 'draft' });
+    seedIteration(db, issueId, { number: 1, status: TaskStatus.running });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.pending });
+    const draftId = seedIteration(db, issueId, { number: 3, status: TaskStatus.draft });
 
     const res = await app.inject({
       method: 'POST',
@@ -452,8 +448,8 @@ describe('POST /iterations/:id/repeat — та же draft-логика', () => {
   it('при running-итерации задача repeat создаёт draft', async () => {
     const { db, app } = makeEnv();
     const issueId = seedIssue(db);
-    const sourceId = seedIteration(db, issueId, { number: 1, status: 'completed' });
-    seedIteration(db, issueId, { number: 2, status: 'running' });
+    const sourceId = seedIteration(db, issueId, { number: 1, status: TaskStatus.completed });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.running });
 
     const res = await app.inject({
       method: 'POST',
@@ -468,9 +464,9 @@ describe('POST /iterations/:id/repeat — та же draft-логика', () => {
   it('repeat при running + draft → 409, без новой строки', async () => {
     const { db, app } = makeEnv();
     const issueId = seedIssue(db);
-    const sourceId = seedIteration(db, issueId, { number: 1, status: 'completed' });
-    seedIteration(db, issueId, { number: 2, status: 'running' });
-    seedIteration(db, issueId, { number: 3, status: 'draft' });
+    const sourceId = seedIteration(db, issueId, { number: 1, status: TaskStatus.completed });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.running });
+    seedIteration(db, issueId, { number: 3, status: TaskStatus.draft });
 
     const before = iterationRows(db, issueId).length;
     const res = await app.inject({
@@ -488,9 +484,9 @@ describe('POST /iterations/:id/repeat — та же draft-логика', () => {
   it('repeat при running + pending → 409, без новой строки', async () => {
     const { db, app } = makeEnv();
     const issueId = seedIssue(db);
-    const sourceId = seedIteration(db, issueId, { number: 1, status: 'completed' });
-    seedIteration(db, issueId, { number: 2, status: 'running' });
-    seedIteration(db, issueId, { number: 3, status: 'pending' });
+    const sourceId = seedIteration(db, issueId, { number: 1, status: TaskStatus.completed });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.running });
+    seedIteration(db, issueId, { number: 3, status: TaskStatus.pending });
 
     const before = iterationRows(db, issueId).length;
     const res = await app.inject({
@@ -511,8 +507,8 @@ describe('очередь: pending стартует после завершени
     const db = createDb(':memory:');
     const root = tempRoot('ir-queue-advance-');
     const issueId = seedIssue(db);
-    const firstId = seedIteration(db, issueId, { number: 1, status: 'running' });
-    const secondId = seedIteration(db, issueId, { number: 2, status: 'pending' });
+    const firstId = seedIteration(db, issueId, { number: 1, status: TaskStatus.running });
+    const secondId = seedIteration(db, issueId, { number: 2, status: TaskStatus.pending });
 
     const pi = new ProbeRunner(true, 10);
     const { deps } = makeDeps(pi);
@@ -538,7 +534,7 @@ describe('очередь: pending стартует после завершени
         .from(iterations)
         .where(eq(iterations.id, secondId))
         .get();
-      return row && row.status !== 'pending' && row.status !== 'running'
+      return row && row.status !== TaskStatus.pending && row.status !== 'running'
         ? row.status
         : undefined;
     });
@@ -560,7 +556,7 @@ describe('шаги итерации выполняются последоват�
     const issueId = seedIssue(db, ['resolve', 'review']);
     const iterationId = seedIteration(db, issueId, {
       number: 1,
-      status: 'running',
+      status: TaskStatus.running,
       steps: ['resolve', 'review'],
     });
 
@@ -725,8 +721,8 @@ describe('статус задачи при наличии pending-итераци
     const db = createDb(':memory:');
     const root = tempRoot('ir-status-');
     const issueId = seedIssue(db);
-    const firstId = seedIteration(db, issueId, { number: 1, status: 'running' });
-    seedIteration(db, issueId, { number: 2, status: 'pending' });
+    const firstId = seedIteration(db, issueId, { number: 1, status: TaskStatus.running });
+    seedIteration(db, issueId, { number: 2, status: TaskStatus.pending });
 
     const pi = new ProbeRunner(true, 10);
     const { deps } = makeDeps(pi);
@@ -756,7 +752,7 @@ describe('статус задачи при наличии pending-итераци
         .from(iterations)
         .where(eq(iterations.id, firstId))
         .get();
-      return row?.status === 'completed' ? true : undefined;
+      return row?.status === TaskStatus.completed ? true : undefined;
     });
     const secondStatus = await waitFor(() => {
       const row = db
@@ -766,7 +762,7 @@ describe('статус задачи при наличии pending-итераци
         .orderBy(iterations.number)
         .all()
         .at(-1);
-      return row && row.status !== 'pending' && row.status !== 'running'
+      return row && row.status !== TaskStatus.pending && row.status !== 'running'
         ? row.status
         : undefined;
     });
@@ -777,7 +773,7 @@ describe('статус задачи при наличии pending-итераци
     const db = createDb(':memory:');
     const root = tempRoot('ir-status-');
     const issueId = seedIssue(db);
-    const iterationId = seedIteration(db, issueId, { number: 1, status: 'running' });
+    const iterationId = seedIteration(db, issueId, { number: 1, status: TaskStatus.running });
 
     const pi = new ProbeRunner(true, 10);
     const { deps } = makeDeps(pi);
@@ -805,7 +801,7 @@ describe('статус задачи при наличии pending-итераци
     const issueId = seedIssue(db);
 
     db.update(issues).set({ status: 'completed' }).where(eq(issues.id, issueId)).run();
-    const draftId = seedIteration(db, issueId, { number: 1, status: 'draft' });
+    const draftId = seedIteration(db, issueId, { number: 1, status: TaskStatus.draft });
 
     const res = await app.inject({
       method: 'POST',

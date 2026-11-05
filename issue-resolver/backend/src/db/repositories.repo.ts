@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import {
-  isSameRepository,
-  type RepoConnectionStatus,
-  type RepoPlatform,
-  type RunInstructionsStatus,
-  type SavedRepo,
-} from '@issue-resolver/shared';
+import { isSameRepository, type RepoConnectionStatus, type RepoPlatform, RunInstructionsStatus, type SavedRepo } from '@issue-resolver/shared';
+
+
+
+
+
 import { asc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { repositories } from './schema';
@@ -96,7 +95,7 @@ export function insertRepository(db: Db, write: RepositoryWrite): SavedRepo {
     id,
     ...write,
     runInstructions: null,
-    runInstructionsStatus: 'unknown',
+    runInstructionsStatus: RunInstructionsStatus.unknown,
     createdAt: now,
     updatedAt: now,
   };

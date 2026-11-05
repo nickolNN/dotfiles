@@ -675,6 +675,35 @@ describe('RpcSessionParser', () => {
     ]);
   });
 
+  it('sawAssistantReply: молчание не считается ответом, любое сообщение модели — считается', () => {
+    const silent = new RpcSessionParser();
+    silent.handle({ type: 'error', message: 'no api key' });
+    silent.handle({ type: 'agent_settled', aborted: false });
+    expect(silent.sawAssistantReply()).toBe(false);
+
+    const byStart = new RpcSessionParser();
+    byStart.handle({ type: 'message_start', message: { role: 'assistant' } });
+    expect(byStart.sawAssistantReply()).toBe(true);
+
+    const byUpdate = new RpcSessionParser();
+    byUpdate.handle({
+      type: 'message_update',
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'x' },
+    });
+    expect(byUpdate.sawAssistantReply()).toBe(true);
+
+    const byEnd = new RpcSessionParser();
+    byEnd.handle({
+      type: 'message_end',
+      message: { role: 'assistant', content: [], stopReason: 'stop' },
+    });
+    expect(byEnd.sawAssistantReply()).toBe(true);
+
+    const userStart = new RpcSessionParser();
+    userStart.handle({ type: 'message_start', message: { role: 'user' } });
+    expect(userStart.sawAssistantReply()).toBe(false);
+  });
+
   it('auto_retry_start/end → retry_start/retry_end (kind auto)', () => {
     const parser = new RpcSessionParser();
 

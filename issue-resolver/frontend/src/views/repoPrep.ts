@@ -1,3 +1,5 @@
+import { WorkspaceProgressStatus } from '@issue-resolver/shared';
+
 export type RepoPrepStatus =
   | 'pending'
   | 'cloning'
@@ -78,7 +80,7 @@ export function repoPrepStatus(
   workspaceReady = false,
 ): RepoPrepStatus {
   const own = steps.filter((step) => step.repo === repoKey);
-  if (own.some((step) => step.status === 'error')) return 'failed';
+  if (own.some((step) => step.status === WorkspaceProgressStatus.error)) return 'failed';
 
   const skipped = !bootstrapEnabled || own.some((step) => step.message === 'пропущен');
   if (workspaceReady) return skipped ? 'skipped' : 'ready';
@@ -86,7 +88,7 @@ export function repoPrepStatus(
   const devServer = lastStep(own, 'dev_server');
   if (devServer) {
     if (skipped) return 'skipped';
-    if (devServer.status === 'running') return 'dev_server';
+    if (devServer.status === WorkspaceProgressStatus.running) return 'dev_server';
     return 'installed';
   }
 
@@ -97,7 +99,7 @@ export function repoPrepStatus(
   if (lastStep(own, 'checking_instructions')) return 'cloned';
 
   const cloning = lastStep(own, 'cloning');
-  if (cloning) return cloning.status === 'running' ? 'cloning' : 'cloned';
+  if (cloning) return cloning.status === WorkspaceProgressStatus.running ? 'cloning' : 'cloned';
 
   return 'pending';
 }
@@ -108,5 +110,5 @@ export function repoDevPort(
 ): number | undefined {
   const own = steps.filter((step) => step.repo === repoKey);
   const devServer = lastStep(own, 'dev_server');
-  return devServer?.status === 'done' ? devServer.devPort : undefined;
+  return devServer?.status === WorkspaceProgressStatus.done ? devServer.devPort : undefined;
 }

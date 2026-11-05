@@ -7,12 +7,9 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import type {
-  Issue,
-  ModelDescriptor,
-  SavedRepo,
-} from '@issue-resolver/shared';
+import type { Issue, ModelDescriptor, SavedRepo } from '@issue-resolver/shared';
 import NewIssue from './NewIssue';
+import { TaskStatus, RepoConnectionStatus, RunInstructionsStatus } from '@issue-resolver/shared';
 
 const thinkingModels: ModelDescriptor[] = [
   { id: 'm1', name: 'Model One', thinkingLevels: ['off', 'low', 'high'] },
@@ -25,7 +22,7 @@ const createdIssue: Issue = {
   jira_issue_url: null,
   repositories: [],
   pipeline_steps: ['resolve'],
-  status: 'pending',
+  status: TaskStatus.pending,
   created_at: '2026-10-09T00:00:00.000Z',
   updated_at: '2026-10-09T00:00:00.000Z',
 };
@@ -46,11 +43,11 @@ function savedRepo(
     language: 'TypeScript',
     description: null,
     isPrivate: false,
-    connectionStatus: 'ok',
+    connectionStatus: RepoConnectionStatus.ok,
     lastValidatedAt: '2026-10-12T00:00:00.000Z',
     writeAccess,
     runInstructions: null,
-    runInstructionsStatus: 'unknown',
+    runInstructionsStatus: RunInstructionsStatus.unknown,
     createdAt: '2026-10-12T00:00:00.000Z',
     updatedAt: '2026-10-12T00:00:00.000Z',
   };
