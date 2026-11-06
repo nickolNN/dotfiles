@@ -1035,3 +1035,133 @@ describe('RpcSessionParser — скорость генерации (speed)', () 
     expect(parser.stats()).not.toHaveProperty('avgTokensPerSecond');
   });
 });
+
+describe('RpcSessionParser — модель и усилие, которыми ответила модель', () => {
+  const answerEnd = (
+    parser: RpcSessionParser,
+    fields: Record<string, unknown>,
+  ): void => {
+    parser.handle({
+      type: 'message_end',
+      message: { role: 'assistant', stopReason: 'stop', ...fields },
+    });
+  };
+
+  it('message_end со всеми четырьмя полями → одно событие answer_model', () => {
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    answerEnd(parser, {
+      model: 'deepseek/deepseek-v3',
+      responseModel: 'deepseek-v3-0324',
+      thinkingLevel: 'high',
+      providerThinkingLevel: 'high',
+    });
+
+    expect(parser.events()).toEqual([
+      {
+        type: 'answer_model',
+        model: 'deepseek/deepseek-v3',
+        responseModel: 'deepseek-v3-0324',
+        thinkingLevel: 'high',
+        providerThinkingLevel: 'high',
+      },
+    ]);
+    expect(events).toEqual(parser.events());
+  });
+
+  it('второй идентичный message_end → события нет', () => {
+    const parser = new RpcSessionParser();
+    const fields = {
+      model: 'm',
+      responseModel: 'r',
+      thinkingLevel: 'low',
+      providerThinkingLevel: 'low',
+    };
+
+    answerEnd(parser, fields);
+    answerEnd(parser, fields);
+
+    expect(parser.events()).toHaveLength(1);
+  });
+
+  it('третий ответ с другим providerThinkingLevel → второе событие', () => {
+    const parser = new RpcSessionParser();
+    const fields = {
+      model: 'm',
+      responseModel: 'r',
+      thinkingLevel: 'low',
+      providerThinkingLevel: 'low',
+    };
+
+    answerEnd(parser, fields);
+    answerEnd(parser, fields);
+    answerEnd(parser, { ...fields, providerThinkingLevel: 'medium' });
+
+    expect(parser.events()).toEqual([
+      {
+        type: 'answer_model',
+        model: 'm',
+        responseModel: 'r',
+        thinkingLevel: 'low',
+        providerThinkingLevel: 'low',
+      },
+      {
+        type: 'answer_model',
+        model: 'm',
+        responseModel: 'r',
+        thinkingLevel: 'low',
+        providerThinkingLevel: 'medium',
+      },
+    ]);
+  });
+
+  it('message_end без полей модели → события нет, числа не приводятся', () => {
+    const parser = new RpcSessionParser();
+
+    answerEnd(parser, { content: [] });
+    answerEnd(parser, { model: 42, responseModel: '', thinkingLevel: null });
+
+    expect(parser.events()).toEqual([]);
+  });
+
+  it('usage.cost.totalFromProvider → fromProvider только при строгом true', () => {
+    const events: SessionEvent[] = [];
+    const parser = new RpcSessionParser({ onEvent: (event) => events.push(event) });
+
+    const emit = (totalFromProvider: unknown, total: number): void =>
+      parser.handle({
+        type: 'message_update',
+        usage: { input: 1, totalTokens: total, cost: { total, totalFromProvider } },
+      });
+
+    emit(true, 1);
+    emit('true', 2);
+    emit(undefined, 3);
+
+    expect(events).toEqual([
+      {
+        type: 'usage',
+        usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, total: 1 },
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 1,
+          fromProvider: true,
+        },
+      },
+      {
+        type: 'usage',
+        usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, total: 2 },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 2 },
+      },
+      {
+        type: 'usage',
+        usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, total: 3 },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 3 },
+      },
+    ]);
+  });
+});

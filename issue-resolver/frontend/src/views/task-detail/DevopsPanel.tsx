@@ -143,6 +143,7 @@ export default function DevopsPanel({
               stepDurationMs(devopsRunLog, false, Date.now()),
             )}
             cost={finishedStats?.cost ?? null}
+            costEstimate={finishedStats?.costFromProvider !== true}
             footer={resolveFooter(finishedEvents, finishedStats)}
           />
         </>

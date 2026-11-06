@@ -74,6 +74,36 @@ describe('sumSessionStats', () => {
     expect(total?.tokens.input).toBe(7);
   });
 
+  it('cost null без флага → costFromProvider всё равно нет', () => {
+    const total = sumSessionStats([
+      stats({ cost: null }),
+      stats({ cost: null }),
+    ]);
+
+    expect(total?.cost).toBeNull();
+    expect(total).not.toHaveProperty('costFromProvider');
+  });
+
+  it('один вход с оплаченной стоимостью, другой без стоимости → ключа нет', () => {
+    const total = sumSessionStats([
+      stats({ cost: 0.02, costFromProvider: true }),
+      stats({ cost: null }),
+    ]);
+
+    expect(total?.cost).toBe(0.02);
+    expect(total).not.toHaveProperty('costFromProvider');
+  });
+
+  it('все входы с оплаченной стоимостью → costFromProvider: true', () => {
+    const total = sumSessionStats([
+      stats({ cost: 0.02, costFromProvider: true }),
+      stats({ cost: 0.03, costFromProvider: true }),
+    ]);
+
+    expect(total?.cost).toBe(0.05);
+    expect(total?.costFromProvider).toBe(true);
+  });
+
   it('все элементы null/undefined → null', () => {
     expect(sumSessionStats([])).toBeNull();
     expect(sumSessionStats([null, undefined])).toBeNull();

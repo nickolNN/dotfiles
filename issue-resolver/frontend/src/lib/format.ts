@@ -36,9 +36,10 @@ export function formatAvgSpeed(value: number): string {
   return String(Math.round(value));
 }
 
-export function formatCost(total: number): string {
-  if (!Number.isFinite(total) || total <= 0) return '$0';
-  return `$${total.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+export function formatCost(total: number, estimate = false): string {
+  const marker = estimate ? '≈' : '';
+  if (!Number.isFinite(total) || total <= 0) return `${marker}$0`;
+  return `${marker}$${total.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
 }
 
 export function formatFileSize(bytes: number): string {

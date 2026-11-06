@@ -15,12 +15,14 @@ export default function RunStatsLine({
   prefix,
   duration,
   cost,
+  costEstimate = false,
   footer,
   children,
 }: {
   prefix: RunPrefix;
   duration: string;
   cost: number | null | undefined;
+  costEstimate?: boolean;
   footer: FooterData | null;
   children?: ReactNode;
 }) {
@@ -34,7 +36,9 @@ export default function RunStatsLine({
         <span data-testid={`${prefix}-duration`}>⏱ {duration}</span>
       )}
       {cost != null && (
-        <span data-testid={`${prefix}-cost`}>· {formatCost(cost)}</span>
+        <span data-testid={`${prefix}-cost`}>
+          · {formatCost(cost, costEstimate)}
+        </span>
       )}
       {footer && (
         <span data-testid={`${prefix}-tokens`}>

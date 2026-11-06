@@ -4,12 +4,14 @@ import {
   num,
   CompactionReason,
   type SessionCost,
+  type SessionEvent,
   type SessionQuestion,
   type SessionUsage,
   type StepExecutionResult,
   type StepReport,
 } from '@issue-resolver/shared';
 import { asRecord } from '../util/records';
+import { nonEmptyString } from '../util/scalars';
 import type { UiResponsePayload } from './session-registry';
 export interface RpcAssistantMessageEvent {
   type?: string;
@@ -102,7 +104,31 @@ export const normalizeCost = (raw: unknown): SessionCost | null => {
     cacheRead: num(obj.cacheRead),
     cacheWrite: num(obj.cacheWrite),
     total: num(obj.total),
+    ...(obj.totalFromProvider === true ? { fromProvider: true } : {}),
   };
+};
+
+export type AnswerModelInfo = Omit<
+  Extract<SessionEvent, { type: 'answer_model' }>,
+  'type'
+>;
+
+export const answerModelOf = (
+  message: Record<string, unknown> | null,
+): AnswerModelInfo | null => {
+  const model = nonEmptyString(message?.model);
+  const responseModel = nonEmptyString(message?.responseModel);
+  const thinkingLevel = nonEmptyString(message?.thinkingLevel);
+  const providerThinkingLevel = nonEmptyString(message?.providerThinkingLevel);
+  if (
+    model === null &&
+    responseModel === null &&
+    thinkingLevel === null &&
+    providerThinkingLevel === null
+  ) {
+    return null;
+  }
+  return { model, responseModel, thinkingLevel, providerThinkingLevel };
 };
 
 const COMPACTION_REASONS: ReadonlySet<string> = new Set(

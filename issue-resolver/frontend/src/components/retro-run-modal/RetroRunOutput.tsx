@@ -133,6 +133,7 @@ export default function RetroRunOutput({ state }: RetroRunOutputProps) {
               runDurationMs(run.created_at, run.updated_at),
             )}
             cost={run.stats?.cost ?? null}
+            costEstimate={run.stats?.costFromProvider !== true}
             footer={resolveFooter(run.events, run.stats)}
           />
           {transcriptOpen && <div className="mt-2">{logBlock}</div>}

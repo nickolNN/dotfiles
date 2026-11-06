@@ -44,6 +44,27 @@ describe('RunStatsLine', () => {
     expect(within(stats).queryByTestId('step-tokens')).toBeNull();
   });
 
+  it('costEstimate помечает cost как оценку, по умолчанию маркера нет', () => {
+    render(
+      <RunStatsLine
+        prefix="step"
+        duration=""
+        cost={0.5}
+        costEstimate
+        footer={null}
+      />,
+    );
+    expect(screen.getByTestId('step-cost')).toHaveTextContent('≈$0.5');
+
+    cleanup();
+
+    render(
+      <RunStatsLine prefix="step" duration="" cost={0.5} footer={null} />,
+    );
+    expect(screen.getByTestId('step-cost')).toHaveTextContent('$0.5');
+    expect(screen.getByTestId('step-cost')).not.toHaveTextContent('≈');
+  });
+
   it('без данных не рендерит строку', () => {
     const { container } = render(
       <RunStatsLine prefix="step" duration="" cost={null} footer={null} />,

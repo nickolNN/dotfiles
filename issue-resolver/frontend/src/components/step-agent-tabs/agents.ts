@@ -82,6 +82,7 @@ export function computeStepTotals(
   let cacheRead = 0;
   let cacheWrite = 0;
   let cost = 0;
+  let costEstimate = false;
   let firstStart = Number.POSITIVE_INFINITY;
   let lastEnd = Number.NEGATIVE_INFINITY;
   let anyRunning = false;
@@ -93,6 +94,7 @@ export function computeStepTotals(
     cacheRead += t?.cacheRead ?? 0;
     cacheWrite += t?.cacheWrite ?? 0;
     cost += agent.stats?.cost ?? 0;
+    if (agent.stats && agent.stats.costFromProvider !== true) costEstimate = true;
     const start = startMillis(agent);
     if (start !== null) {
       firstStart = Math.min(firstStart, start);
@@ -110,5 +112,14 @@ export function computeStepTotals(
     Number.isFinite(firstStart) && Number.isFinite(lastEnd)
       ? Math.max(0, anyRunning ? now - firstStart : lastEnd - firstStart)
       : null;
-  return { tokens, input, output, cacheRead, cacheWrite, cost, wallMs };
+  return {
+    tokens,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    cost,
+    costEstimate,
+    wallMs,
+  };
 }

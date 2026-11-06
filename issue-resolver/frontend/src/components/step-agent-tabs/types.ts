@@ -29,5 +29,6 @@ export interface StepTotals {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
+  costEstimate: boolean;
   wallMs: number | null;
 }

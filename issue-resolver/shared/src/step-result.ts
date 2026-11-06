@@ -93,6 +93,9 @@ export function sumSessionStats(
   const costs = present
     .map((entry) => entry.cost)
     .filter((cost): cost is number => cost != null);
+  const costFromProvider =
+    costs.length > 0 &&
+    present.every((entry) => entry.costFromProvider === true);
 
   return {
     userMessages: sum((entry) => entry.userMessages),
@@ -109,6 +112,7 @@ export function sumSessionStats(
     },
     cost: costs.length > 0 ? costs.reduce((acc, cost) => acc + cost, 0) : null,
     contextUsage: null,
+    ...(costFromProvider ? { costFromProvider: true } : {}),
   };
 }
 

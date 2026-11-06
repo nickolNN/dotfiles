@@ -369,6 +369,7 @@ describe('InMemoryStepSessionRegistry', () => {
       tokens: { input: 15, output: 3, cacheRead: 3, cacheWrite: 1, total: 22 },
       cost: 3,
       contextUsage: null,
+      costFromProvider: false,
     });
   });
 

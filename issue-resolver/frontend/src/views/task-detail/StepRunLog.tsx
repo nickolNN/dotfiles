@@ -96,6 +96,7 @@ export default function StepRunLog({
         prefix="step"
         duration={duration}
         cost={run.stats?.cost}
+        costEstimate={run.stats?.costFromProvider !== true}
         footer={footer}
       >
         <span data-testid="step-files">

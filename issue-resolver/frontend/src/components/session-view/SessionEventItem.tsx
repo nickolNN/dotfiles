@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { SessionEvent } from '../../api/session-events';
+import AnswerModelLine, { answerModelText } from './AnswerModelLine';
 import CompactionBanner from './CompactionBanner';
 import ExtensionErrorBanner from './ExtensionErrorBanner';
 import NoticeBanner from './NoticeBanner';
@@ -105,6 +106,13 @@ export default function SessionEventItem({
 
     case 'extension_error':
       content = <ExtensionErrorBanner message={event.message} />;
+      break;
+
+    case 'answer_model':
+      content =
+        answerModelText(event) === null ? null : (
+          <AnswerModelLine event={event} />
+        );
       break;
   }
 

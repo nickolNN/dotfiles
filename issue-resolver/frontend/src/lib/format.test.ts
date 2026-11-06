@@ -42,6 +42,13 @@ describe('lib/format', () => {
     expect(formatCost(0.01)).toBe('$0.01');
   });
 
+  it('formatCost с estimate печатает ≈ перед суммой', () => {
+    expect(formatCost(0.0123, true)).toBe('≈$0.0123');
+    expect(formatCost(0.0123, false)).toBe('$0.0123');
+    expect(formatCost(1.5, true)).toBe('≈$1.5');
+    expect(formatCost(0, true)).toBe('≈$0');
+  });
+
   it('formatFileSize использует Б/КБ/МБ', () => {
     expect(formatFileSize(512)).toBe('512 Б');
     expect(formatFileSize(1536)).toBe('1.5 КБ');

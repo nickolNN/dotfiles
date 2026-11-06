@@ -306,6 +306,7 @@ export default function ReportSection({
           prefix="report"
           duration={reportDuration}
           cost={reportRunLog?.stats?.cost ?? null}
+          costEstimate={reportRunLog?.stats?.costFromProvider !== true}
           footer={resolveFooter(
             reportModalEvents,
             reportRunLog?.stats ?? null,

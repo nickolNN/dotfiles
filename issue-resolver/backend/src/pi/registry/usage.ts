@@ -14,6 +14,7 @@ export interface AgentEntry {
   usageSeen: boolean;
   cost: number | null;
   pendingCost: number | null;
+  costFromProvider: boolean | null;
   lastStats: SessionStats | null;
 }
 
@@ -63,6 +64,7 @@ export function emptyAgentEntry(
     usageSeen: false,
     cost: null,
     pendingCost: null,
+    costFromProvider: null,
     lastStats: null,
   };
 }
@@ -81,6 +83,9 @@ export function aggregateCost(entry: AgentEntry): number | null {
 export function buildAgentStats(entry: AgentEntry): SessionStats | null {
   const base = entry.lastStats;
   if (!entry.usageSeen && !base) return null;
+  const costFromProvider = entry.usageSeen
+    ? entry.costFromProvider
+    : (base?.costFromProvider ?? null);
   return {
     ...(base?.sessionId === undefined ? {} : { sessionId: base.sessionId }),
     ...(base?.model === undefined ? {} : { model: base.model }),
@@ -94,6 +99,7 @@ export function buildAgentStats(entry: AgentEntry): SessionStats | null {
       : (base?.tokens ?? zeroUsage()),
     cost: entry.usageSeen ? aggregateCost(entry) : (base?.cost ?? null),
     contextUsage: base?.contextUsage ?? null,
+    ...(costFromProvider === null ? {} : { costFromProvider }),
   };
 }
 
@@ -110,6 +116,10 @@ export function recordUsageEvent(
     entry.pendingCost = null;
   }
   entry.pending = { ...event.usage };
-  if (event.cost) entry.pendingCost = event.cost.total;
+  if (event.cost) {
+    entry.pendingCost = event.cost.total;
+    entry.costFromProvider =
+      (entry.costFromProvider ?? true) && event.cost.fromProvider === true;
+  }
   entry.usageSeen = true;
 }

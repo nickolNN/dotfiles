@@ -11,6 +11,7 @@ export type RetryEvent = Extract<
   { type: 'retry_start' | 'retry_end' }
 >;
 export type NoticeEvent = Extract<SessionEvent, { type: 'notice' }>;
+export type AnswerModelEvent = Extract<SessionEvent, { type: 'answer_model' }>;
 
 export const ToolStatus = Object.freeze({
   running: 'running',

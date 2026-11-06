@@ -59,6 +59,7 @@ function isStats(value: unknown): boolean {
   if (!isOptionalOf(value.sessionId, isString)) return false;
   if (!isOptionalOf(value.model, isString)) return false;
   if (!isOptionalOf(value.avgTokensPerSecond, isNumber)) return false;
+  if (!isOptionalOf(value.costFromProvider, isBoolean)) return false;
   return value.contextUsage === null || isContextUsage(value.contextUsage);
 }
 
@@ -144,6 +145,11 @@ export const SESSION_EVENT_GUARDS: Record<SessionEventType, EventGuard> = {
   extension_error: (event) => isString(event.message),
   bash: (event) => isString(event.delta),
   editor_text: (event) => isString(event.text),
+  answer_model: (event) =>
+    isNullableString(event.model) &&
+    isNullableString(event.responseModel) &&
+    isNullableString(event.thinkingLevel) &&
+    isNullableString(event.providerThinkingLevel),
 };
 
 function isSessionEventType(value: string): value is SessionEventType {

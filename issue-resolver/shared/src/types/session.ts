@@ -14,6 +14,7 @@ export interface SessionCost {
   cacheRead: number;
   cacheWrite: number;
   total: number;
+  fromProvider?: boolean;
 }
 
 export interface SessionSpeed {
@@ -54,6 +55,7 @@ export interface SessionStats {
     percent: number | null;
   } | null;
   avgTokensPerSecond?: number;
+  costFromProvider?: boolean;
 }
 
 export type SessionEvent =
@@ -122,4 +124,11 @@ export type SessionEvent =
   | { type: 'title'; title: string }
   | { type: 'extension_error'; message: string }
   | { type: 'bash'; delta: string }
-  | { type: 'editor_text'; text: string };
+  | { type: 'editor_text'; text: string }
+  | {
+      type: 'answer_model';
+      model: string | null;
+      responseModel: string | null;
+      thinkingLevel: string | null;
+      providerThinkingLevel: string | null;
+    };

@@ -409,6 +409,46 @@ describe('StepAgentTabs — вкладки агентов комнаты', () =>
     expect(summary).toHaveTextContent('$0.03');
   });
 
+  it('итог помечает cost оценкой, пока хоть один агент не отчитался провайдером', async () => {
+    stubFetch([
+      makeAgent({ stats: makeStats({ cost: 0.01, costFromProvider: true }) }),
+      makeAgent({
+        id: 'run-1/worker/1',
+        index: 2,
+        label: 'Исполнитель 2',
+        status: StepAgentStatus.finished,
+        stats: makeStats({ cost: 0.02 }),
+      }),
+    ]);
+
+    render(<StepAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('step-agents');
+
+    expect(screen.getByTestId('step-agents-summary')).toHaveTextContent(
+      '≈$0.03',
+    );
+  });
+
+  it('итог без ≈, когда все агенты отчитались провайдером', async () => {
+    stubFetch([
+      makeAgent({ stats: makeStats({ cost: 0.01, costFromProvider: true }) }),
+      makeAgent({
+        id: 'run-1/worker/1',
+        index: 2,
+        label: 'Исполнитель 2',
+        status: StepAgentStatus.finished,
+        stats: makeStats({ cost: 0.02, costFromProvider: true }),
+      }),
+    ]);
+
+    render(<StepAgentTabs iterationId="iter-1" />);
+    await screen.findByTestId('step-agents');
+
+    const summary = screen.getByTestId('step-agents-summary');
+    expect(summary).toHaveTextContent('$0.03');
+    expect(summary).not.toHaveTextContent('≈');
+  });
+
   it('null startedAt/stats не роняет компонент и даёт нулевой итог', async () => {
     stubFetch([makeAgent()]);
 

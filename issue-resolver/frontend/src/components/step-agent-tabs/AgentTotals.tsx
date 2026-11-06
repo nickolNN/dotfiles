@@ -30,7 +30,7 @@ export default function AgentTotals({ totals, stageGroups }: AgentTotalsProps) {
           <CacheIcon />
           {formatTokens(totals.cacheRead + totals.cacheWrite)}
         </span>{' '}
-        · {formatCost(totals.cost)} ·{' '}
+        · {formatCost(totals.cost, totals.costEstimate)} ·{' '}
         {totals.wallMs === null ? '—' : formatDuration(totals.wallMs)}
       </p>
       {stageGroups.length > 0 && (
@@ -67,7 +67,7 @@ export default function AgentTotals({ totals, stageGroups }: AgentTotalsProps) {
               </span>{' '}
               ·{' '}
               <span data-testid="stage-agents-cost">
-                {formatCost(group.cost)}
+                {formatCost(group.cost, group.costEstimate)}
               </span>{' '}
               ·{' '}
               <span data-testid="stage-agents-duration">

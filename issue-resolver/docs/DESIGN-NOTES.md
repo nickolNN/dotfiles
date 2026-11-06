@@ -118,6 +118,22 @@ future reader could break without noticing, add it here instead of a comment.
   means unknown and is never treated as silence — a fake runner, an older pi or
   a stats payload without that field must not turn into a failure
   (`backend/src/pi/rpc-session.ts`).
+- The `answer_model` session event names the model and the effort level that
+  actually produced an answer, not the ones we asked for: `responseModel` (the
+  concrete model the provider reports) and `providerThinkingLevel` (the
+  provider-native effort) come from the authoritative `message_end` message.
+  The event is emitted on change only — a fingerprint of the four fields — so a
+  step that answers forty times at the same level contributes one line. Without
+  it a virtual model that resolves to another one, and a provider that clamps
+  an effort level, both look exactly like the request.
+- Cost carries its own provenance: `SessionCost.fromProvider` and
+  `SessionStats.costFromProvider` are true only when every contributing usage
+  report was billed (`usage.cost.totalFromProvider`); absent means the number
+  is a catalog estimate, and the frontend prints those with `≈`. The flag is
+  sticky-false across an agent's session
+  (`backend/src/pi/registry/usage.ts`), and an aggregate is provider-reported
+  only when every part is (`sumSessionStats`, `shared/src/step-result.ts`). A
+  total nobody billed must not read as an invoice.
 - A failed run without a report persists a synthesized `fail` report carrying
   the reason (`STEP_FAILURE_TEXT` / `failureReportOverride` in
   `backend/src/workflow/step-failure.ts`) and publishes it as an error notice.

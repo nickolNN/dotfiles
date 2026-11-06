@@ -89,6 +89,9 @@ export function analyzeEvents(events: SessionEvent[]): AnalyzedEvents {
         visible.push(event);
         liveThinking = null;
         break;
+      case 'answer_model':
+        visible.push(event);
+        break;
       default:
         visible.push(event);
     }

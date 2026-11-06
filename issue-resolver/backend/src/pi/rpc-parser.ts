@@ -10,6 +10,7 @@ import { ContentStream } from './rpc-content-stream';
 import { noticeEvent } from './agent-session';
 import { mapStatelessEvent, mapUiRequest } from './rpc-event-map';
 import {
+  answerModelOf,
   normalizeCost,
   normalizeUsage,
   thinkingContentText,
@@ -36,6 +37,7 @@ export class RpcSessionParser {
   private statsValue: SessionStats | null = null;
   private modelValue: string | null = null;
   private assistantReplySeen = false;
+  private lastAnswerModel: string | null = null;
   private lastUsageTotal: number | null = null;
   private sessionStartMs: number | null = null;
   private speedSample: { output: number; tsMs: number } | null = null;
@@ -121,6 +123,7 @@ export class RpcSessionParser {
           ),
         );
       }
+      this.recordAnswerModel(message);
       return;
     }
 
@@ -186,6 +189,20 @@ export class RpcSessionParser {
     if (message.type === 'thinking_end') {
       this.thinking.finalize(this.index(message), message.content);
     }
+  }
+
+  private recordAnswerModel(message: Record<string, unknown> | null): void {
+    const answer = answerModelOf(message);
+    if (!answer) return;
+    const fingerprint = [
+      answer.model,
+      answer.responseModel,
+      answer.thinkingLevel,
+      answer.providerThinkingLevel,
+    ].join('\u0000');
+    if (fingerprint === this.lastAnswerModel) return;
+    this.lastAnswerModel = fingerprint;
+    this.push({ type: 'answer_model', ...answer });
   }
 
   private markSessionStart(now: number = Date.now()): void {
