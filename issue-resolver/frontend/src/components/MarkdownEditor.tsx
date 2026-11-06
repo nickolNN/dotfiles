@@ -15,7 +15,7 @@ export function getMarkdownEditorInstance(
     : undefined;
 }
 
-export interface MarkdownEditorProps {
+interface MarkdownEditorProps {
   id?: string;
   value: string;
   onChange: (markdown: string) => void;
@@ -157,6 +157,8 @@ export function markdownEditorExtensions(placeholder = ''): Extensions {
   ];
 }
 
+const EMPTY_TOOLBAR_STATE: Record<string, boolean> = {};
+
 export default function MarkdownEditor({
   id,
   value,
@@ -213,7 +215,7 @@ export default function MarkdownEditor({
   const active = useEditorState({
     editor,
     selector: ({ editor: current }) => {
-      if (!current) return {} as Record<string, boolean>;
+      if (!current) return EMPTY_TOOLBAR_STATE;
       return Object.fromEntries(TOOLBAR.map((b) => [b.key, b.isActive(current)]));
     },
   });

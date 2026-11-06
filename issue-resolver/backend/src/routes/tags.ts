@@ -10,9 +10,10 @@ import {
 } from '../db/tags.repo';
 import {
   createTagRequestSchema,
-  formatZodError,
   updateTagRequestSchema,
 } from '../validation';
+import { parseBody } from './parse-body';
+import { notFound } from './params';
 
 const API_PATH = '/issue-resolver/api/v1';
 const TAGS_PATH = `${API_PATH}/tags`;
@@ -24,10 +25,8 @@ export async function tagsRoutes(
   app.get(TAGS_PATH, async () => listTags(db));
 
   app.post(TAGS_PATH, async (request, reply) => {
-    const parsed = createTagRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: formatZodError(parsed.error) });
-    }
+    const parsed = parseBody(reply, createTagRequestSchema, request.body);
+    if (!parsed.ok) return parsed.reply;
     const input: CreateTagRequest = parsed.data;
     return reply.status(201).send(insertTag(db, input));
   });
@@ -37,7 +36,7 @@ export async function tagsRoutes(
     async (request, reply) => {
       const tag = getTag(db, request.params.id);
       if (!tag) {
-        return reply.status(404).send({ error: 'tag not found' });
+        return notFound(reply, 'tag not found');
       }
       return tag;
     },
@@ -46,14 +45,12 @@ export async function tagsRoutes(
   app.put<{ Params: { id: string } }>(
     `${TAGS_PATH}/:id`,
     async (request, reply) => {
-      const parsed = updateTagRequestSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.status(400).send({ error: formatZodError(parsed.error) });
-      }
+      const parsed = parseBody(reply, updateTagRequestSchema, request.body);
+      if (!parsed.ok) return parsed.reply;
       const input: UpdateTagRequest = parsed.data;
       const updated = updateTag(db, request.params.id, input);
       if (!updated) {
-        return reply.status(404).send({ error: 'tag not found' });
+        return notFound(reply, 'tag not found');
       }
       return updated;
     },
@@ -63,7 +60,7 @@ export async function tagsRoutes(
     `${TAGS_PATH}/:id`,
     async (request, reply) => {
       if (!deleteTag(db, request.params.id)) {
-        return reply.status(404).send({ error: 'tag not found' });
+        return notFound(reply, 'tag not found');
       }
       return reply.code(204).send();
     },

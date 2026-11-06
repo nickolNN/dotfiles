@@ -63,12 +63,19 @@ class FakeEventSource {
   }
 }
 
-function stubFetch() {
+function stubFetch(options: { devopsStatus?: () => Response } = {}) {
   const issue = makeIssue();
   const iteration = makeIteration();
 
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith('/devops/status')) {
+      return Promise.resolve(
+        options.devopsStatus
+          ? options.devopsStatus()
+          : jsonResponse({ status: 'idle' }),
+      );
+    }
     if (url.endsWith('/step-runs')) {
       return Promise.resolve(jsonResponse([]));
     }
@@ -80,6 +87,24 @@ function stubFetch() {
 
   vi.stubGlobal('fetch', fetchMock);
   return { fetchMock };
+}
+
+function emitDevopsLog(
+  data: string,
+  stream: 'stdout' | 'stderr' = 'stdout',
+  stepRunId = 'issue.issue-1.devops',
+): void {
+  act(() => {
+    FakeEventSource.instances[0].emit({
+      type: 'log',
+      issueId: 'issue-1',
+      iterationId: 'iter-1',
+      stepRunId,
+      stream,
+      data,
+      ts: '2026-10-09T00:00:00.000Z',
+    });
+  });
 }
 
 function emitProgress(
@@ -169,55 +194,48 @@ describe('TaskDetail — прогресс подготовки воркспей�
     expect(stepOf('installing')).toHaveTextContent('install failed');
   });
 
-  it('log DevOps → SessionView с накоплением stdout/stderr', async () => {
-    stubFetch();
-    render(<TaskDetail issueId="issue-1" />);
-    await screen.findByText('Fix login bug');
-
-    emitProgress('devops', 'running', { repo: 'owner/repo' });
-    const emitLog = (text: string, stream: 'stdout' | 'stderr' = 'stdout') => {
-      act(() => {
-        FakeEventSource.instances[0].emit({
-          type: 'log',
-          issueId: 'issue-1',
-          iterationId: 'iter-1',
-          stepRunId: 'issue.issue-1.devops',
-          stream,
-          data: text,
-          ts: '2026-10-09T00:00:00.000Z',
-        });
-      });
-    };
-    emitLog('> npm ci\n');
-    emitLog('added 42 packages\n');
-    emitLog('npm warn deprecated\n', 'stderr');
-
-    const session = await screen.findByTestId('devops-session');
-    expect(session).toHaveTextContent('npm ci');
-    expect(session).toHaveTextContent('added 42 packages');
-    expect(session).toHaveTextContent('npm warn deprecated');
-  });
-
-  it('log с чужим stepRunId не попадает в DevOps-сессию', async () => {
-    stubFetch();
-    render(<TaskDetail issueId="issue-1" />);
-    await screen.findByText('Fix login bug');
-
-    emitProgress('devops', 'running', { repo: 'owner/repo' });
-    act(() => {
-      FakeEventSource.instances[0].emit({
-        type: 'log',
-        issueId: 'issue-1',
-        iterationId: 'iter-1',
-        stepRunId: 'run-1',
-        stream: 'stdout',
-        data: 'step output',
-        ts: '2026-10-09T00:00:00.000Z',
-      });
+  it('лог DevOps — один живой бокс в секции DevOps, панель прогресса его не рисует', async () => {
+    stubFetch({
+      devopsStatus: () =>
+        jsonResponse({ status: 'running', startedAt: '2026-10-09T00:00:00.000Z' }),
     });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    emitProgress('devops', 'running', { repo: 'owner/repo' });
+    emitDevopsLog('> npm ci\n');
+    emitDevopsLog('added 42 packages\n');
+    emitDevopsLog('npm warn deprecated\n', 'stderr');
+
+    const live = await screen.findByTestId('devops-live');
+    expect(live).toHaveTextContent('npm ci');
+    expect(live).toHaveTextContent('added 42 packages');
+    expect(live).toHaveTextContent('npm warn deprecated');
 
     const panel = await screen.findByTestId('workspace-progress');
     expect(within(panel).queryByTestId('devops-session')).toBeNull();
+    expect(within(panel).queryByTestId('devops-live')).toBeNull();
+  });
+
+  it('log с чужим stepRunId не попадает в DevOps-прогон', async () => {
+    stubFetch({
+      devopsStatus: () =>
+        jsonResponse({ status: 'running', startedAt: '2026-10-09T00:00:00.000Z' }),
+    });
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    emitProgress('devops', 'running', { repo: 'owner/repo' });
+    emitDevopsLog('> npm ci\n');
+    await waitFor(() =>
+      expect(screen.getByTestId('devops-live')).toHaveTextContent('npm ci'),
+    );
+
+    emitDevopsLog('step output', 'stdout', 'run-1');
+
+    expect(screen.getByTestId('devops-live')).not.toHaveTextContent(
+      'step output',
+    );
   });
 
   it('iteration_status failed с error → красный баннер', async () => {

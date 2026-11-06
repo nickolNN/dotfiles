@@ -1,4 +1,12 @@
 
+import {
+  asRecord,
+  requireArray,
+  requireRecord,
+  requireString,
+} from '../util/records';
+import { stringOrNull } from '../util/scalars';
+
 export interface JiraIssue {
   key: string;
   title: string;
@@ -75,6 +83,86 @@ interface JiraIssueResponse {
   };
 }
 
+function issuePayload(value: unknown): {
+  issue: JiraIssueResponse;
+  raw: Record<string, unknown>;
+} {
+  const raw = requireRecord(value, 'jira issue response');
+  const fields = asRecord(raw.fields);
+  return {
+    issue: {
+      key: stringOrNull(raw.key) ?? undefined,
+      fields: fields
+        ? {
+            summary: stringOrNull(fields.summary) ?? undefined,
+            description: stringOrNull(fields.description) ?? undefined,
+          }
+        : undefined,
+    },
+    raw,
+  };
+}
+
+function commentsPayload(value: unknown): JiraComment[] {
+  const raw = requireRecord(value, 'jira comments response');
+  if (raw.comments === undefined) return [];
+  return requireArray(raw.comments, 'jira comments response').map((entry) => {
+    const comment = asRecord(entry);
+    if (!comment) {
+      throw new Error('jira comments response: comment is not an object');
+    }
+    const author = asRecord(comment.author);
+    return {
+      id: requireString(comment, 'id', 'jira comment'),
+      author:
+        stringOrNull(author?.displayName) ??
+        stringOrNull(author?.name) ??
+        'unknown',
+      created: stringOrNull(comment.created) ?? '',
+      body: stringOrNull(comment.body) ?? '',
+    };
+  });
+}
+
+function changelogPayload(value: unknown): JiraChangelogEntry[] {
+  const raw = requireRecord(value, 'jira changelog response');
+  const changelog = asRecord(raw.changelog);
+  if (changelog?.histories === undefined) return [];
+  return requireArray(changelog.histories, 'jira changelog histories').map(
+    (entry) => {
+      const history = asRecord(entry);
+      if (!history) {
+        throw new Error('jira changelog response: history is not an object');
+      }
+      const author = asRecord(history.author);
+      const items =
+        history.items === undefined
+          ? []
+          : requireArray(history.items, 'jira changelog items').map((item) => {
+              const change = asRecord(item);
+              if (!change) {
+                throw new Error(
+                  'jira changelog response: item is not an object',
+                );
+              }
+              return {
+                field: stringOrNull(change.field) ?? '',
+                fromString: stringOrNull(change.fromString) ?? undefined,
+                toString: stringOrNull(change.toString) ?? undefined,
+              };
+            });
+      return {
+        author:
+          stringOrNull(author?.displayName) ??
+          stringOrNull(author?.name) ??
+          'unknown',
+        created: stringOrNull(history.created) ?? '',
+        items,
+      };
+    },
+  );
+}
+
 export class HttpJiraClient implements JiraClient {
   constructor(
     private readonly baseUrl: string,
@@ -97,12 +185,12 @@ export class HttpJiraClient implements JiraClient {
     if (!response.ok) {
       throw new Error(`jira issue fetch failed: ${response.status}`);
     }
-    const data = (await response.json()) as JiraIssueResponse;
+    const { issue: data, raw } = issuePayload(await response.json());
     return {
       key: data.key ?? issueKey,
       title: data.fields?.summary ?? '',
       summary: data.fields?.description ?? '',
-      raw: data,
+      raw,
     };
   }
 
@@ -122,21 +210,7 @@ export class HttpJiraClient implements JiraClient {
         { headers },
       );
       if (res.ok) {
-        const data = (await res.json()) as {
-          comments?: Array<{
-            id: string;
-            author?: { displayName?: string; name?: string };
-            created?: string;
-            body?: string;
-          }>;
-        };
-        comments =
-          data.comments?.map((c) => ({
-            id: c.id,
-            author: c.author?.displayName ?? c.author?.name ?? 'unknown',
-            created: c.created ?? '',
-            body: c.body ?? '',
-          })) ?? [];
+        comments = commentsPayload(await res.json());
       }
     } catch {
     }
@@ -148,30 +222,7 @@ export class HttpJiraClient implements JiraClient {
         { headers },
       );
       if (res.ok) {
-        const data = (await res.json()) as {
-          changelog?: {
-            histories?: Array<{
-              author?: { displayName?: string; name?: string };
-              created?: string;
-              items?: Array<{
-                field?: string;
-                fromString?: string;
-                toString?: string;
-              }>;
-            }>;
-          };
-        };
-        changelog =
-          data.changelog?.histories?.map((h) => ({
-            author: h.author?.displayName ?? h.author?.name ?? 'unknown',
-            created: h.created ?? '',
-            items:
-              h.items?.map((i) => ({
-                field: i.field ?? '',
-                fromString: i.fromString,
-                toString: i.toString,
-              })) ?? [],
-          })) ?? [];
+        changelog = changelogPayload(await res.json());
       }
     } catch {
     }

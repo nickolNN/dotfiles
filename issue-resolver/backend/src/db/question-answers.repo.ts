@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { Db } from './client';
 import { questionAnswers } from './schema';
+import { nowIso } from './rows';
 
 export interface RecordQuestionAnswerInput {
   iterationId: string;
@@ -15,7 +16,7 @@ export async function recordQuestionAnswer(
   db: Db,
   input: RecordQuestionAnswerInput,
 ): Promise<void> {
-  const now = new Date().toISOString();
+  const now = nowIso();
   db.insert(questionAnswers)
     .values({
       id: randomUUID(),
@@ -43,22 +44,4 @@ export async function listAnsweredQuestionIds(
     .where(eq(questionAnswers.iteration_id, iterationId))
     .all()
     .map((row) => row.question_id);
-}
-
-export async function hasQuestionAnswer(
-  db: Db,
-  iterationId: string,
-  questionId: string,
-): Promise<boolean> {
-  const row = db
-    .select({ id: questionAnswers.id })
-    .from(questionAnswers)
-    .where(
-      and(
-        eq(questionAnswers.iteration_id, iterationId),
-        eq(questionAnswers.question_id, questionId),
-      ),
-    )
-    .get();
-  return row !== undefined;
 }

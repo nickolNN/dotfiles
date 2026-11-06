@@ -16,9 +16,8 @@
 | `shared/` | Доменные типы, статусная модель, чистые функции (workflow, разбор отчёта шага, статус задачи) — контракт для всех пакетов |
 | `backend/` | Fastify 5 REST API, workflow-движок, SQLite/Drizzle, адаптеры (docker/git/pi/MR/Jira/RPC) |
 | `frontend/` | React 19 + Vite 6 + Tailwind 4 SPA (тема Matrix/hackerman) |
-| `e2e/` | Playwright UI-сценарии на мок-бэкенде: `flow` + `edge-cases` |
-| `e2e/scenarios/` | Пресеты мок-ответов агента (`all-success`, `step-failure`, `agent-question`, `concurrent-questions`, `bootstrap-failure`) |
-| `frontend/e2e/` | Frontend Playwright: `flows/` (жизненный цикл, bootstrap-тоггл/лог, вопрос, статусы), `scenarios/` (мок-ответы агента), `backend/` (HTTP-сценарии) |
+| `frontend/e2e/` | Playwright UI-сценарии на мок-стеке: `flows/` (жизненный цикл, bootstrap-тоггл/лог, вопрос, статусы, обрыв SSE, отчёт, две задачи), `scenarios/` (мок-ответы агента), `backend/` (HTTP-сценарии) |
+| `backend/test/scenarios/` | Пресеты мок-ответов агента (`all-success`, `step-failure`, `agent-question`, `concurrent-questions`, `bootstrap-failure`) |
 
 ## Запуск
 
@@ -34,10 +33,7 @@ cd backend && ISSUE_RESOLVER_LOCAL=1 npm run start
 # frontend: Vite dev-сервер на 0.0.0.0:5173, проксирует /issue-resolver → http://localhost:8080
 cd frontend && npm run dev -- --host 0.0.0.0 --port 5173
 
-# e2e: сам поднимает мок-стек (e2e-server :8096 + vite :5196)
-cd e2e && npx playwright test
-
-# frontend e2e: мок-стек :8095/:5195 (backend HTTP + flows + scenarios)
+# e2e: сам поднимает мок-стек :8095/:5195 (backend HTTP + flows + scenarios)
 cd frontend && npx playwright test
 ```
 
@@ -166,6 +162,12 @@ allow-list enforcement'ится на мутирующих методах (`POST`
 отдаётся с реального hostname, добавь его собственный origin в
 `ISSUE_RESOLVER_ALLOWED_ORIGINS`, иначе его же мутирующие запросы получат `403`.
 
+Одиночные ответы-ошибки маршрутов не собираются руками: `notFound`,
+`badRequest`, `conflict`, `unprocessable` и `getIterationRow` живут в
+`backend/src/routes/params.ts`, поэтому тела `{ error: … }` в таблице ниже —
+единственное место, где текст ошибки задаётся. Один и тот же тест кода в
+`routes/issues/*` и `routes/iterations/*` даёт одинаковый ответ.
+
 | Метод и путь | Запрос | Ответ |
 | --- | --- | --- |
 | `GET /ping` | — | `{ ok: true }` |
@@ -187,8 +189,8 @@ allow-list enforcement'ится на мутирующих методах (`POST`
 | `GET /files/:fileId/content` | — | `200` содержимое файла: `Content-Type: <mime_type>` (fallback `application/octet-stream`) + `Content-Disposition: attachment; filename="…"` (safe ASCII + `filename*=UTF-8''…`) / `404` (нет строки, файла или путь вне `attachments/`) |
 | `GET /iterations/:id/step-runs` | — | `StepRunWithLog[]` (порядок шагов конвейера, внутри шага `attempt` возр.; сырой лог шага) / `404` |
 | `POST /iterations/:id/repeat` | — | `201 Iteration` — копия: те же `context`/`steps`/модели/вложения, `number = max+1`, запускает прогон в фоне. Только для завершённой/проваленной/отменённой итерации; активную (`running`/`pending`) → `409 { error: 'cannot repeat an active iteration' }` / `404` |
-| `GET /iterations/:id/agents` | — | `RoomAgent[]` (агенты комнаты resolve: исполнители по `index` 1..N + координатор последним; `id`, `role: 'worker' \| 'coordinator'`, `index`, `label`, `status`, `startedAt`, `stats`) / `404` |
-| `GET /iterations/:id/agents/stream?agentId=` | — | SSE: события сессии одного агента комнаты (`?agentId=<RoomAgent.id>`) / `400` (нет `agentId`) |
+| `GET /iterations/:id/agents` | — | `StepAgent[]` (агенты шага resolve: исполнители по `index` 1..N + координатор последним; `id`, `role: 'worker' \| 'coordinator'`, `index`, `label`, `status`, `startedAt`, `stats`) / `404` |
+| `GET /iterations/:id/agents/stream?agentId=` | — | SSE: события сессии одного агента шага (`?agentId=<StepAgent.id>`) / `400` (нет `agentId`) |
 | `GET /issues/:id/stream` | — | SSE: `data: <SSEEvent JSON>\n\n` |
 | `GET /stream` | — | SSE: все события шины без фильтра по задаче/итерации (для списка задач) |
 | `POST /iterations/:id/message` | `{ message }` | `{ ok: true }` (steer активного шага) / `409 { error: 'no active step session' }` / `400` |
@@ -288,7 +290,7 @@ context», когда не пуст). Шаг `pr` добавляется в ко
 `additional_context`.
 
 **SSE-потоки.** Каждый SSE-ответ открывается комментарием `: connected`
-(см. `openSse` в `backend/src/routes/stream.ts`). Это не данные, а требование к
+(см. `openSse` в `backend/src/routes/stream/sse.ts`). Это не данные, а требование к
 прокси: и Vite dev-proxy, и nginx держат блок заголовков в буфере до первого
 байта тела, поэтому поток, который сразу ничего не пишет, у клиента не
 открывается (`EventSource` остаётся в CONNECTING). До этого фикса через
@@ -469,7 +471,7 @@ DevOps-агента в `prepareIssueWorkspace`, и новые тег-инстр�
 
 **Файлы в корне рабочей папки.** Помимо `WORKSPACE_INSTRUCTIONS.md`, генерируемых
 агентом, `prepareIssueWorkspace` вызывает `installWorkspaceHelpers`
-(`backend/src/workflow/run-iteration.service.ts`): он копирует `bin/pw-browsers.sh`
+(`backend/src/workflow/workspace-helpers.ts`): он копирует `bin/pw-browsers.sh`
 в корень рабочей папки задачи с правами `0755`. Контейнер агента видит только
 бинд `/workspaces/<issueId>`, поэтому хостовый путь
 `…/issue-resolver/bin/pw-browsers.sh` внутри него не существует — в промптах
@@ -651,7 +653,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   есть `report.md`, `failed` — прогон упал **или не создал ни одного
   артефакта** (типичный случай: ответ модели упёрся в лимит выхода, exit code
   0, файлов нет), `idle` — прогонов не было. Поля ответа: `runId`,
-  `runStatus`, `startedAt`, `finishedAt`, `feedback` (причина падения либо
+  `runStatus`, `startedAt`, `finishedAt`, `updatedAt`, `feedback` (причина падения либо
   «report.html отсутствует»), `artifacts{md,html}` (`present/bytes/mtime`),
   `lastRunAt` (mtime `report.md`, ISO-Z без миллисекунд — один формат с
   `x-artifact-mtime`), плюс process-local `observedModel`/`warnings`. Исходы
@@ -700,7 +702,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   `GET /issues/:id/devops/status` отвечает `idle`/`running`/`success`/`failed`
   по **последнему прогону из БД** (после рестарта backend статус не сбрасывается
   в `idle`; зависший без активности прогон доводится до `failed`) и несёт
-  `runId`, `runStatus`, `startedAt`, `finishedAt`, `feedback`.
+  `runId`, `runStatus`, `startedAt`, `finishedAt`, `updatedAt`, `feedback`.
   `GET /issues/:id/devops/run` отдаёт `StepRunWithLog` целиком — UI поднимает
   из него панель вывода после перезагрузки страницы.
 - **Управление report-агентом как шагом**: живая report-сессия
@@ -769,7 +771,8 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   лог), затем по ответам строит план. Текст Jira докачивается на прогоне через
   `jira.fetchIssue`; ошибка Jira деградирует до `null` и шаг не падает.
   Главный выход планировщика — решение, а не документ: он оценивает размер
-  задачи и решает форму прогона (один агент / комната / этапы), по умолчанию
+  задачи и решает форму прогона (один агент / одна стадия с N исполнителями /
+  несколько этапов), по умолчанию
   `single`, и пишет `plan.md` как развёрнутое ТЗ исполнителю: запрос
   пользователя и что он значит конкретно, решения из интервью с причинами,
   поведение до/после, ограничения и инварианты, критерии приёмки, риски, по
@@ -799,10 +802,11 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   self-checks (build/typecheck/unit smoke), а без них `resolve` сам становится
   финальным гейтом, и план несёт полную самопроверку. Промпт `resolve`
   аналогично знает о включённых даунстрим-шагах `review`/`test` и ограничивает
-  свою проверку локальными self-checks (то же — у координатора комнаты и
+  свою проверку локальными self-checks (то же — у координатора этапа и
   финального lead staged-режима).
-- **Промпты шагов** (`prompts/*.md` + сборка в `backend/src/workflow/prompts.ts`):
-  к каждому промпту — шаговому и роли комнаты — в конце добавляются общие
+- **Промпты шагов** (`prompts/*.md` + сборка в `backend/src/workflow/prompts/`,
+  реэкспорт из `backend/src/workflow/prompts.ts`):
+  к каждому промпту — шаговому и staged-роли — в конце добавляются общие
   фрагменты `SHARED_FRAGMENTS` (`capabilities.md` о доступном агенту,
   `memory-rules.md` о тегах и ссылках): правило живёт в одном файле и не
   копируется по ролям, а тест проверяет, что фрагмент доехал ровно один раз.
@@ -817,7 +821,8 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   `output-contract.md` (форма `.issue-step-result.json` c `scenarios`/`findings`).
   Дальше — роль-специфичное тело: `refine` (метод — скилл `grilling`,
   интервью через tool `question`, `plan.md`, рекомендация `execution`, потолок
-  исполнителей подставляется из `DEFAULT_MAX_ROOM_EXECUTORS`), `resolve` (implementer + HARD-RULES: изменения
+  исполнителей подставляется из `maxExecutorsFor` — это `worker_count`, а
+  `DEFAULT_MAX_EXECUTORS = 4` (`shared/src/execution.ts`) служит фолбэком), `resolve` (implementer + HARD-RULES: изменения
   остаются незакоммиченными), `review` (read-only ревью change set рабочего
   дерева), `test` (Playwright против живого dev-сервера, скриншоты в
   `screenshots/`; оба обязаны отдать весь список дефектов за один проход и не
@@ -832,34 +837,55 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   на каждый репозиторий своё описание в `merge_requests[]`; читает
   `git diff origin/<base>` — ВСЁ, что несёт ветка, включая работу прошлых
   итераций, — плюс цели публикации с base-веткой и `create_mr`). Отчёты
-  `resolve`/`review` эти поля не заполняют и движок их не подхватывает. Room/staged-промпты
-  (`resolve-room-*`, `resolve-stages-*`) несут тот же контекст своими
+  `resolve`/`review` эти поля не заполняют и движок их не подхватывает. Staged-промпты
+  (`resolve-stages-*`) несут тот же контекст своими
   плейсхолдерами (`{{TASK_CONTEXT}}`/`{{REPOS}}`/`{{ATTACHMENTS}}`/
   `{{PREVIOUS_OUTCOME}}`/`{{DOWNSTREAM_AWARENESS}}`), потому что собираются без
   шапки шага.
-- **Room-режим (последовательные/параллельные агенты)**: `refine` — шаг
-  планирования: его отчёт может нести `execution` (`{ mode: 'single' | 'room' |
-  'stages', executors?, decomposition?, stages?, rationale? }`), а также пишет
+- **Staged-исполнение (последовательные и параллельные агенты)**: `refine` —
+  шаг планирования: его отчёт может нести `execution`
+  (`{ mode: 'single' | 'stages', stages?, rationale? }`), а также пишет
   человекочитаемый план в `plan.md` в корне рабочей папки. Топологию
-  детерминированно решает движок (`planExecutionMode`, потолок
-  `DEFAULT_MAX_ROOM_EXECUTORS = 4`), а не сами агенты. Планировщик выбирает
+  детерминированно решает движок (`planExecutionMode`), а не сами агенты;
+  предел одновременности задаёт `iteration.worker_count` (когда он не задан
+  или невалиден — фолбэк `DEFAULT_MAX_EXECUTORS = 4`). Планировщик выбирает
   топологию по двум осям (`prompts/step-refine.md` §3): **форма** — независимые
-  части → `room`, упорядоченные → `stages`; **ёмкость** — изменение больше одного
+  части → одна параллельная волна (`stages` из одного этапа), упорядоченные →
+  несколько `stages`; **ёмкость** — изменение больше одного
   *working set* исполнителя (порядка десятка файлов плюс один тест-цикл) уходит в
-  `stages`, даже когда части независимы. `iteration.worker_count` рендерится в
-  `{{PARALLELISM}}` через `maxExecutorsFor`, поэтому потолок, который видит
-  планировщик, равен реальному потолку движка (при `worker_count=1` текст говорит
-  прямо: параллелизма нет, объём всё равно делится в `stages` по одному
-  исполнителю на этап):
-  - `room` валиден только при `executors >= 2`; N исполнителей параллельно решают
-    подзадачи и пишут каждый свой `.issue-worker-result-<n>.json` (`n` — 1-based
-    номер подзадачи, как в подписи исполнителя), затем
-    координатор (lead, запускается последним и держит финальный `pass`/`fail`)
-    интегрирует их и пишет итоговый `.issue-step-result.json`. Саммари исполнителей
-    в промпте координатора движок дочитывает из этих файлов (host-путь рабочей
-    папки, `RoomResolveOptions.hostWorkspaceDir`): in-memory `report` раннер
-    заполняет только при abort.
-  - `stages` валиден при 2+ валидных этапах в `execution.stages`
+  `stages`, даже когда части независимы. `iteration.worker_count` — это только
+  предел одновременности: он рендерится в `{{PARALLELISM}}` через
+  `maxExecutorsFor`, но план не переписывает. Движок проверяет план
+  (`executionPlanProblem`): `executors` любого этапа не может превышать этот
+  предел, `stages` без объявленных этапов — ошибка планировщика, а план из
+  одного этапа с одним исполнителем отклоняется с фидбеком «это `single`».
+  Каждая объявленная стадия обязана быть корректной: нецелый или нулевой
+  `index`, `executors` меньше единицы, нецелый или нечисловой `executors`,
+  `decomposition` не массив, содержащий нестроковые или пустые пункты, а также
+  число пунктов, не равное объявленному `executors`, — отказ, а не тихое
+  вычёркивание стадии из плана, не обрезка лишних пунктов и не дописывание
+  недостающих. Стадия называется позицией в объявленном списке (`stage at
+  position 1 of 2 is malformed`, `stage at position 1 of 2 declares 4
+  decomposition entries for 2 executors — a wave has one sub-task per executor`),
+  потому что `index` стадии — подсказка порядка, и он сам может быть тем полем,
+  что сломано. Верхнеуровневые `executors`/`decomposition` у `stages`-плана
+  отклоняются: этапный план объявляет их у этапов, а не у себя
+  (`mode stages declares top-level executors`). Когда кривы все объявленные
+  стадии, сообщение называет первую из них — «no valid stages» остаётся только
+  для плана без объявленных этапов. `single` не может объявлять
+  больше одного исполнителя (ни через `executors`, ни через `decomposition`):
+  такой план отклоняется, иначе отчёт рисовал бы «исполнителей: 9» при одном
+  агенте. Режим объявляется только как `single` или `stages`: неизвестный режим
+  (в том числе снятый `room`) делает `execution` нечитаемым, а нечитаемый план —
+  тоже отказ, а не молчаливый одиночный `resolve`.
+  Невалидный план не исполняется — `refine` перезапускается с фидбеком и тратит
+  на это свой бюджет self-retry (`MAX_SELF_RETRIES.refine = 3` повторных
+  запуска, общий с крашами refine); когда бюджет исчерпан, итерация падает и
+  `resolve` не стартует. Фидбек называет конкретную причину отказа из
+  `executionPlanProblem`, а не общую формулировку. Число этапов пределом не ограничено, поэтому большой объём без
+  параллельности делится в `stages` по одному исполнителю на этап:
+  - `stages` валиден, когда объявлен хотя бы один этап и каждый объявленный
+    этап корректен (`execution.stages`)
     (элемент — `{ index, name?, task?, executors?, decomposition? }`). Этапы
     исполняются строго последовательно: на этапе с `executors >= 2` исполнители
     работают параллельно, затем координатор этапа пишет
@@ -867,41 +893,75 @@ Node-reverse-proxy (node в образе всегда), без попыток е
     этап с одним исполнителем выполняет один агент; после всех этапов
     финальный lead интегрирует исходы и ОДИН пишет deliverable
     (`report.md`/`report.html` по `desired_result`) и итоговый
-    `.issue-step-result.json`. `planExecutionStages` перенумеровывает этапы
+    `.issue-step-result.json`.
+  - **волна** — план из одного этапа с `executors >= 2`: отдельного координатора
+    этапа нет, финальный lead сам интегрирует исполнителей (их саммари приходят
+    в его промпт блоком `## Wave workers`, файлы
+    `.issue-stage-1-worker-<w>.json`) и сразу пишет `.issue-step-result.json`.
+    `.issue-stage-1.json` не создаётся, поэтому повторный `resolve` переигрывает
+    волну целиком. План из одного этапа с одним исполнителем — это `single`,
+    движок его отклоняет. `planExecutionStages` перенумеровывает этапы
     1..N, зажимает `executors` в `[1..max]` и добивает `decomposition` до
-    ровно `executors` пунктов; abort на любом этапе немедленно завершает шаг.
+    ровно `executors` пунктов (это страховка: валидный план уже проверен выше —
+    лишние пункты гейт отклоняет, — поэтому ни зажим, ни добор не могут молча
+    урезать исполняемый план; `max` — обязательный аргумент без дефолта, так что
+    новый вызов не унаследует чужой потолок);
+    abort на любом этапе немедленно завершает шаг.
     Координатор этапа и финальный lead дополнительно читают решения и ловушки
-    предыдущих этапов через общую память комнаты (`memory_read`/`memory_search`);
+    предыдущих этапов через общую память задачи (`memory_read`/`memory_search`);
     в память пишут то, что не прочитать в коде (`#decision`/`#lesson`, теги
     `#issue-resolver`/`[[stage-N]]`), а вердикт этапа остаётся в
     `.issue-stage-<i>.json`: вердикты раундов в `MEMORY.md` не попадают.
-  - иначе (нет плана, битый, `single`, < 2 валидных этапов) — один агент, и это
+  - исходы этапов переживают рестарт только в границах одной итерации и одного
+    плана: `runStagedResolve` пишет `.issue-stage-manifest.json`
+    (`iterationId` + подпись формы плана) и при расхождении с манифестом на
+    диске удаляет `.issue-stage-*.json` перед запуском. Файл этапа прошлой
+    итерации или прошлого плана больше не читается как результат текущего.
+  - иначе (нет плана, битый, `single`, нет валидных этапов) — один агент, и это
     заметно: движок отдаёт warning-notice в ленту шага и пишет `console.warn`
     («no execution plan — resolve runs as single»), чтобы недописанный
     `.issue-step-result.json` не выглядел как осознанный `single`.
-  В `room`/`stages` у каждого агента свой `RoomAgent.id` (`<stepRunId>` у
-  финального координатора, `run.<stepRunId>.w<i>` у исполнителей комнаты,
-  `run.<stepRunId>.s<s>.w<w>` и `run.<stepRunId>.s<s>.lead` у
-  staged-агентов) и отдельный per-agent SSE (`/agents/stream?agentId=`), а
-  `RoomAgent` несёт `stage`/`stageName` (staged-режим), `startedAt` (ISO) и
+  В staged-исполнении у каждого агента свой `StepAgent.id` (`<stepRunId>` у
+  финального координатора, `run.<stepRunId>.s<s>.w<w>` у исполнителей и
+  `run.<stepRunId>.s<s>.lead` у координатора этапа; у волны координатора этапа
+  нет, поэтому только `run.<stepRunId>.s1.w<w>` и `<stepRunId>`) и отдельный per-agent SSE (`/agents/stream?agentId=`), а
+  `StepAgent` несёт `stage`/`stageName` (staged-режим), `startedAt` (ISO) и
   агрегированные `stats` (токены/cost/context из usage/stats-событий его
   сессии).
 - **Цикл фидбека**: провал `review`/`test` откатывает конвейер на `resolve`
-  (разработку) с `attempt + 1` и передаёт фидбек; сам `test` код не чинит.
+  (разработку) с `attempt + 1` и передаёт фидбек **только когда в отчёте есть
+  замечание `major` или `critical`**. Решение принимает `blockingFindings`
+  (`shared/src/step-result.ts`): `fail` из одних `minor`/`low`/`info` идёт
+  дальше как pass, а `pass` не переопределяется severity. Безопасная сторона:
+  `fail` без единого findings, нечитаемая severity и помеченный
+  `findingsMalformed` отчёт считаются блокирующими. Сам `test` код не чинит.
   Максимум `MAX_PIPELINE_ATTEMPTS` попыток (`shared/src/workflow.ts`, сейчас 5),
-  дальше — `needs_input` с причиной `max_attempts`: итерация останавливается и
-  спрашивает человека. Test-шаг получает это число в промпте через
-  `{{ATTEMPT_LIMIT}}`, поэтому лимит не живёт отдельным числом в markdown, и
-  номер текущей попытки через `{{VERIFICATION_MODE}}`: первый раунд гоняет
-  полную матрицу, повторный сначала перепроверяет находки предыдущего раунда и
-  пути из них, затем build/test репозитория, а полную матрицу — только если
-  раунд менял исполняемый код (раунд из одной прозы не стоит свежего клона и
-  сотни вызовов инструментов). `review` и `test` обязаны отдать **весь** список
-  дефектов за проход: раунд с одной находкой и остальными «на потом» стоит
-  полного цикла разработки на каждую оставшуюся.
+  и `needs_input` с причиной `max_attempts` остаётся только для случая «блокеры
+  есть, бюджет кончился» — это последняя линия, а не единственный выход из
+  цикла. Test-шаг получает число в промпте через `{{ATTEMPT_LIMIT}}`, поэтому
+  лимит не живёт отдельным числом в markdown, и номер текущей попытки через
+  `{{VERIFICATION_MODE}}` (его получают и `review`, и `test`): первый раунд
+  гоняет полную матрицу, повторный сначала перепроверяет находки предыдущего
+  раунда и пути из них, затем build/test репозитория, а полную матрицу — только
+  если раунд менял исполняемый код (раунд из одной прозы не стоит свежего клона
+  и сотни вызовов инструментов). Наблюдение вне тронутой этим раундом
+  поверхности — `minor`, а не блокер: остальной change set был принят раньше.
+  `review` и `test` обязаны отдать **весь** список дефектов за проход: раунд с
+  одной находкой и остальными «на потом» стоит полного цикла разработки на
+  каждую оставшуюся.
+- **Граница ревью и теста**: `review` только читает и доказывает дефект
+  `file:line`; `test` только исполняет и доказывает воспроизведением (команда,
+  страница, шаги, скриншот). Заявляет тот, кто может доказать своим способом;
+  второй упоминает находку в `summary` и не заводит её заново — один дефект
+  стоит одного цикла разработки. Ревью не требует прогонов, тест не судит имена,
+  структуру и дубли. Отсутствие теста на новую логику — `major`, если в
+  репозитории тесты есть (сюита, тестовые файлы или тестовый скрипт), и `minor`,
+  если их нет вообще: репозиторий без тестовой культуры не блокируется, а тот,
+  где она есть, её не теряет. Правило целиком — в `prompts/step-scope.md`,
+  который висит на каждом шаге.
   Провал `refine`/`resolve`/`pr` завершает итерацию сразу.
 - **Терминальность сбоя агента**: reject/таймаут `pi.run` (spawn ENOENT,
-  timeout, child error, зависание) ловится движком вокруг single/room/stages
+  timeout, child error, зависание) ловится движком вокруг одиночного и staged-
   вызова шага: `step_run` → `failed`, `step_output` с отчётом
   `{ status: 'fail', summary: '<step> agent failed/hung' }` и текстом ошибки в
   `stderr`, итерация → `failed`. Шаг не остаётся в `running` навсегда. Успешный
@@ -1015,13 +1075,14 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   (`parseStepReport(run.report)`, `data-testid="step-summary"`, summary обрезан
   `line-clamp-4`), а при отсутствии/битом отчёте (в т.ч. устаревшая строка
   `"null"`) — заглушку «Результат отсутствует.» (статус в блоке саммари —
-  `PASS`/`FAIL`/`BLOCKED` из отчёта, uppercase). В `room`-режиме карточка
+  `PASS`/`FAIL`/`BLOCKED` из отчёта, uppercase). В staged-режиме карточка
   активного `resolve` вместо одной сессии показывает вкладки «Исполнитель 1..N /
-  Координатор (lead)» (`RoomAgentTabs`): у выбранного агента — живой
+  Координатор (lead)» (`StepAgentTabs`): у выбранного агента — живой
   `SessionView` и его статистика (токены/cost/контекст + ⏱ длительность), а над
   вкладками — итог по всему шагу (суммарные токены/cost и wall-time от первого
   старта). Режим определяется по последнему `refine`-отчёту
-  (`parseStepReport(report).execution.mode === 'room'` либо `'stages'`); в
+  (`parseStepReport(report).execution.mode === 'stages'`; отчёт с неизвестным
+  режимом, включая снятый `room`, считается нечитаемым планом, а не этапным); в
   `stages` вкладки группируются по этапам (`stage`/`stageName`, сначала этап 1
   с его исполнителями и координатором, затем этап 2, …; финальный координатор —
   последним), иначе — обычная одиночная сессия. Под карточкой шага
@@ -1087,7 +1148,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   (переключение между ними не «прыгает» по ширине). Верхняя навигация-табы («Задачи» / «Репозитории») в хедере;
   справа от табов — кнопка «+» с контекстным действием (создать задачу /
   добавить репозиторий по активному табу). Нижней мобильной панели нет.
-  Хеш-роуты: `#/new`, `#/tasks`, `#/tasks/:id`, `#/repositories`. На детали
+  Роуты (History API, без хеша): `/new`, `/tasks`, `/tasks/:id`, `/repositories`. На детали
   задачи над карточкой — текстовая крошка «← Задачи». В карточках списка задач
   — таймер: у `running` живой «⏱ Xм Yс» от `created_at`, у `completed`
   фиксированный (`created_at` → `updated_at`), у остальных статусов — прежнее
@@ -1096,7 +1157,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   (сопоставление сохранённого репозитория с задачей по URL): `✅` — соединение
   `ok` и инструкция сгенерирована, `🔵` — соединение `ok` без инструкции, `🟡`
   — ещё ждёт, `❌` — ошибка; запрос кешируется на один список. Экран «Репозитории»
-  (`#/repositories`) — CRUD сохранённых репозиториев: карточка той же
+  (`/repositories`) — CRUD сохранённых репозиториев: карточка той же
   ширины, что и остальные экраны (`max-w-4xl`), первая строка — индикатор статуса соединения (🟢 `ok` /
   🔴 `error` / ⚪ `unknown`, с tooltip), чип платформы, `fullName` и иконки
   действий справа (🔄 «Проверить» → `POST /repositories/:id/validate`, ✏️
@@ -1201,7 +1262,7 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   через паузу `SIGKILL` по оставшимся; свой процесс и его предки из выборки
   исключены. Снос папки повторяется до 4 раз с новой сессией убийства между
   попытками — иначе процесс, переоткрывающий файл, оставлял её `ENOTEMPTY`.
-  Экран «Настройки» (`#/settings`) — hostname
+  Экран «Настройки» (`/settings`) — hostname
   инстанса (`GET`/`PUT /settings/hostname`) и кнопка очистки
   орфанед-воркспейсов (`POST /admin/cleanup-orphans`), она же убирает
   брошенные комнаты задач (`issue-*` без живых агентов; корень комнат —
@@ -1214,7 +1275,9 @@ Node-reverse-proxy (node в образе всегда), без попыток е
   память агента (`PI_MEMORY_DIR`: `MEMORY.md`, `SCRATCHPAD.md`, `daily/*`) и
   проводит ретро по скиллу `retro` (логи сессий `~/.pi/agent/sessions`, БД
   приложения, репозиторий), пишет markdown-отчёт в таблицу `retro_runs` —
-  отчёт можно открыть и скачать `.md`, историю прогонов — в той же модалке;
+  отчёт можно открыть и скачать `.md`, а сохранённый вывод прогона — за
+  кнопкой «Развернуть» рядом с ней (до раскрытия транскрипт не висит над
+  рамкой), историю прогонов — в той же модалке;
   модель, её thinking effort, лимит сессий и свои инструкции сохраняются в строке
   прогона (клик по
   истории подставляет их в форму, чтобы повторить запуск), а идущий прогон
@@ -1239,11 +1302,11 @@ Node-reverse-proxy (node в образе всегда), без попыток е
 
 ```bash
 npm run typecheck                 # tsc во всех пакетах
+npm run lint                      # eslint: правила из eslint.config.mjs
 (cd shared   && npx vitest run)   # 97 тестов
 (cd backend  && npx vitest run)   # 563 теста
-(cd frontend && npx vitest run)   # 433 теста
-(cd e2e      && npx playwright test)  # flow (2) + edge-cases (10) на мок-стеке
-(cd frontend && npx playwright test)  # 8 backend HTTP + 5 flows + 3 scenarios на мок-стеке
+(cd frontend && npx vitest run)   # 660 тестов
+(cd frontend && npx playwright test)  # 8 backend HTTP + 11 flows + 3 scenarios на мок-стеке
 ```
 
 **E2E-сценарии агента (без Docker/git/pi/сети/токенов).**
@@ -1251,29 +1314,29 @@ npm run typecheck                 # tsc во всех пакетах
 мок-агента: ответы шагов (`success`/`failure`/`question`/`timeout`)
 задаются `POST /e2e/scenarios` (встроенное имя или inline `steps` + опц.
 `bootstrap`/`delayMs`), сброс — `POST /e2e/reset`, чтение —
-`GET /e2e/scenarios`. Пресеты — `e2e/scenarios/*.ts` (`all-success`,
+`GET /e2e/scenarios`. Пресеты — `backend/test/scenarios/*.ts` (`all-success`,
 `step-failure`, `agent-question`, `concurrent-questions`,
 `bootstrap-failure`). HTTP-спеки — `frontend/e2e/backend/api.spec.ts`
 (вопрос, параллельные вопросы, SSE), UI-спеки —
-`frontend/e2e/scenarios/*.spec.ts` (модалка → ответ → завершение, падение
+`frontend/e2e/scenarios/*.spec.ts` (инлайн-вопрос → ответ → завершение, падение
 шага, падение подготовки). Вопрос получает ответ через реальный
 `POST /iterations/:id/ui-response` → реестр живых сессий; курсор шагов — на
 итерацию, поэтому параллельные задачи независимы. Прогон детерминирован
 (каждый тест < 5с); токены не тратятся.
 
-**Свой мок-стек.** `frontend/playwright.config.ts` и
-`e2e/playwright.config.ts` поднимают собственные e2e-server + vite на
-свободных портах (`:8095`/`:5195` и `:8096`/`:5196`), не конфликтуя с живым
+**Свой мок-стек.** `frontend/playwright.config.ts` поднимает собственные
+e2e-server + vite на свободных портах (`:8095`/`:5195`), не конфликтуя с живым
 dev-стеком соседей (`:8080`/`:5173`); цель vite-прокси задаётся
 `VITE_PROXY_TARGET`. Живой дефолт ‑ `:8080`.
 
-**e2e `edge-cases/*`.** Краевые UI-сценарии (пустой список, две задачи,
-подготовка двух репозиториев, повтор итерации, `desired_result`, обрыв SSE,
-валидация формы) перехватывают API/SSE через детерминированный `FakeApi`
-(`e2e/helpers.ts`), а `flow.spec.ts` ходит через vite-прокси на мок-бэкенд.
-Хелперы: `createRepo` (сохранить репозиторий через UI), `getLatestIssueId`
-(id из `#/tasks/<id>`), `pollIterationStatus` (дождаться статуса итерации),
-`wsProgress`/`logChunk` (кадры SSE `workspace_progress` / `log`).
+**`frontend/e2e/flows/*`.** Пользовательские сценарии поверх реального
+мок-стека: жизненный цикл задачи, bootstrap-тоггл и лог DevOps, инлайн-вопрос
+(ответ и отмена), подписи статусов, обрыв SSE и восстановление
+(`reconnect.spec.ts`), панель отчёта (`report-flow.spec.ts`: idle → запуск →
+success → артефакт → повтор, ошибка запуска, `step_status` report-прогона в
+SSE) и две независимые задачи в карточном списке
+(`concurrent-issues.spec.ts`). Сеть перехватывается точечно через
+`page.route` (`mockStreamBatches` для SSE), отдельного класса-фейка нет.
 
 Юниты backend работают на in-memory фейках (docker/git/pi/MR/Jira/RPC) — реальные
 контейнеры, git-пуш и сетевые вызовы не выполняются; интеграционные обёртки

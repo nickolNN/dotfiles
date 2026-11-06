@@ -18,7 +18,7 @@ import {
   runIssueIteration,
   type IterationRunDeps,
 } from '../src/workflow/run-iteration.service';
-import { StepReportStatus, TaskStatus } from '@issue-resolver/shared';
+import { ExecutionMode, StepReportStatus, TaskStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-06-01T00:00:00.000Z';
 const STEPS: PipelineStep[] = ['refine', 'resolve'];
@@ -223,8 +223,8 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     });
   }
 
-  it('single: refine → один агент resolve (без room/stage)', async () => {
-    const plan: ExecutionPlan = { mode: 'single', rationale: 'one agent' };
+  it('single: refine → один агент resolve (без волны и этапов)', async () => {
+    const plan: ExecutionPlan = { mode: ExecutionMode.single, rationale: 'one agent' };
     const { db, pi, events, seeded, result } = await runTopology(plan, 1);
 
     expectCompleted(db, seeded, result, 2, pi, events);
@@ -233,20 +233,27 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
     ]);
   });
 
-  it('room: refine → 3 исполнителя ∥ + 1 координатор', async () => {
+  it('волна: refine → 3 исполнителя ∥ + финальный lead, без координатора этапа', async () => {
     const plan: ExecutionPlan = {
-      mode: 'room',
-      executors: 3,
-      decomposition: ['a', 'b', 'c'],
+      mode: ExecutionMode.stages,
+      stages: [
+        {
+          index: 1,
+          name: 'Волна',
+          task: 'весь объём',
+          executors: 3,
+          decomposition: ['a', 'b', 'c'],
+        },
+      ],
       rationale: 'parallel',
     };
     const { db, pi, events, seeded, result } = await runTopology(plan, 4);
 
     expectCompleted(db, seeded, result, 5, pi, events);
     expect(resolveAgents(pi)).toEqual([
-      { role: 'worker', stage: null, index: 1, label: 'Исполнитель 1' },
-      { role: 'worker', stage: null, index: 2, label: 'Исполнитель 2' },
-      { role: 'worker', stage: null, index: 3, label: 'Исполнитель 3' },
+      { role: 'worker', stage: 1, index: 1, label: 'Этап 1 · Исполнитель 1' },
+      { role: 'worker', stage: 1, index: 2, label: 'Этап 1 · Исполнитель 2' },
+      { role: 'worker', stage: 1, index: 3, label: 'Этап 1 · Исполнитель 3' },
       { role: 'coordinator', stage: null, index: null, label: 'Координатор' },
     ]);
 
@@ -256,15 +263,16 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
       .where(eq(stepRuns.iteration_id, seeded.iterationId))
       .all()
       .find((run) => run.step === 'resolve');
-    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRun?.id}.w0`);
-    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRun?.id}.w1`);
-    expect(pi.calls[3].options?.stepRunId).toBe(`run.${resolveRun?.id}.w2`);
+    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRun?.id}.s1.w0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRun?.id}.s1.w1`);
+    expect(pi.calls[3].options?.stepRunId).toBe(`run.${resolveRun?.id}.s1.w2`);
     expect(pi.calls[4].options?.stepRunId).toBe(resolveRun?.id);
+    expect(pi.calls[4].prompt).toContain('## Wave workers');
   });
 
   it('stages 3×1: refine → 3 исполнителя-этапа последовательно + финальный lead', async () => {
     const plan: ExecutionPlan = {
-      mode: 'stages',
+      mode: ExecutionMode.stages,
       stages: [
         { index: 1, name: 'D', executors: 1 },
         { index: 2, name: 'I', executors: 1 },
@@ -303,7 +311,7 @@ describe('pipeline E2E — 4 топологии resolve (refine → resolve)', (
 
   it('stages-микс 2→1→3: параллель → последовательность → параллель → финал', async () => {
     const plan: ExecutionPlan = {
-      mode: 'stages',
+      mode: ExecutionMode.stages,
       stages: [
         {
           index: 1,

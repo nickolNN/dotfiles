@@ -24,7 +24,9 @@ When you add a rule a future reader could break without noticing:
 
 - [`CODING_STANDARDS.md`](CODING_STANDARDS.md) is the code doctrine: no magic
   strings for closed sets, statuses declared once as frozen objects in
-  `shared/src/status.ts`. Read it before adding a status, a kind or a mode.
+  `shared/src/status.ts`. Read it before adding a status, a kind or a mode — and
+  before reporting a file-size finding: the "Reviewed exceptions" section lists
+  files that are at the ceiling on purpose.
 - `shared/` is a contract: change it only with the backend and frontend in the
   same commit.
 - Tests are the specification of behaviour: a change lands with a test that

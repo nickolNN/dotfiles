@@ -694,6 +694,46 @@ describe('SessionView — живая проза (text_update)', () => {
     );
   });
 
+  it('answer_model проходит через analyze и рисуется строкой модели', () => {
+    render(
+      <SessionView
+        events={[
+          { type: 'text', text: 'ответ' },
+          {
+            type: 'answer_model',
+            model: 'claude-sonnet-4-5',
+            responseModel: 'claude-opus-4-1',
+            thinkingLevel: 'high',
+            providerThinkingLevel: 'high',
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId('session-answer-model')).toHaveTextContent(
+      'модель claude-opus-4-1 · усилие high',
+    );
+  });
+
+  it('answer_model без единого известного поля не оставляет пустого блока', () => {
+    const { container } = render(
+      <SessionView
+        events={[
+          {
+            type: 'answer_model',
+            model: null,
+            responseModel: null,
+            thinkingLevel: null,
+            providerThinkingLevel: null,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByTestId('session-answer-model')).toBeNull();
+    expect(container.querySelector('.animate-fade-in-up')).toBeNull();
+  });
+
   it('не-running (персистентная) сессия: text_update не рисует live-блок', () => {
     render(
       <SessionView

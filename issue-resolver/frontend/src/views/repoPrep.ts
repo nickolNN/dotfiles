@@ -1,61 +1,65 @@
-import { WorkspaceProgressStatus } from '@issue-resolver/shared';
+import { WorkspaceProgressStep, WorkspaceProgressStatus } from '@issue-resolver/shared';
 
+export const RepoPrepStatus = Object.freeze({
+  pending: 'pending',
+  cloning: 'cloning',
+  cloned: 'cloned',
+  devops: 'devops',
+  installed: 'installed',
+  dev_server: 'dev_server',
+  ready: 'ready',
+  skipped: 'skipped',
+  failed: 'failed',
+} as const);
 export type RepoPrepStatus =
-  | 'pending'
-  | 'cloning'
-  | 'cloned'
-  | 'devops'
-  | 'installed'
-  | 'dev_server'
-  | 'ready'
-  | 'skipped'
-  | 'failed';
+  (typeof RepoPrepStatus)[keyof typeof RepoPrepStatus];
 
 export interface RepoPrepStep {
   step: string;
   repo?: string;
-  status: 'running' | 'done' | 'warning' | 'error';
+  status: WorkspaceProgressStatus;
   message?: string;
   devPort?: number;
 }
 
 export const REPO_PREP_LABELS: Record<RepoPrepStatus, string> = {
-  pending: 'в очереди',
-  cloning: 'клонирование',
-  cloned: 'склонирован',
-  devops: 'анализ запуска',
-  installed: 'зависимости установлены',
-  dev_server: 'запуск dev-сервера',
-  ready: 'готов',
-  skipped: 'DevOps пропущен',
-  failed: 'ошибка',
+  [RepoPrepStatus.pending]: 'в очереди',
+  [RepoPrepStatus.cloning]: 'клонирование',
+  [RepoPrepStatus.cloned]: 'склонирован',
+  [RepoPrepStatus.devops]: 'анализ запуска',
+  [RepoPrepStatus.installed]: 'зависимости установлены',
+  [RepoPrepStatus.dev_server]: 'запуск dev-сервера',
+  [RepoPrepStatus.ready]: 'готов',
+  [RepoPrepStatus.skipped]: 'DevOps пропущен',
+  [RepoPrepStatus.failed]: 'ошибка',
 };
 
 export const REPO_PREP_MARKS: Record<RepoPrepStatus, string> = {
-  pending: '🟡',
-  cloning: '🔵',
-  cloned: '🔵',
-  devops: '🟣',
-  installed: '🟢',
-  dev_server: '🔷',
-  ready: '✅',
-  skipped: '⏭️',
-  failed: '❌',
+  [RepoPrepStatus.pending]: '🟡',
+  [RepoPrepStatus.cloning]: '🔵',
+  [RepoPrepStatus.cloned]: '🔵',
+  [RepoPrepStatus.devops]: '🟣',
+  [RepoPrepStatus.installed]: '🟢',
+  [RepoPrepStatus.dev_server]: '🔷',
+  [RepoPrepStatus.ready]: '✅',
+  [RepoPrepStatus.skipped]: '⏭️',
+  [RepoPrepStatus.failed]: '❌',
 };
 
 export const REPO_PREP_COLORS: Record<RepoPrepStatus, string> = {
-  pending: '#FFB000',
-  cloning: '#00B4FF',
-  cloned: '#00B4FF',
-  devops: '#9D7CFF',
-  installed: '#00FF41',
-  dev_server: '#00B4FF',
-  ready: '#00FF41',
-  skipped: '#8A8A8A',
-  failed: '#FF0033',
+  [RepoPrepStatus.pending]: '#FFB000',
+  [RepoPrepStatus.cloning]: '#00B4FF',
+  [RepoPrepStatus.cloned]: '#00B4FF',
+  [RepoPrepStatus.devops]: '#9D7CFF',
+  [RepoPrepStatus.installed]: '#00FF41',
+  [RepoPrepStatus.dev_server]: '#00B4FF',
+  [RepoPrepStatus.ready]: '#00FF41',
+  [RepoPrepStatus.skipped]: '#8A8A8A',
+  [RepoPrepStatus.failed]: '#FF0033',
 };
 
-export function repoFullNameFromUrl(url: string): string {
+export function repoFullNameFromUrl(url: string | null | undefined): string {
+  if (typeof url !== 'string') return '';
   const trimmed = url.trim().replace(/\/+$/, '');
   const withoutGit = trimmed.replace(/\.git$/i, '');
   const segments = withoutGit.split(/[/:]/).filter((segment) => segment.length > 0);
@@ -80,28 +84,33 @@ export function repoPrepStatus(
   workspaceReady = false,
 ): RepoPrepStatus {
   const own = steps.filter((step) => step.repo === repoKey);
-  if (own.some((step) => step.status === WorkspaceProgressStatus.error)) return 'failed';
+  if (own.some((step) => step.status === WorkspaceProgressStatus.error))
+    return RepoPrepStatus.failed;
 
   const skipped = !bootstrapEnabled || own.some((step) => step.message === 'пропущен');
-  if (workspaceReady) return skipped ? 'skipped' : 'ready';
+  if (workspaceReady) return skipped ? RepoPrepStatus.skipped : RepoPrepStatus.ready;
 
-  const devServer = lastStep(own, 'dev_server');
+  const devServer = lastStep(own, WorkspaceProgressStep.dev_server);
   if (devServer) {
-    if (skipped) return 'skipped';
-    if (devServer.status === WorkspaceProgressStatus.running) return 'dev_server';
-    return 'installed';
+    if (skipped) return RepoPrepStatus.skipped;
+    if (devServer.status === WorkspaceProgressStatus.running) return RepoPrepStatus.dev_server;
+    return RepoPrepStatus.installed;
   }
 
-  if (lastStep(own, 'installing')) return skipped ? 'skipped' : 'installed';
-  if (lastStep(own, 'devops')) {
-    return skipped ? 'skipped' : 'devops';
+  if (lastStep(own, WorkspaceProgressStep.installing))
+    return skipped ? RepoPrepStatus.skipped : RepoPrepStatus.installed;
+  if (lastStep(own, WorkspaceProgressStep.devops)) {
+    return skipped ? RepoPrepStatus.skipped : RepoPrepStatus.devops;
   }
-  if (lastStep(own, 'checking_instructions')) return 'cloned';
+  if (lastStep(own, WorkspaceProgressStep.checking_instructions)) return RepoPrepStatus.cloned;
 
-  const cloning = lastStep(own, 'cloning');
-  if (cloning) return cloning.status === WorkspaceProgressStatus.running ? 'cloning' : 'cloned';
+  const cloning = lastStep(own, WorkspaceProgressStep.cloning);
+  if (cloning)
+    return cloning.status === WorkspaceProgressStatus.running
+      ? RepoPrepStatus.cloning
+      : RepoPrepStatus.cloned;
 
-  return 'pending';
+  return RepoPrepStatus.pending;
 }
 
 export function repoDevPort(
@@ -109,6 +118,6 @@ export function repoDevPort(
   steps: readonly RepoPrepStep[],
 ): number | undefined {
   const own = steps.filter((step) => step.repo === repoKey);
-  const devServer = lastStep(own, 'dev_server');
+  const devServer = lastStep(own, WorkspaceProgressStep.dev_server);
   return devServer?.status === WorkspaceProgressStatus.done ? devServer.devPort : undefined;
 }

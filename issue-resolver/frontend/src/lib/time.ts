@@ -12,10 +12,27 @@ export function useNow(active: boolean): number {
   return now;
 }
 
-export interface WorkTimeStepRun {
+interface WorkTimeStepRun {
   status: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface StepRunTimes {
+  created_at: string;
+  updated_at: string;
+}
+
+export function stepDurationMs(
+  run: StepRunTimes,
+  live: boolean,
+  now: number,
+): number | null {
+  const created = Date.parse(run.created_at);
+  if (!Number.isFinite(created)) return null;
+  const end = live ? now : Date.parse(run.updated_at);
+  if (!Number.isFinite(end)) return null;
+  return Math.max(0, end - created);
 }
 
 export function sumStepRunWorkMs(
@@ -26,11 +43,12 @@ export function sumStepRunWorkMs(
 
   let total = 0;
   for (const run of runs) {
-    const start = Date.parse(run.created_at);
-    if (!Number.isFinite(start)) continue;
-    const end =
-      run.status === StepRunStatus.running ? now : Date.parse(run.updated_at);
-    if (Number.isFinite(end)) total += Math.max(0, end - start);
+    const duration = stepDurationMs(
+      run,
+      run.status === StepRunStatus.running,
+      now,
+    );
+    if (duration !== null) total += duration;
   }
   return total;
 }

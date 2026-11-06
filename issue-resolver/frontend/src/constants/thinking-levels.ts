@@ -1,14 +1,11 @@
-import type { ModelDescriptor, ThinkingLevel } from '@issue-resolver/shared';
+import { ThinkingLevel } from '@issue-resolver/shared';
+import type { ModelDescriptor } from '@issue-resolver/shared';
 
-export const THINKING_LEVEL_OPTIONS: readonly ThinkingLevel[] = [
-  'off',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-];
+const THINKING_LEVELS = Object.values(ThinkingLevel);
+
+export function isThinkingLevel(value: string): value is ThinkingLevel {
+  return THINKING_LEVELS.some((level) => level === value);
+}
 
 export function thinkingLevelsFor(
   model: ModelDescriptor | undefined,

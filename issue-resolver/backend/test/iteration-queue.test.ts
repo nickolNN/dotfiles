@@ -24,11 +24,11 @@ import {
   type IterationRunDeps,
 } from '../src/workflow/run-iteration.service';
 import {
-  runRoomResolve,
-  type RoomResolveInput,
-  type RoomResolveOptions,
-} from '../src/workflow/room';
-import { StepReportStatus, TaskStatus } from '@issue-resolver/shared';
+  runStagedResolve,
+  type StagedResolveInput,
+  type StagedResolveOptions,
+} from '../src/workflow/staged-resolve';
+import { ExecutionMode, StepReportStatus, TaskStatus } from '@issue-resolver/shared';
 
 const ISSUES = '/issue-resolver/api/v1/issues';
 const ITERATIONS = '/issue-resolver/api/v1/iterations';
@@ -594,14 +594,21 @@ describe('шаги итерации выполняются последоват�
   });
 });
 
-const ROOM_PLAN: ExecutionPlan = {
-  mode: 'room',
-  executors: 3,
-  decomposition: ['бэкенд', 'фронтенд', 'тесты'],
-  rationale: 'три независимые части — параллельно',
+const WAVE_PLAN: ExecutionPlan = {
+  mode: ExecutionMode.stages,
+  stages: [
+    {
+      index: 1,
+      name: 'Волна',
+      task: 'весь объём',
+      executors: 3,
+      decomposition: ['бэкенд', 'фронтенд', 'тесты'],
+    },
+  ],
+  rationale: 'три независимые части — одна волна',
 };
 
-function roomInput(execution: ExecutionPlan): RoomResolveInput {
+function stagedInput(execution: ExecutionPlan): StagedResolveInput {
   return {
     containerName: 'issue-resolver-issue-1',
     execution,
@@ -618,24 +625,24 @@ function roomInput(execution: ExecutionPlan): RoomResolveInput {
   };
 }
 
-const roomOptions: RoomResolveOptions = {
+const stagedOptions: StagedResolveOptions = {
   stepRunId: 'run-1',
   iterationId: 'iter-1',
   issueId: 'issue-1',
 };
 
-describe('room-режим: исполнители одного шага бегут параллельно', () => {
-  it('3 исполнителя стартуют одновременно, координатор — только после них', async () => {
+describe('волна: исполнители одного этапа бегут параллельно', () => {
+  it('3 исполнителя стартуют одновременно, финальный lead — только после них', async () => {
     const pi = new ProbeRunner(false);
-    const promise = runRoomResolve(pi, roomInput(ROOM_PLAN), roomOptions);
+    const promise = runStagedResolve(pi, stagedInput(WAVE_PLAN), stagedOptions);
 
     await waitFor(() => (pi.active >= 3 ? true : undefined));
     expect(pi.active).toBe(3);
     expect(pi.maxActive).toBe(3);
     expect(pi.calls.map((call) => call.id)).toEqual([
-      'run.run-1.w0',
-      'run.run-1.w1',
-      'run.run-1.w2',
+      'run.run-1.s1.w0',
+      'run.run-1.s1.w1',
+      'run.run-1.s1.w2',
     ]);
     expect(pi.calls.some((call) => call.id === 'run-1')).toBe(false);
 
@@ -666,11 +673,11 @@ describe('worker_count доезжает до refine-промпта', () => {
       .map((call) => call.prompt)
       .find((text) => text.includes('Parallel executors'));
     expect(refinePrompt).toBeDefined();
-    expect(refinePrompt).toContain('Parallel executors: at most 3 at a time');
-    expect(refinePrompt).not.toContain('room` is out of reach');
+    expect(refinePrompt).toContain('Parallel executors: at most 3 at the same moment');
+    expect(refinePrompt).toContain('a concurrency ceiling');
   });
 
-  it('worker_count=1 → планировщик видит «room недоступен, дели объём в stages»', async () => {
+  it('worker_count=1 → планировщик видит «дели объём в stages, волна не шире 1»', async () => {
     const { db, pi, app } = makeEnv();
     const issueId = seedIssue(db);
 
@@ -686,7 +693,7 @@ describe('worker_count доезжает до refine-промпта', () => {
       .map((call) => call.prompt)
       .find((text) => text.includes('Parallel executors'));
     expect(refinePrompt).toContain('Parallel executors: 1');
-    expect(refinePrompt).toContain('room` is out of reach');
+    expect(refinePrompt).toContain('A single stage with one executor is `single`');
     expect(refinePrompt).toContain('one executor per stage');
   });
 });

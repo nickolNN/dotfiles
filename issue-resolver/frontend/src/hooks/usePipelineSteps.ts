@@ -5,16 +5,16 @@ import {
   type Dispatch,
   type SetStateAction,
 } from 'react';
+import { PipelineStep } from '@issue-resolver/shared';
 import type {
   ModelDescriptor,
-  PipelineStep,
   StepModels,
   StepThinkingLevels,
   ThinkingLevel,
 } from '@issue-resolver/shared';
-import { thinkingLevelsFor } from '../constants/thinking-levels';
+import { thinkingLevelsFor, isThinkingLevel } from '../constants/thinking-levels';
 
-export interface UsePipelineStepsOptions {
+interface UsePipelineStepsOptions {
   models: ModelDescriptor[];
   prAvailable?: boolean;
   initialSteps?: PipelineStep[];
@@ -24,7 +24,7 @@ export interface UsePipelineStepsOptions {
   defaultPrRepoIds?: ReadonlyArray<string>;
 }
 
-export interface UsePipelineStepsResult {
+interface UsePipelineStepsResult {
   selectedSteps: PipelineStep[];
   stepModels: StepModels;
   stepThinkingLevels: StepThinkingLevels;
@@ -63,7 +63,7 @@ export function usePipelineSteps({
 
   const toggleStep = useCallback(
     (step: PipelineStep) => {
-      if (step === 'pr' && !prAvailable) return;
+      if (step === PipelineStep.pr && !prAvailable) return;
 
       const willEnable = !selectedSteps.includes(step);
       setSelectedSteps((current) =>
@@ -72,7 +72,7 @@ export function usePipelineSteps({
           : [...current, step],
       );
 
-      if (step === 'pr') {
+      if (step === PipelineStep.pr) {
         if (willEnable) {
           setPrRepoIds((current) =>
             current.size === 0 ? new Set(defaultPrRepoIds ?? []) : current,
@@ -115,8 +115,8 @@ export function usePipelineSteps({
     (step: PipelineStep, value: string) => {
       setStepThinkingLevels((current) => {
         const next: StepThinkingLevels = { ...current };
-        if (value) {
-          next[step] = value as ThinkingLevel;
+        if (isThinkingLevel(value)) {
+          next[step] = value;
         } else {
           delete next[step];
         }

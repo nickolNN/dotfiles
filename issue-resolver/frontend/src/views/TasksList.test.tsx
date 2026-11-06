@@ -1141,7 +1141,9 @@ describe('TasksList', () => {
         makeRepoIssue('1', TaskStatus.pending, shared),
         makeRepoIssue('2', TaskStatus.pending, shared),
       ],
-      repositories: [makeSavedRepo(shared[0], RepoConnectionStatus.ok, RunInstructionsStatus.generated)],
+      repositories: [
+        makeSavedRepo(shared[0], RepoConnectionStatus.ok, RunInstructionsStatus.generated),
+      ],
     });
 
     render(<TasksList />);
@@ -1160,7 +1162,9 @@ describe('TasksList', () => {
       issues: [
         { ...makeRepoIssue('1', TaskStatus.completed, urls), desired_result: 'md' },
       ],
-      repositories: [makeSavedRepo(urls[0], RepoConnectionStatus.ok, RunInstructionsStatus.generated)],
+      repositories: [
+        makeSavedRepo(urls[0], RepoConnectionStatus.ok, RunInstructionsStatus.generated),
+      ],
     });
 
     render(<TasksList />);

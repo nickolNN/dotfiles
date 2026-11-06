@@ -53,46 +53,68 @@ const stepRun = {
   ],
 };
 
+async function openQuestionScreen(
+  page: Parameters<typeof createIssueViaUI>[0],
+): Promise<Record<string, unknown>[]> {
+  const responses: Record<string, unknown>[] = [];
+  const title = uniqueTitle('e2e-question');
+
+  await page.route('**/issues/*/iterations', (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({ json: [iteration] })
+      : route.continue(),
+  );
+  await page.route('**/iterations/*/step-runs', (route) =>
+    route.fulfill({ json: [stepRun] }),
+  );
+  await page.route('**/iterations/*/question-answers', (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route('**/iterations/*/ui-response', (route) => {
+    responses.push((route.request().postDataJSON() ?? {}) as Record<string, unknown>);
+    return route.request().method() === 'POST'
+      ? route.fulfill({ json: { ok: true } })
+      : route.continue();
+  });
+  await mockStreamBatches(page, '**/issues/*/stream', [
+    [iterationStatus('question')],
+  ]);
+
+  await createIssueViaUI(page, { title, bootstrapEnabled: false });
+  return responses;
+}
+
 test.describe('question flow', () => {
-  test('модалка → Escape → баннер → ответ', async ({ page }) => {
-    const title = uniqueTitle('e2e-question');
+  test('вопрос виден инлайном, ответ отправляется и блок исчезает', async ({
+    page,
+  }) => {
+    const responses = await openQuestionScreen(page);
 
-    await page.route('**/issues/*/iterations', (route) =>
-      route.request().method() === 'GET'
-        ? route.fulfill({ json: [iteration] })
-        : route.continue(),
-    );
-    await page.route('**/iterations/*/step-runs', (route) =>
-      route.fulfill({ json: [stepRun] }),
-    );
-    await page.route('**/iterations/*/question-answers', (route) =>
-      route.fulfill({ json: [] }),
-    );
-    await page.route('**/iterations/*/ui-response', (route) =>
-      route.request().method() === 'POST'
-        ? route.fulfill({ json: { ok: true } })
-        : route.continue(),
-    );
-    await mockStreamBatches(page, '**/issues/*/stream', [
-      [iterationStatus('question')],
-    ]);
+    const question = page.getByTestId('inline-question');
+    await expect(question).toBeVisible();
+    await expect(question).toContainText('Уточните детали задачи');
 
-    await createIssueViaUI(page, { title, bootstrapEnabled: false });
+    await question.getByLabel('Ответ').fill('Ожидаемое поведение: всё ок');
+    await question.getByRole('button', { name: 'Ответить' }).click();
 
-    const modal = page.getByTestId('question-modal');
-    await expect(modal).toBeVisible();
+    await expect(question).toBeHidden();
+    expect(responses).toHaveLength(1);
+    expect(responses[0]).toMatchObject({
+      id: QUESTION_ID,
+      value: 'Ожидаемое поведение: всё ок',
+    });
+  });
 
-    await page.keyboard.press('Escape');
-    await expect(modal).toBeHidden();
+  test('крестик отправляет отмену и блок исчезает', async ({ page }) => {
+    const responses = await openQuestionScreen(page);
 
-    const banner = page.getByTestId('step-pending-question');
-    await expect(banner).toBeVisible();
-    await banner.click();
-    await expect(modal).toBeVisible();
+    const question = page.getByTestId('inline-question');
+    await expect(question).toBeVisible();
 
-    await modal.getByLabel('Ответ').fill('Ожидаемое поведение: всё ок');
-    await modal.getByRole('button', { name: 'Ответить' }).click();
-    await expect(modal).toBeHidden();
-    await expect(page.getByTestId('step-pending-question')).toBeHidden();
+    await question.getByTestId('question-close').click();
+
+    await expect(question).toBeHidden();
+    expect(responses).toHaveLength(1);
+    expect(responses[0]).toMatchObject({ id: QUESTION_ID, cancelled: true });
   });
 });

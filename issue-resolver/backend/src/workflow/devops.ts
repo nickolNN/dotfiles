@@ -1,13 +1,16 @@
 import { readFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PipelineStep } from '@issue-resolver/shared';
 import type { SessionEvent, SessionStats, ThinkingLevel } from '@issue-resolver/shared';
 import type { PiRunner } from '../pi/runner';
 import { PORT_RANGE_LABEL } from '../port-allocator';
 import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
 import { soloRunExcludeTools } from '../pi/tool-policy';
-import { STEP_SYSTEM_APPEND } from './prompts';
+import { DEVOPS_SYSTEM_APPEND, withSharedFragments } from './prompts';
+import { messageOf } from '../util/errors';
+import { renderPlaceholders } from '../prompt-render';
+import { readTextFileOrNullAsync } from '../util/files';
 
 export const DEFAULT_DEVOPS_PROMPT_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -72,26 +75,18 @@ export function renderDevOpsPrompt(
     return `\n## Repository Instructions (per-repo)\n\n${raw.trim()}\n`;
   };
 
-  return template
-    .replace(/\{\{REPO_DIR\}\}/g, repoDir)
-    .replace(/\{\{REPO_NAME\}\}/g, repoName)
-    .replace(/\{\{DEV_SERVER_PORT\}\}/g, String(devServerPort))
-    .replace(/\{\{DEV_PORT_RANGE\}\}/g, PORT_RANGE_LABEL)
-    .replace(
-      /\{\{TAG_INSTRUCTIONS\}\}/g,
-      tagInstructions?.trim()
-        ? `\n## Tag Instructions (workspace-level)\n\n${tagInstructions.trim()}\n`
-        : '',
-    )
-    .replace(/\{\{REPOS_NAMES\}\}/g, reposNames ?? '')
-    .replace(
-      /\{\{REPOS_REQUIRE_DEV_SERVER\}\}/g,
-      reposRequireDevServer ?? '',
-    )
-    .replace(
-      /\{\{REPOS_INSTRUCTIONS\}\}/g,
-      buildReposInstructions(reposInstructions),
-    );
+  return renderPlaceholders(template, {
+    REPO_DIR: repoDir,
+    REPO_NAME: repoName,
+    DEV_SERVER_PORT: String(devServerPort),
+    DEV_PORT_RANGE: PORT_RANGE_LABEL,
+    TAG_INSTRUCTIONS: tagInstructions?.trim()
+      ? `\n## Tag Instructions (workspace-level)\n\n${tagInstructions.trim()}\n`
+      : '',
+    REPOS_NAMES: reposNames ?? '',
+    REPOS_REQUIRE_DEV_SERVER: reposRequireDevServer ?? '',
+    REPOS_INSTRUCTIONS: buildReposInstructions(reposInstructions),
+  });
 }
 
 export function loadDevOpsPrompt(
@@ -105,29 +100,23 @@ export function loadDevOpsPrompt(
   reposInstructions?: string | null,
 ): string {
   const template = readFileSync(promptPath, 'utf-8');
-  return renderDevOpsPrompt(
-    template,
-    repoDir,
-    repoName,
-    devServerPort,
-    tagInstructions,
-    reposNames,
-    reposRequireDevServer,
-    reposInstructions,
+  return withSharedFragments(
+    renderDevOpsPrompt(
+      template,
+      repoDir,
+      repoName,
+      devServerPort,
+      tagInstructions,
+      reposNames,
+      reposRequireDevServer,
+      reposInstructions,
+    ),
   );
 }
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 async function readRunInstructions(path: string): Promise<string | null> {
-  try {
-    const text = await readFile(path, 'utf8');
-    const trimmed = text.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  } catch {
-    return null;
-  }
+  return (await readTextFileOrNullAsync(path))?.trim() ?? null;
 }
 
 export class PiDevOpsAgent implements DevOpsAgent {
@@ -179,12 +168,12 @@ export class PiDevOpsAgent implements DevOpsAgent {
           stepRunId: this.options.stepRunId,
           registry: this.options.registry,
           excludeTools: soloRunExcludeTools(),
-          systemAppend: STEP_SYSTEM_APPEND,
+          systemAppend: DEVOPS_SYSTEM_APPEND,
           ...(this.options.issueId
             ? {
                 sessionDir: issueSessionDir(this.options.issueId),
                 sessionName: sessionDisplayName({
-                  step: 'devops',
+                  step: PipelineStep.devops,
                   issueId: this.options.issueId,
                 }),
               }
@@ -214,7 +203,7 @@ export class PiDevOpsAgent implements DevOpsAgent {
       return {
         success: false,
         instructions: null,
-        error: errorMessage(error),
+        error: messageOf(error),
       };
     }
   }

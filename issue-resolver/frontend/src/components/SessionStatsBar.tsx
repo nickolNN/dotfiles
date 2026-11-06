@@ -5,6 +5,9 @@ import type {
   SessionUsage,
 } from '@issue-resolver/shared';
 import type { SessionEvent } from '../api/session-events';
+import { formatAvgSpeed, formatInstantSpeed, formatTokens } from '../lib/format';
+import TokenDownIcon from './icons/TokenDownIcon';
+import TokenUpIcon from './icons/TokenUpIcon';
 
 interface LiveUsage {
   usage: SessionUsage;
@@ -26,40 +29,6 @@ interface SessionStatsBarProps {
   events: SessionEvent[];
   stats?: SessionStats | null;
   className?: string;
-}
-
-export function TokenUpIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-[1em] w-[1em] shrink-0"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      viewBox="0 0 24 24"
-    >
-      <path d="M12 19V5M5 12l7-7 7 7" />
-    </svg>
-  );
-}
-
-export function TokenDownIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-[1em] w-[1em] shrink-0"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2}
-      viewBox="0 0 24 24"
-    >
-      <path d="M12 5v14M5 12l7 7 7-7" />
-    </svg>
-  );
 }
 
 export default function SessionStatsBar({
@@ -186,30 +155,13 @@ export function resolveFooter(
   return null;
 }
 
-export function formatInstantSpeed(value: number): string {
-  return value.toFixed(1);
-}
-
-export function formatAvgSpeed(value: number): string {
-  return String(Math.round(value));
-}
-
 function finiteOrNull(value: number | undefined | null): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-export function formatCost(total: number): string {
-  if (!Number.isFinite(total) || total <= 0) return '$0';
-  return `$${total.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
-}
-
-export function formatTokens(total: number): string {
-  if (!Number.isFinite(total) || total <= 0) return '0';
-  if (total >= 1_000_000) return `${trimDecimal(total / 1_000_000)}M`;
-  if (total >= 1000) return `${trimDecimal(total / 1000)}k`;
-  return String(Math.round(total));
-}
-
-function trimDecimal(value: number): string {
-  return value.toFixed(1).replace(/\.0$/, '');
-}
+export {
+  formatAvgSpeed,
+  formatCost,
+  formatInstantSpeed,
+  formatTokens,
+} from '../lib/format';

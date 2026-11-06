@@ -7,7 +7,7 @@ import {
   type MockPiStep,
   type ScenarioBootstrapMode,
   type ScenarioPipelineStep,
-} from '../../e2e/scenarios';
+} from './scenarios';
 import { FakeGitService } from '../src/git/service';
 import type { PiRunCall, PiRunner, PiRunOptions } from '../src/pi/runner';
 import type { UiResponsePayload } from '../src/pi/session-registry';
@@ -29,6 +29,13 @@ function stepFromPrompt(prompt: string): ScenarioPipelineStep {
   const match = /^Pipeline step:\s*([a-z]+)/m.exec(prompt);
   const candidate = match?.[1] as ScenarioPipelineStep | undefined;
   return candidate && PIPELINE_STEPS.includes(candidate) ? candidate : 'resolve';
+}
+
+function answerTextOf(answer: UiResponsePayload): string {
+  if (answer.value !== undefined) return answer.value;
+  if (answer.confirmed === true) return 'Да';
+  if (answer.cancelled === true) return 'Отменено';
+  return 'ответ';
 }
 
 const cloneScenario = (scenario: MockPiScenario): MockPiScenario => ({
@@ -176,14 +183,7 @@ export class ScenarioPiRunner implements PiRunner {
     ]);
     this.pending.delete(cursorKey);
 
-    const answerText = answer
-      ? (answer.value ??
-        (answer.confirmed === true
-          ? 'Да'
-          : answer.cancelled
-            ? 'Отменено'
-            : 'ответ'))
-      : 'auto (timeout)';
+    const answerText = answer ? answerTextOf(answer) : 'auto (timeout)';
     opts.onEvent?.({
       type: 'question_answered',
       questionId: question.id,
@@ -315,11 +315,9 @@ export function registerScenarioRoutes(
     }
 
     const bootstrap: ScenarioBootstrapMode =
-      body.bootstrap === 'failure'
-        ? 'failure'
-        : body.bootstrap === 'success'
-          ? 'success'
-          : (scenario.bootstrap ?? 'success');
+      body.bootstrap === 'failure' || body.bootstrap === 'success'
+        ? body.bootstrap
+        : (scenario.bootstrap ?? 'success');
     const questionTimeoutMs =
       typeof body.questionTimeoutMs === 'number'
         ? body.questionTimeoutMs

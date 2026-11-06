@@ -116,9 +116,7 @@ follows it deterministically, so a wrong shape is a wrong run.
 
 ```json
 {
-  "mode": "single | room | stages",
-  "executors": 2,
-  "decomposition": ["brief for worker 1: what it owns, its finish line", "..."],
+  "mode": "single | stages",
   "stages": [
     { "index": 1, "name": "...", "task": "...", "executors": 2, "decomposition": ["...", "..."] }
   ],
@@ -127,32 +125,33 @@ follows it deterministically, so a wrong shape is a wrong run.
 ```
 
 - `single` — one agent holds the whole task; no decomposition.
-- `room` — one coordinator (lead) plus up to {{MAX_EXECUTORS}} workers in
-  parallel; never exceed {{MAX_EXECUTORS}}.
-  `decomposition` carries one brief per worker, naming the files or area it
-  owns so two workers never touch the same file.
-- `stages` — 2+ ordered stages, each with 1..{{MAX_EXECUTORS}} workers
-  (1-based `index`, one `decomposition` entry per worker); a final lead
-  integrates all stages. A stage with one executor is a normal stage: it is how
-  a big change is handed to a sequence of agents, each staying inside its own
-  working set.
+- `stages` — 1+ ordered stages; **the number of stages is not limited by
+  {{MAX_EXECUTORS}}**. Each stage has 1..{{MAX_EXECUTORS}} workers that run at the
+  same moment (1-based `index`, one `decomposition` entry per worker, naming the
+  files or area it owns so two workers never touch the same file); a final lead
+  integrates all stages. A single stage with 2+ workers is one parallel wave and
+  needs {{MAX_EXECUTORS}} >= 2. A stage with one executor is a normal stage: it
+  is how a big change is handed to a sequence of agents, each staying inside its
+  own working set.
 
 Pick by the shape of the work: independent parts that can be built at the same
-time → `room`; ordered parts where each needs the previous one's result, or a
-change too big for one working set → `stages`; one coherent change a single
-agent keeps in its head and within its working set → `single`.
+time → `stages` with ONE stage and one `decomposition` entry per part (one
+parallel wave, the final lead integrates the workers directly); ordered parts
+where each needs the previous one's result, or a change too big for one working
+set → `stages` with several stages; one coherent change a single agent keeps in
+its head and within its working set → `single`. A plan with one stage and one
+executor is `single` — the engine rejects it.
 
 Do NOT plan a trailing "integration" / "acceptance" / "lead" stage: the engine
 always adds its own final lead after the last stage, so such a stage is a second
 agent re-checking work that was just checked. Every stage you plan must change
 or verify something concrete of its own.
 
-The engine clamps `executors` to {{MAX_EXECUTORS}} and pads `decomposition` to
-match, so a wrong count costs nothing while a bad split costs a re-run. Split so
-that sub-tasks are file-disjoint (two agents in one file conflict) and each is
-verifiable on its own — the ownership map is the one place file paths belong. If
-the work needs more parallelism than {{MAX_EXECUTORS}} allows, use `stages` to
-serialize the excess into a later stage rather than oversubscribing one.
+Split so that sub-tasks are file-disjoint (two agents in one file conflict) and
+each is verifiable on its own — the ownership map is the one place file paths
+belong. One stage with several executors is a wave and cannot resume: if the
+resolve step runs again, every worker in that wave starts from scratch, so a
+wave is the right shape only when its parts are cheap to redo.
 
 Only the coordinator (lead) makes the final pass/fail decision for the execution
 step; workers report their own sub-task.
@@ -205,7 +204,7 @@ iteration.
 
 Plan entries state the behaviour change, the area that owns it, and how the
 executor confirms it — as observable behaviour, not as an edit. Order entries by
-dependency; with `room` or `stages`, each entry belongs to exactly one
+dependency; with several executors, each entry belongs to exactly one
 executor's sub-task, so a worker reads its own entry and knows its finish line.
 
 {{DOWNSTREAM_AWARENESS}}

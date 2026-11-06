@@ -1,11 +1,18 @@
-import { StepRunStatus } from '@issue-resolver/shared';
+import {
+  SSEStream,
+  SessionNoticeLevel,
+  StepRunStatus,
+  TaskStatus,
+} from '@issue-resolver/shared';
 import type { SSEEvent, SessionEvent, SessionStats } from '@issue-resolver/shared';
+import { nowIso } from '../db/rows';
 import { capSessionEvents } from './session-events-cap';
 import type { SseHub } from '../sse/hub';
 import type {
-  RoomAgentInfo,
+  StepAgentInfo,
   StepSessionRegistry,
 } from './session-registry';
+import type { QuestionStatus } from '../workflow/iteration/contracts';
 
 export interface AgentSessionDeps {
   sse: Pick<SseHub, 'publish'>;
@@ -17,7 +24,7 @@ export interface AgentSessionDeps {
       patch: { status?: StepRunStatus; feedback?: string | null },
     ): Promise<unknown>;
   };
-  onQuestionStatus?: (status: 'question' | 'running') => void;
+  onQuestionStatus?: (status: QuestionStatus) => void;
 }
 
 export interface AgentSessionInput {
@@ -38,17 +45,15 @@ export interface SessionSnapshot {
 
 export interface AgentSession {
   callbacks: {
-    onStdout: (chunk: string, agent?: RoomAgentInfo) => void;
-    onStderr: (chunk: string, agent?: RoomAgentInfo) => void;
-    onEvent: (event: SessionEvent, agent?: RoomAgentInfo) => void;
+    onStdout: (chunk: string, agent?: StepAgentInfo) => void;
+    onStderr: (chunk: string, agent?: StepAgentInfo) => void;
+    onEvent: (event: SessionEvent, agent?: StepAgentInfo) => void;
   };
   activity(): number;
   snapshot(): SessionSnapshot;
   setStats(stats: SessionStats | null): void;
   stop(): void;
 }
-
-const nowIso = () => new Date().toISOString();
 
 const STREAM_TAIL_CHARS = 512_000;
 
@@ -91,6 +96,11 @@ export function streamEvent(
     ts: nowIso(),
   };
 }
+
+export const noticeEvent = (
+  level: SessionNoticeLevel,
+  message: string,
+): SessionEvent => ({ type: 'notice', level, message });
 
 export function stepEvent(
   issueId: string,
@@ -153,14 +163,14 @@ export function startAgentSession(
         activity += 1;
         stdout = appendTail(stdout, chunk);
         deps.sse.publish(
-          streamEvent(issueId, iterationId, sessionId, 'stdout', chunk, agent?.id),
+          streamEvent(issueId, iterationId, sessionId, SSEStream.stdout, chunk, agent?.id),
         );
       },
       onStderr(chunk, agent) {
         activity += 1;
         stderr = appendTail(stderr, chunk);
         deps.sse.publish(
-          streamEvent(issueId, iterationId, sessionId, 'stderr', chunk, agent?.id),
+          streamEvent(issueId, iterationId, sessionId, SSEStream.stderr, chunk, agent?.id),
         );
       },
       onEvent(event, agent) {
@@ -194,10 +204,10 @@ export function startAgentSession(
           stepEvent(issueId, iterationId, sessionId, event, agent?.id),
         );
         if (event.type === 'question') {
-          deps.onQuestionStatus?.('question');
+          deps.onQuestionStatus?.(TaskStatus.question);
           append(event);
         } else if (event.type === 'question_answered') {
-          deps.onQuestionStatus?.('running');
+          deps.onQuestionStatus?.(TaskStatus.running);
           append(event);
         }
       },

@@ -1,7 +1,7 @@
 import type { NormalizedStage, PipelineStep } from '@issue-resolver/shared';
-import { DEFAULT_MAX_ROOM_EXECUTORS, MAX_PIPELINE_ATTEMPTS, REFINED_PLAN_CHAR_LIMIT } from '@issue-resolver/shared';
+import { DEFAULT_MAX_EXECUTORS, MAX_PIPELINE_ATTEMPTS, REFINED_PLAN_CHAR_LIMIT } from '@issue-resolver/shared';
 import { describe, expect, it } from 'vitest';
-import { STEP_SYSTEM_APPEND, buildRoomCoordinatorPrompt, buildRoomWorkerPrompt, buildStageCoordinatorPrompt, buildStageSoloPrompt, buildStageWorkerPrompt, buildStagedFinalCoordinatorPrompt, buildStepPrompt, type PrTarget, type RoomPromptInput } from '../src/workflow/prompts';
+import { STEP_SYSTEM_APPEND, buildStageCoordinatorPrompt, buildStageSoloPrompt, buildStageWorkerPrompt, buildStagedFinalCoordinatorPrompt, buildStepPrompt, previousAttemptFeedback, type PrTarget, type StagePromptInput } from '../src/workflow/prompts';
 
 const base = {
   issueTitle: 'Поправить вход в личный кабинет',
@@ -50,15 +50,18 @@ describe('buildStepPrompt', () => {
     );
   });
 
-  it('refine: потолок параллелизма = clamp движка, а не жёсткая единица', () => {
+  it('refine: потолок параллелизма = worker_count, а не константа движка', () => {
     expect(prompt('refine')).toContain(
-      `Parallel executors: at most ${DEFAULT_MAX_ROOM_EXECUTORS} at a time`,
+      `Parallel executors: at most ${DEFAULT_MAX_EXECUTORS} at the same moment`,
     );
     expect(prompt('refine', { workerCount: 3 })).toContain(
-      'Parallel executors: at most 3 at a time',
+      'Parallel executors: at most 3 at the same moment',
     );
     expect(prompt('refine', { workerCount: 9 })).toContain(
-      `at most ${DEFAULT_MAX_ROOM_EXECUTORS}`,
+      'Parallel executors: at most 9 at the same moment',
+    );
+    expect(prompt('refine', { workerCount: 0 })).toContain(
+      `Parallel executors: at most ${DEFAULT_MAX_EXECUTORS} at the same moment`,
     );
     expect(prompt('refine')).not.toContain('Maximum parallel agents');
   });
@@ -76,7 +79,7 @@ describe('buildStepPrompt', () => {
     const text = prompt('refine', { workerCount: 1 });
 
     expect(text).toContain('Parallel executors: 1');
-    expect(text).toContain('room` is out of reach');
+    expect(text).toContain('A single stage with one executor is `single`');
     expect(text).toContain('one executor per stage');
   });
 
@@ -325,8 +328,8 @@ describe('buildStepPrompt', () => {
 
     expect(text).toContain('independent code reviewer');
     expect(text).toContain('source code');
-    expect(text).toContain('READ-ONLY means the');
-    expect(text).toContain('you do not edit source');
+    expect(text).toContain('Read-only git only');
+    expect(text).toContain('You have no execution');
     expect(text).toContain('iterations/<n>/.review.md');
     expect(text).toContain('.issue-step-result.json');
     expect(text).not.toContain('You are allowed to run');
@@ -334,13 +337,42 @@ describe('buildStepPrompt', () => {
     expect(text).not.toContain('Verify the real behavior');
   });
 
+  it('review: severity решает возврат в разработку, придирка не поднимается до major', () => {
+    const text = prompt('review');
+
+    expect(text).toContain('Only `critical` and `major` send the change back');
+    expect(text).toContain('Do not grade a nit up to `major`');
+    expect(text).toContain('A defect in code this change did not touch is `minor`, never `major`');
+    expect(text).toContain('not another cycle');
+  });
+
+  it('review: только чтение — проверяемое лишь запуском уходит в test', () => {
+    const text = prompt('review');
+
+    expect(text).toContain('What reading can prove');
+    expect(text).toContain('You have no execution');
+    expect(text).toContain('is not yours to file');
+    expect(text).toContain('If the repository keeps tests');
+  });
+
+  it('review: повторный круг не открывает весь change set', () => {
+    const retry = prompt('review', { attempt: 3 });
+
+    expect(retry).toContain('re-verification round');
+    expect(retry).toContain('paths those findings name plus the code this round used');
+    expect(retry).toContain('rest of the change set was accepted in an earlier round');
+    expect(retry).toContain('Finding nothing is a');
+    expect(retry).toContain('does not belong in `findings`');
+    expect(retry).toContain('no `test` step');
+  });
+
   it('test: финальная проверка, не чинит код, при падении перезапускается разработка', () => {
     const text = prompt('test');
 
     expect(text).toContain('final verification only');
     expect(text).toContain('Playwright');
-    expect(text.toLowerCase()).toContain('do not fix');
-    expect(text.toLowerCase()).toContain('re-runs development');
+    expect(text.toLowerCase()).toContain('list of defects');
+    expect(text.toLowerCase()).toContain('sends the change back to');
     expect(text).toContain('fail/blocked');
     expect(text).toContain('.issue-step-result.json');
   });
@@ -373,6 +405,20 @@ describe('buildStepPrompt', () => {
 
       expect(text).toContain('Output contract');
       expect(text).toContain('.issue-step-result.json');
+    },
+  );
+
+  it.each(['refine', 'resolve', 'review', 'test', 'pr'] as PipelineStep[])(
+    '%s: граница шага подключена раньше возможностей и памяти',
+    (step) => {
+      const text = prompt(step);
+      const scope = text.indexOf('One step, one axis');
+      const capabilities = text.indexOf('## Tools you have');
+      const memory = text.indexOf('## Memory');
+
+      expect(scope).toBeGreaterThan(-1);
+      expect(scope).toBeLessThan(capabilities);
+      expect(scope).toBeLessThan(memory);
     },
   );
 
@@ -455,8 +501,8 @@ describe('buildStepPrompt', () => {
   });
 });
 
-describe('refine execution & room prompts', () => {
-  const roomInput: RoomPromptInput = {
+describe('refine execution & staged prompts', () => {
+  const stagedInput: StagePromptInput = {
     issueTitle: base.issueTitle,
     description: base.description,
     jiraText: base.jiraText,
@@ -469,12 +515,13 @@ describe('refine execution & room prompts', () => {
     attachmentPaths: [],
   };
 
-  it('refine: asks for an execution recommendation incl. room', () => {
+  it('refine: asks for an execution recommendation (single | stages, без wave)', () => {
     const text = prompt('refine');
 
     expect(text).toContain('execution');
-    expect(text).toContain('room');
+    expect(text).toContain('"mode": "single | stages"');
     expect(text).toContain('single');
+    expect(text).not.toContain('"room"');
   });
 
   it('resolve: refinedPlan renders the "Task brief" section', () => {
@@ -484,27 +531,14 @@ describe('refine execution & room prompts', () => {
     expect(text).toContain('План из refine');
   });
 
-  it('worker prompt: peer, not the lead, writes .issue-worker-result-1.json', () => {
-    const text = buildRoomWorkerPrompt(
-      roomInput,
-      { index: 0, task: 'frontend part' },
-      2,
-    );
-
-    expect(text).toContain('NOT the lead');
-    expect(text).toContain('.issue-worker-result-1.json');
-    expect(text).not.toContain('.issue-worker-result-0.json');
-    expect(text).toContain('frontend part');
-    expect(text).toContain('Sub-task 1 of 2');
-    expect(text).toContain('build/tests/typecheck');
-    expect(text).toContain('Commit/push are FORBIDDEN');
-  });
-
-  it('coordinator prompt: LEAD takes the FINAL decision + worker summaries', () => {
-    const text = buildRoomCoordinatorPrompt(roomInput, [
-      { index: 0, summary: 'frontend done' },
-      { index: 1, summary: 'backend done' },
-    ]);
+  it('волна: финальный lead принимает FINAL-решение по summary исполнителей', () => {
+    const text = buildStagedFinalCoordinatorPrompt(stagedInput, {
+      kind: 'wave',
+      workers: [
+        { index: 1, summary: 'frontend done' },
+        { index: 2, summary: 'backend done' },
+      ],
+    });
 
     expect(text).toContain('LEAD');
     expect(text).toContain('FINAL');
@@ -513,10 +547,10 @@ describe('refine execution & room prompts', () => {
     expect(text).toContain('.issue-step-result.json');
   });
 
-  it('coordinator: знает даунстрим-гейты, когда они включены', () => {
-    const text = buildRoomCoordinatorPrompt(
-      { ...roomInput, pipelineSteps: ['refine','resolve','review','test','pr'] },
-      [{ index: 0, summary: 'frontend done' }],
+  it('волна: даунстрим-гейты видны финальному лиду', () => {
+    const text = buildStagedFinalCoordinatorPrompt(
+      { ...stagedInput, pipelineSteps: ['refine','resolve','review','test','pr'] },
+      { kind: 'wave', workers: [{ index: 1, summary: 'frontend done' }] },
     );
 
     expect(text).toContain('Downstream verification steps run AFTER you');
@@ -532,7 +566,7 @@ describe('staged prompts', () => {
     decomposition: ['frontend', 'backend'],
   };
 
-  const roomInput: RoomPromptInput = {
+  const stagedInput: StagePromptInput = {
     issueTitle: base.issueTitle,
     description: base.description,
     jiraText: base.jiraText,
@@ -555,7 +589,7 @@ describe('staged prompts', () => {
 
   it('stage worker: stage name, peer-not-lead, own stage-worker file', () => {
     const text = buildStageWorkerPrompt(
-      roomInput,
+      stagedInput,
       stage,
       { index: 1, task: 'backend' },
       2,
@@ -568,10 +602,27 @@ describe('staged prompts', () => {
     expect(text).not.toContain('.issue-step-result.json');
     expect(text).toContain('build/tests/typecheck');
     expect(text).toContain('Commit/push are FORBIDDEN');
+    expect(text).toContain('stage coordinator');
+    expect(text).toContain('read their outcome files');
+  });
+
+  it('волна: исполнитель знает, что координатора этапа нет и интегрирует финальный lead', () => {
+    const text = buildStageWorkerPrompt(
+      stagedInput,
+      stage,
+      { index: 1, task: 'backend' },
+      2,
+      true,
+    );
+
+    expect(text).toContain('NOT the lead');
+    expect(text).toContain('no stage coordinator');
+    expect(text).toContain('final lead');
+    expect(text).not.toContain('read their outcome files');
   });
 
   it('stage coordinator: integrates workers, stage file, shared memory read/write', () => {
-    const text = buildStageCoordinatorPrompt(roomInput, stage, [
+    const text = buildStageCoordinatorPrompt(stagedInput, stage, [
       { index: 0, summary: 'frontend done' },
       { index: 1, summary: 'backend done' },
     ]);
@@ -588,7 +639,7 @@ describe('staged prompts', () => {
   });
 
   it('stage solo (executors=1): роль единственного исполнителя, файл этапа, память; без интеграции исполнителей', () => {
-    const text = buildStageSoloPrompt(roomInput, stage);
+    const text = buildStageSoloPrompt(stagedInput, stage);
 
     expect(text).toContain('the only worker of stage 1');
     expect(text).toContain('there are no other workers and no stage coordinator');
@@ -605,13 +656,16 @@ describe('staged prompts', () => {
   });
 
   it('final lead: integrates all stage outcomes + final report + memory, без HTML-deliverable', () => {
-    const text = buildStagedFinalCoordinatorPrompt(roomInput, [
-      { stage, outcome: 'stage 1 done' },
-      {
-        stage: { ...stage, index: 2, name: 'Починка', executors: 1 },
-        outcome: 'stage 2 done',
-      },
-    ]);
+    const text = buildStagedFinalCoordinatorPrompt(stagedInput, {
+      kind: 'stages',
+      outcomes: [
+        { stage, outcome: 'stage 1 done' },
+        {
+          stage: { ...stage, index: 2, name: 'Починка', executors: 1 },
+          outcome: 'stage 2 done',
+        },
+      ],
+    });
 
     expect(text).toContain('LEAD');
     expect(text).toContain('FINAL');
@@ -636,7 +690,7 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     executors: 2,
     decomposition: ['frontend', 'backend'],
   };
-  const full: RoomPromptInput = {
+  const full: StagePromptInput = {
     issueTitle: 'Поправить вход',
     description: 'Описание',
     jiraText: 'Jira',
@@ -658,17 +712,18 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     pipelineSteps: steps,
     devServerPort: 4321,
   };
-  const roomTexts = (): string[] => [
-    buildRoomWorkerPrompt(full, { index: 0, task: 'frontend' }, 2),
-    buildRoomCoordinatorPrompt(full, [{ index: 1, summary: 'frontend done' }]),
+  const stagedTexts = (): string[] => [
     buildStageWorkerPrompt(full, stage, { index: 0, task: 'frontend' }, 2),
     buildStageCoordinatorPrompt(full, stage, [{ index: 1, summary: 'frontend done' }]),
     buildStageSoloPrompt(full, stage),
-    buildStagedFinalCoordinatorPrompt(full, [{ stage, outcome: 'stage done' }]),
+    buildStagedFinalCoordinatorPrompt(full, {
+      kind: 'stages',
+      outcomes: [{ stage, outcome: 'stage done' }],
+    }),
   ];
 
-  it('каждая роль комнаты видит рабочее состояние', () => {
-    for (const text of roomTexts()) {
+  it('каждая роль видит рабочее состояние', () => {
+    for (const text of stagedTexts()) {
       expect(text).toContain('Working copy right now');
     }
   });
@@ -676,7 +731,7 @@ describe('prompt hygiene — роль видит всё, что нужно им�
   it('общие фрагменты доезжают до каждой роли ровно один раз', () => {
     const texts = [
       ...steps.map((step) => prompt(step, { pipelineSteps: steps })),
-      ...roomTexts(),
+      ...stagedTexts(),
     ];
 
     for (const text of texts) {
@@ -698,24 +753,23 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     expect(text).toContain('- /workspaces/issue-1/app');
   });
 
-  it('room/staged: разметка create MR доходит до каждой роли', () => {
-    const withTargets: RoomPromptInput = {
+  it('staged: разметка create MR доходит до каждой роли', () => {
+    const withTargets: StagePromptInput = {
       ...full,
       prTargets: [
         { path: '/workspaces/issue-1/app', baseBranch: 'dev', createMr: true },
       ],
     };
     const texts = [
-      buildRoomWorkerPrompt(withTargets, { index: 0, task: 'frontend' }, 2),
-      buildRoomCoordinatorPrompt(withTargets, [{ index: 1, summary: 'done' }]),
       buildStageWorkerPrompt(withTargets, stage, { index: 0, task: 'frontend' }, 2),
       buildStageCoordinatorPrompt(withTargets, stage, [
         { index: 1, summary: 'done' },
       ]),
       buildStageSoloPrompt(withTargets, stage),
-      buildStagedFinalCoordinatorPrompt(withTargets, [
-        { stage, outcome: 'done' },
-      ]),
+      buildStagedFinalCoordinatorPrompt(withTargets, {
+        kind: 'stages',
+        outcomes: [{ stage, outcome: 'done' }],
+      }),
     ];
 
     for (const text of texts) {
@@ -723,8 +777,8 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     }
   });
 
-  it('room/staged: без целей публикации разметки MR нет (обратная совместимость)', () => {
-    for (const text of roomTexts()) {
+  it('staged: без целей публикации разметки MR нет (обратная совместимость)', () => {
+    for (const text of stagedTexts()) {
       expect(text).not.toContain('— create MR:');
     }
   });
@@ -745,7 +799,7 @@ describe('prompt hygiene — роль видит всё, что нужно им�
           ],
         }),
       ),
-      ...roomTexts(),
+      ...stagedTexts(),
     ];
 
     for (const text of texts) {
@@ -753,8 +807,8 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     }
   });
 
-  it('room/staged: задача, вложения и итог прошлой итерации доходят до каждой роли', () => {
-    for (const text of roomTexts()) {
+  it('staged: задача, вложения и итог прошлой итерации доходят до каждой роли', () => {
+    for (const text of stagedTexts()) {
       expect(text).toContain('Task: Поправить вход');
       expect(text).toContain('Uploaded files (already in the working folder):');
       expect(text).toContain('- attachments/spec.pdf');
@@ -764,21 +818,24 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     }
   });
 
-  it('room/staged: исполнителю и лиду видно, какие гейты идут после них', () => {
-    for (const text of roomTexts()) {
+  it('staged: исполнителю и лиду видно, какие гейты идут после них', () => {
+    for (const text of stagedTexts()) {
       expect(text).toContain('Downstream verification steps run AFTER');
       expect(text).toContain('Playwright');
     }
   });
 
-  it('lead комнаты: карта файлов исполнителей + output contract', () => {
-    const text = buildRoomCoordinatorPrompt(full, [
-      { index: 1, summary: 'frontend done' },
-      { index: 2, summary: 'backend done' },
-    ]);
+  it('финальный lead волны: карта файлов исполнителей + output contract', () => {
+    const text = buildStagedFinalCoordinatorPrompt(full, {
+      kind: 'wave',
+      workers: [
+        { index: 1, summary: 'frontend done' },
+        { index: 2, summary: 'backend done' },
+      ],
+    });
 
-    expect(text).toContain('`.issue-worker-result-1.json`: frontend done');
-    expect(text).toContain('`.issue-worker-result-2.json`: backend done');
+    expect(text).toContain('`.issue-stage-1-worker-1.json`: frontend done');
+    expect(text).toContain('`.issue-stage-1-worker-2.json`: backend done');
     expect(text).toContain('Output contract');
   });
 
@@ -820,7 +877,7 @@ describe('prompt hygiene — роль видит всё, что нужно им�
     for (const step of ['test', 'review'] as const) {
       const text = prompt(step);
 
-      expect(text).toContain('COMPLETE list of what is wrong');
+      expect(text).toContain('COMPLETE list');
       expect(text).toContain('not its first');
     }
   });
@@ -872,8 +929,8 @@ describe('prompt hygiene — роль видит всё, что нужно им�
   it('refine: число параллельных исполнителей из shared, без противоречивых «prefer»', () => {
     const text = prompt('refine');
 
-    expect(text).toContain(`at most ${DEFAULT_MAX_ROOM_EXECUTORS} at a time`);
-    expect(text).toContain(`1..${DEFAULT_MAX_ROOM_EXECUTORS} workers`);
+    expect(text).toContain(`at most ${DEFAULT_MAX_EXECUTORS} at the same moment`);
+    expect(text).toContain(`1..${DEFAULT_MAX_EXECUTORS} workers`);
     expect(text).not.toContain('MAX 3 AGENTS PARALLEL');
     expect(text).not.toContain('Prefer `single`');
     expect(text).not.toContain('Prefer room or stages');
@@ -1049,5 +1106,53 @@ describe('правила памяти в промптах шагов', () => {
   it('system-append фиксирует файл как единственный deliverable', () => {
     expect(STEP_SYSTEM_APPEND).toContain('.issue-step-result.json');
     expect(STEP_SYSTEM_APPEND).toContain('not a deliverable');
+  });
+});
+
+describe('previousAttemptFeedback — blockers never get cut', () => {
+  const finding = (
+    severity: 'minor' | 'major' | 'critical',
+    title: string,
+  ) => ({ severity, title });
+
+  const report = (findings: ReturnType<typeof finding>[]) => ({
+    status: 'fail' as const,
+    summary: 'defects',
+    findings,
+  });
+
+  it('puts a late major first, ahead of the non-blocking tail', () => {
+    const findings = [
+      ...Array.from({ length: 25 }, (_, i) => finding('minor', `nit ${i + 1}`)),
+      finding('major', 'late blocker'),
+    ];
+
+    const text = previousAttemptFeedback('review', report(findings)) ?? '';
+    const lines = text.split('\n');
+
+    expect(lines[4]).toContain('[major] late blocker');
+    expect(text).toContain('6 more non-blocking findings');
+    expect(text).not.toContain('[minor] nit 26');
+  });
+
+  it('keeps every blocker even when they alone exceed the cap', () => {
+    const findings = Array.from({ length: 25 }, (_, i) =>
+      finding('critical', `blocker ${i + 1}`),
+    );
+
+    const text = previousAttemptFeedback('test', report(findings)) ?? '';
+
+    expect(text).toContain('[critical] blocker 25');
+    expect(text).not.toContain('non-blocking findings');
+  });
+
+  it('reports how many non-blocking findings were left out', () => {
+    const findings = Array.from({ length: 23 }, (_, i) =>
+      finding('minor', `nit ${i + 1}`),
+    );
+
+    const text = previousAttemptFeedback('review', report(findings)) ?? '';
+
+    expect(text).toContain('3 more non-blocking findings');
   });
 });

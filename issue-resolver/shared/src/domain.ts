@@ -1,6 +1,5 @@
 import { TaskStatus } from './status';
-import type { Iteration } from './types';
-
+import type { Iteration } from './types/iteration';
 
 export function extractIssueKeyFromUrl(url: string): string | null {
   const trimmed = url.trim();
@@ -167,11 +166,11 @@ export function statusOfIssue(
 }
 
 export function isIterationActive(status: TaskStatus): boolean {
-  return status === TaskStatus.running || status === TaskStatus.pending || status === TaskStatus.preparing;
-}
-
-export function canStartDraft(status: TaskStatus, iterationsCount: number): boolean {
-  return status === TaskStatus.draft && iterationsCount === 0;
+  return (
+    status === TaskStatus.running ||
+    status === TaskStatus.pending ||
+    status === TaskStatus.preparing
+  );
 }
 
 export function canStartIteration(iterations: Iteration[]): boolean {

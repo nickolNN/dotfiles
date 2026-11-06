@@ -1,3 +1,4 @@
+import { ThinkingLevel } from '@issue-resolver/shared';
 
 export interface BuiltinSlashCommand {
   name: string;
@@ -58,15 +59,9 @@ const BUILTIN_NAMES: ReadonlySet<string> = new Set(
   BUILTIN_SLASH_COMMANDS.map((command) => command.name),
 );
 
-const THINKING_LEVELS: ReadonlySet<string> = new Set([
-  'off',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-]);
+const THINKING_LEVELS: ReadonlySet<string> = new Set(
+  Object.values(ThinkingLevel),
+);
 
 export function parseSlash(
   text: string,
@@ -78,10 +73,17 @@ export function parseSlash(
   return { name: match[1], args: match[2].trim() };
 }
 
+export const SlashOutcomeKind = Object.freeze({
+  notBuiltin: 'not-builtin',
+  handled: 'handled',
+} as const);
+export type SlashOutcomeKind =
+  (typeof SlashOutcomeKind)[keyof typeof SlashOutcomeKind];
+
 export type SlashOutcome =
-  | { kind: 'not-builtin' }
+  | { kind: typeof SlashOutcomeKind.notBuiltin }
   | {
-      kind: 'handled';
+      kind: typeof SlashOutcomeKind.handled;
       ok: boolean;
       command: Record<string, unknown> | null;
       error?: string;
@@ -98,12 +100,12 @@ export async function handleBuiltinSlash(
   args: string,
   deps: SlashDeps,
 ): Promise<SlashOutcome> {
-  if (!BUILTIN_NAMES.has(name)) return { kind: 'not-builtin' };
+  if (!BUILTIN_NAMES.has(name)) return { kind: SlashOutcomeKind.notBuiltin };
 
   switch (name) {
     case 'compact':
       return {
-        kind: 'handled',
+        kind: SlashOutcomeKind.handled,
         ok: true,
         command: {
           type: 'compact',
@@ -114,18 +116,18 @@ export async function handleBuiltinSlash(
     case 'thinking': {
       const level = args.trim().toLowerCase();
       if (level.length === 0) {
-        return { kind: 'handled', ok: true, command: { type: 'cycle_thinking_level' } };
+        return { kind: SlashOutcomeKind.handled, ok: true, command: { type: 'cycle_thinking_level' } };
       }
       if (!THINKING_LEVELS.has(level)) {
         return {
-          kind: 'handled',
+          kind: SlashOutcomeKind.handled,
           ok: false,
           command: null,
           error: `Неизвестный уровень размышления: ${args.trim()}. Доступно: off, minimal, low, medium, high, xhigh, max.`,
         };
       }
       return {
-        kind: 'handled',
+        kind: SlashOutcomeKind.handled,
         ok: true,
         command: { type: 'set_thinking_level', level },
       };
@@ -134,14 +136,14 @@ export async function handleBuiltinSlash(
     case 'name':
       if (args.trim().length === 0) {
         return {
-          kind: 'handled',
+          kind: SlashOutcomeKind.handled,
           ok: false,
           command: null,
           error: 'Укажите имя сессии: /name <имя>',
         };
       }
       return {
-        kind: 'handled',
+        kind: SlashOutcomeKind.handled,
         ok: true,
         command: { type: 'set_session_name', name: args.trim() },
       };
@@ -149,7 +151,7 @@ export async function handleBuiltinSlash(
     case 'model': {
       const query = args.trim();
       if (query.length === 0) {
-        return { kind: 'handled', ok: true, command: { type: 'cycle_model' } };
+        return { kind: SlashOutcomeKind.handled, ok: true, command: { type: 'cycle_model' } };
       }
       const slash = query.indexOf('/');
       if (slash > 0 && slash < query.length - 1) {
@@ -157,7 +159,7 @@ export async function handleBuiltinSlash(
         const modelId = query.slice(slash + 1).trim();
         if (provider.length > 0 && modelId.length > 0) {
           return {
-            kind: 'handled',
+            kind: SlashOutcomeKind.handled,
             ok: true,
             command: { type: 'set_model', provider, modelId },
           };
@@ -166,14 +168,14 @@ export async function handleBuiltinSlash(
       const resolved = await deps.resolveModel(query);
       if (!resolved) {
         return {
-          kind: 'handled',
+          kind: SlashOutcomeKind.handled,
           ok: false,
           command: null,
           error: `Модель не найдена: ${query}. Уточните provider/id или подстроку.`,
         };
       }
       return {
-        kind: 'handled',
+        kind: SlashOutcomeKind.handled,
         ok: true,
         command: {
           type: 'set_model',
@@ -185,7 +187,7 @@ export async function handleBuiltinSlash(
 
     case 'new':
       return {
-        kind: 'handled',
+        kind: SlashOutcomeKind.handled,
         ok: true,
         command: { type: 'new_session' },
       };
@@ -195,9 +197,9 @@ export async function handleBuiltinSlash(
     case 'reload':
     case 'help':
     case 'copy':
-      return { kind: 'handled', ok: true, command: null };
+      return { kind: SlashOutcomeKind.handled, ok: true, command: null };
 
     default:
-      return { kind: 'not-builtin' };
+      return { kind: SlashOutcomeKind.notBuiltin };
   }
 }

@@ -7,7 +7,7 @@ import type {
 import ModelThinkingSelect from './ModelThinkingSelect';
 import { inputClass } from './formStyles';
 
-export interface StepRowProps {
+interface StepRowProps {
   step: { value: PipelineStep; label: string };
   checked: boolean;
   disabled?: boolean;

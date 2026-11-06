@@ -21,7 +21,7 @@ import {
   resolveAgentTimeoutMs,
   resolveDevOpsTimeoutMs,
 } from '../src/workflow/timeout';
-import { TaskStatus, StepReportStatus, StepRunStatus } from '@issue-resolver/shared';
+import { ExecutionMode, TaskStatus, StepReportStatus, StepRunStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-01-01T00:00:00.000Z';
 
@@ -184,14 +184,15 @@ const passResolve = (summary: string): StepExecutionResult => ({
 
 const hang = (): Promise<StepExecutionResult> => new Promise(() => {});
 
-const roomPlan: ExecutionPlan = {
-  mode: 'room',
-  executors: 2,
-  decomposition: ['a', 'b'],
+const wavePlan: ExecutionPlan = {
+  mode: ExecutionMode.stages,
+  stages: [
+    { index: 1, name: 'Волна', task: 'весь объём', executors: 2, decomposition: ['a', 'b'] },
+  ],
 };
 
 const stagesPlan: ExecutionPlan = {
-  mode: 'stages',
+  mode: ExecutionMode.stages,
   stages: [
     { index: 1, name: 'Дизайн', task: 't1', executors: 1 },
     { index: 2, name: 'Реализация', task: 't2', executors: 1 },
@@ -300,10 +301,10 @@ describe('runIteration — падение/зависание pi-агента з�
     expect(pi.calls[0].options?.timeoutMs).toBe(25);
   });
 
-  it('room: reject pi.run у исполнителя → 4 resolve попытки, все failed, координатор не решает', async () => {
+  it('волна: reject pi.run у исполнителя → 4 resolve попытки, все failed, координатор не решает', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
-      () => Promise.resolve(refineResolve(roomPlan)),
+      () => Promise.resolve(refineResolve(wavePlan)),
       () => Promise.reject(new Error('spawn pi ENOENT')),
       () => Promise.resolve(passResolve('worker1')),
     ]);
@@ -329,10 +330,10 @@ describe('runIteration — падение/зависание pi-агента з�
     expect(pi.calls.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('room: reject pi.run у координатора → 4 resolve попытки, все failed', async () => {
+  it('волна: reject pi.run у координатора → 4 resolve попытки, все failed', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
-      () => Promise.resolve(refineResolve(roomPlan)),
+      () => Promise.resolve(refineResolve(wavePlan)),
       () => Promise.resolve(passResolve('worker0')),
       () => Promise.resolve(passResolve('worker1')),
       () => Promise.reject(new Error('child error')),
@@ -352,10 +353,10 @@ describe('runIteration — падение/зависание pi-агента з�
     expect(resolveOutput(store).stderr).toMatch(/child error|unexpected pi call/);
   });
 
-  it('room: зависание исполнителей катится до таймаута → 4 resolve попытки', async () => {
+  it('волна: зависание исполнителей катится до таймаута → 4 resolve попытки', async () => {
     const { deps, store } = makeDeps();
     const pi = new ScriptedPiRunner([
-      () => Promise.resolve(refineResolve(roomPlan)),
+      () => Promise.resolve(refineResolve(wavePlan)),
       hang,
       hang,
     ]);

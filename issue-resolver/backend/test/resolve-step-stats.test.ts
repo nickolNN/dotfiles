@@ -2,17 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { ExecutionPlan, PipelineStep, SessionStats, StepExecutionResult } from '@issue-resolver/shared';
 import { FakePiRunner } from '../src/pi/runner';
 import {
-  runRoomResolve,
   runStagedResolve,
-  type RoomResolveInput,
-  type RoomResolveOptions,
-} from '../src/workflow/room';
-import { COMPLEX_STAGES_PLAN, ROOM_PLAN } from './execution-plans.example';
+  type StagedResolveInput,
+  type StagedResolveOptions,
+} from '../src/workflow/staged-resolve';
+import { COMPLEX_STAGES_PLAN, WAVE_PLAN } from './execution-plans.example';
 import { StepReportStatus } from '@issue-resolver/shared';
 
 const STEP: PipelineStep = 'resolve';
 
-const input = (execution: ExecutionPlan): RoomResolveInput => ({
+const input = (execution: ExecutionPlan): StagedResolveInput => ({
   containerName: 'issue-resolver-issue-1',
   execution,
   issueTitle: 'Fix bug',
@@ -27,7 +26,7 @@ const input = (execution: ExecutionPlan): RoomResolveInput => ({
   attachmentPaths: [],
 });
 
-const options = (): RoomResolveOptions => ({
+const options = (): StagedResolveOptions => ({
   stepRunId: 'run-1',
   iterationId: 'iter-1',
   issueId: 'issue-1',
@@ -83,25 +82,25 @@ const sumOf = (count: number): SessionStats => {
   return acc;
 };
 
-describe('runRoomResolve — stats шага = сумма всех агентов', () => {
-  it('room: 3 исполнителя + координатор, cost и токены суммируются', async () => {
+describe('runStagedResolve — stats волны = сумма всех агентов', () => {
+  it('волна: 3 исполнителя + финальный lead, cost и токены суммируются', async () => {
     const pi = new FakePiRunner();
     for (let n = 1; n <= 4; n += 1) {
       pi.enqueue(pass(`agent-${n}`, statsWith(n)));
     }
 
-    const result = await runRoomResolve(pi, input(ROOM_PLAN), options());
+    const result = await runStagedResolve(pi, input(WAVE_PLAN), options());
 
     expect(result.report?.summary).toBe('agent-4');
     expect(result.stats).toEqual(sumOf(4));
     expect(result.stats?.tokens.input).not.toBe(400);
   });
 
-  it('room: все агенты без stats → result.stats null', async () => {
+  it('волна: все агенты без stats → result.stats null', async () => {
     const pi = new FakePiRunner();
     for (let n = 1; n <= 4; n += 1) pi.enqueue(pass(`agent-${n}`, null));
 
-    const result = await runRoomResolve(pi, input(ROOM_PLAN), options());
+    const result = await runStagedResolve(pi, input(WAVE_PLAN), options());
 
     expect(result.stats).toBeNull();
   });

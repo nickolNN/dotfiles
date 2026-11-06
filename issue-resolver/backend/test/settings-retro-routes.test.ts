@@ -290,7 +290,6 @@ describe('POST /settings/retro/:id/abort', () => {
   });
 });
 
-/** Registers itself in the session registry and waits until aborted. */
 function hangingRunner(): PiRunner {
   return {
     async run(_containerName, _prompt, options = {}) {

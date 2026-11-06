@@ -21,9 +21,8 @@ const STEP_STATUSES: StepRunStatus[] = [
   StepRunStatus.failed,
   StepRunStatus.needs_input,
   StepRunStatus.skipped,
+  StepRunStatus.aborted,
 ];
-
-const STEP_STATUS_KEYS = [...STEP_STATUSES, 'aborted'];
 
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -54,13 +53,11 @@ describe('theme tokens', () => {
     expect(statusColor.question).toBe('#FFB000');
   });
 
-  it('maps every StepRunStatus (plus aborted) to a valid hex color', () => {
-    expect(Object.keys(stepStatusColor).sort()).toEqual(
-      [...STEP_STATUS_KEYS].sort(),
-    );
+  it('maps every StepRunStatus to a valid hex color', () => {
+    expect(Object.keys(stepStatusColor).sort()).toEqual([...STEP_STATUSES].sort());
 
-    for (const status of STEP_STATUS_KEYS) {
-      expect(stepStatusColor[status as StepRunStatus], status).toMatch(HEX);
+    for (const status of STEP_STATUSES) {
+      expect(stepStatusColor[status], status).toMatch(HEX);
     }
   });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { StepRunStatus } from '@issue-resolver/shared';
 import type { SSEEvent, SessionEvent } from '@issue-resolver/shared';
-import { parseAgentEventPayload, parseIssueDeletedPayload, parseIssueDeletingPayload, parseStepEventPayload, parseWorkspaceProgressPayload } from './sse';
+import { parseAgentEventPayload, parseIssueDeletedPayload, parseIssueDeletingPayload, parseStepEventPayload, parseStepStatusPayload, parseWorkspaceProgressPayload } from './sse';
 
 function envelope(event: unknown): string {
   return JSON.stringify({ stepRunId: 'run-1', event });
@@ -71,6 +72,24 @@ describe('parseStepEventPayload — распознавание SessionEvent', ()
   it('отбрасывает неизвестный тип события', () => {
     expect(
       parseStepEventPayload(JSON.stringify({ event: { type: 'nope' } })),
+    ).toBeNull();
+  });
+
+  it('отбрасывает известный тип события без обязательных полей', () => {
+    expect(
+      parseStepEventPayload(JSON.stringify({ event: { type: 'text' } })),
+    ).toBeNull();
+    expect(
+      parseStepEventPayload(
+        JSON.stringify({ event: { type: 'stats', stats: { model: 'x' } } }),
+      ),
+    ).toBeNull();
+    expect(
+      parseStepEventPayload(
+        JSON.stringify({
+          event: { type: 'notice', level: 'loud', message: 'ок' },
+        }),
+      ),
     ).toBeNull();
   });
 
@@ -259,5 +278,21 @@ describe('parseIssueDeletingPayload / parseIssueDeletedPayload — фоново�
         }),
       ),
     ).toEqual({ issueId: 'issue-1', ts: '2026-10-13T00:00:00.000Z' });
+  });
+});
+
+describe('parseStepStatusPayload — status из SSE step_status', () => {
+  it.each([StepRunStatus.success, StepRunStatus.failed])(
+    'достаёт доменный статус %s',
+    (status) => {
+      expect(parseStepStatusPayload(JSON.stringify({ status }))).toBe(status);
+    },
+  );
+
+  it('отбрасывает битый JSON, не-объект и значение вне домена', () => {
+    expect(parseStepStatusPayload('не json')).toBeNull();
+    expect(parseStepStatusPayload(JSON.stringify('success'))).toBeNull();
+    expect(parseStepStatusPayload(JSON.stringify({ status: 'done' }))).toBeNull();
+    expect(parseStepStatusPayload(JSON.stringify({}))).toBeNull();
   });
 });

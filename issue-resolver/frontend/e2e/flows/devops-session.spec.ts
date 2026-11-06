@@ -13,7 +13,7 @@ test.describe('devops session', () => {
     const title = uniqueTitle('e2e-devops-session');
 
     await mockStreamBatches(page, '**/issues/*/stream', (call, issueId) => {
-      const run = `${issueId}/devops`;
+      const run = `issue.${issueId}.devops`;
       if (call === 1) {
         return [
           workspaceProgress('creating_dirs', 'running'),
@@ -30,9 +30,15 @@ test.describe('devops session', () => {
       return [];
     });
 
+    await page.route('**/issues/*/devops/status', (route) =>
+      route.fulfill({
+        json: { status: 'running', startedAt: new Date().toISOString() },
+      }),
+    );
+
     await createIssueViaUI(page, { title, bootstrapEnabled: true });
 
-    const session = page.getByTestId('devops-session');
+    const session = page.getByTestId('devops-live');
     await expect(session).toBeVisible();
     await expect(session).toContainText('Analyzing repository layout...');
     await expect(session).toContainText('No package manifests found', {

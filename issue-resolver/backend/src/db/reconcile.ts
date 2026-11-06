@@ -3,6 +3,7 @@ import { StepRunStatus, TaskStatus } from '@issue-resolver/shared';
 import { and, eq, inArray, or } from 'drizzle-orm';
 import type { Db } from './client';
 import { issues, iterations, stepRuns } from './schema';
+import { nowIso } from './rows';
 
 const INTERRUPTED_STEP_STATUSES: StepRunStatus[] = [
   StepRunStatus.pending,
@@ -11,7 +12,7 @@ const INTERRUPTED_STEP_STATUSES: StepRunStatus[] = [
 ];
 
 export function reconcileInterruptedRuns(db: Db): void {
-  const now = new Date().toISOString();
+  const now = nowIso();
 
   const interrupted = db
     .select({ id: stepRuns.id })

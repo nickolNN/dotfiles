@@ -634,8 +634,10 @@ describe('findOpenMr', () => {
             {
               id: 99,
               fromRef: { id: 'refs/heads/feature/fix-bug-abc123' },
+              toRef: { id: 'refs/heads/main' },
             },
           ],
+          isLastPage: true,
         }),
       });
       vi.stubGlobal('fetch', fetchMock);
@@ -651,8 +653,8 @@ describe('findOpenMr', () => {
         );
 
         const [url] = fetchMock.mock.calls[0] as [string];
-        expect(url).toContain('direction=OUTGOING');
-        expect(url).toContain('at=refs/heads/main');
+        expect(url).not.toContain('at=refs/heads');
+        expect(url).not.toContain('direction=OUTGOING');
         expect(url).toContain('state=OPEN');
         expect(result).toEqual({
           mrUrl: 'https://b.yadro.com/projects/kos/repos/some-repo/pull-requests/99',
@@ -671,8 +673,10 @@ describe('findOpenMr', () => {
             {
               id: 99,
               fromRef: { id: 'refs/heads/feature/other-branch' },
+              toRef: { id: 'refs/heads/main' },
             },
           ],
+          isLastPage: true,
         }),
       });
       vi.stubGlobal('fetch', fetchMock);
@@ -811,6 +815,100 @@ describe('HttpMrClient.fetchComments — bitbucket', () => {
     try {
       const comments = await fetchComments(canonicalUrl);
       expect(comments[0]).toMatchObject({ file: 'a.ts', line: 7 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('реальная форма Server 8 (`action: COMMENTED`, `commentAnchor`, ответы) разбирается', async () => {
+    singlePageFetch({
+      values: [
+        {
+          id: 18492115,
+          createdDate: 1793874338226,
+          user: { name: 'a.kotov', displayName: 'Artem Kotov' },
+          action: 'COMMENTED',
+          commentAction: 'ADDED',
+          commentAnchor: {
+            fromHash: 'b60775ef',
+            toHash: 'fe4cabe9',
+            line: 14,
+            lineType: 'ADDED',
+            fileType: 'TO',
+            path: 'package.json',
+            diffType: 'EFFECTIVE',
+            orphaned: false,
+          },
+          comment: {
+            id: 2762567,
+            text: 'Почему не 2.0?',
+            author: { name: 'a.kotov', displayName: 'Artem Kotov' },
+            createdDate: 1793874338224,
+            comments: [
+              {
+                id: 2762568,
+                text: 'Потому что peer dep',
+                author: { name: 'n.lobanov', displayName: 'Nickol Lobanov' },
+                createdDate: 1793874340000,
+              },
+            ],
+          },
+        },
+        {
+          id: 18492116,
+          createdDate: 1793874338227,
+          user: { name: 'a.kotov' },
+          action: 'COMMENTED',
+          commentAction: 'ADDED',
+          commentAnchor: {
+            fromHash: 'b60775ef',
+            toHash: 'fe4cabe9',
+            path: 'src/base.css',
+            diffType: 'EFFECTIVE',
+            orphaned: false,
+          },
+          comment: {
+            text: 'Нужны классы базовых компонентов',
+            author: { name: 'a.kotov', displayName: 'Artem Kotov' },
+            createdDate: 1793874338228,
+          },
+        },
+        { id: 1, action: 'OPENED', createdDate: 1793874000000 },
+        { id: 2, action: 'RESCOPED', createdDate: 1793874000001 },
+        {
+          id: 3,
+          action: 'COMMENTED',
+          commentAction: 'DELETED',
+          comment: { text: 'удалённый', author: { name: 'x' } },
+        },
+      ],
+      isLastPage: true,
+    });
+    try {
+      const comments = await fetchComments(canonicalUrl);
+      expect(comments).toEqual([
+        {
+          file: 'package.json',
+          line: 14,
+          body: 'Почему не 2.0?',
+          author: 'Artem Kotov',
+          created_at: new Date(1793874338224).toISOString(),
+        },
+        {
+          file: 'package.json',
+          line: 14,
+          body: 'Потому что peer dep',
+          author: 'Nickol Lobanov',
+          created_at: new Date(1793874340000).toISOString(),
+        },
+        {
+          file: 'src/base.css',
+          line: null,
+          body: 'Нужны классы базовых компонентов',
+          author: 'Artem Kotov',
+          created_at: new Date(1793874338228).toISOString(),
+        },
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1024,10 +1122,12 @@ describe('HttpMrClient — web-URL созданного/дубликата PR', 
             {
               id: 220,
               fromRef: { id: 'refs/heads/someone-elses-branch' },
+              toRef: { id: 'refs/heads/dev' },
             },
             {
               id: 218,
               fromRef: { id: 'refs/heads/feature/changes-182dd3' },
+              toRef: { id: 'refs/heads/dev' },
               links: {
                 self: [
                   {
@@ -1037,6 +1137,7 @@ describe('HttpMrClient — web-URL созданного/дубликата PR', 
               },
             },
           ],
+          isLastPage: true,
         }),
       });
     vi.stubGlobal('fetch', fetchMock);
@@ -1047,7 +1148,7 @@ describe('HttpMrClient — web-URL созданного/дубликата PR', 
         id: '218',
       });
       expect((fetchMock.mock.calls[1] as [string])[0]).toContain(
-        'pull-requests?direction=OUTGOING&at=refs/heads/dev',
+        'pull-requests?state=OPEN&limit=100',
       );
     } finally {
       vi.unstubAllGlobals();
@@ -1065,7 +1166,7 @@ describe('HttpMrClient — web-URL созданного/дубликата PR', 
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
-        json: async () => ({ values: [] }),
+        json: async () => ({ values: [], isLastPage: true }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -1089,6 +1190,37 @@ describe('HttpMrClient — web-URL созданного/дубликата PR', 
       );
       expect((fetchMock.mock.calls[2] as [string])[0]).toBe(
         'https://b.yadro.com/rest/api/1.0/projects/kos/repos/kc_docs_editor_front/pull-requests/218',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('409 с чужим id в теле (id проекта KOS = 2859) → не публикует выдуманный PR', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        text: async () =>
+          '{"errors":[{"context":{"projectId":2859,"pullRequestId":2859},"message":"A pull request from this branch already exists"}]}',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ values: [], isLastPage: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({
+          errors: [{ message: 'Pull request 2859 does not exist' }],
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(new HttpMrClient().createMr(createInput())).rejects.toThrow(
+        'bitbucket pr failed: 409',
       );
     } finally {
       vi.unstubAllGlobals();
@@ -1299,7 +1431,7 @@ describe('HttpMrClient — bitbucket Cloud (api.bitbucket.org/2.0)', () => {
   });
 
   it('createMr: 400 «already exists» → найденный открытый PR, а не ошибка', async () => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) =>
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
       (init?.method ?? 'GET') === 'POST'
         ? {
             ok: false,

@@ -1,13 +1,29 @@
+export const SteeringMode = Object.freeze({
+  all: 'all',
+  'one-at-a-time': 'one-at-a-time',
+} as const);
+export type SteeringMode = (typeof SteeringMode)[keyof typeof SteeringMode];
 
-export type SteeringMode = 'all' | 'one-at-a-time';
+export const PromptMode = Object.freeze({
+  steer: 'steer',
+  followUp: 'followUp',
+} as const);
+export type PromptMode = (typeof PromptMode)[keyof typeof PromptMode];
 
-export type PromptMode = 'steer' | 'followUp';
+export const SessionCommandSource = Object.freeze({
+  builtin: 'builtin',
+  extension: 'extension',
+  prompt: 'prompt',
+  skill: 'skill',
+} as const);
+export type SessionCommandSource =
+  (typeof SessionCommandSource)[keyof typeof SessionCommandSource];
 
 export interface SessionCommandInfo {
   name: string;
   description?: string;
   argumentHint?: string;
-  source: 'builtin' | 'extension' | 'prompt' | 'skill';
+  source: SessionCommandSource;
 }
 
 export interface SessionModelInfo {
@@ -57,8 +73,28 @@ export interface ControlResult {
   error?: string;
 }
 
+export const PromptDisposition = Object.freeze({
+  started: 'started',
+  queued: 'queued',
+  handled: 'handled',
+} as const);
+export type PromptDisposition =
+  (typeof PromptDisposition)[keyof typeof PromptDisposition];
+
+const PROMPT_DISPOSITIONS: ReadonlySet<string> = new Set(
+  Object.values(PromptDisposition),
+);
+
+/** Unknown protocol values fall back to `started`: a prompt that reached pi is
+ * assumed to be running rather than silently reported as queued. */
+export function promptDisposition(value: unknown): PromptDisposition {
+  return typeof value === 'string' && PROMPT_DISPOSITIONS.has(value)
+    ? (value as PromptDisposition)
+    : PromptDisposition.started;
+}
+
 export interface PromptResult {
   ok: boolean;
-  disposition: 'started' | 'queued' | 'handled';
+  disposition: PromptDisposition;
   error?: string;
 }

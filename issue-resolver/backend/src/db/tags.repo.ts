@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { RunInstructionsStatus } from '@issue-resolver/shared';
 import type { CreateTagRequest, Tag, TagRepository, TagRepositoryWithRepo, UpdateTagRequest } from '@issue-resolver/shared';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { toSavedRepo } from './repositories.repo';
 import { repositories, tagRepositories, tags } from './schema';
+import { nowIso } from './rows';
 
 type TagRow = typeof tags.$inferSelect;
 type TagRepositoryRow = typeof tagRepositories.$inferSelect;
@@ -53,7 +54,7 @@ function repositoriesByTag(
     .from(tagRepositories)
     .innerJoin(repositories, eq(tagRepositories.repository_id, repositories.id))
     .where(inArray(tagRepositories.tag_id, tagIds))
-    .orderBy(asc(tagRepositories.created_at), asc(tagRepositories.id))
+    .orderBy(asc(tagRepositories.created_at), asc(sql`tag_repositories.rowid`))
     .all();
   for (const { link, repo } of rows) {
     const list = grouped.get(link.tag_id) ?? [];
@@ -67,7 +68,7 @@ export function listTags(db: Db): Tag[] {
   const rows = db
     .select()
     .from(tags)
-    .orderBy(asc(tags.created_at), asc(tags.id))
+    .orderBy(asc(tags.created_at), asc(sql`rowid`))
     .all();
   const grouped = repositoriesByTag(
     db,
@@ -86,7 +87,7 @@ export function getTag(db: Db, id: string): Tag | undefined {
 
 export function insertTag(db: Db, input: CreateTagRequest): Tag {
   const id = randomUUID();
-  const now = new Date().toISOString();
+  const now = nowIso();
 
   db.transaction((tx) => {
     tx.insert(tags)
@@ -95,7 +96,9 @@ export function insertTag(db: Db, input: CreateTagRequest): Tag {
         name: input.name,
         description: input.description ?? null,
         run_instructions: input.run_instructions ?? null,
-        run_instructions_status: input.run_instructions ? 'generated' : 'unknown',
+        run_instructions_status: input.run_instructions
+          ? RunInstructionsStatus.generated
+          : RunInstructionsStatus.unknown,
         created_at: now,
         updated_at: now,
       })
@@ -132,7 +135,7 @@ export function updateTag(
   if (!existing) {
     return undefined;
   }
-  const now = new Date().toISOString();
+  const now = nowIso();
   const patch: { name?: string; description?: string | null; run_instructions?: string | null; run_instructions_status?: import('@issue-resolver/shared').RunInstructionsStatus; updated_at: string } =
     { updated_at: now };
   if (input.name !== undefined) {
@@ -143,7 +146,9 @@ export function updateTag(
   }
   if (input.run_instructions !== undefined) {
     patch.run_instructions = input.run_instructions;
-    patch.run_instructions_status = input.run_instructions ? RunInstructionsStatus.generated : RunInstructionsStatus.unknown;
+    patch.run_instructions_status = input.run_instructions
+      ? RunInstructionsStatus.generated
+      : RunInstructionsStatus.unknown;
   }
   const nextRepositories = input.repositories;
   const instructionsChanged =
@@ -183,7 +188,7 @@ export function updateTag(
         tx.update(repositories)
           .set({
             run_instructions: null,
-            run_instructions_status: 'unknown',
+            run_instructions_status: RunInstructionsStatus.unknown,
             updated_at: now,
           })
           .where(inArray(repositories.id, repoIds))
@@ -209,7 +214,7 @@ export function updateTagRunInstructions(
     .set({
       run_instructions: patch.instructions,
       run_instructions_status: patch.status,
-      updated_at: new Date().toISOString(),
+      updated_at: nowIso(),
     })
     .where(eq(tags.id, id))
     .run();

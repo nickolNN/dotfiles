@@ -8,6 +8,7 @@ import { isSameRepository, type RepoConnectionStatus, type RepoPlatform, RunInst
 import { asc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { repositories } from './schema';
+import { nowIso } from './rows';
 
 export interface RepositoryWrite {
   url: string;
@@ -79,14 +80,14 @@ export function getRepository(db: Db, id: string): SavedRepo | undefined {
 }
 
 export function insertRepository(db: Db, write: RepositoryWrite): SavedRepo {
-  const now = new Date().toISOString();
+  const now = nowIso();
   const id = randomUUID();
   db.insert(repositories)
     .values({
       id,
       ...toColumns(write),
       run_instructions: null,
-      run_instructions_status: 'unknown',
+      run_instructions_status: RunInstructionsStatus.unknown,
       created_at: now,
       updated_at: now,
     })
@@ -106,7 +107,7 @@ export function updateRepository(
   id: string,
   write: RepositoryWrite,
 ): SavedRepo | undefined {
-  const now = new Date().toISOString();
+  const now = nowIso();
   const result = db
     .update(repositories)
     .set({ ...toColumns(write), updated_at: now })
@@ -159,7 +160,7 @@ export function updateRepositoryRunInstructions(
     .set({
       run_instructions: patch.instructions,
       run_instructions_status: patch.status,
-      updated_at: new Date().toISOString(),
+      updated_at: nowIso(),
     })
     .where(inArray(repositories.id, ids))
     .run();

@@ -124,6 +124,24 @@ describe('StepReportView — структурированный отчёт', () 
     expect(descriptions[1]).toHaveTextContent('утечка');
   });
 
+  it('мусорные findings и scenarios не роняют рендер', () => {
+    render(
+      <StepReportView
+        raw={JSON.stringify({
+          status: 'fail',
+          summary: 's',
+          findings: [null, { title: 'без severity' }, { severity: 'minor', description: 'ok' }],
+          scenarios: [null, { name: 'ok', status: 'pass' }],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('step-report-status')).toHaveTextContent('FAIL');
+    // A finding without a severity is kept as a blocking `critical` one, not dropped.
+    expect(screen.getAllByTestId('step-report-finding')).toHaveLength(2);
+    expect(screen.getAllByTestId('step-report-scenario')).toHaveLength(1);
+  });
+
   it('finding: severity info c title+detail рендерит title и body=detail', () => {
     render(
       <StepReportView
@@ -189,42 +207,6 @@ describe('StepReportView — структурированный отчёт', () 
     );
   });
 
-  it('execution: mode, executors, decomposition, rationale', () => {
-    render(
-      <StepReportView
-        raw={JSON.stringify({
-          status: 'pass',
-          summary: 's',
-          execution: {
-            mode: 'room',
-            executors: 3,
-            decomposition: ['бэк', 'фронт', 'тесты'],
-            rationale: 'много контекста',
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByTestId('step-report-execution')).toBeInTheDocument();
-    expect(screen.getByTestId('step-report-execution-mode')).toHaveTextContent(
-      'room',
-    );
-    expect(
-      screen.getByTestId('step-report-execution-executors'),
-    ).toHaveTextContent('3');
-
-    const decomposition = screen.getByTestId(
-      'step-report-execution-decomposition',
-    );
-    expect(decomposition.querySelectorAll('li')).toHaveLength(3);
-    expect(decomposition).toHaveTextContent('бэк');
-    expect(decomposition).toHaveTextContent('тесты');
-
-    expect(
-      screen.getByTestId('step-report-execution-rationale'),
-    ).toHaveTextContent('много контекста');
-  });
-
   it('execution stages: рендерит нумерованный список этапов', () => {
     render(
       <StepReportView
@@ -233,6 +215,9 @@ describe('StepReportView — структурированный отчёт', () 
           summary: 's',
           execution: {
             mode: 'stages',
+            executors: 3,
+            decomposition: ['бэк', 'фронт'],
+            rationale: 'много контекста',
             stages: [
               {
                 index: 1,
@@ -255,6 +240,77 @@ describe('StepReportView — структурированный отчёт', () 
     expect(items[0]).toHaveTextContent('собрать');
     expect(items[1]).toHaveTextContent('Этап 2');
     expect(items[1]).toHaveTextContent('починить');
+    expect(
+      screen.queryByTestId('step-report-execution-executors'),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId('step-report-execution-decomposition'),
+    ).toBeNull();
+    expect(
+      screen.getByTestId('step-report-execution-rationale'),
+    ).toHaveTextContent('много контекста');
+  });
+
+  it('execution stages: негодный executors не печатается как NaN', () => {
+    render(
+      <StepReportView
+        raw={JSON.stringify({
+          status: 'pass',
+          summary: 's',
+          execution: {
+            mode: 'stages',
+            stages: [
+              { index: 1, name: 'Сбор', executors: '3', task: 'собрать' },
+            ],
+          },
+        })}
+      />,
+    );
+
+    const items = screen
+      .getByTestId('step-report-execution-stages')
+      .querySelectorAll('li');
+    expect(items[0]).toHaveTextContent('Сбор');
+    expect(items[0]).not.toHaveTextContent('NaN');
+    expect(items[0]).not.toHaveTextContent('исп.');
+  });
+
+  it('execution single: негодный executors не печатает NaN', () => {
+    render(
+      <StepReportView
+        raw={JSON.stringify({
+          status: 'pass',
+          summary: 's',
+          execution: { mode: 'single', executors: '9' },
+        })}
+      />,
+    );
+
+    expect(
+      screen.queryByTestId('step-report-execution-executors'),
+    ).toBeNull();
+    expect(
+      screen.getByTestId('step-report-execution'),
+    ).not.toHaveTextContent('NaN');
+  });
+
+  it('execution single: показывает исполнителей из плана', () => {
+    render(
+      <StepReportView
+        raw={JSON.stringify({
+          status: 'pass',
+          summary: 's',
+          execution: { mode: 'single', executors: 1, decomposition: ['всё'] },
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('step-report-execution-executors')).toHaveTextContent(
+      '1',
+    );
+    expect(
+      screen.getByTestId('step-report-execution-decomposition'),
+    ).toHaveTextContent('всё');
   });
 
   it('execution single без опциональных полей рендерит только mode', () => {
@@ -280,6 +336,42 @@ describe('StepReportView — структурированный отчёт', () 
     expect(
       screen.queryByTestId('step-report-execution-rationale'),
     ).toBeNull();
+  });
+
+  it('execution unreadable: маркер вместо молчания, блок исполнителей не рисуется', () => {
+    render(
+      <StepReportView
+        raw={JSON.stringify({
+          status: 'pass',
+          summary: 's',
+          execution: { mode: 'room', executors: 2, decomposition: ['a', 'b'] },
+        })}
+      />,
+    );
+
+    const banner = screen.getByTestId('step-report-execution-unreadable');
+    expect(banner).toHaveTextContent('План нечитаем');
+    expect(banner).toHaveTextContent('single или stages');
+    expect(screen.queryByTestId('step-report-execution')).toBeNull();
+    expect(
+      screen.queryByTestId('step-report-execution-executors'),
+    ).toBeNull();
+  });
+
+  it('execution unreadable: явный null и отсутствие ключа баннера не дают', () => {
+    for (const execution of [null, undefined]) {
+      cleanup();
+      render(
+        <StepReportView
+          raw={JSON.stringify({ status: 'pass', summary: 's', execution })}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId('step-report-execution-unreadable'),
+      ).toBeNull();
+      expect(screen.queryByTestId('step-report-execution')).toBeNull();
+    }
   });
 
   it('не-JSON raw → <pre> фолбек с текстом как есть', () => {

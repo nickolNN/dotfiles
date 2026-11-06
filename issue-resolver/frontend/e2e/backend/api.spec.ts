@@ -397,7 +397,7 @@ test.describe('backend API', () => {
         acc.some(
           (event) =>
             event.type === 'log' &&
-            event.stepRunId === `${issue.id}/devops`,
+            event.stepRunId === `issue.${issue.id}.devops`,
         ) &&
         hasType(acc, 'iteration_status'),
     );
@@ -407,7 +407,7 @@ test.describe('backend API', () => {
 
     const logs = events.filter(
       (event) =>
-        event.type === 'log' && event.stepRunId === `${issue.id}/devops`,
+        event.type === 'log' && event.stepRunId === `issue.${issue.id}.devops`,
     );
     expect(logs.length).toBeGreaterThan(0);
     expect(logs.some((event) => event.stream === 'stdout')).toBe(true);

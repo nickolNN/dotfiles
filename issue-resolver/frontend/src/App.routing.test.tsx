@@ -13,8 +13,8 @@ const issue = {
   updated_at: '2026-10-09T00:00:00.000Z',
 };
 
-function setHash(hash: string) {
-  window.history.replaceState(null, '', hash || '/');
+function setPath(path: string) {
+  window.history.replaceState(null, '', path || '/');
 }
 
 function stubFetch(issues = [issue]) {
@@ -39,22 +39,22 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  setHash('');
+  setPath('');
 });
 
 describe('App routing', () => {
-  it('renders the tasks list for #/tasks', async () => {
+  it('renders the tasks list for /tasks', async () => {
     stubFetch();
-    setHash('#/tasks');
+    setPath('/tasks');
     render(<App />);
 
     expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
     expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument();
   });
 
-  it('renders TaskDetail for #/tasks/:issueId', async () => {
+  it('renders TaskDetail for /tasks/:issueId', async () => {
     const fetchMock = stubFetch();
-    setHash('#/tasks/abc');
+    setPath('/tasks/abc');
     render(<App />);
 
     expect(await screen.findByText('Итераций пока нет.')).toBeInTheDocument();
@@ -63,9 +63,9 @@ describe('App routing', () => {
     );
   });
 
-  it('renders TaskDetail for #/tasks/:issueId/result', async () => {
+  it('renders TaskDetail for /tasks/:issueId/result', async () => {
     const fetchMock = stubFetch();
-    setHash('#/tasks/abc/result');
+    setPath('/tasks/abc/result');
     render(<App />);
 
     expect(await screen.findByText('Итераций пока нет.')).toBeInTheDocument();
@@ -74,27 +74,27 @@ describe('App routing', () => {
     );
   });
 
-  it('falls back to the tasks list for an empty hash', async () => {
+  it('falls back to the tasks list for an empty path', async () => {
     stubFetch();
-    setHash('');
+    setPath('');
     render(<App />);
 
     expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
     expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument();
   });
 
-  it('falls back to the tasks list for an unknown hash', async () => {
+  it('falls back to the tasks list for an unknown path', async () => {
     stubFetch();
-    setHash('#/nope');
+    setPath('/nope');
     render(<App />);
 
     expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
     expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument();
   });
 
-  it('navigates to #/tasks from the top nav item', async () => {
+  it('navigates to /tasks from the top nav item', async () => {
     stubFetch();
-    setHash('#/repositories');
+    setPath('/repositories');
     render(<App />);
 
     fireEvent.click(
@@ -103,30 +103,30 @@ describe('App routing', () => {
       }),
     );
 
-    expect(window.location.hash).toBe('#/tasks');
+    expect(window.location.pathname).toBe('/tasks');
     expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
   });
 
-  it('pushes #/tasks/:issueId when a task is opened', async () => {
+  it('pushes /tasks/:issueId when a task is opened', async () => {
     stubFetch();
-    setHash('#/tasks');
+    setPath('/tasks');
     render(<App />);
 
     fireEvent.click(await screen.findByText('Fix login bug'));
 
-    expect(window.location.hash).toBe('#/tasks/issue-1');
+    expect(window.location.pathname).toBe('/tasks/issue-1');
     expect(await screen.findByText('Итераций пока нет.')).toBeInTheDocument();
   });
 
-  it('updates the view when the hash changes', async () => {
+  it('updates the view when the path changes', async () => {
     stubFetch();
-    setHash('#/new');
+    setPath('/new');
     render(<App />);
 
     expect(screen.getByLabelText('Заголовок')).toBeInTheDocument();
 
-    window.history.replaceState(null, '', '#/tasks');
-    window.dispatchEvent(new Event('hashchange'));
+    window.history.replaceState(null, '', '/tasks');
+    window.dispatchEvent(new PopStateEvent('popstate'));
 
     expect(await screen.findByText('Fix login bug')).toBeInTheDocument();
     expect(screen.queryByLabelText('Заголовок')).not.toBeInTheDocument();

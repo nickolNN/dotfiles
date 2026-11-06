@@ -69,11 +69,10 @@ export async function createIssueViaUI(
     ? { id: options.repoId, url: TEST_REPO_URL, defaultBranch: 'master' }
     : await ensureSavedRepo(page.request);
 
-  await page.goto('/#/tasks');
-  await expect(
-    page.getByRole('heading', { name: 'Мои задачи' }),
-  ).toBeVisible();
-  await page.getByRole('button', { name: 'Создать задачу' }).click();
+  await page.goto('/tasks');
+  const createTask = page.getByRole('button', { name: 'Создать задачу' });
+  await expect(createTask).toBeVisible();
+  await createTask.click();
   await expect(
     page.getByRole('heading', { name: 'Создание задачи' }),
   ).toBeVisible();
@@ -94,7 +93,7 @@ export async function createIssueViaUI(
   await expect(page.getByTestId('repository-branch-0')).not.toHaveValue('');
 
   if (options.bootstrapEnabled === false) {
-    await page.getByRole('switch', { name: /Запустить/ }).click();
+    await page.getByRole('switch', { name: /Dev сервер/ }).click();
   }
 
   await page
@@ -103,7 +102,7 @@ export async function createIssueViaUI(
 
   await expect(page.getByRole('heading', { name: options.title })).toBeVisible();
 
-  const match = /#\/tasks\/([^/?#]+)/.exec(page.url());
+  const match = /\/tasks\/([^/?#]+)/.exec(page.url());
   if (!match) {
     throw new Error(`не удалось определить issueId из URL: ${page.url()}`);
   }
@@ -229,12 +228,12 @@ export async function mockStreamBatches(
     onCall?.(call);
     const issueId =
       /issues\/([^/?#]+)\/stream/.exec(route.request().url())?.[1] ?? 'e2e';
-    const batch =
-      typeof batches === 'function'
-        ? batches(call, issueId)
-        : call <= batches.length
-          ? batches[call - 1]
-          : [];
+    let batch: SseEvent[] = [];
+    if (typeof batches === 'function') {
+      batch = batches(call, issueId);
+    } else if (call <= batches.length) {
+      batch = batches[call - 1];
+    }
     return route.fulfill({
       status: 200,
       contentType: 'text/event-stream',
