@@ -1,4 +1,5 @@
 import {
+  PipelineStep,
   StepRunStatus,
   parseStepReport,
   type StepRunWithLog,
@@ -41,7 +42,7 @@ export default function StepRunLog({
   const stepLive = status === StepRunStatus.running;
   const duration = formatStepDuration(stepDurationMs(run, stepLive, now));
   const changedFiles = stepChangedFiles(events);
-  const isAgentResolve = agentsIteration && run.step === "resolve";
+  const isAgentResolve = agentsIteration && run.step === PipelineStep.resolve;
   const footer = resolveFooter(isAgentResolve ? [] : events, run.stats ?? null);
 
   return (

@@ -438,7 +438,69 @@ looks like it is missing from the DDL too, but it is created from
 - The origin allow-list is one source of truth for CORS reads and mutating
   routes: wildcard is never propagated (a local API must not be opened by an
   accidental `*`), and the env is re-read on every call so tests and runtime see
-  changes.
+  changes. A mutating request whose `Origin` matches the `Host` header is
+  accepted as same-origin: the browser sends `Origin` on its own POSTs, so
+  without that rule the UI is usable only on `localhost`, and opening it on a LAN
+  address or a forwarded port turns every action into `403 origin not allowed`
+  while reads keep working. The frontend dev-server proxy therefore sets
+  `changeOrigin: false` — rewriting `Host` to the proxy target breaks exactly
+  that comparison.
+- Run instructions are a cache with three consumers: the later steps read
+  `RUN_INSTRUCTIONS.md` in the clone, the human edits that text by hand, and the
+  DevOps agent reuses it as its own starting point for the next task on the same
+  repository. So the cache never skips the step: `prepare-workspace/instructions.ts`
+  always runs the agent and passes the stored text as `{{CACHED_INSTRUCTIONS}}`,
+  and the agent verifies and updates its own notes instead of re-deriving the
+  setup. The start script `DEV_SERVER.sh` is deliberately *not* part of the cache
+  — every run produces it, because it lives on the disk of one clone:
+  `startRepoDevServer` answers `null` without the file and the allocated port
+  stays unbound, which is how a cached repo used to arrive at the `test` step
+  with no server at all. When that still happens the devops step keeps
+  `success` but its summary and `feedback` name the missing script; the earlier
+  canned «DevOps completed during workspace preparation» made a skipped step
+  look like finished work.
+- The test account is a per-repository, human-owned value
+  (`repositories.test_credentials`, written through
+  `PUT /repositories/:id/credentials`). Agents only read it: it reaches the
+  `devops` and `test` prompts as `{{CREDENTIALS}}` so the tester logs into the
+  real stand instead of inventing a mock backend, and both prompts forbid copying
+  the password or token into the step result, the narrative, a screenshot, the
+  report or `RUN_INSTRUCTIONS.md`/`WORKSPACE_INSTRUCTIONS.md`. An empty value is
+  not "try harder": with an account the tester must log in and verify against
+  the real stand, and a mock is then not an option; without one a mock or stub
+  server is allowed but has to be declared in `summary`, its dependent scenarios
+  named, and findings that only the mock could produce stay at `low`/`info`.
+  When nothing else can judge the change, the verdict is `blocked`. Empty string
+  clears the field to `NULL`, so removing an account never leaves a stale secret
+  behind.
+- The `test` step drives the browser through `agent-browser`, not a harness the
+  agent writes for itself: the CLI ships in the image and carries its own guide
+  (`agent-browser skills get core`), while a hand-rolled Puppeteer/Playwright
+  script pays a browser cold start on every attempt. That, plus the old 25 s
+  default action timeout, is what turned a test round into 30 minutes: 65 tool
+  calls, 48 of them `bash`, median 21.7 s. The prompt now pins
+  `AGENT_BROWSER_DEFAULT_TIMEOUT=10000` and treats a missing element as a finding
+  after two attempts instead of a retry loop. Batching matters as much as the
+  driver: with the CLI in place the tool time fell from 18.4 min to 3.1 min, but
+  the step still ran 25 minutes because 148 tool calls each cost a model turn
+  (~8.5 s) — so the prompt now requires one `agent-browser batch` invocation per
+  scenario (JSON array of commands on stdin) instead of one command per turn. Prompts are read through an
+  mtime-keyed cache (`prompts/loader.ts`), so a prompt edit lands on the next
+  step without a backend restart.
+- `codemode` is offered to every step through the shared `capabilities.md`
+  fragment (`withSharedFragments`), together with the rule to prefer it over a pile
+  of single calls. Observed reason: across nine sessions of one issue the step
+  agents made ~800 tool calls and used `codemode` zero times — a test round spent
+  148 turns on one `bash` command each, and it is the turn count, not the command
+  time, that costs the half hour. The fragment also names the limits: no timers, no
+  network of its own, and a plain tool stays right for a single call. Placement
+  matters and is deliberate: the shared fragments are appended *after* the step
+  body, so in a `test` prompt the mechanics sit at 80% of 14.3k characters with the
+  memory rules behind them. The decision itself therefore also rides in
+  `STEP_SYSTEM_APPEND`/`DEVOPS_SYSTEM_APPEND` (`--append-system-prompt`), where it is
+  read before the task and cannot be buried by a long step body. Two sentences with
+  different jobs — directive at the top, mechanics at the end — not the same text
+  pasted twice.
 - Jira uses API v2: v3 breaks on Server with 404.
 - Bitbucket auth: Bearer for a PAT, Basic for an app password.
 - Bitbucket Server (8.x) PR review comments are read from

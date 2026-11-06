@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { RepoConnectionStatus, type SavedRepo } from '@issue-resolver/shared';
 
-import { validateRepository } from '../api/client';
+import { saveRepositoryCredentials, validateRepository } from '../api/client';
 import {
   useCreateRepository,
   useDeleteRepository,
@@ -106,6 +106,23 @@ function RepositoriesView({ createSignal }: RepositoriesProps) {
     }
   }
 
+  async function handleSaveCredentials(repo: SavedRepo, value: string) {
+    setBusyId(repo.id);
+    setNotice(null);
+    try {
+      const trimmed = value.trim();
+      const saved = await saveRepositoryCredentials(
+        repo.id,
+        trimmed === '' ? null : value,
+      );
+      writeRepositoryToCache(queryClient, saved);
+    } catch (err) {
+      setNotice(messageOf(err));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   function handleDelete(repo: SavedRepo) {
     requestDelete(repo.id, `Удалить репозиторий ${repo.url}?`);
   }
@@ -137,6 +154,9 @@ function RepositoriesView({ createSignal }: RepositoriesProps) {
                 onValidate={() => void handleValidate(repo)}
                 onEdit={() => openEdit(repo)}
                 onDelete={() => void handleDelete(repo)}
+                onSaveCredentials={(value) =>
+                  void handleSaveCredentials(repo, value)
+                }
               />
             ))}
           </ul>

@@ -51,6 +51,7 @@ export interface SavedRepo {
   writeAccess: boolean;
   runInstructions: string | null;
   runInstructionsStatus: RunInstructionsStatus;
+  testCredentials: string | null;
   createdAt: string;
   updatedAt: string;
 }

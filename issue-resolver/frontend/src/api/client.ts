@@ -12,7 +12,7 @@ export { getModels } from './endpoints/models';
 export { fetchReviewComments } from './endpoints/pr';
 export { getReportRun, getReportStatus, reembedReport, runReportAgent } from './endpoints/report';
 export type { ReportStatus } from './endpoints/report';
-export { createRepository, deleteRepository, getRepositories, getRepositoryBranches, updateRepository, validateRepos, validateRepository } from './endpoints/repos';
+export { createRepository, deleteRepository, getRepositories, getRepositoryBranches, saveRepositoryCredentials, updateRepository, validateRepos, validateRepository } from './endpoints/repos';
 export { abortRetroRun, getRetroRun, getRetroRuns, startRetroRun } from './endpoints/retro';
 export { getIterationControl, getQuestionAnswers, getStepAgents, promptIteration, sendIterationCommand, sendIterationMessage, sendUiResponse } from './endpoints/sessions';
 export { getHostname, setHostname } from './endpoints/settings';

@@ -18,3 +18,12 @@ export function isAllowedOrigin(
   if (process.env.ISSUE_RESOLVER_LOCAL === '1') return true;
   return LOCAL_ORIGIN.test(origin) || extra.includes(origin);
 }
+
+export function isSameOrigin(origin: string, host?: string): boolean {
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host.toLowerCase() === host.trim().toLowerCase();
+  } catch {
+    return false;
+  }
+}

@@ -165,6 +165,7 @@ export async function runDevopsAgent(
         stepRunId: sessionId,
         registry: deps.control,
         tagInstructions: context.tagInstructions,
+        cachedInstructions: runStore.getInstructions(repo.repository_url),
         reposNames: context.reposNames,
         reposRequireDevServer: context.reposRequireDevServer,
         reposInstructions: context.reposInstructions,

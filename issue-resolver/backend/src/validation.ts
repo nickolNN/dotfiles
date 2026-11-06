@@ -117,6 +117,10 @@ export const createRepoRequestSchema = z.object({
   url: z.string().trim().url('url должен быть валидным URL'),
 });
 
+export const repoCredentialsSchema = z.object({
+  testCredentials: z.string().nullable(),
+});
+
 export const createTagRequestSchema = z.object({
   name: z.string().min(1, 'name обязателен'),
   description: z.string().optional(),

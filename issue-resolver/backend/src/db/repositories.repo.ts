@@ -56,6 +56,7 @@ export function toSavedRepo(row: typeof repositories.$inferSelect): SavedRepo {
     writeAccess: row.write_access,
     runInstructions: row.run_instructions,
     runInstructionsStatus: row.run_instructions_status,
+    testCredentials: row.test_credentials,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -97,6 +98,7 @@ export function insertRepository(db: Db, write: RepositoryWrite): SavedRepo {
     ...write,
     runInstructions: null,
     runInstructionsStatus: RunInstructionsStatus.unknown,
+    testCredentials: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -165,6 +167,28 @@ export function updateRepositoryRunInstructions(
     .where(inArray(repositories.id, ids))
     .run();
   return true;
+}
+
+export function updateRepositoryTestCredentials(
+  db: Db,
+  id: string,
+  credentials: string | null,
+): SavedRepo | undefined {
+  const result = db
+    .update(repositories)
+    .set({ test_credentials: credentials, updated_at: nowIso() })
+    .where(eq(repositories.id, id))
+    .run();
+  if (result.changes === 0) return undefined;
+  return getRepository(db, id);
+}
+
+export function getRepositoryTestCredentials(
+  db: Db,
+  url: string,
+): string | null {
+  const [row] = findRowsByUrl(db, url);
+  return row?.test_credentials ?? null;
 }
 
 export function deleteRepository(db: Db, id: string): boolean {

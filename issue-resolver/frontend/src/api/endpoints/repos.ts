@@ -79,6 +79,7 @@ function isSavedRepo(value: unknown): value is SavedRepo {
     isBoolean(value.writeAccess) &&
     isNullableString(value.runInstructions) &&
     isOneOf(RUN_INSTRUCTIONS_STATUSES, value.runInstructionsStatus) &&
+    isNullableString(value.testCredentials) &&
     isString(value.createdAt) &&
     isString(value.updatedAt)
   );
@@ -134,6 +135,17 @@ export async function updateRepository(
     method: 'PUT',
     json: request,
   });
+  return readRepositoryResponse(response);
+}
+
+export async function saveRepositoryCredentials(
+  id: string,
+  testCredentials: string | null,
+): Promise<SavedRepo> {
+  const response = await send(
+    `${API_BASE}/repositories/${id}/credentials`,
+    { method: 'PUT', json: { testCredentials } },
+  );
   return readRepositoryResponse(response);
 }
 

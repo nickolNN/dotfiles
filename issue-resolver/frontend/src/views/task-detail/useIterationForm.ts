@@ -123,7 +123,7 @@ export function useIterationForm({
   const prAvailable =
     state.status === AsyncStateStatus.ready && state.data.issue.repositories.length > 0;
   const selectedRunSteps = PIPELINE_ORDER.filter(
-    (step) => chosenSteps.has(step) && (step !== "pr" || prAvailable),
+    (step) => chosenSteps.has(step) && (step !== PipelineStep.pr || prAvailable),
   );
   const hasIterationSteps = selectedRunSteps.length > 0;
   const hint = iterationHint(

@@ -10,6 +10,7 @@ import { refinePipelineAwareness, resolveDownstreamAwareness } from './downstrea
 import {
   attachmentsBlock,
   DEPENDENCIES_PREPARED,
+  credentialsBlock,
   devServerBlock,
   grouped,
   outputContract,
@@ -41,6 +42,7 @@ export interface StepPromptInput {
   previousOutcome?: string | null;
   pipelineSteps?: PipelineStep[];
   devServerPort?: number | null;
+  credentials?: string | null;
   prTargets?: PrTarget[];
   workerCount?: number;
   stateDigest?: RepoChangeDigest[];
@@ -170,6 +172,7 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
   test: (input) =>
     render(readPrompt('step-test.md'), {
       DEV_SERVER: devServerBlock(input.devServerPort),
+      CREDENTIALS: credentialsBlock(input.credentials),
       ATTEMPT_LIMIT: attemptLimitBlock(),
       VERIFICATION_MODE: verificationModeBlock(input.attempt),
     }),

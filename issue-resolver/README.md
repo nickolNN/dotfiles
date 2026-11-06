@@ -158,9 +158,13 @@ allow-list enforcement'ится на мутирующих методах (`POST`
 `Origin: null` → `403`. `GET`/SSE не задеваются.
 
 Важно: браузер шлёт `Origin` и на **same-origin** POST — это origin самого
-приложения. На `localhost` он в дефолтном allow-list, но если приложение
-отдаётся с реального hostname, добавь его собственный origin в
-`ISSUE_RESOLVER_ALLOWED_ORIGINS`, иначе его же мутирующие запросы получат `403`.
+приложения. Такой запрос пропускается без настройки: `isSameOrigin`
+сравнивает host:port из `Origin` с заголовком `Host`, поэтому приложение
+работает и на `localhost`, и на LAN-адресе, и на проброшенном порту. Условие —
+прокси не должен переписывать `Host` (`changeOrigin: false` во
+`frontend/vite.config.ts`); с `changeOrigin: true` backend видит
+`Host: localhost:8080` и отвечает `403`. Если фронт и API живут на разных
+origin-ах, добавляй origin фронта в `ISSUE_RESOLVER_ALLOWED_ORIGINS`.
 
 Одиночные ответы-ошибки маршрутов не собираются руками: `notFound`,
 `badRequest`, `conflict`, `unprocessable` и `getIterationRow` живут в
@@ -204,6 +208,7 @@ allow-list enforcement'ится на мутирующих методах (`POST`
 | `GET /repositories` | — | `SavedRepo[]` (по `created_at` возр.) |
 | `POST /repositories` | `CreateRepoRequest` `{ url }` | `201 SavedRepo` (валиден, `connectionStatus: 'ok'`) / `422 { error, repository }` (валидация не прошла — репо сохранён со `connectionStatus: 'error'`) / `400 { error }` |
 | `PUT /repositories/:id` | `UpdateRepoRequest` `{ url }` | `200 SavedRepo` / `422 { error, repository }` / `404` |
+| `PUT /repositories/:id/credentials` | `{ testCredentials: string \| null }` | `200 SavedRepo` (пустая строка → `null`) / `400` / `404`. Тестовый аккаунт репозитория: пишет человек, агенты только читают; едет в промпты `devops` и `test` как `{{CREDENTIALS}}` |
 | `DELETE /repositories/:id` | — | `204` / `404` |
 | `POST /repositories/:id/validate` | — | `200 SavedRepo` (перевалидирован; `connectionStatus` — итог) / `404` |
 | `GET /repositories/:id/branches` | — | `200 { branches: string[] }` (live из резолвера, не из БД) / `502 { error }` / `404` |

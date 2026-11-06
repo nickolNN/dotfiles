@@ -46,6 +46,8 @@ export interface PiDevOpsAgentOptions {
   stepRunId?: string;
   registry?: import('../pi/session-registry').StepSessionRegistry;
   tagInstructions?: string | null;
+  cachedInstructions?: string | null;
+  credentials?: string | null;
   reposNames?: string | null;
   reposRequireDevServer?: string | null;
   reposInstructions?: string | null;
@@ -67,6 +69,8 @@ export function renderDevOpsPrompt(
   reposNames?: string | null,
   reposRequireDevServer?: string | null,
   reposInstructions?: string | null,
+  cachedInstructions?: string | null,
+  credentials?: string | null,
 ): string {
   const buildReposInstructions = (
     raw: string | null | undefined,
@@ -86,6 +90,16 @@ export function renderDevOpsPrompt(
     REPOS_NAMES: reposNames ?? '',
     REPOS_REQUIRE_DEV_SERVER: reposRequireDevServer ?? '',
     REPOS_INSTRUCTIONS: buildReposInstructions(reposInstructions),
+    CACHED_INSTRUCTIONS: cachedInstructions?.trim()
+      ? cachedInstructions.trim()
+      : 'None: this repository has no saved instructions yet.',
+    CREDENTIALS: credentials?.trim()
+      ? [
+          '```',
+          credentials.trim(),
+          '```',
+        ].join('\n')
+      : 'None supplied. Record in `## Auth` whether the app can be verified without a login.',
   });
 }
 
@@ -98,6 +112,8 @@ export function loadDevOpsPrompt(
   reposNames?: string | null,
   reposRequireDevServer?: string | null,
   reposInstructions?: string | null,
+  cachedInstructions?: string | null,
+  credentials?: string | null,
 ): string {
   const template = readFileSync(promptPath, 'utf-8');
   return withSharedFragments(
@@ -110,6 +126,8 @@ export function loadDevOpsPrompt(
       reposNames,
       reposRequireDevServer,
       reposInstructions,
+      cachedInstructions,
+      credentials,
     ),
   );
 }
@@ -154,6 +172,8 @@ export class PiDevOpsAgent implements DevOpsAgent {
         this.options.reposNames,
         this.options.reposRequireDevServer,
         this.options.reposInstructions,
+        this.options.cachedInstructions,
+        this.options.credentials,
       );
       const result = await this.options.pi.run(
         this.options.containerName,

@@ -1,6 +1,13 @@
 import { useEffect, type Dispatch, type SetStateAction } from "react";
 import type { QueryClient } from "@tanstack/react-query";
-import { IssueDeletingPhase, TaskStatus, WorkspaceProgressStatus, type SessionEvent } from "@issue-resolver/shared";
+import {
+  IssueDeletingPhase,
+  SSEStream,
+  TaskStatus,
+  WorkspaceProgressStatus,
+  WorkspaceProgressStep,
+  type SessionEvent,
+} from "@issue-resolver/shared";
 import { subscribeToIssueEvents } from "../../api/sse";
 import { isWorkspaceProgressStatus } from "./constants";
 import { isStepRunStatus } from "./format";
@@ -55,7 +62,7 @@ export function useIssueSubscription({
 
     const unsubscribe = subscribeToIssueEvents(issueId, {
       onLog: (event) => {
-        if (event.stream === "mr") {
+        if (event.stream === SSEStream.mr) {
           const url = event.data.trim();
           if (!url) return;
           setLiveMrUrls((current) =>
@@ -63,7 +70,7 @@ export function useIssueSubscription({
           );
           return;
         }
-        if (event.stream !== "stdout" && event.stream !== "stderr") return;
+        if (event.stream !== SSEStream.stdout && event.stream !== SSEStream.stderr) return;
         const stepRunId = event.stepRunId;
         if (!stepRunId || event.data === "") return;
         setLiveEventsByRun((current) => {
@@ -158,7 +165,9 @@ export function useIssueSubscription({
       onWorkspaceProgress: (payload) => {
         if (!isWorkspaceProgressStatus(payload.status)) return;
         const status = payload.status;
-        const fresh = payload.step === "creating_dirs" && status === WorkspaceProgressStatus.running;
+        const fresh =
+          payload.step === WorkspaceProgressStep.creating_dirs &&
+          status === WorkspaceProgressStatus.running;
         if (fresh && progressTimerRef.current) {
           clearTimeout(progressTimerRef.current);
           progressTimerRef.current = null;
@@ -185,10 +194,15 @@ export function useIssueSubscription({
                 )
               : [...entry.steps, next];
           const finished =
-            entry.finished || payload.step === "ready" || status === WorkspaceProgressStatus.error;
+            entry.finished ||
+            payload.step === WorkspaceProgressStep.ready ||
+            status === WorkspaceProgressStatus.error;
           return { ...entry, steps, finished };
         });
-        if (payload.step === "ready" || status === WorkspaceProgressStatus.error) {
+        if (
+          payload.step === WorkspaceProgressStep.ready ||
+          status === WorkspaceProgressStatus.error
+        ) {
           scheduleProgressFade();
         }
       },

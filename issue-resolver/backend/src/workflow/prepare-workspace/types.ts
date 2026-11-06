@@ -13,6 +13,7 @@ import type { StepSessionRegistry } from '../../pi/session-registry';
 export interface RunInstructionsPort {
   getStatus(repoUrl: string): RunInstructionsStatus | undefined;
   getInstructions(repoUrl: string): string | null;
+  getCredentials?(repoUrl: string): string | null;
   saveGenerated(repoUrl: string, instructions: string): void;
   saveFailed(repoUrl: string): void;
 }
@@ -26,6 +27,8 @@ export type DevOpsFactory = (params: {
   stepRunId?: string;
   registry?: StepSessionRegistry;
   tagInstructions?: string | null;
+  cachedInstructions?: string | null;
+  credentials?: string | null;
   model?: string;
   thinkingLevel?: ThinkingLevel;
   timeoutMs?: number;

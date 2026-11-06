@@ -7,7 +7,7 @@ import type {
   StepAgent,
 } from '@issue-resolver/shared';
 import { StepAgentRole, StepAgentStatus } from '@issue-resolver/shared';
-import { SessionCommandSource, SteeringMode } from '@issue-resolver/shared';
+import { PromptDisposition, SessionCommandSource, SteeringMode } from '@issue-resolver/shared';
 import { messageOf } from '../../lib/errors';
 import {
   isArrayWhere,
@@ -90,7 +90,8 @@ export async function promptIteration(
       error?: unknown;
     };
     const disposition =
-      data?.disposition === 'queued' || data?.disposition === 'handled'
+      data?.disposition === PromptDisposition.queued ||
+      data?.disposition === PromptDisposition.handled
         ? data.disposition
         : 'started';
     const ok = data?.ok === false ? false : true;

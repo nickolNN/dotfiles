@@ -1394,14 +1394,18 @@ describe('runIssueIteration — run_instructions через анализатор
     });
   });
 
-  it('status generated: devops не вызывается, инструкции не трогаются', async () => {
+  it('status generated: devops получает кэш и обновляет инструкции', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);
     const { deps, pi } = makeDeps();
     deps.workspaceRoot = tempRoot();
     seedRepository(db, repositories[0].repository_url, RunInstructionsStatus.generated);
     const agent = new FakeDevOpsAgent({ success: true, instructions: 'new' });
-    deps.devopsFactory = () => agent;
+    const seenCached: Array<string | null | undefined> = [];
+    deps.devopsFactory = (params) => {
+      seenCached.push(params.cachedInstructions);
+      return agent;
+    };
     pi.enqueue(pass('resolve'));
 
     const repoWorkspaces = await prepareIssueWorkspace(db, deps, {
@@ -1416,10 +1420,11 @@ describe('runIssueIteration — run_instructions через анализатор
     );
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    expect(agent.calls).toHaveLength(0);
+    expect(agent.calls).toHaveLength(1);
+    expect(seenCached).toHaveLength(1);
     const row = repoRow(db, repositories[0].repository_url);
     expect(row?.run_instructions_status).toBe('generated');
-    expect(row?.run_instructions).toBeNull();
+    expect(row?.run_instructions).toBe('new');
   });
 
   it('фейл анализа: статус failed, инструкция очищена', async () => {
@@ -1585,6 +1590,36 @@ describe('runIssueIteration — run_instructions через анализатор
     );
 
     expect(seen).toEqual([123_456]);
+  });
+
+  it('test-шаг получает тестовый аккаунт репозитория в промпте', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['test']);
+    const { deps, pi } = makeDeps();
+    deps.workspaceRoot = tempRoot();
+    seedRepository(db, repositories[0].repository_url, RunInstructionsStatus.generated);
+    db.update(repositoriesTable)
+      .set({ test_credentials: 'https://dev.example.com · robot · secret42' })
+      .where(eq(repositoriesTable.url, repositories[0].repository_url))
+      .run();
+    pi.enqueue(pass('test'));
+
+    const repoWorkspaces = [
+      {
+        repoUrl: repositories[0].repository_url,
+        path: join(String(deps.workspaceRoot), issueId, 'app'),
+        branch: 'main',
+      },
+    ];
+    const base = runInput(issueId, iteration, repoWorkspaces);
+    await runIssueIteration(db, deps, {
+      ...base,
+      issue: { ...base.issue, pipelineSteps: ['test'] },
+    });
+
+    const prompts = pi.calls.map((call) => call.prompt).join('\n');
+    expect(prompts).toContain('https://dev.example.com · robot · secret42');
+    expect(prompts).toContain('Test account for this repository');
   });
 });
 

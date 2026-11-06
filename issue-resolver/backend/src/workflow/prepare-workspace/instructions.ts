@@ -2,7 +2,6 @@ import { WorkspaceProgressStep } from '@issue-resolver/shared';
 import type { WorkspaceProgressReporter } from '@issue-resolver/shared';
 import {
   PipelineStep,
-  RunInstructionsStatus,
   SessionAddress,
   WorkspaceProgressStatus,
   extractRepoNameFromUrl,
@@ -39,18 +38,6 @@ export async function prepareRunInstructions(
         });
         continue;
       }
-      if (
-        runInstructions.getStatus(workspace.repoUrl) ===
-        RunInstructionsStatus.generated
-      ) {
-        generatedRepos.push(workspace.repoUrl);
-        onProgress?.({
-          step: WorkspaceProgressStep.checking_instructions,
-          repo: repoName,
-          status: WorkspaceProgressStatus.done,
-        });
-        continue;
-      }
       onProgress?.({
         step: WorkspaceProgressStep.checking_instructions,
         repo: repoName,
@@ -71,6 +58,7 @@ export async function prepareRunInstructions(
         stepRunId: devopsId,
         registry: deps.control,
         tagInstructions: deps.tagInstructions,
+        cachedInstructions: runInstructions.getInstructions(workspace.repoUrl),
         reposNames: deps.reposNames,
         reposRequireDevServer: deps.reposRequireDevServer,
         reposInstructions: deps.reposInstructions,

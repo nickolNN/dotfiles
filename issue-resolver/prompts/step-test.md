@@ -18,6 +18,10 @@ development cycle per leftover finding.
 
 {{DEV_SERVER}}
 
+## Test account
+
+{{CREDENTIALS}}
+
 ## What to verify
 
 1. `.issue-step-result.json` at the working-folder root — the previous step's
@@ -35,10 +39,50 @@ insufficient rights, concurrent edit), not only the happy one.
 
 ## How
 
-- Drive the real app with Playwright: rendered text, states, navigation, console
-  errors — what the user sees, not what the code intends.
-- If the repository's `package.json` declares `playwright` or
-  `@playwright/test`, use ITS copy — that is the version the project pins. When
+- Read `RUN_INSTRUCTIONS.md` in the repository before starting anything: it
+  names the entry command, the backend the app talks to, and what sits behind
+  auth.
+- Drive the real app with `agent-browser`: rendered text, states, navigation,
+  console errors — what the user sees, not what the code intends. It is already
+  installed (`agent-browser` on `PATH`) and ships its own guide: start with
+  `agent-browser skills get core` instead of guessing flags. Do NOT write your
+  own Puppeteer/Playwright/CDP harness — a hand-rolled script pays a browser
+  cold start on every attempt and is the main reason a test step takes half an
+  hour.
+- Give every action 10 seconds, not 25: export
+  `AGENT_BROWSER_DEFAULT_TIMEOUT=10000` (or pass `--timeout 10000`). If the
+  element is still absent after 10 s, record "not found after 10 s" and move to
+  the next scenario; two attempts on one selector is a defect report, not a retry
+  loop.
+- Batch a whole scenario into ONE `bash` call, never one command per turn: every
+  exchange costs the model several seconds, and 150 one-command turns is how a
+  ten-minute check becomes a half-hour one. `agent-browser batch` reads a JSON
+  array of commands on stdin:
+
+  ```bash
+  export AGENT_BROWSER_DEFAULT_TIMEOUT=10000
+  agent-browser batch <<'EOF'
+  [["open","http://localhost:5100/"],
+   ["click","@e5"],
+   ["wait","--text","Отправлено"],
+   ["snapshot"],
+   ["screenshot","screenshots/after-send.png"]]
+  EOF
+  ```
+
+  One such call per scenario, one `snapshot` where you need the refs — not a
+  snapshot after every click.
+- Prefer the application's own backend — the one its config and
+  `RUN_INSTRUCTIONS.md` name. When a test account is supplied above, log in with
+  it and verify against the real stand; with credentials in hand a mock is not an
+  option. Without them a mock or stub server is allowed when it is the only way
+  to reach the UI: say in `summary` that the run used one, name the scenarios
+  that depend on it, and keep findings that only a mock could produce at
+  `low`/`info`. If the change cannot be judged any other way, the verdict is
+  `blocked`.
+- Only when `agent-browser` cannot express the check, and the repository's
+  `package.json` declares `playwright` or `@playwright/test`, use ITS copy — that
+  is the version the project pins. When
   the launch fails with `Executable doesn't exist at /opt/ms-playwright/…`, run
   the helper the engine puts in your working folder: `bash pw-browsers.sh
   <repo-dir>` (probes, then installs the missing revision).
@@ -56,7 +100,6 @@ insufficient rights, concurrent edit), not only the happy one.
   result; save screenshots into `screenshots/` at the working-folder root.
 - If neither Playwright launches, the verdict is `blocked` (infrastructure),
   not `fail`.
-
 ## Severity decides the next move
 
 - `critical` — the build fails, the app does not start, the main flow is broken,

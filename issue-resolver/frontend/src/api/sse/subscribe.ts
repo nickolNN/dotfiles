@@ -176,13 +176,13 @@ export function subscribeToAgentEvents(
       raw = undefined;
     }
 
-    if (raw?.type === 'step_status') {
+    if (raw?.type === SSEEventType.step_status) {
       cb.onStepStatus?.(raw);
       return;
     }
 
     const body =
-      raw?.type === 'step_event' && typeof raw.data === 'string'
+      raw?.type === SSEEventType.step_event && typeof raw.data === 'string'
         ? raw.data
         : event.data;
     const payload = parseAgentEventPayload(body);

@@ -96,6 +96,7 @@ export async function executeStepAgent(
     attachmentPaths: input.attachmentPaths ?? [],
     pipelineSteps: plan.steps,
     devServerPort: input.devServerPort ?? null,
+    credentials: input.credentials ?? null,
     prTargets: plan.prTargets,
     workerCount: iteration.worker_count ?? undefined,
     stateDigest,

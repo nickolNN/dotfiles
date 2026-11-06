@@ -17,7 +17,7 @@ import { FakeJiraClient, type JiraClient } from './jira/client';
 import { InMemoryStepSessionRegistry } from './pi/session-registry';
 import { controlRoutes } from './routes/control';
 import { healthRoutes } from './routes/health';
-import { isAllowedOrigin } from './http/origin';
+import { isAllowedOrigin, isSameOrigin } from './http/origin';
 import { issuesRoutes } from './routes/issues';
 import { createIssueService } from './issues/service';
 import { iterationsRoutes } from './routes/iterations';
@@ -106,7 +106,11 @@ export function buildApp(
   app.addHook('preHandler', async (request, reply) => {
     if (!MUTATING_METHODS.has(request.method)) return;
     const origin = request.headers.origin;
-    if (origin && !isAllowedOrigin(origin)) {
+    if (
+      origin &&
+      !isAllowedOrigin(origin) &&
+      !isSameOrigin(origin, request.headers.host)
+    ) {
       return reply.code(403).send({ error: 'origin not allowed' });
     }
   });

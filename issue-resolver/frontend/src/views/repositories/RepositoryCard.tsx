@@ -21,6 +21,7 @@ interface RepositoryCardProps {
   onValidate: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onSaveCredentials?: (value: string) => void;
 }
 
 export default function RepositoryCard({
@@ -30,6 +31,7 @@ export default function RepositoryCard({
   onValidate,
   onEdit,
   onDelete,
+  onSaveCredentials,
 }: RepositoryCardProps) {
   const label = repo.fullName ?? repo.url;
 
@@ -145,6 +147,41 @@ export default function RepositoryCard({
               </span>
             )}
           </div>
+        )}
+
+        {onSaveCredentials && (
+          <details
+            data-testid="repo-credentials"
+            className="mt-1 text-[10px] text-[#00FF41]/50"
+          >
+            <summary className="cursor-pointer select-none uppercase tracking-wide">
+              тестовый аккаунт {repo.testCredentials ? '✓' : '—'}
+            </summary>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const data = new FormData(event.currentTarget);
+                onSaveCredentials(String(data.get('credentials') ?? ''));
+              }}
+            >
+              <textarea
+                name="credentials"
+                data-testid="repo-credentials-input"
+                defaultValue={repo.testCredentials ?? ''}
+                rows={3}
+                placeholder="URL стенда · логин · пароль или токен"
+                className="mt-1 w-full border border-[#008F11]/30 bg-[#0D0208] p-1.5 font-mono text-[11px] text-[#00FF41] outline-none"
+              />
+              <button
+                type="submit"
+                data-testid="repo-credentials-save"
+                disabled={busy}
+                className="mt-1 border border-[#00FF41]/40 px-2 py-1 uppercase tracking-wide text-[#00FF41] transition-base hover:bg-[#00FF41]/10 disabled:opacity-50"
+              >
+                Сохранить
+              </button>
+            </form>
+          </details>
         )}
 
         {repo.description && (

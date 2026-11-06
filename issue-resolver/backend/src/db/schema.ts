@@ -131,6 +131,7 @@ export const repositories = sqliteTable('repositories', {
     .$type<RunInstructionsStatus>()
     .notNull()
     .default(RunInstructionsStatus.unknown),
+  test_credentials: text('test_credentials'),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
 });

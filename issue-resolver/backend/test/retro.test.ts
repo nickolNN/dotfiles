@@ -15,6 +15,7 @@ import type { PiRunOptions, PiRunner } from '../src/pi/runner';
 import {
   RETRO_SCOPE_ID,
   abortRetroRun,
+  loadRetroPrompt,
   renderRetroPrompt,
   retroPromptValues,
   retroReportPath,
@@ -153,6 +154,15 @@ describe('renderRetroPrompt — подстановки', () => {
     const rendered = renderRetroPrompt('{{EXTRA_INSTRUCTIONS}}', withText);
     expect(rendered).toContain('## Extra instructions from the operator');
     expect(rendered).toContain('сделай упор на nav');
+  });
+
+  it('промпт ретро несёт общий блок про codemode', () => {
+    const dir = tempDir();
+    const deps = depsFor(createDb(':memory:'), dir, fakeRunner(okResult).runner);
+
+    const text = loadRetroPrompt(deps, '/tmp/r.md');
+
+    expect(text).toContain('`codemode` — prefer it over a pile of single calls');
   });
 });
 

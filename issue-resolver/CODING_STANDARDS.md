@@ -27,6 +27,15 @@ would leave a second, stale description behind.
 | `no-self-compare` | `x === x` used as a null check | Control flow stays linear |
 | `no-var` | function-scoped `var` | Control flow stays linear |
 | `no-param-reassign` | mutating a parameter instead of a local | One implementation, reused everywhere |
+| `issue-resolver/closed-set-literals` | comparing a field against a literal that is a member of a domain declared in `shared/src` (`status === 'failed'`) | The literal is a silent copy of the domain (see the next section) |
+| `issue-resolver/untrusted-json-cast` (`warn` until the four remaining sites are decoded) | `as X` on an HTTP `response.json()`; widening to `unknown` is fine | An HTTP body is untrusted input (see "Untrusted input keeps three states") |
+
+`closed-set-literals` reads its value list from the `Object.freeze({…} as const)`
+declarations in `shared/src` at config load, so a new domain is covered without
+touching the config. Comparisons that are legitimately not domain reads (wire
+discriminants, env values, a screen-local union) are listed in the config's
+exception table **with a reason**; that table is the record of the decision, not
+a place to park a failure.
 
 Policy for adding a rule: it lands together with a clean tree — either the rule
 is already satisfied everywhere, or the violations are fixed in the same change.
@@ -45,6 +54,8 @@ depends on intent) stays a review item and does not enter the config.
 A **closed set** is a value domain the compiler can enumerate: a status, a kind,
 a role, a mode. Never write its members as bare string literals. Declare one
 frozen object, derive the type from it, and reference the member everywhere.
+`issue-resolver/closed-set-literals` reports the comparisons the compiler would
+otherwise accept silently.
 
 Every status domain lives in `shared/src/status.ts`:
 
@@ -91,6 +102,10 @@ concept, one identifier.
   `'pending' | 'cloning' | 'cloned'`) may keep its literals until it is used in
   more than one module; then it earns its own frozen object next to its
   consumer.
+- **Wire discriminants.** A `SessionEvent.type` (`'question'`, `'text'`) is
+  compared inline on purpose — a frozen object would be a third copy of the same
+  18 names. Those sites sit in the linter's exception table with the reason, so
+  they are a decision and not an accident.
 
 ### Adding a domain
 

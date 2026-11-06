@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import {
   TaskStatus,
   WorkspaceProgressStatus,
+  WorkspaceProgressStep,
   extractRepoNameFromUrl,
 } from "@issue-resolver/shared";
 import { devServerPortOf } from "../../api/client";
@@ -57,7 +58,7 @@ export function useIssueDerived({
     workspaceProgress !== null
       ? workspaceProgress.steps.some(
           (step) =>
-            step.step === "ready" &&
+            step.step === WorkspaceProgressStep.ready &&
             step.status === WorkspaceProgressStatus.done,
         )
       : state.status === AsyncStateStatus.ready &&

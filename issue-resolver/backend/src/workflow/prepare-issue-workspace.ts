@@ -160,6 +160,7 @@ export async function prepareIssueWorkspace(
   };
 
   const prepStart = nowIso();
+  let devServerProblem: string | null = null;
   db.update(issues)
     .set({ status: TaskStatus.preparing, updated_at: prepStart })
     .where(eq(issues.id, input.issueId))
@@ -194,6 +195,8 @@ export async function prepareIssueWorkspace(
           .run();
       } else {
         releaseIssueDevPorts(input.issueId);
+        devServerProblem = `dev server не запущен: нет ${repoName}/DEV_SERVER.sh`;
+        console.error(`prepare: ${devServerProblem} (issue=${input.issueId})`);
       }
     }
 
@@ -219,7 +222,11 @@ export async function prepareIssueWorkspace(
     await finishDevopsSession(db, deps, devopsSession, {
       issueId: input.issueId,
       status: StepRunStatus.success,
-      summary: 'DevOps completed during workspace preparation',
+      summary:
+        devServerProblem === null
+          ? 'DevOps completed during workspace preparation'
+          : `DevOps: инструкции есть, ${devServerProblem}`,
+      feedback: devServerProblem,
     });
 
     return prepared;

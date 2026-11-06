@@ -48,6 +48,7 @@ function savedRepo(
     writeAccess,
     runInstructions: null,
     runInstructionsStatus: RunInstructionsStatus.unknown,
+    testCredentials: null,
     createdAt: '2026-10-12T00:00:00.000Z',
     updatedAt: '2026-10-12T00:00:00.000Z',
   };

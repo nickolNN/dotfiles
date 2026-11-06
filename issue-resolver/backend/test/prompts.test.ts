@@ -18,6 +18,7 @@ const base = {
   reviewContext: null as string | null,
   pipelineSteps: undefined as PipelineStep[] | undefined,
   devServerPort: null as number | null | undefined,
+  credentials: null as string | null | undefined,
   prTargets: undefined as PrTarget[] | undefined,
   workerCount: undefined as number | undefined,
   iterationCount: undefined as number | undefined,
@@ -142,6 +143,10 @@ describe('buildStepPrompt', () => {
     expect(text).not.toContain('— create MR:');
   });
 
+  it('системный промпт шага требует codemode до начала работы', () => {
+    expect(STEP_SYSTEM_APPEND).toContain('Prefer `codemode`');
+  });
+
   it('каждый шаг конвейера требует отчёт шага по контрактному пути', () => {
     const steps: PipelineStep[] = ['refine', 'resolve', 'review', 'test', 'pr'];
 
@@ -149,7 +154,34 @@ describe('buildStepPrompt', () => {
       const text = prompt(step, { workingDir: '/workspaces/issue-1' });
       expect(text).toContain('/workspaces/issue-1/.issue-step-result.json');
       expect(text).toContain('Output contract');
+      expect(text).toContain('`codemode` — prefer it over a pile of single calls');
     }
+  });
+
+  it('test: тестовый аккаунт попадает в промпт, без аккаунта — запрет мока', () => {
+    const withAccount = prompt('test', {
+      credentials: 'https://dev.example.com · login · secret',
+    });
+    expect(withAccount).toContain('https://dev.example.com · login · secret');
+    expect(withAccount).toContain('Test account for this repository');
+    expect(withAccount).toContain(
+      'Never copy the password or token into `.issue-step-result.json`',
+    );
+
+    const withoutAccount = prompt('test');
+    expect(withoutAccount).toContain('No test account is configured');
+    expect(withoutAccount).toContain('A mock or stub backend is');
+  });
+
+  it('test: браузер водит agent-browser с таймаутом 10 с, а не свой харнесс', () => {
+    const text = prompt('test');
+
+    expect(text).toContain('Drive the real app with `agent-browser`');
+    expect(text).toContain('Do NOT write your');
+    expect(text).toContain('AGENT_BROWSER_DEFAULT_TIMEOUT=10000');
+    expect(text).toContain('not found after 10 s');
+    expect(text).toContain('agent-browser batch');
+    expect(text).toContain('ONE `bash` call');
   });
 
   it('pr: разметка create MR сосуществует с блоком целей (base-ветка не потеряна)', () => {
@@ -604,6 +636,7 @@ describe('staged prompts', () => {
     expect(text).toContain('Commit/push are FORBIDDEN');
     expect(text).toContain('stage coordinator');
     expect(text).toContain('read their outcome files');
+    expect(text).toContain('`codemode` — prefer it over a pile of single calls');
   });
 
   it('волна: исполнитель знает, что координатора этапа нет и интегрирует финальный lead', () => {

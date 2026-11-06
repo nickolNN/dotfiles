@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS repositories (
   write_access INTEGER NOT NULL DEFAULT 0,
   run_instructions TEXT,
   run_instructions_status TEXT NOT NULL DEFAULT 'unknown',
+  test_credentials TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

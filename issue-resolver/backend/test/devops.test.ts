@@ -16,8 +16,10 @@ import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import {
   PiDevOpsAgent,
   RUN_INSTRUCTIONS_FILE,
+  loadDevOpsPrompt,
   renderDevOpsPrompt,
 } from '../src/workflow/devops';
+import { DEVOPS_SYSTEM_APPEND } from '../src/workflow/prompts';
 import type {
   RunInstructionsPort,
   WorkspaceProgress,
@@ -189,14 +191,15 @@ describe('prepareWorkspace — анализ run_instructions', () => {
     expect(steps.indexOf('devops')).toBeLessThan(steps.indexOf('installing'));
   });
 
-  it('статус generated: devops не вызывается', async () => {
+  it('статус generated: devops запускается с кэшем в промпте и обновляет инструкции', async () => {
     const store = new FakeRunInstructionsStore();
     store.statuses.set(REPO_URL, RunInstructionsStatus.generated);
+    store.instructions.set(REPO_URL, '# Run\nnpm run dev');
     const agent = new FakeDevOpsAgent({
       success: true,
-      instructions: 'unused',
+      instructions: '# Run\nnpm run dev\n',
     });
-    const progress: WorkspaceProgress[] = [];
+    const seen: Array<string | null | undefined> = [];
     const root = await tempRoot();
 
     await prepareWorkspace(
@@ -204,17 +207,52 @@ describe('prepareWorkspace — анализ run_instructions', () => {
         container: new FakeContainerController(),
         git: new FakeGitService(),
         workspaceRoot: root,
-        devops: () => agent,
+        devops: (params) => {
+          seen.push(params.cachedInstructions);
+          return agent;
+        },
         runInstructions: store,
       },
       { id: 'issue-1' },
       repos,
-      (item) => progress.push(item),
     );
 
-    expect(agent.calls).toHaveLength(0);
-    expect(progress.some((item) => item.step === 'devops')).toBe(false);
-    expect(store.saved).toHaveLength(0);
+    expect(agent.calls).toHaveLength(1);
+    expect(seen).toEqual(['# Run\nnpm run dev']);
+    expect(store.saved).toEqual([
+      { url: REPO_URL, instructions: '# Run\nnpm run dev\n' },
+    ]);
+  });
+
+  it('первый запуск без кэша: агент не получает инструкций', async () => {
+    const store = new FakeRunInstructionsStore();
+    store.statuses.set(REPO_URL, RunInstructionsStatus.unknown);
+    const agent = new FakeDevOpsAgent({
+      success: true,
+      instructions: '# Run\nnpm run dev',
+    });
+    const seen: Array<string | null | undefined> = [];
+    const root = await tempRoot();
+
+    await prepareWorkspace(
+      {
+        container: new FakeContainerController(),
+        git: new FakeGitService(),
+        workspaceRoot: root,
+        devops: (params) => {
+          seen.push(params.cachedInstructions);
+          return agent;
+        },
+        runInstructions: store,
+      },
+      { id: 'issue-1' },
+      repos,
+    );
+
+    expect(seen).toEqual([null]);
+    expect(store.saved).toEqual([
+      { url: REPO_URL, instructions: '# Run\nnpm run dev' },
+    ]);
   });
 
   it('фейл анализа: статус failed, прогресс analyzing error', async () => {
@@ -254,7 +292,12 @@ describe('prepareWorkspace — анализ run_instructions', () => {
   it('фейл install сбрасывает ранее generated инструкции в failed', async () => {
     const store = new FakeRunInstructionsStore();
     store.statuses.set(REPO_URL, RunInstructionsStatus.generated);
+    store.instructions.set(REPO_URL, '## Run\n```bash\nnpm run dev\n```');
     const root = await tempRoot();
+    const agent = new FakeDevOpsAgent({
+      success: true,
+      instructions: '## Run\n```bash\nnpm run dev\n```',
+    });
 
     await expect(
       prepareWorkspace(
@@ -262,9 +305,7 @@ describe('prepareWorkspace — анализ run_instructions', () => {
           container: new FakeContainerController(),
           git: new FailingInstallGitService(),
           workspaceRoot: root,
-          devops: () => {
-            throw new Error('devops must not run for generated');
-          },
+          devops: () => agent,
           runInstructions: store,
         },
         { id: 'issue-1' },
@@ -320,15 +361,17 @@ describe('prepareWorkspace — запуск dev-сервера', () => {
     const progress: WorkspaceProgress[] = [];
     const root = await tempRoot();
     const repoDir = join(root, 'issue-1', 'app');
+    const agent = new FakeDevOpsAgent({
+      success: true,
+      instructions: '## Run\n```bash\nnpm run dev\n```',
+    });
 
     await prepareWorkspace(
       {
         container: new FakeContainerController(),
         git,
         workspaceRoot: root,
-        devops: () => {
-          throw new Error('devops must not run for generated');
-        },
+        devops: () => agent,
         runInstructions: store,
       },
       { id: 'issue-1' },
@@ -541,6 +584,46 @@ describe('PiDevOpsAgent', () => {
         5101,
       ),
     ).toBe('/a/b @ /a :5101');
+  });
+
+  it('renderDevOpsPrompt отдаёт кэш инструкций или явное «нет»', () => {
+    const template = '## Cached\n{{CACHED_INSTRUCTIONS}}';
+    expect(
+      renderDevOpsPrompt(template, '/a', 'b', 5101, null, null, null, null, '# Run\nnpm ci'),
+    ).toBe('## Cached\n# Run\nnpm ci');
+    expect(
+      renderDevOpsPrompt(template, '/a', 'b', 5101, null, null, null, null, null),
+    ).toContain('no saved instructions yet');
+  });
+
+  it('системный промпт девопса требует codemode', () => {
+    expect(DEVOPS_SYSTEM_APPEND).toContain('Prefer `codemode`');
+  });
+
+  it('промпт девопса несёт общий блок про codemode', () => {
+    const text = loadDevOpsPrompt('/a', 'app', 5100);
+
+    expect(text).toContain('`codemode` — prefer it over a pile of single calls');
+  });
+
+  it('renderDevOpsPrompt отдаёт тестовый аккаунт девопсу', () => {
+    const template = '## Test account\n{{CREDENTIALS}}';
+    const withAccount = renderDevOpsPrompt(
+      template,
+      '/a',
+      'b',
+      5101,
+      null,
+      null,
+      null,
+      null,
+      null,
+      'https://dev · robot · secret',
+    );
+    expect(withAccount).toContain('https://dev · robot · secret');
+    expect(
+      renderDevOpsPrompt(template, '/a', 'b', 5101, null, null, null, null, null, null),
+    ).toContain('None supplied');
   });
 
   it('диапазон entry-портов в промпте = константа аллокатора', () => {

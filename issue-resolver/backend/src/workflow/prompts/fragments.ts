@@ -91,6 +91,30 @@ export function reposBlock(
   return lines.join('\n');
 }
 
+export function credentialsBlock(credentials?: string | null): string {
+  if (!credentials?.trim()) {
+    return [
+      'No test account is configured for this repository. A mock or stub backend is',
+      'allowed when it is the only way to reach the UI under test — it is not',
+      'equivalent to the real stand, so say in `summary` that the run used one and',
+      'name the scenarios that depend on it. Only findings that also hold on the',
+      'real stand may be `major` or `critical`; the rest belong in `low`/`info`',
+      'with the mock named as the reason. If the change cannot be judged any other',
+      'way, the verdict is `blocked` with the missing-login reason.',
+    ].join('\n');
+  }
+  return [
+    'Test account for this repository (use it to log in for real):',
+    '',
+    '```',
+    credentials.trim(),
+    '```',
+    '',
+    'Never copy the password or token into `.issue-step-result.json`, the narrative,',
+    'a screenshot or the report.',
+  ].join('\n');
+}
+
 export function devServerBlock(devServerPort?: number | null): string {
   if (devServerPort === undefined || devServerPort === null) {
     return [
@@ -194,13 +218,21 @@ export function withSharedFragments(prompt: string): string {
   ].join('\n\n');
 }
 
+const CODEMODE_DIRECTIVE = [
+  'Prefer `codemode` over a pile of single calls: one script that calls the other',
+  'tools does the work of twenty turns of `bash`. The plain tool stays right for',
+  'a single call.',
+].join(' ');
+
 export const STEP_SYSTEM_APPEND = [
   'The deliverable of this run is `.issue-step-result.json` in the working folder.',
   'A summary in chat is not a deliverable: do not substitute prose for that file,',
   'and do not paste the plan, the report, or the diff into chat instead of writing it.',
+  CODEMODE_DIRECTIVE,
 ].join(' ');
 
 export const DEVOPS_SYSTEM_APPEND = [
   'The deliverable of this run is `RUN_INSTRUCTIONS.md` in the repository working',
   'copy. A summary in chat is not a deliverable: write the file the engine reads.',
+  CODEMODE_DIRECTIVE,
 ].join(' ');

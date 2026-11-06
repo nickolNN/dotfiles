@@ -48,6 +48,28 @@ developer infrastructure: `{{TAG_INSTRUCTIONS}}`
 - You work inside a task container; other agents will later solve a development
   task in this same directory, relying on what you write here.
 
+## Cached instructions — start here
+
+{{CACHED_INSTRUCTIONS}}
+
+If the block above holds real text, that is what a previous run wrote for this
+repository — the very text the later steps read and the human may have edited by
+hand. Start from it: check each command in this container, update what changed,
+fill the gaps, and leave the file accurate. Do not re-derive the setup from
+scratch when the notes already answer the question, and do not copy them blindly
+either — a command that no longer works is a defect to fix here. Treat the
+`DEV_SERVER.sh` the notes describe as something to (re)create in this clone: the
+clone is fresh, the file never survives from the previous task.
+
+## Test account
+
+{{CREDENTIALS}}
+
+Use it to check the real login in this container, and write down in `## Auth` how
+auth works: which backend the app talks to, which login flow, what sits behind
+the login wall. Never put the password or token itself into
+`RUN_INSTRUCTIONS.md`, `WORKSPACE_INSTRUCTIONS.md` or your summary.
+
 ## Read this first: the port contract
 
 `{{DEV_SERVER_PORT}}` is the **single public entry port of the whole workspace**,

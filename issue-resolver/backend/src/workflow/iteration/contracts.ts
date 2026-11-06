@@ -88,6 +88,7 @@ export interface RunIterationInput {
   previousOutcome?: string | null;
   attachmentPaths?: string[];
   devServerPort?: number | null;
+  credentials?: string | null;
   agentTimeoutMs?: number;
   agentStallTimeoutMs?: number;
 }

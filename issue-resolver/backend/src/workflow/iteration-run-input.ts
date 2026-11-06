@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Iteration } from '@issue-resolver/shared';
 import { TaskStatus } from '@issue-resolver/shared';
 import type { Db } from '../db/client';
+import { getRepositoryTestCredentials } from '../db/repositories.repo';
 import { listAttachableRelPaths } from '../db/issue-files.repo';
 import { issues } from '../db/schema';
 import { DEFAULT_WORKSPACE_ROOT } from '../workspace/paths';
@@ -85,6 +86,12 @@ export async function buildRunIterationInput(
       .from(issues)
       .where(eq(issues.id, input.issue.id))
       .get()?.port ?? null;
+  const devRepo = input.repositories.find(
+    (repo) => repo.bootstrap_enabled !== false,
+  );
+  const credentials = devRepo
+    ? getRepositoryTestCredentials(db, devRepo.repository_url)
+    : null;
 
   return {
     issue: input.issue,
@@ -101,5 +108,6 @@ export async function buildRunIterationInput(
     previousOutcome,
     attachmentPaths,
     devServerPort,
+    credentials,
   };
 }

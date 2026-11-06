@@ -168,6 +168,10 @@ const REPOSITORY_COLUMNS: readonly ColumnMigration[] = [
     add: "ALTER TABLE repositories ADD COLUMN run_instructions_status TEXT NOT NULL DEFAULT 'unknown'",
   },
   {
+    column: 'test_credentials',
+    add: 'ALTER TABLE repositories ADD COLUMN test_credentials TEXT',
+  },
+  {
     column: 'created_at',
     add: "ALTER TABLE repositories ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
   },

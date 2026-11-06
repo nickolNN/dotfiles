@@ -10,7 +10,7 @@ export default defineConfig({
     proxy: {
       '/issue-resolver': {
         target: proxyTarget,
-        changeOrigin: true,
+        changeOrigin: false,
       },
     },
   },

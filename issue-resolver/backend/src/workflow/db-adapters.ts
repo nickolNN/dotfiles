@@ -7,6 +7,7 @@ import {
 } from '../db/step-runs.repo';
 import {
   getRepositoryByUrl,
+  getRepositoryTestCredentials,
   updateRepositoryRunInstructions,
 } from '../db/repositories.repo';
 import { RunInstructionsStatus } from '@issue-resolver/shared';
@@ -37,6 +38,7 @@ export function dbRunInstructionsStore(db: Db): RunInstructionsPort {
   return {
     getStatus: (url) => getRepositoryByUrl(db, url)?.runInstructionsStatus,
     getInstructions: (url) => getRepositoryByUrl(db, url)?.runInstructions ?? null,
+    getCredentials: (url) => getRepositoryTestCredentials(db, url),
     saveGenerated: (url, instructions) =>
       warnUnmatched(
         url,

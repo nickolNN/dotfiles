@@ -8,6 +8,7 @@ import {
   insertRepository,
   listRepositories,
   updateRepository,
+  updateRepositoryTestCredentials,
   type RepositoryWrite,
 } from '../db/repositories.repo';
 import type { RepoResolverFactory } from '../repo-resolver/resolver';
@@ -18,6 +19,7 @@ import {
 } from '../repo-resolver/validate';
 import {
   createRepoRequestSchema,
+  repoCredentialsSchema,
   validateReposRequestSchema,
 } from '../validation';
 import { parseBody } from './parse-body';
@@ -130,6 +132,24 @@ export async function reposRoutes(
         return reply
           .status(422)
           .send({ error: result.error ?? 'repository not accessible', repository: saved });
+      }
+      return saved;
+    },
+  );
+
+  app.put<{ Params: { id: string } }>(
+    `${REPOSITORIES_PATH}/:id/credentials`,
+    async (request, reply) => {
+      const parsed = parseBody(reply, repoCredentialsSchema, request.body);
+      if (!parsed.ok) return parsed.reply;
+      const raw = parsed.data.testCredentials?.trim() ?? '';
+      const saved = updateRepositoryTestCredentials(
+        db,
+        request.params.id,
+        raw === '' ? null : raw,
+      );
+      if (!saved) {
+        return notFound(reply, 'repository not found');
       }
       return saved;
     },

@@ -220,6 +220,35 @@ describe('CORS: часть B — Origin на мутирующих методах
     });
   });
 
+  it('POST с Origin, совпадающим с Host → 201 (не localhost, LAN-адрес)', async () => {
+    await withApp(async (app) => {
+      const response = await app.inject({
+        method: 'POST',
+        url: ISSUES_PATH,
+        headers: {
+          origin: 'http://192.168.50.196:5173',
+          host: '192.168.50.196:5173',
+        },
+        payload: DRAFT,
+      });
+
+      expect(response.statusCode).toBe(201);
+    });
+  });
+
+  it('POST с Origin, не совпадающим с Host → 403', async () => {
+    await withApp(async (app) => {
+      const response = await app.inject({
+        method: 'POST',
+        url: ISSUES_PATH,
+        headers: { origin: 'http://evil.com', host: '192.168.50.196:5173' },
+        payload: DRAFT,
+      });
+
+      expect(response.statusCode).toBe(403);
+    });
+  });
+
   it('GET (не mutating) не задет частью B', async () => {
     await withApp(async (app) => {
       const response = await app.inject({
