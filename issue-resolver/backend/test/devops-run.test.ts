@@ -408,8 +408,6 @@ describe('runDevopsAgent — прогон DevOps на уровне задачи'
       issueId,
       repositories: [{ repository_url: REPO_URL }],
     });
-    // Yield to the event loop: the port is allocated through net I/O before the
-    // agent is called, so a microtask-only spin would starve that callback.
     while (calls.length === 0) {
       await new Promise((resolve) => setTimeout(resolve, 1));
     }
@@ -688,16 +686,21 @@ describe('startRepoDevServer передаёт системе выделенны�
     const pid = startRepoDevServer(root, 'app', 5199);
     expect(pid).not.toBeNull();
 
+    const readMarker = () =>
+      existsSync(marker) ? readFileSync(marker, 'utf8').trim() : '';
+
     const deadline = Date.now() + 3000;
-    while (!existsSync(marker) && Date.now() < deadline) {
+    let port = readMarker();
+    while (port === '' && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
+      port = readMarker();
     }
 
-    expect(readFileSync(marker, 'utf8').trim()).toBe('5199');
+    expect(port).toBe('5199');
     try {
       process.kill(pid as number, 'SIGKILL');
-    } catch {
-      // скрипт уже завершился сам
+    } catch (error) {
+      void error;
     }
   });
 });

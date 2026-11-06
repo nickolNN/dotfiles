@@ -1,6 +1,10 @@
 import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { JSON_PARSE_FAILED, readJsonFile, tryParseJson } from '../util/json-file';
+import { asRecord } from '../util/records';
+import { stringOrNull } from '../util/scalars';
+import { messageOf } from '../util/errors';
 
 const ISSUE_ROOM_PREFIX = 'issue-';
 
@@ -9,11 +13,6 @@ export const ROOM_LIVE_TTL_MS = 60_000;
 export interface RoomCleanupResult {
   deleted_rooms: number;
   errors: string[];
-}
-
-interface AgentRecord {
-  status?: string;
-  lastSeen?: number;
 }
 
 export function roomsRootFromEnv(env: NodeJS.ProcessEnv = process.env): string {
@@ -32,14 +31,10 @@ function isRoomLive(roomDir: string, now: number): boolean {
 
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
-    let record: AgentRecord;
-    try {
-      record = JSON.parse(
-        readFileSync(join(agentsDir, file), 'utf8'),
-      ) as AgentRecord;
-    } catch {
-      continue;
-    }
+    const record = asRecord(
+      tryParseJson(readFileSync(join(agentsDir, file), 'utf8')),
+    );
+    if (record === null) continue;
     if (record.status === 'offline') continue;
     const lastSeen = typeof record.lastSeen === 'number' ? record.lastSeen : 0;
     if (now - lastSeen <= ROOM_LIVE_TTL_MS) return true;
@@ -75,7 +70,7 @@ export function cleanupAbandonedIssueRooms(
       result.deleted_rooms += 1;
     } catch (error) {
       result.errors.push(
-        `${entry.name}: ${error instanceof Error ? error.message : String(error)}`,
+        `${entry.name}: ${messageOf(error)}`,
       );
     }
   }
@@ -92,15 +87,10 @@ function clearDefaultRoomIfDeleted(
   if (deleted.size === 0) return;
 
   const configPath = join(roomsRoot, 'config.json');
-  let config: { defaultRoom?: string };
-  try {
-    config = JSON.parse(readFileSync(configPath, 'utf8')) as {
-      defaultRoom?: string;
-    };
-  } catch {
-    return;
-  }
-  if (!config.defaultRoom || !deleted.has(config.defaultRoom)) return;
+  const config = readJsonFile(configPath, asRecord);
+  if (!config) return;
+  const defaultRoom = stringOrNull(config.defaultRoom);
+  if (!defaultRoom || !deleted.has(defaultRoom)) return;
 
   delete config.defaultRoom;
   try {

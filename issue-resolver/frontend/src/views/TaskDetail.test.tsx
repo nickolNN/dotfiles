@@ -281,7 +281,7 @@ describe('TaskDetail', () => {
     const input = within(refineHint[0]).getByTestId('worker-count-input');
     expect(input).toHaveAttribute('type', 'number');
     expect(input).toHaveAttribute('min', '0');
-    expect(input).toHaveAttribute('max', '4');
+    expect(input).not.toHaveAttribute('max');
     expect(refineHint[0]).toHaveTextContent(
       'Макс. число параллельных агентов',
     );
@@ -1513,7 +1513,7 @@ describe('TaskDetail — фоновое удаление', () => {
       }),
     );
 
-    window.location.hash = '';
+    window.history.replaceState(null, '', '/');
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
@@ -1541,7 +1541,7 @@ describe('TaskDetail — фоновое удаление', () => {
       ts: '2026-10-13T00:00:01.000Z',
     });
 
-    await waitFor(() => expect(window.location.hash).toBe('#/'));
+    await waitFor(() => expect(window.location.pathname).toBe('/tasks'));
   });
 
   it('shows timeout error if issue_deleted never arrives', async () => {
@@ -1558,7 +1558,7 @@ describe('TaskDetail — фоновое удаление', () => {
       }),
     );
 
-    window.location.hash = '';
+    window.history.replaceState(null, '', '/');
     render(<TaskDetail issueId="issue-1" />);
     await screen.findByText('Fix login bug');
 
@@ -1589,6 +1589,6 @@ describe('TaskDetail — фоновое удаление', () => {
     );
     expect(screen.queryByTestId('task-deleting')).not.toBeInTheDocument();
     expect(screen.getByText('Fix login bug')).toBeInTheDocument();
-    expect(window.location.hash).not.toBe('#/');
+    expect(window.location.pathname).not.toBe('/tasks');
   });
 });

@@ -4,21 +4,20 @@ import { planExecutionMode, StepReportStatus } from '@issue-resolver/shared';
 import { FakePiRunner, type PiRunCall } from '../src/pi/runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import {
-  runRoomResolve,
   runStagedResolve,
-  type RoomResolveInput,
-  type RoomResolveOptions,
-} from '../src/workflow/room';
+  type StagedResolveInput,
+  type StagedResolveOptions,
+} from '../src/workflow/staged-resolve';
 import {
   COMPLEX_STAGES_PLAN,
-  ROOM_PLAN,
   SEQUENTIAL_STAGES_PLAN,
   SINGLE_PLAN,
+  WAVE_PLAN,
 } from './execution-plans.example';
 
 const STEP: PipelineStep = 'resolve';
 
-const input = (execution: ExecutionPlan): RoomResolveInput => ({
+const input = (execution: ExecutionPlan): StagedResolveInput => ({
   containerName: 'issue-resolver-issue-1',
   execution,
   issueTitle: 'Fix bug',
@@ -33,7 +32,7 @@ const input = (execution: ExecutionPlan): RoomResolveInput => ({
   attachmentPaths: [],
 });
 
-const options = (): RoomResolveOptions => ({
+const options = (): StagedResolveOptions => ({
   stepRunId: 'run-1',
   iterationId: 'iter-1',
   issueId: 'issue-1',
@@ -95,39 +94,39 @@ function traceTopology(
 }
 
 describe('топологии исполнения resolve — демо-примеры', () => {
-  it('single: движок решает «один агент» (без комнаты/этапов)', () => {
+  it('single: движок решает «один агент» (без волны/этапов)', () => {
     expect(planExecutionMode(SINGLE_PLAN)).toBe('single');
-    expect(planExecutionMode(ROOM_PLAN)).toBe('room');
+    expect(planExecutionMode(WAVE_PLAN)).toBe('stages');
     expect(planExecutionMode(SEQUENTIAL_STAGES_PLAN)).toBe('stages');
     expect(planExecutionMode(COMPLEX_STAGES_PLAN)).toBe('stages');
   });
 
-  it('room: 3 исполнителя ∥, затем один координатор (id = stepRunId)', async () => {
+  it('волна (один этап): 3 исполнителя ∥, затем финальный lead без координатора этапа', async () => {
     const pi = new FakePiRunner();
     const control = new InMemoryStepSessionRegistry();
     pi.enqueue(pass('w-backend'));
     pi.enqueue(pass('w-frontend'));
     pi.enqueue(pass('w-tests'));
-    pi.enqueue(pass('room-coord'));
+    pi.enqueue(pass('wave-lead'));
 
-    const result = await runRoomResolve(
+    const result = await runStagedResolve(
       pi,
-      input(ROOM_PLAN),
+      input(WAVE_PLAN),
       { ...options(), registry: control },
     );
 
-    traceTopology('room — параллельно', pi, 'run-1');
+    traceTopology('волна — параллельно', pi, 'run-1');
 
     expect(pi.calls.map((c) => c.options?.stepRunId)).toEqual([
-      'run.run-1.w0',
-      'run.run-1.w1',
-      'run.run-1.w2',
+      'run.run-1.s1.w0',
+      'run.run-1.s1.w1',
+      'run.run-1.s1.w2',
       'run-1',
     ]);
     expect(pi.calls.slice(0, 3).map((c) => c.options?.agent?.label)).toEqual([
-      'Исполнитель 1',
-      'Исполнитель 2',
-      'Исполнитель 3',
+      'Этап 1 · Исполнитель 1',
+      'Этап 1 · Исполнитель 2',
+      'Этап 1 · Исполнитель 3',
     ]);
     expect(pi.calls[3].options?.agent).toMatchObject({
       id: 'run-1',
@@ -135,7 +134,8 @@ describe('топологии исполнения resolve — демо-прим�
       index: null,
       label: 'Координатор',
     });
-    expect(result.report?.summary).toBe('room-coord');
+    expect(pi.calls[3].prompt).toContain('## Wave workers');
+    expect(result.report?.summary).toBe('wave-lead');
   });
 
   it('stages 3×1: три агента-этапа строго последовательно + финальный lead', async () => {

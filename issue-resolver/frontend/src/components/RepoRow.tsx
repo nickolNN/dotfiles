@@ -10,7 +10,7 @@ export interface RepoRowData {
   branchesLoading: boolean;
 }
 
-export interface RepoRowProps {
+interface RepoRowProps {
   repo: RepoRowData;
   index: number;
   savedRepos: SavedRepo[];
@@ -19,6 +19,18 @@ export interface RepoRowProps {
   onUpdateBranch: (index: number, value: string) => void;
   onToggleBootstrap: (index: number) => void;
   onRemove: (index: number) => void;
+}
+
+function branchOptionsFor(repo: RepoRowData): string[] {
+  if (repo.base_branch.length === 0) return [];
+  if (repo.branches.includes(repo.base_branch)) return repo.branches;
+  return [repo.base_branch, ...repo.branches];
+}
+
+function branchPlaceholder(repo: RepoRowData): string {
+  if (repo.branchesLoading) return 'Загружаем…';
+  if (repo.repo_id) return 'нет веток';
+  return '—';
 }
 
 export default function RepoRow({
@@ -32,12 +44,7 @@ export default function RepoRow({
   onRemove,
 }: RepoRowProps) {
   const selectedRepo = savedRepos.find((item) => item.id === repo.repo_id);
-  const branchOptions =
-    repo.base_branch.length === 0
-      ? []
-      : repo.branches.includes(repo.base_branch)
-        ? repo.branches
-        : [repo.base_branch, ...repo.branches];
+  const branchOptions = branchOptionsFor(repo);
 
   return (
     <div
@@ -80,13 +87,7 @@ export default function RepoRow({
             onChange={(event) => onUpdateBranch(index, event.target.value)}
           >
             {branchOptions.length === 0 && (
-              <option value="">
-                {repo.branchesLoading
-                  ? 'Загружаем…'
-                  : repo.repo_id
-                    ? 'нет веток'
-                    : '—'}
-              </option>
+              <option value="">{branchPlaceholder(repo)}</option>
             )}
             {branchOptions.map((branch) => (
               <option key={branch} value={branch}>

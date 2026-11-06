@@ -1,13 +1,7 @@
 import type { ChangeEvent } from 'react';
+import { formatFileSize } from '../lib/format';
 
-export function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '—';
-  if (bytes < 1024) return `${Math.round(bytes)} Б`;
-  const kb = bytes / 1024;
-  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} КБ`;
-  const mb = kb / 1024;
-  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} МБ`;
-}
+export { formatFileSize } from '../lib/format';
 
 export interface FilePickerProps {
   id?: string;

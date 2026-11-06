@@ -1,10 +1,11 @@
-import type {
-  DesiredResult,
-  PipelineStep,
+import {
   RepoConnectionStatus,
+  RunInstructionsStatus,
+} from '@issue-resolver/shared';
+import type {
+  PipelineStep,
   RepoPlatform,
   RetroRunStatus,
-  RunInstructionsStatus,
   SessionEvent,
   StepModels,
   StepRunStatus,
@@ -12,7 +13,8 @@ import type {
   TaskStatus,
   ThinkingLevel,
 } from '@issue-resolver/shared';
-import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { DesiredResult } from '@issue-resolver/shared';
 import { sql } from 'drizzle-orm';
 
 export const issues = sqliteTable('issues', {
@@ -22,7 +24,7 @@ export const issues = sqliteTable('issues', {
   desired_result: text('desired_result')
     .$type<DesiredResult>()
     .notNull()
-    .default('md'),
+    .default(DesiredResult.md),
   jira_issue_url: text('jira_issue_url'),
   pipeline_steps: text('pipeline_steps', { mode: 'json' })
     .$type<PipelineStep[]>()
@@ -54,7 +56,9 @@ export const issueRepositories = sqliteTable(
   'issue_repositories',
   {
     id: text('id').primaryKey(),
-    issue_id: text('issue_id').notNull(),
+    issue_id: text('issue_id')
+      .notNull()
+      .references(() => issues.id, { onDelete: 'cascade' }),
     repository_url: text('repository_url').notNull(),
     branch_name: text('branch_name').notNull(),
     create_mr: integer('create_mr', { mode: 'boolean' }).notNull().default(false),
@@ -75,7 +79,9 @@ export const iterations = sqliteTable(
   'iterations',
   {
     id: text('id').primaryKey(),
-    issue_id: text('issue_id').notNull(),
+    issue_id: text('issue_id')
+      .notNull()
+      .references(() => issues.id, { onDelete: 'cascade' }),
     number: integer('number').notNull(),
     context: text('context').notNull().default(''),
     review_context: text('review_context').notNull().default(''),
@@ -115,7 +121,7 @@ export const repositories = sqliteTable('repositories', {
   connection_status: text('connection_status')
     .$type<RepoConnectionStatus>()
     .notNull()
-    .default('unknown'),
+    .default(RepoConnectionStatus.unknown),
   last_validated_at: text('last_validated_at'),
   write_access: integer('write_access', { mode: 'boolean' })
     .notNull()
@@ -124,7 +130,7 @@ export const repositories = sqliteTable('repositories', {
   run_instructions_status: text('run_instructions_status')
     .$type<RunInstructionsStatus>()
     .notNull()
-    .default('unknown'),
+    .default(RunInstructionsStatus.unknown),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
 });
@@ -137,7 +143,7 @@ export const tags = sqliteTable('tags', {
   run_instructions_status: text('run_instructions_status')
     .$type<RunInstructionsStatus>()
     .notNull()
-    .default('unknown'),
+    .default(RunInstructionsStatus.unknown),
   created_at: text('created_at').notNull(),
   updated_at: text('updated_at').notNull(),
 });
@@ -165,20 +171,27 @@ export const tagRepositories = sqliteTable(
   }),
 );
 
-export const issueFiles = sqliteTable('issue_files', {
-  id: text('id').primaryKey(),
-  issue_id: text('issue_id')
-    .notNull()
-    .references(() => issues.id, { onDelete: 'cascade' }),
-  iteration_id: text('iteration_id').references(() => iterations.id, {
-    onDelete: 'set null',
+export const issueFiles = sqliteTable(
+  'issue_files',
+  {
+    id: text('id').primaryKey(),
+    issue_id: text('issue_id')
+      .notNull()
+      .references(() => issues.id, { onDelete: 'cascade' }),
+    iteration_id: text('iteration_id').references(() => iterations.id, {
+      onDelete: 'set null',
+    }),
+    name: text('name').notNull(),
+    rel_path: text('rel_path').notNull(),
+    size: integer('size').notNull(),
+    mime_type: text('mime_type'),
+    created_at: text('created_at').notNull(),
+  },
+  (table) => ({
+    byIssue: index('issue_files_issue_id_idx').on(table.issue_id),
+    byIteration: index('issue_files_iteration_id_idx').on(table.iteration_id),
   }),
-  name: text('name').notNull(),
-  rel_path: text('rel_path').notNull(),
-  size: integer('size').notNull(),
-  mime_type: text('mime_type'),
-  created_at: text('created_at').notNull(),
-});
+);
 
 export const stepRuns = sqliteTable(
   'step_runs',
@@ -249,25 +262,31 @@ export const stepOutputs = sqliteTable('step_outputs', {
   updated_at: text('updated_at').notNull(),
 });
 
-export const retroRuns = sqliteTable('retro_runs', {
-  id: text('id').primaryKey(),
-  status: text('status').$type<RetroRunStatus>().notNull(),
-  model: text('model'),
-  instructions: text('instructions'),
-  session_limit: integer('session_limit'),
-  thinking_level: text('thinking_level').$type<ThinkingLevel>(),
-  report: text('report'),
-  error: text('error'),
-  stdout: text('stdout').notNull().default(''),
-  stderr: text('stderr').notNull().default(''),
-  events: text('events', { mode: 'json' })
-    .$type<SessionEvent[]>()
-    .notNull()
-    .default([]),
-  stats: text('stats'),
-  created_at: text('created_at').notNull(),
-  updated_at: text('updated_at').notNull(),
-});
+export const retroRuns = sqliteTable(
+  'retro_runs',
+  {
+    id: text('id').primaryKey(),
+    status: text('status').$type<RetroRunStatus>().notNull(),
+    model: text('model'),
+    instructions: text('instructions'),
+    session_limit: integer('session_limit'),
+    thinking_level: text('thinking_level').$type<ThinkingLevel>(),
+    report: text('report'),
+    error: text('error'),
+    stdout: text('stdout').notNull().default(''),
+    stderr: text('stderr').notNull().default(''),
+    events: text('events', { mode: 'json' })
+      .$type<SessionEvent[]>()
+      .notNull()
+      .default([]),
+    stats: text('stats'),
+    created_at: text('created_at').notNull(),
+    updated_at: text('updated_at').notNull(),
+  },
+  (table) => ({
+    byCreatedAt: index('retro_runs_created_at_idx').on(table.created_at),
+  }),
+);
 
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),

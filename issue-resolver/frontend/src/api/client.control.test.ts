@@ -147,6 +147,19 @@ describe('api/client — управление живой pi-сессией', () 
     expect(await getIterationControl('iter-1')).toBeNull();
   });
 
+  it('getIterationControl: неполный state → null', async () => {
+    const snapshot = makeSnapshot();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse({ ...snapshot, state: { model: 'Claude Sonnet 4' } }),
+        ),
+      ),
+    );
+    expect(await getIterationControl('iter-1')).toBeNull();
+  });
+
   it('getIterationControl: мусорная форма → null', async () => {
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(jsonResponse({ nope: true }))));
     expect(await getIterationControl('iter-1')).toBeNull();
@@ -206,7 +219,8 @@ describe('getReportStatus — форма ответа', () => {
   });
 
   it('корректный статус проходит как есть', async () => {
-    const body = { status: 'success', artifacts: {} };
+    const artifact = { present: true, bytes: 12, mtime: null };
+    const body = { status: 'success', artifacts: { md: artifact, html: artifact } };
     stubFetch(body);
     await expect(getReportStatus('issue-1')).resolves.toEqual(body);
   });
@@ -227,6 +241,17 @@ describe('getReportStatus — форма ответа', () => {
 
   it('artifacts не объект — ошибка', async () => {
     stubFetch({ status: 'success', artifacts: 'нет' });
+    await expect(getReportStatus('issue-1')).rejects.toThrow(
+      'некорректный ответ статуса отчёта',
+    );
+  });
+
+  it('artifacts без md/html — ошибка: потребитель читает artifacts.md.present', async () => {
+    stubFetch({ status: 'success', artifacts: {} });
+    await expect(getReportStatus('issue-1')).rejects.toThrow(
+      'некорректный ответ статуса отчёта',
+    );
+    stubFetch({ status: 'success', artifacts: { md: { present: true }, html: {} } });
     await expect(getReportStatus('issue-1')).rejects.toThrow(
       'некорректный ответ статуса отчёта',
     );

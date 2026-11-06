@@ -25,7 +25,10 @@ this file the step counts as incomplete.
 - `scenarios`: one entry per thing you checked, with what you expected and what
   you actually got. Empty array when this step checks nothing.
 - `findings`: defects and risks you hand downstream, each with a file:line or a
-  flow, so the next agent can go straight to it. Empty array when there are none.
+  flow, so the next agent can go straight to it. `severity` is required and is
+  one of `info`, `low`, `minor`, `major`, `critical`: only `major` and
+  `critical` send a `fail` back to development. Empty array when there are
+  none.
 
 Publishing is the backend's job: once the `pr` step succeeds it commits the
 working copy, pushes a feature branch and opens the MR — and only when a `pr`

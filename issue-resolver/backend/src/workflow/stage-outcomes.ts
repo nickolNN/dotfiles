@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readTextFileOrNull } from '../util/files';
 import { join } from 'node:path';
 import { parseStepReport, type NormalizedStage } from '@issue-resolver/shared';
 
@@ -16,18 +16,12 @@ export function readStageOutcome(
   hostWorkspaceDir: string,
   stageIndex: number,
 ): string | null {
-  try {
-    const report = parseStepReport(
-      readFileSync(
-        join(hostWorkspaceDir, `.issue-stage-${stageIndex}.json`),
-        'utf-8',
-      ),
-    );
-    const summary = report?.summary?.trim();
-    return summary ? summary : null;
-  } catch {
-    return null;
-  }
+  const text = readTextFileOrNull(
+    join(hostWorkspaceDir, `.issue-stage-${stageIndex}.json`),
+  );
+  if (text === null) return null;
+  const summary = parseStepReport(text)?.summary?.trim();
+  return summary ? summary : null;
 }
 
 export function readStageOutcomes(

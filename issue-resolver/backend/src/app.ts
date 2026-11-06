@@ -32,6 +32,7 @@ import type { ReposValidator } from './repo-resolver/validate';
 import type { RepoResolverFactory } from './repo-resolver/resolver';
 import type { Db } from './db/client';
 import type { IterationRunDeps } from './workflow/run-iteration.service';
+import { nowIso } from './db/rows';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -77,7 +78,6 @@ export interface AppDeps extends Partial<IterationRunDeps> {
   repos?: ReposValidator;
   repoResolverFactory?: RepoResolverFactory;
   roomsRoot?: string;
-  /** Maintenance sessions always run in the backend's own environment. */
   retroPi?: PiRunner;
 }
 
@@ -114,7 +114,7 @@ export function buildApp(
   app.addHook('onResponse', async (request, reply) => {
     if (!MUTATING_METHODS.has(request.method)) return;
     console.log(
-      `mutate ${request.method} ${request.url} origin=${request.headers.origin ?? 'none'} status=${reply.statusCode} at=${new Date().toISOString()}`,
+      `mutate ${request.method} ${request.url} origin=${request.headers.origin ?? 'none'} status=${reply.statusCode} at=${nowIso()}`,
     );
   });
 

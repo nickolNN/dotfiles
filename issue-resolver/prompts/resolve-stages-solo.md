@@ -21,13 +21,7 @@ Stage {{STAGE_INDEX}} task: {{STAGE_TASK}}
 
 ## Stage memory
 
-- Earlier stages leave their decisions and traps in the shared memory under
-  `[[stage-N]]`. Read those entries with `memory_search` before you start, in
-  addition to the working-folder files.
-- Record what the next stage cannot read from the code — a decision with its
-  reason, a trap that cost time — following the memory rules below. The stage
-  verdict does not go to memory: it goes to
-  `.issue-stage-{{STAGE_INDEX}}.json` in item 3.
+Read earlier `[[stage-N]]` entries before you start and record as the memory rules below say; the stage verdict does not go to memory — it goes to `.issue-stage-{{STAGE_INDEX}}.json`.
 
 ## Your job
 

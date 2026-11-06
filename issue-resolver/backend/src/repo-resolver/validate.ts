@@ -1,5 +1,7 @@
 
+import { RepoPlatform } from '@issue-resolver/shared';
 import type { RepoValidationResult } from '@issue-resolver/shared';
+import { messageOf } from '../util/errors';
 import {
   createRepoResolver,
   detectPlatform,
@@ -18,7 +20,7 @@ export async function validateRepos(
   return Promise.all(
     urls.map(async (url) => {
       const platform = detectPlatform(url);
-      if (platform === 'unknown') {
+      if (platform === RepoPlatform.unknown) {
         return { url, valid: false, platform, error: 'Unsupported platform' };
       }
       try {
@@ -35,7 +37,7 @@ export async function validateRepos(
           url,
           valid: false,
           platform,
-          error: err instanceof Error ? err.message : 'Unknown error',
+          error: messageOf(err, 'Unknown error'),
         };
       }
     }),

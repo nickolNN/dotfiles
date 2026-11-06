@@ -8,16 +8,18 @@ import {
 } from '../db/retro-runs.repo';
 import { getSetting, setSetting } from '../db/settings.repo';
 import {
+  AbortRetroResult,
   abortRetroRun,
   activeRetroRunId,
   runRetroSession,
   type RetroRunDeps,
 } from '../retro/service';
 import {
-  formatZodError,
   startRetroRunRequestSchema,
   updateHostnameRequestSchema,
 } from '../validation';
+import { parseBody } from './parse-body';
+import { conflict, notFound } from './params';
 
 const API_PATH = '/issue-resolver/api/v1';
 const HOSTNAME_KEY = 'hostname';
@@ -34,10 +36,8 @@ export async function settingsRoutes(
   }));
 
   app.put(HOSTNAME_PATH, async (request, reply) => {
-    const parsed = updateHostnameRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: formatZodError(parsed.error) });
-    }
+    const parsed = parseBody(reply, updateHostnameRequestSchema, request.body);
+    if (!parsed.ok) return parsed.reply;
     setSetting(db, HOSTNAME_KEY, parsed.data.hostname);
     return { hostname: parsed.data.hostname };
   });
@@ -48,10 +48,12 @@ export async function settingsRoutes(
         .status(503)
         .send({ error: 'запуск ретро не сконфигурирован' });
     }
-    const parsed = startRetroRunRequestSchema.safeParse(request.body ?? {});
-    if (!parsed.success) {
-      return reply.status(400).send({ error: formatZodError(parsed.error) });
-    }
+    const parsed = parseBody(
+      reply,
+      startRetroRunRequestSchema,
+      request.body ?? {},
+    );
+    if (!parsed.ok) return parsed.reply;
     const active = activeRetroRunId();
     if (active) {
       return reply.status(409).send({ error: 'ретро уже идёт', id: active });
@@ -93,13 +95,13 @@ export async function settingsRoutes(
       }
       const run = getRetroRun(db, request.params.id);
       if (!run) {
-        return reply.status(404).send({ error: 'прогон не найден' });
+        return notFound(reply, 'прогон не найден');
       }
       const result = abortRetroRun({ ...retro, db }, run.id);
-      if (result === 'not_running') {
-        return reply.status(409).send({ error: 'прогон уже завершён' });
+      if (result === AbortRetroResult.notRunning) {
+        return conflict(reply, 'прогон уже завершён');
       }
-      if (result === 'unavailable') {
+      if (result === AbortRetroResult.unavailable) {
         return reply.status(503).send({ error: 'сессия недоступна' });
       }
       return reply.code(202).send({ ok: true });
@@ -109,7 +111,7 @@ export async function settingsRoutes(
   app.get<{ Params: { id: string } }>(`${RETRO_PATH}/:id`, async (request, reply) => {
     const run = getRetroRunWithLog(db, request.params.id);
     if (!run) {
-      return reply.status(404).send({ error: 'прогон не найден' });
+      return notFound(reply, 'прогон не найден');
     }
     return run;
   });

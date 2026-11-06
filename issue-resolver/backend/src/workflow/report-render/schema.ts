@@ -1,7 +1,19 @@
+import { StepReportStatus } from '@issue-resolver/shared';
 import { z } from 'zod';
 
-const STATUSES = ['pass', 'fail', 'blocked', 'running', 'na'] as const;
-export type DiagramStatus = (typeof STATUSES)[number];
+export const DiagramStatus = Object.freeze({
+  pass: 'pass',
+  fail: 'fail',
+  blocked: 'blocked',
+  running: 'running',
+  na: 'na',
+} as const);
+export type DiagramStatus = (typeof DiagramStatus)[keyof typeof DiagramStatus];
+
+const STATUSES = Object.values(DiagramStatus) as [
+  DiagramStatus,
+  ...DiagramStatus[],
+];
 
 const statusSchema = z.enum(STATUSES);
 
@@ -66,10 +78,6 @@ const diagramSchema = z.discriminatedUnion('kind', [
 ]);
 
 export type Diagram = z.infer<typeof diagramSchema>;
-export type FlowDiagram = z.infer<typeof flowSchema>;
-export type BarsDiagram = z.infer<typeof barsSchema>;
-export type MatrixDiagram = z.infer<typeof matrixSchema>;
-export type SvgDiagram = z.infer<typeof svgSchema>;
 
 export interface ReportMetric {
   label: string;
@@ -156,7 +164,9 @@ export function parseReportDoc(raw: unknown): ParsedReport {
   const doc: ReportDoc = {};
 
   if (source.verdict !== undefined) {
-    const verdict = z.enum(['pass', 'fail', 'blocked']).safeParse(source.verdict);
+    const verdict = z
+      .enum(Object.values(StepReportStatus) as [StepReportStatus, ...StepReportStatus[]])
+      .safeParse(source.verdict);
     if (verdict.success) doc.verdict = verdict.data;
     else {
       warnings.push('report.json: verdict must be pass|fail|blocked');

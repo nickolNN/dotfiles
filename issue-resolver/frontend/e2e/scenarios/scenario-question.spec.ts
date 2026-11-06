@@ -18,7 +18,7 @@ test.describe('scenario: agent question', () => {
     const title = uniqueTitle('e2e-scenario-question');
 
     const issueId = await createIssueViaUI(page, { title });
-    const modal = page.getByTestId('question-modal');
+    const modal = page.getByTestId('inline-question');
 
     await expect(modal).toBeVisible({ timeout: 25_000 });
     await expect(modal).toContainText('уточните ожидаемое поведение');

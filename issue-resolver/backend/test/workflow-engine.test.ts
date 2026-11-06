@@ -2,11 +2,12 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ExecutionPlan, Iteration, PipelineStep, SessionEvent, SessionStats, SSEEvent, StepExecutionResult, StepOutput, StepRun } from '@issue-resolver/shared';
+import type { ExecutionPlan, Iteration, PipelineStep, SessionEvent, SessionStats, SSEEvent, StepExecutionResult, StepOutput, StepReportFinding, StepRun } from '@issue-resolver/shared';
 import {
   MAX_PIPELINE_ATTEMPTS,
   MAX_SELF_RETRIES,
   parseStepReport,
+  ExecutionMode,
   TaskStatus,
   StepReportStatus,
   StepRunStatus,
@@ -173,6 +174,33 @@ const fail = (step: PipelineStep): StepExecutionResult => ({
   step,
   exitCode: 1,
   report: { status: StepReportStatus.fail, summary: `${step} no` },
+  stdout: '',
+  stderr: `${step} err`,
+});
+
+const blockingFail = (step: PipelineStep): StepExecutionResult => ({
+  step,
+  exitCode: 1,
+  report: {
+    status: StepReportStatus.fail,
+    summary: `${step} found a blocking defect`,
+    findings: [{ severity: 'major', title: `${step} defect` }],
+  },
+  stdout: '',
+  stderr: `${step} err`,
+});
+
+const minorOnlyFail = (step: PipelineStep): StepExecutionResult => ({
+  step,
+  exitCode: 1,
+  report: {
+    status: StepReportStatus.fail,
+    summary: `${step} found nits only`,
+    findings: [
+      { severity: 'minor', title: 'typo' },
+      { severity: 'low', title: 'stale comment' },
+    ] satisfies StepReportFinding[],
+  },
   stdout: '',
   stderr: `${step} err`,
 });
@@ -827,6 +855,43 @@ describe('runIteration — цикл фидбека', () => {
   it('review fail → откат на resolve#2 → review#2 success → completed', async () => {
     const { deps, store, pi } = makeDeps();
     pi.enqueue(pass('resolve'));
+    pi.enqueue(blockingFail('review'));
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('review'));
+
+    const result = await runIteration(deps, makeInput(['resolve', 'review']));
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual([
+      'resolve#1:success',
+      'review#1:failed',
+      'resolve#2:success',
+      'review#2:success',
+    ]);
+  });
+
+  it('review fail только с minor/low → advance к test, второй resolve не создаётся', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(minorOnlyFail('review'));
+    pi.enqueue(pass('test'));
+
+    const result = await runIteration(
+      deps,
+      makeInput(['resolve', 'review', 'test']),
+    );
+
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual([
+      'resolve#1:success',
+      'review#1:failed',
+      'test#1:success',
+    ]);
+  });
+
+  it('review fail без findings (молчаливый) → безопасная сторона: в разработку', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
     pi.enqueue(fail('review'));
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('review'));
@@ -880,7 +945,7 @@ describe('runIteration — цикл фидбека', () => {
   it('второй раунд test знает номер попытки из движка', async () => {
     const { deps, pi } = makeDeps();
     pi.enqueue(pass('resolve'));
-    pi.enqueue(fail('test'));
+    pi.enqueue(blockingFail('test'));
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('test'));
 
@@ -895,7 +960,7 @@ describe('runIteration — цикл фидбека', () => {
     const { deps, store, pi } = makeDeps();
     for (let attempt = 1; attempt <= MAX_PIPELINE_ATTEMPTS; attempt += 1) {
       pi.enqueue(pass('resolve'));
-      pi.enqueue(fail('review'));
+      pi.enqueue(blockingFail('review'));
     }
 
     const result = await runIteration(deps, makeInput(['resolve', 'review']));
@@ -1644,6 +1709,22 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     stderr: '',
   });
 
+  const wavePlan = (
+    executors: number,
+    decomposition: string[],
+  ): ExecutionPlan => ({
+    mode: ExecutionMode.stages,
+    stages: [
+      {
+        index: 1,
+        name: 'Волна',
+        task: 'весь объём',
+        executors,
+        decomposition,
+      },
+    ],
+  });
+
   const resolveWith = (summary: string): StepExecutionResult => ({
     step: 'resolve',
     exitCode: 0,
@@ -1652,17 +1733,11 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     stderr: '',
   });
 
-  it('refine room(2) → 2 исполнителя + 1 координатор; отчёт = координатора', async () => {
+  it('refine волна (один этап, 2 исполнителя) → 2 исполнителя + финальный lead', async () => {
     const { deps, store, pi, sse, control } = makeDeps();
     const events: SSEEvent[] = [];
     sse.subscribe('iter-1', (event) => events.push(event));
-    pi.enqueue(
-      refineWith({
-        mode: 'room',
-        executors: 2,
-        decomposition: ['a', 'b'],
-      }),
-    );
+    pi.enqueue(refineWith(wavePlan(2, ['a', 'b'])));
     pi.enqueue(resolveWith('worker0'));
     pi.enqueue(resolveWith('worker1'));
     pi.enqueue(resolveWith('coordinator'));
@@ -1674,8 +1749,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     expect(pi.calls).toHaveLength(4);
     const resolveRunId = store.runs[1].id;
-    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.w0`);
-    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.w1`);
+    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.s1.w0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.s1.w1`);
     expect(pi.calls[3].options?.stepRunId).toBe(resolveRunId);
 
     expect(JSON.parse(store.outputs[1].report)).toMatchObject({
@@ -1700,24 +1775,24 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
 
     expect(control.listAgents('iter-1')).toEqual([
       {
-        id: `run.${resolveRunId}.w0`,
+        id: `run.${resolveRunId}.s1.w0`,
         role: 'worker',
         index: 1,
-        label: 'Исполнитель 1',
-        stage: null,
-        stageName: null,
+        label: 'Этап 1 · Исполнитель 1',
+        stage: 1,
+        stageName: 'Волна',
         status: 'running',
         startedAt: expect.any(String),
         endedAt: null,
         stats: null,
       },
       {
-        id: `run.${resolveRunId}.w1`,
+        id: `run.${resolveRunId}.s1.w1`,
         role: 'worker',
         index: 2,
-        label: 'Исполнитель 2',
-        stage: null,
-        stageName: null,
+        label: 'Этап 1 · Исполнитель 2',
+        stage: 1,
+        stageName: 'Волна',
         status: 'running',
         startedAt: expect.any(String),
         endedAt: null,
@@ -1744,27 +1819,32 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     for (const event of tagged) {
       perAgent.set(event.agentId ?? '', (perAgent.get(event.agentId ?? '') ?? 0) + 1);
     }
-    expect(perAgent.get(`run.${resolveRunId}.w0`)).toBe(3);
-    expect(perAgent.get(`run.${resolveRunId}.w1`)).toBe(3);
+    expect(perAgent.get(`run.${resolveRunId}.s1.w0`)).toBe(3);
+    expect(perAgent.get(`run.${resolveRunId}.s1.w1`)).toBe(3);
     expect(perAgent.get(resolveRunId)).toBe(3);
     expect(
       JSON.parse(tagged[0].data) as { agentId?: string },
     ).toMatchObject({
       stepRunId: resolveRunId,
-      agentId: `run.${resolveRunId}.w0`,
+      agentId: `run.${resolveRunId}.s1.w0`,
     });
   });
 
-  it('worker_count = 1 гасит room-рекомендацию refine → resolve одним агентом', async () => {
+  it('worker_count = 1: волна из 3 исполнителей отклоняется, refine перепланирует в stages', async () => {
     const { deps, store, pi } = makeDeps();
+    pi.enqueue(refineWith(wavePlan(3, ['a', 'b', 'c'])));
     pi.enqueue(
       refineWith({
-        mode: 'room',
-        executors: 3,
-        decomposition: ['a', 'b', 'c'],
+        mode: ExecutionMode.stages,
+        stages: [
+          { index: 1, task: 'one', executors: 1 },
+          { index: 2, task: 'two', executors: 1 },
+        ],
       }),
     );
-    pi.enqueue(resolveWith('solo'));
+    pi.enqueue(resolveWith('stage1'));
+    pi.enqueue(resolveWith('stage2'));
+    pi.enqueue(resolveWith('final'));
 
     const input = makeInput(['refine', 'resolve']);
     const result = await runIteration(deps, {
@@ -1773,48 +1853,91 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     });
 
     expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
-    expect(pi.calls).toHaveLength(2);
-    expect(pi.calls[1].options?.stepRunId).toBe(store.runs[1].id);
-    expect(pi.calls[1].options?.agent).toBeUndefined();
-    expect(pi.calls[1].prompt).toContain('Role: implementer');
+    expect(trace(store)).toEqual([
+      'refine#1:failed',
+      'refine#2:success',
+      'resolve#2:success',
+    ]);
+    expect(store.runs[0].feedback).toContain(
+      'stage at position 1 of 1 declares 3 parallel executors',
+    );
+    expect(pi.calls).toHaveLength(5);
   });
 
-  it('worker_count = 2 режет room-план refine с 4 исполнителями до двух', async () => {
-    const { deps, pi } = makeDeps();
-    pi.enqueue(
-      refineWith({
-        mode: 'room',
-        executors: 4,
-        decomposition: ['a', 'b', 'c', 'd'],
-      }),
-    );
+  it('worker_count = 2: волна из 4 исполнителей отклоняется, refine перепланирует волну из 2', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(refineWith(wavePlan(4, ['a', 'b', 'c', 'd'])));
+    pi.enqueue(refineWith(wavePlan(2, ['a', 'b'])));
     pi.enqueue(resolveWith('w1'));
     pi.enqueue(resolveWith('w2'));
     pi.enqueue(resolveWith('lead'));
 
     const input = makeInput(['refine', 'resolve']);
-    await runIteration(deps, {
+    const result = await runIteration(deps, {
       ...input,
       iteration: { ...input.iteration, worker_count: 2 },
     });
 
-    expect(pi.calls).toHaveLength(4);
-    expect(pi.calls.map((call) => call.options?.stepRunId).slice(1)).toEqual([
-      expect.stringContaining('.w0'),
-      expect.stringContaining('.w1'),
-      expect.not.stringContaining('.w'),
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(trace(store)).toEqual([
+      'refine#1:failed',
+      'refine#2:success',
+      'resolve#2:success',
     ]);
+    expect(store.runs[0].feedback).toContain(
+      'stage at position 1 of 1 declares 4 parallel executors',
+    );
+    expect(pi.calls).toHaveLength(5);
   });
 
-  it('room + aborted исполнитель → координатор НЕ стартует, итерация cancelled', async () => {
+  it('невалидный план тратит бюджет self-retry refine → итерация падает, resolve не стартует', async () => {
     const { deps, store, pi } = makeDeps();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      pi.enqueue(refineWith(wavePlan(2, ['a', 'b'])));
+    }
+
+    const input = makeInput(['refine', 'resolve']);
+    const result = await runIteration(deps, {
+      ...input,
+      iteration: { ...input.iteration, worker_count: 1 },
+    });
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(trace(store)).toEqual([
+      'refine#1:failed',
+      'refine#2:failed',
+      'refine#3:failed',
+      'refine#4:failed',
+    ]);
+    expect(pi.calls).toHaveLength(4);
+  });
+
+  it('фидбек перепланирования называет настоящую причину отказа, а не выдуманную параллель', async () => {
+    const { deps, pi } = makeDeps();
     pi.enqueue(
       refineWith({
-        mode: 'room',
-        executors: 2,
-        decomposition: ['a', 'b'],
+        mode: ExecutionMode.stages,
+        stages: [
+          { index: 1, name: 'Один', task: 'весь объём', executors: 1 },
+        ],
       }),
     );
+    pi.enqueue(refineWith(wavePlan(2, ['a', 'b'])));
+    pi.enqueue(resolveWith('w1'));
+    pi.enqueue(resolveWith('w2'));
+    pi.enqueue(resolveWith('lead'));
+
+    await runIteration(deps, makeInput(['refine', 'resolve']));
+
+    expect(pi.calls[1].prompt).toContain(
+      'a plan with one stage and one executor is `single`',
+    );
+    expect(pi.calls[1].prompt).not.toContain('declares more parallel executors');
+  });
+
+  it('волна + aborted исполнитель → финальный lead НЕ стартует, итерация cancelled', async () => {
+    const { deps, store, pi } = makeDeps();
+    pi.enqueue(refineWith(wavePlan(2, ['a', 'b'])));
     pi.enqueue({
       ...resolveWith('worker0'),
       exitCode: 1,
@@ -1828,8 +1951,8 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     expect(result).toEqual({ iterationStatus: 'cancelled', needsInput: false });
     expect(pi.calls).toHaveLength(3);
     const resolveRunId = store.runs[1].id;
-    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.w0`);
-    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.w1`);
+    expect(pi.calls[1].options?.stepRunId).toBe(`run.${resolveRunId}.s1.w0`);
+    expect(pi.calls[2].options?.stepRunId).toBe(`run.${resolveRunId}.s1.w1`);
     expect(store.runs[1].status).toBe('aborted');
     expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:aborted']);
   });
@@ -1848,22 +1971,49 @@ describe('runIteration — resolve как комната (multi-agent)', () => {
     expect(pi.calls[1].prompt).not.toContain('NOT the lead');
   });
 
-  it('refine execution single с executors — всё равно один вызов', async () => {
+  it('refine execution single с исполнителями — план отклонён, refine перепланирует single', async () => {
     const { deps, store, pi } = makeDeps();
-    pi.enqueue(refineWith({ mode: 'single', executors: 4 }));
+    pi.enqueue(refineWith({ mode: ExecutionMode.single, executors: 4 }));
+    pi.enqueue(refineWith({ mode: ExecutionMode.single }));
     pi.enqueue(pass('resolve'));
 
-    await runIteration(deps, makeInput(['refine', 'resolve']));
+    const result = await runIteration(deps, makeInput(['refine', 'resolve']));
 
-    expect(pi.calls).toHaveLength(2);
-    expect(trace(store)).toEqual(['refine#1:success', 'resolve#1:success']);
+    expect(result).toEqual({ iterationStatus: 'completed', needsInput: false });
+    expect(pi.calls).toHaveLength(3);
+    expect(pi.calls[1].prompt).toContain(
+      'mode single declares 4 executors — single means one executor, use mode stages for a wave',
+    );
+    expect(trace(store)).toEqual([
+      'refine#1:failed',
+      'refine#2:success',
+      'resolve#2:success',
+    ]);
+  });
+
+  it('невалидный план отклоняется, даже когда resolve в пайплайне нет', async () => {
+    const { deps, store, pi } = makeDeps();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      pi.enqueue(refineWith(wavePlan(9, ['a', 'b'])));
+    }
+
+    const result = await runIteration(deps, makeInput(['refine']));
+
+    expect(result).toEqual({ iterationStatus: 'failed', needsInput: false });
+    expect(pi.calls).toHaveLength(4);
+    expect(trace(store)).toEqual([
+      'refine#1:failed',
+      'refine#2:failed',
+      'refine#3:failed',
+      'refine#4:failed',
+    ]);
   });
 
   it('refine stages(2) → этапы последовательно + финальный lead; отчёт = final', async () => {
     const { deps, store, pi, control } = makeDeps();
     pi.enqueue(
       refineWith({
-        mode: 'stages',
+        mode: ExecutionMode.stages,
         stages: [
           {
             index: 1,
@@ -1973,7 +2123,7 @@ describe('runIteration — onIterationTerminal (A1–A5)', () => {
     const { deps, pi } = makeDeps();
     for (let attempt = 1; attempt <= MAX_PIPELINE_ATTEMPTS; attempt += 1) {
       pi.enqueue(pass('resolve'));
-      pi.enqueue(fail('review'));
+      pi.enqueue(blockingFail('review'));
     }
     const seen = collect(deps);
 
@@ -1986,7 +2136,7 @@ describe('runIteration — onIterationTerminal (A1–A5)', () => {
   it('A5: retry→успех не дёргает колбэк дважды — ровно один completed', async () => {
     const { deps, pi } = makeDeps();
     pi.enqueue(pass('resolve'));
-    pi.enqueue(fail('review'));
+    pi.enqueue(blockingFail('review'));
     pi.enqueue(pass('resolve'));
     pi.enqueue(pass('review'));
     const seen = collect(deps);

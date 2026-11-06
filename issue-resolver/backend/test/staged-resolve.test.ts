@@ -6,10 +6,10 @@ import { FakePiRunner } from '../src/pi/runner';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';
 import {
   runStagedResolve,
-  type RoomResolveInput,
-  type RoomResolveOptions,
-} from '../src/workflow/room';
-import { StepReportStatus } from '@issue-resolver/shared';
+  type StagedResolveInput,
+  type StagedResolveOptions,
+} from '../src/workflow/staged-resolve';
+import { ExecutionMode, StepReportStatus } from '@issue-resolver/shared';
 
 const STEP: PipelineStep = 'resolve';
 
@@ -21,7 +21,7 @@ afterEach(() => {
   }
 });
 
-const input = (execution: ExecutionPlan): RoomResolveInput => ({
+const input = (execution: ExecutionPlan): StagedResolveInput => ({
   containerName: 'issue-resolver-issue-1',
   execution,
   issueTitle: 'Fix bug',
@@ -38,7 +38,7 @@ const input = (execution: ExecutionPlan): RoomResolveInput => ({
 
 const options = (
   control?: InMemoryStepSessionRegistry,
-): RoomResolveOptions => ({
+): StagedResolveOptions => ({
   stepRunId: 'run-1',
   iterationId: 'iter-1',
   issueId: 'issue-1',
@@ -71,7 +71,7 @@ const noReport = (): StepExecutionResult => ({
 });
 
 const twoStages: ExecutionPlan = {
-  mode: 'stages',
+  mode: ExecutionMode.stages,
   stages: [
     {
       index: 1,
@@ -85,7 +85,7 @@ const twoStages: ExecutionPlan = {
 };
 
 const threeStages: ExecutionPlan = {
-  mode: 'stages',
+  mode: ExecutionMode.stages,
   stages: [
     { index: 1, name: 'One', task: 't1', executors: 1 },
     { index: 2, name: 'Two', task: 't2', executors: 1 },
@@ -202,7 +202,7 @@ describe('runStagedResolve — последовательные этапы', () 
   it('executors=1 этап = один вызов, отдельного исполнителя нет', async () => {
     const pi = new FakePiRunner();
     const execution: ExecutionPlan = {
-      mode: 'stages',
+      mode: ExecutionMode.stages,
       stages: [
         { index: 1, name: 'One', task: 't1', executors: 1 },
         { index: 2, name: 'Two', task: 't2' },
@@ -224,7 +224,7 @@ describe('runStagedResolve — последовательные этапы', () 
   });
 
   it('саммари для координатора читаются из файлов отчётов, когда раннер не вернул report', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ir-room-files-'));
+    const dir = mkdtempSync(join(tmpdir(), 'ir-wave-files-'));
     dirs.push(dir);
     const write = (name: string, summary: string): void =>
       writeFileSync(
@@ -254,6 +254,59 @@ describe('runStagedResolve — последовательные этапы', () 
   });
 });
 
+describe('runStagedResolve — один этап (волна без координатора этапа)', () => {
+  const wave: ExecutionPlan = {
+    mode: ExecutionMode.stages,
+    stages: [
+      {
+        index: 1,
+        name: 'Волна',
+        task: 'сделать',
+        executors: 2,
+        decomposition: ['a', 'b'],
+      },
+    ],
+  };
+
+  it('исполнители → финальный lead; координатора этапа нет, lead видит воркеров', async () => {
+    const pi = new FakePiRunner();
+    const control = new InMemoryStepSessionRegistry();
+    pi.enqueue(pass('w1'));
+    pi.enqueue(pass('w2'));
+    pi.enqueue(pass('final'));
+
+    const result = await runStagedResolve(pi, input(wave), options(control));
+
+    expect(result.report?.summary).toBe('final');
+    expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
+      'run.run-1.s1.w0',
+      'run.run-1.s1.w1',
+      'run-1',
+    ]);
+    expect(pi.calls[2].prompt).toContain('## Wave workers');
+    expect(pi.calls[2].prompt).toContain('`.issue-stage-1-worker-1.json`: w1');
+    expect(pi.calls[2].prompt).toContain('`.issue-stage-1-worker-2.json`: w2');
+    expect(pi.calls[2].prompt).not.toContain('No stage reports');
+    expect(pi.calls[2].prompt).not.toContain('`.issue-stage-1.json`');
+    expect(control.listAgents('iter-1').map((agent) => agent.role)).toEqual([
+      'worker',
+      'worker',
+      'coordinator',
+    ]);
+  });
+
+  it('abort исполнителя волны → сразу aborted; финальный lead не стартует', async () => {
+    const pi = new FakePiRunner();
+    pi.enqueue(pass('w1'));
+    pi.enqueue(aborted('boom'));
+
+    const result = await runStagedResolve(pi, input(wave), options());
+
+    expect(result.aborted).toBe(true);
+    expect(pi.calls).toHaveLength(2);
+  });
+});
+
 describe('runStagedResolve — resume по файлам исходов этапов', () => {
   const writeOutcome = (dir: string, index: number, summary: string): void =>
     writeFileSync(
@@ -263,7 +316,7 @@ describe('runStagedResolve — resume по файлам исходов этап�
     );
 
   it('этапы 1–2 готовы → исполняется только этап 3 и финальный lead; исходы 1–2 переданы', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ir-room-resume-'));
+    const dir = mkdtempSync(join(tmpdir(), 'ir-wave-resume-'));
     dirs.push(dir);
     writeOutcome(dir, 1, 'этап1 готов');
     writeOutcome(dir, 2, 'этап2 готов');
@@ -287,7 +340,7 @@ describe('runStagedResolve — resume по файлам исходов этап�
   });
 
   it('все этапы готовы → запускается только финальный lead (ни одного этапа)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ir-room-resume-all-'));
+    const dir = mkdtempSync(join(tmpdir(), 'ir-wave-resume-all-'));
     dirs.push(dir);
     writeOutcome(dir, 1, 'готов1');
     writeOutcome(dir, 2, 'готов2');
@@ -307,7 +360,7 @@ describe('runStagedResolve — resume по файлам исходов этап�
   });
 
   it('нет файлов исходов → все этапы с 1 (поведение не изменилось)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ir-room-resume-empty-'));
+    const dir = mkdtempSync(join(tmpdir(), 'ir-wave-resume-empty-'));
     dirs.push(dir);
 
     const pi = new FakePiRunner();
@@ -330,7 +383,7 @@ describe('runStagedResolve — resume по файлам исходов этап�
   });
 
   it('испорченный файл этапа → этап считается незавершённым и перезапускается', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'ir-room-resume-bad-'));
+    const dir = mkdtempSync(join(tmpdir(), 'ir-wave-resume-bad-'));
     dirs.push(dir);
     writeFileSync(join(dir, '.issue-stage-1.json'), '{ not json', 'utf8');
 

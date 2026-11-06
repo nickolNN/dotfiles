@@ -1,8 +1,8 @@
 import type { IssueFile } from '@issue-resolver/shared';
 import { fileContentUrl } from '../api/client';
-import { formatFileSize } from './FilePicker';
+import { formatFileSize } from '../lib/format';
 
-export interface IssueFilesListProps {
+interface IssueFilesListProps {
   files: IssueFile[];
   onDelete?: (fileId: string) => void;
   deletingId?: string | null;

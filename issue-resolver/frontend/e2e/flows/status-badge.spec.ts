@@ -40,9 +40,9 @@ test.describe('status badge', () => {
         : route.continue(),
     );
 
-    await page.goto('/#/tasks');
+    await page.goto('/tasks');
     await expect(
-      page.getByRole('heading', { name: 'Мои задачи' }),
+      page.locator('[data-testid="issue-status"]').first(),
     ).toBeVisible();
 
     for (const { status, label, rgb } of CASES) {

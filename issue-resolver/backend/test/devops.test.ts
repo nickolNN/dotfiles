@@ -128,7 +128,11 @@ describe('prepareWorkspace — анализ run_instructions', () => {
       success: true,
       instructions: '# Run\nnpm ci',
     });
-    const factoryCalls: { containerName: string; hostWorkspaceDir: string; containerWorkspaceDir: string }[] = [];
+    const factoryCalls: {
+      containerName: string;
+      hostWorkspaceDir: string;
+      containerWorkspaceDir: string;
+    }[] = [];
     const progress: WorkspaceProgress[] = [];
     const root = await tempRoot();
 
@@ -436,8 +440,16 @@ describe('PiDevOpsAgent', () => {
       stats: null,
     });
     expect(pi.calls).toHaveLength(1);
-    expect(pi.calls[0].prompt).toBe('DIR=/workspaces/issue-1/app NAME=app');
+    expect(pi.calls[0].prompt).toContain(
+      'DIR=/workspaces/issue-1/app NAME=app',
+    );
+    expect(pi.calls[0].prompt).toContain('One step, one axis');
+    expect(pi.calls[0].prompt).toContain('## Memory');
+    expect(pi.calls[0].prompt).not.toContain('Output contract');
     expect(pi.calls[0].options?.cwd).toBe('/workspaces/issue-1');
+    expect(pi.calls[0].options?.systemAppend).toContain(
+      RUN_INSTRUCTIONS_FILE,
+    );
   });
 
   it('пробрасывает thinkingLevel в pi.run', async () => {

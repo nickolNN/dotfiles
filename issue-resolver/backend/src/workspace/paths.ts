@@ -1,5 +1,3 @@
-import type { DesiredResult } from '@issue-resolver/shared';
-
 export const DEFAULT_WORKSPACE_ROOT = '/workspaces';
 
 const CONTAINER_WORKSPACE_ROOT = '/workspaces';
@@ -32,19 +30,6 @@ export const ALL_RESULT_ARTIFACTS: readonly ResultArtifact[] = [
   HTML_ARTIFACT,
   MD_ARTIFACT,
 ];
-
-export function resultArtifactFor(
-  desiredResult: DesiredResult | undefined,
-): ResultArtifact | null {
-  switch (desiredResult) {
-    case 'md':
-      return MD_ARTIFACT;
-    case 'html':
-      return HTML_ARTIFACT;
-    default:
-      return null;
-  }
-}
 
 export const iterationResultDirFor = (
   root: string,

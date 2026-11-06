@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   useCleanupOrphans,
-  useHostname,
-  useSetHostname,
+  useSaveHostname,
 } from '../stores/queries';
 import type { CleanupResult } from '../api/client';
 import QueryBoundary from '../components/QueryBoundary';
 import RetroRunModal from '../components/RetroRunModal';
-
-const FIELD_CLASS =
-  'w-full rounded-none border border-[#008F11] bg-[#0D0208] px-3 py-2 text-sm text-[#00FF41] outline-none placeholder:text-[#008F11] focus:border-[#00FF41] focus:shadow-[0_0_8px_rgba(0,255,65,0.35)]';
+import { btnOutline } from '../components/buttonStyles';
+import { inputClass } from '../components/formStyles';
+import { messageOf } from '../lib/errors';
 
 function CleanupButton() {
   const cleanupMutation = useCleanupOrphans();
@@ -24,7 +23,7 @@ function CleanupButton() {
     cleanupMutation.mutate(undefined, {
       onSuccess: (res) => setResult(res),
       onError: (err) =>
-        setError(err instanceof Error ? err.message : 'Ошибка очистки'),
+        setError(messageOf(err, 'Ошибка очистки')),
     });
   }
 
@@ -76,9 +75,8 @@ export default function Settings(props: SettingsProps) {
 }
 
 function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
-  const { data } = useHostname();
-  const currentHostname = data ?? hostname;
-  const saveMutation = useSetHostname();
+  const currentHostname = hostname;
+  const saveMutation = useSaveHostname();
 
   const [draft, setDraft] = useState(currentHostname);
   const [saved, setSaved] = useState(false);
@@ -111,7 +109,7 @@ function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
         savedTimer.current = window.setTimeout(() => setSaved(false), 2000);
       },
       onError: (err) =>
-        setError(err instanceof Error ? err.message : 'Не удалось сохранить'),
+        setError(messageOf(err, 'Не удалось сохранить')),
     });
   }
 
@@ -135,7 +133,7 @@ function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
           value={draft}
           placeholder="hostname"
           spellCheck={false}
-          className={FIELD_CLASS}
+          className={inputClass}
           onChange={(event) => setDraft(event.currentTarget.value)}
         />
         <div className="flex items-center gap-3">
@@ -143,7 +141,7 @@ function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
             type="submit"
             data-testid="settings-save"
             disabled={saving}
-            className="rounded-none border border-[#00FF41] px-4 py-2 text-sm font-medium text-[#00FF41] transition-colors hover:bg-[#00FF41]/10 disabled:opacity-50"
+            className={btnOutline}
           >
             Сохранить
           </button>
@@ -192,7 +190,7 @@ function SettingsView({ hostname, onHostnameChange }: SettingsProps) {
         <button
           type="button"
           data-testid="settings-retro-open"
-          className="rounded-none border border-[#00FF41] px-4 py-2 text-sm font-medium text-[#00FF41] transition-colors hover:bg-[#00FF41]/10"
+          className={btnOutline}
           onClick={() => setRetroOpen(true)}
         >
           Открыть ретро

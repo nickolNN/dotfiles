@@ -3,6 +3,7 @@ import type { IssueFile } from '@issue-resolver/shared';
 import { and, asc, eq, isNull, or } from 'drizzle-orm';
 import type { Db } from './client';
 import { issueFiles } from './schema';
+import { nowIso } from './rows';
 
 export interface NewIssueFile {
   issueId: string;
@@ -20,7 +21,7 @@ export async function insertMany(
   if (files.length === 0) {
     return [];
   }
-  const now = new Date().toISOString();
+  const now = nowIso();
   const rows: IssueFile[] = files.map((file) => ({
     id: randomUUID(),
     issue_id: file.issueId,

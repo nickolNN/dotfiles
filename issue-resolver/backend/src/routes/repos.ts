@@ -1,3 +1,4 @@
+import { isKnownRepoPlatform } from '@issue-resolver/shared';
 import type { RepoBranchesResponse, RepoPlatform, RepoValidationResult, SavedRepo } from '@issue-resolver/shared';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '../db/client';
@@ -17,10 +18,12 @@ import {
 } from '../repo-resolver/validate';
 import {
   createRepoRequestSchema,
-  formatZodError,
   validateReposRequestSchema,
 } from '../validation';
+import { parseBody } from './parse-body';
 import { RepoConnectionStatus } from '@issue-resolver/shared';
+import { notFound } from './params';
+import { nowIso } from '../db/rows';
 
 const API_PATH = '/issue-resolver/api/v1';
 const REPOSITORIES_PATH = `${API_PATH}/repositories`;
@@ -35,8 +38,9 @@ function writeFromResult(
   url: string,
   result: RepoValidationResult,
 ): RepositoryWrite {
-  const platform: RepoPlatform | null =
-    result.platform === 'unknown' ? null : result.platform;
+  const platform: RepoPlatform | null = isKnownRepoPlatform(result.platform)
+    ? result.platform
+    : null;
 
   if (!result.valid || !result.info) {
     return {
@@ -49,7 +53,7 @@ function writeFromResult(
       description: null,
       isPrivate: null,
       connectionStatus: RepoConnectionStatus.error,
-      lastValidatedAt: new Date().toISOString(),
+      lastValidatedAt: nowIso(),
       writeAccess: false,
     };
   }
@@ -65,7 +69,7 @@ function writeFromResult(
     description: info.description,
     isPrivate: info.isPrivate,
     connectionStatus: RepoConnectionStatus.ok,
-    lastValidatedAt: new Date().toISOString(),
+    lastValidatedAt: nowIso(),
     writeAccess: info.writeAccess ?? false,
   };
 }
@@ -85,10 +89,8 @@ export async function reposRoutes(
   };
 
   app.post(`${API_PATH}/repos/validate`, async (request, reply) => {
-    const parsed = validateReposRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: formatZodError(parsed.error) });
-    }
+    const parsed = parseBody(reply, validateReposRequestSchema, request.body);
+    if (!parsed.ok) return parsed.reply;
     const results = await validate(parsed.data.urls);
     return { results };
   });
@@ -96,10 +98,8 @@ export async function reposRoutes(
   app.get(REPOSITORIES_PATH, async () => listRepositories(db));
 
   app.post(REPOSITORIES_PATH, async (request, reply) => {
-    const parsed = createRepoRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: formatZodError(parsed.error) });
-    }
+    const parsed = parseBody(reply, createRepoRequestSchema, request.body);
+    if (!parsed.ok) return parsed.reply;
     const url = parsed.data.url.trim();
     const result = await resolveOne(url);
     const saved: SavedRepo = insertRepository(db, writeFromResult(url, result));
@@ -114,19 +114,17 @@ export async function reposRoutes(
   app.put<{ Params: { id: string } }>(
     `${REPOSITORIES_PATH}/:id`,
     async (request, reply) => {
-      const parsed = createRepoRequestSchema.safeParse(request.body);
-      if (!parsed.success) {
-        return reply.status(400).send({ error: formatZodError(parsed.error) });
-      }
+      const parsed = parseBody(reply, createRepoRequestSchema, request.body);
+      if (!parsed.ok) return parsed.reply;
       const { id } = request.params;
       if (!getRepository(db, id)) {
-        return reply.status(404).send({ error: 'repository not found' });
+        return notFound(reply, 'repository not found');
       }
       const url = parsed.data.url.trim();
       const result = await resolveOne(url);
       const saved = updateRepository(db, id, writeFromResult(url, result));
       if (!saved) {
-        return reply.status(404).send({ error: 'repository not found' });
+        return notFound(reply, 'repository not found');
       }
       if (saved.connectionStatus !== RepoConnectionStatus.ok) {
         return reply
@@ -141,7 +139,7 @@ export async function reposRoutes(
     `${REPOSITORIES_PATH}/:id`,
     async (request, reply) => {
       if (!deleteRepository(db, request.params.id)) {
-        return reply.status(404).send({ error: 'repository not found' });
+        return notFound(reply, 'repository not found');
       }
       return reply.code(204).send();
     },
@@ -152,7 +150,7 @@ export async function reposRoutes(
     async (request, reply) => {
       const existing = getRepository(db, request.params.id);
       if (!existing) {
-        return reply.status(404).send({ error: 'repository not found' });
+        return notFound(reply, 'repository not found');
       }
       const result = await resolveOne(existing.url);
       const saved = updateRepository(
@@ -161,7 +159,7 @@ export async function reposRoutes(
         writeFromResult(existing.url, result),
       );
       if (!saved) {
-        return reply.status(404).send({ error: 'repository not found' });
+        return notFound(reply, 'repository not found');
       }
       return reply.status(200).send(saved);
     },
@@ -172,7 +170,7 @@ export async function reposRoutes(
     async (request, reply) => {
       const existing = getRepository(db, request.params.id);
       if (!existing) {
-        return reply.status(404).send({ error: 'repository not found' });
+        return notFound(reply, 'repository not found');
       }
       const result = await resolveOne(existing.url);
       if (!result.valid || !result.info) {

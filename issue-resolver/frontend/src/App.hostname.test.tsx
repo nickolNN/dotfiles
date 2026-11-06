@@ -57,7 +57,7 @@ describe('App hostname → заголовок вкладки', () => {
 
   it('обновляет заголовок после сохранения в настройках', async () => {
     vi.stubGlobal('EventSource', FakeEventSource);
-    window.history.replaceState(null, '', '/#/settings');
+    window.history.replaceState(null, '', '/settings');
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/settings/hostname')) {

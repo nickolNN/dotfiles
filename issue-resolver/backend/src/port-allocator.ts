@@ -53,18 +53,6 @@ export async function reserveDevPort(
   return true;
 }
 
-export function releaseDevPort(port: number): void {
-  const owner = portOwner.get(port);
-  if (owner) {
-    const set = issuePorts.get(owner);
-    if (set) {
-      set.delete(port);
-      if (set.size === 0) issuePorts.delete(owner);
-    }
-    portOwner.delete(port);
-  }
-}
-
 export function releaseIssueDevPorts(issueId: string): void {
   const set = issuePorts.get(issueId);
   if (set) {
@@ -73,12 +61,6 @@ export function releaseIssueDevPorts(issueId: string): void {
     }
     issuePorts.delete(issueId);
   }
-}
-
-export function getDevPort(issueId: string): number | undefined {
-  const set = issuePorts.get(issueId);
-  if (set && set.size > 0) return set.values().next().value;
-  return undefined;
 }
 
 export function resetPortAllocator(): void {

@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process';
 import type { ModelDescriptor } from '@issue-resolver/shared';
 
 import { modelDescriptorFromPiModel } from '../models/source';
+import { JSON_PARSE_FAILED, tryParseJson } from '../util/json-file';
+import { asRecord } from '../util/records';
 
 export interface ModelsProbe {
   list(): Promise<ModelDescriptor[]>;
@@ -84,12 +86,8 @@ function probeLiveModels(): Promise<ModelDescriptor[]> {
       buffer = lines.pop() ?? '';
       for (const line of lines) {
         if (!line.trim()) continue;
-        let event: Record<string, unknown>;
-        try {
-          event = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          continue;
-        }
+        const event = asRecord(tryParseJson(line));
+        if (event === null) continue;
         if (event.command !== 'get_available_models') continue;
         finish(modelsFromProbeResponse(event));
         return;

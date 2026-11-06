@@ -50,8 +50,8 @@ afterEach(() => {
   for (const child of children.splice(0)) {
     try {
       process.kill(-(child.pid as number), 'SIGKILL');
-    } catch {
-      // уже завершился
+    } catch (error) {
+      void error;
     }
   }
   for (const root of roots.splice(0)) {

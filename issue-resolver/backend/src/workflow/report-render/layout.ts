@@ -29,6 +29,12 @@ const BLOCK = /<(h1|h2|p)\b([^>]*)>([\s\S]*?)<\/\1>/g;
 
 type BlockKind = 'h1' | 'h2' | 'p' | 'other';
 
+const BLOCK_KINDS: ReadonlySet<string> = new Set(['h1', 'h2', 'p']);
+
+function isBlockKind(value: unknown): value is BlockKind {
+  return typeof value === 'string' && BLOCK_KINDS.has(value);
+}
+
 interface Block {
   kind: BlockKind;
   html: string;
@@ -52,7 +58,7 @@ function blocks(html: string): Block[] {
     const id = /id="([^"]*)"/.exec(match[2])?.[1] ?? '';
     const text = plain(match[3]);
     parsed.push({
-      kind: match[1] as BlockKind,
+      kind: isBlockKind(match[1]) ? match[1] : 'other',
       html: match[0],
       id,
       text,

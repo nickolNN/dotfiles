@@ -7,6 +7,7 @@ import { issues } from '../db/schema';
 import { cleanupAbandonedIssueRooms, roomsRootFromEnv } from '../pi/rooms';
 import { removeWorkspaceDir } from '../processes/workspace-processes';
 import { DEFAULT_WORKSPACE_ROOT } from '../workspace/paths';
+import { messageOf } from '../util/errors';
 
 const API_PATH = '/issue-resolver/api/v1';
 
@@ -65,7 +66,7 @@ export async function adminRoutes(
         result.deleted_dirs += 1;
       } catch (error) {
         result.errors.push(
-          `${dir}: ${error instanceof Error ? error.message : String(error)}`,
+          `${dir}: ${messageOf(error)}`,
         );
       }
     }

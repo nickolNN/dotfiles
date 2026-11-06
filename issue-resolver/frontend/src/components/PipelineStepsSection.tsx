@@ -1,6 +1,6 @@
+import { DEFAULT_MAX_EXECUTORS, PipelineStep } from '@issue-resolver/shared';
 import type {
   ModelDescriptor,
-  PipelineStep,
   StepModels,
   StepThinkingLevels,
 } from '@issue-resolver/shared';
@@ -8,21 +8,21 @@ import { thinkingLevelsFor } from '../constants/thinking-levels';
 import { compactInputClass, labelClass } from './formStyles';
 import StepRow from './StepRow';
 
-export const DEFAULT_STEP_OPTIONS: ReadonlyArray<{
+const DEFAULT_STEP_OPTIONS: ReadonlyArray<{
   value: PipelineStep;
   label: string;
 }> = [
-  { value: 'refine', label: 'Планирование' },
-  { value: 'resolve', label: 'Исполнение' },
-  { value: 'review', label: 'Код-ревью' },
-  { value: 'test', label: 'Тест' },
-  { value: 'pr', label: 'Merge Request' },
+  { value: PipelineStep.refine, label: 'Планирование' },
+  { value: PipelineStep.resolve, label: 'Исполнение' },
+  { value: PipelineStep.review, label: 'Код-ревью' },
+  { value: PipelineStep.test, label: 'Тест' },
+  { value: PipelineStep.pr, label: 'Merge Request' },
 ];
 
 const WORKER_COUNT_TITLE =
-  'Планируем — решает, запускать ли resolve комнатой агентов; без Планирования всегда ровно один агент. 0 — как по умолчанию (макс. 4), 1 — комнаты нет, но объём всё равно делится этапами по одному агенту, 2-4 — макс. N в комнате.';
+  `Планируем — решает, запускать ли resolve несколькими агентами; без Планирования всегда ровно один агент. 0 — как по умолчанию (${DEFAULT_MAX_EXECUTORS}), 1 — ни одного параллельного агента, но объём всё равно делится этапами по одному исполнителю, N — макс. N агентов одновременно (волна или внутри этапа).`;
 
-export interface PipelineStepOption {
+interface PipelineStepOption {
   value: PipelineStep;
   label: string;
 }
@@ -66,7 +66,7 @@ export default function PipelineStepsSection({
 }: PipelineStepsSectionProps) {
   const chosenSteps = new Set<PipelineStep>(selectedSteps);
   const showWorkerCount = workerCount !== undefined && onWorkerCountChange;
-  const showPrRepositories = selectedSteps.includes('pr') && !prDisabled;
+  const showPrRepositories = selectedSteps.includes(PipelineStep.pr) && !prDisabled;
 
   return (
     <>
@@ -74,7 +74,7 @@ export default function PipelineStepsSection({
         <legend className={labelClass}>Шаги пайплайна и модели</legend>
         <div className="space-y-3">
           {stepOptions.map((step) => {
-            const prBlocked = step.value === 'pr' && prDisabled;
+            const prBlocked = step.value === PipelineStep.pr && prDisabled;
             const checked = !prBlocked && selectedSteps.includes(step.value);
             const modelEnabled = chosenSteps.has(step.value) && !prBlocked;
             const selectedModel = models.find(
@@ -100,7 +100,7 @@ export default function PipelineStepsSection({
                 onModelChange={onStepModelChange}
                 onThinkingChange={onStepThinkingChange}
                 hint={
-                  step.value === 'refine' && showWorkerCount ? (
+                  step.value === PipelineStep.refine && showWorkerCount ? (
                     <label
                       data-testid="refine-planner-hint"
                       className="flex items-center gap-2 text-xs text-[#00FF41]/60"
@@ -112,7 +112,6 @@ export default function PipelineStepsSection({
                         id="worker-count"
                         type="number"
                         min={0}
-                        max={4}
                         value={workerCount}
                         onChange={(event) =>
                           onWorkerCountChange(Number(event.target.value) || 0)

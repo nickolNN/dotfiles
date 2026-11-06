@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { MAX_PIPELINE_ATTEMPTS, nextStepDecision } from '../src/workflow';
-import type { PipelineStep } from '../src/types';
+import {
+  MAX_PIPELINE_ATTEMPTS,
+  nextStepDecision,
+  type StepTransitionInput,
+} from '../src/workflow';
+import type { PipelineStep, StepReport, StepReportFinding } from '../src/types';
 
 function decide(
   steps: PipelineStep[],
@@ -11,6 +15,26 @@ function decide(
   maxAttempts?: number,
 ) {
   return nextStepDecision({ steps, currentStep, result, attempt, maxAttempts });
+}
+
+const failReport = (findings?: StepReportFinding[]): StepReport => ({
+  status: 'fail',
+  summary: 'review found defects',
+  ...(findings === undefined ? {} : { findings }),
+});
+
+function decideReport(
+  report: StepReport | null | undefined,
+  overrides: Partial<StepTransitionInput> = {},
+) {
+  return nextStepDecision({
+    steps: ['resolve', 'review', 'pr'],
+    currentStep: 'review',
+    result: 'failed',
+    attempt: 1,
+    report,
+    ...overrides,
+  });
 }
 
 describe('nextStepDecision — advance on success', () => {
@@ -85,6 +109,69 @@ describe('nextStepDecision — retry_resolve on failed review/test', () => {
     expect(
       decide(['resolve', 'test'], 'test', 'failed', MAX_PIPELINE_ATTEMPTS),
     ).toEqual({ kind: 'needs_input', reason: 'max_attempts' });
+  });
+});
+
+describe('nextStepDecision — severity decides the return', () => {
+  it('advances a fail with only minor findings, as if it had passed', () => {
+    expect(
+      decideReport(
+        failReport([
+          { severity: 'minor', title: 'typo' },
+          { severity: 'low', title: 'stale comment' },
+        ]),
+      ),
+    ).toEqual({ kind: 'advance', nextStep: 'pr', iterationCompleted: false });
+  });
+
+  it('retries resolve on a fail with one major finding', () => {
+    expect(decideReport(failReport([{ severity: 'major', title: 'wrong focus' }]))).toEqual({
+      kind: 'retry_resolve',
+      attempt: 2,
+    });
+  });
+
+  it('retries resolve on a fail without any finding — silent fail is blocking', () => {
+    expect(decideReport(failReport())).toEqual({
+      kind: 'retry_resolve',
+      attempt: 2,
+    });
+  });
+
+  it('retries resolve on a fail without a report at all', () => {
+    expect(decideReport(null)).toEqual({ kind: 'retry_resolve', attempt: 2 });
+  });
+
+  it('retries resolve when a severity outside the set is unreadable', () => {
+    const report = {
+      status: 'fail',
+      summary: 'review found defects',
+      findings: [{ severity: 'high', title: 'unknown grade' }],
+    } as unknown as StepReport;
+
+    expect(decideReport(report)).toEqual({ kind: 'retry_resolve', attempt: 2 });
+  });
+
+  it('asks the human when blocking findings outlive the attempt budget', () => {
+    expect(
+      decideReport(failReport([{ severity: 'critical', title: 'crash' }]), {
+        attempt: 3,
+        maxAttempts: 3,
+      }),
+    ).toEqual({ kind: 'needs_input', reason: 'max_attempts' });
+  });
+
+  it('advances a pass even when it carries a major finding', () => {
+    expect(
+      decideReport(
+        {
+          status: 'pass',
+          summary: 'shipped, with one remark',
+          findings: [{ severity: 'major', title: 'remark' }],
+        },
+        { result: 'success' },
+      ),
+    ).toEqual({ kind: 'advance', nextStep: 'pr', iterationCompleted: false });
   });
 });
 

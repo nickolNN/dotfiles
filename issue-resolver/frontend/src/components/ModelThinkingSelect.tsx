@@ -2,10 +2,9 @@ import type {
   ModelDescriptor,
   ThinkingLevel,
 } from '@issue-resolver/shared';
-import { thinkingLevelsFor } from '../constants/thinking-levels';
 import { inputClass } from './formStyles';
 
-export interface ModelThinkingSelectProps {
+interface ModelThinkingSelectProps {
   models: ModelDescriptor[];
   thinkingLevels: readonly ThinkingLevel[];
 
@@ -32,7 +31,6 @@ export interface ModelThinkingSelectProps {
 
   modelSelectClassName?: string;
   thinkingSelectClassName?: string;
-  /** Class of the label text; defaults to the form-sized label. */
   labelClassName?: string;
 
   className?: string;
@@ -121,5 +119,3 @@ export default function ModelThinkingSelect({
     </div>
   );
 }
-
-export { thinkingLevelsFor };

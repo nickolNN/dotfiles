@@ -1,46 +1,34 @@
-import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import type { ModelDescriptor, ThinkingLevel } from '@issue-resolver/shared';
+import { ThinkingLevel, isThinkingLevel } from '@issue-resolver/shared';
+import type { ModelDescriptor } from '@issue-resolver/shared';
+
+import { readJsonFile } from '../util/json-file';
+import { asRecord } from '../util/records';
 
 export interface ModelSource {
   list(): Promise<ModelDescriptor[]>;
 }
 
-const EXTENDED_THINKING_LEVELS: readonly ThinkingLevel[] = [
-  'off',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-];
-
-const THINKING_LEVELS: ReadonlySet<string> = new Set(EXTENDED_THINKING_LEVELS);
+const EXTENDED_THINKING_LEVELS: readonly ThinkingLevel[] =
+  Object.values(ThinkingLevel);
 
 function toThinkingLevel(value: unknown): ThinkingLevel | null {
-  return typeof value === 'string' && THINKING_LEVELS.has(value)
-    ? (value as ThinkingLevel)
-    : null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return isThinkingLevel(value) ? value : null;
 }
 
 function supportedThinkingLevels(
   record: Record<string, unknown>,
 ): ThinkingLevel[] {
-  if (!record.reasoning) return ['off'];
+  if (!record.reasoning) return [ThinkingLevel.off];
   const map = asRecord(record.thinkingLevelMap);
   return EXTENDED_THINKING_LEVELS.filter((level) => {
     const mapped = map?.[level];
     if (mapped === null) return false;
-    if (level === 'xhigh' || level === 'max') return mapped !== undefined;
+    if (level === ThinkingLevel.xhigh || level === ThinkingLevel.max) {
+      return mapped !== undefined;
+    }
     return true;
   });
 }
@@ -135,8 +123,9 @@ function readPiModelsFile(env: NodeJS.ProcessEnv): ModelDescriptor[] {
 
   for (const file of candidates) {
     if (!file) continue;
+    const parsed = readJsonFile(file, asRecord);
+    if (!parsed) continue;
     try {
-      const parsed = JSON.parse(readFileSync(file, 'utf8'));
       const models = modelsFromPiConfig(parsed);
       if (models.length > 0) return models;
     } catch {

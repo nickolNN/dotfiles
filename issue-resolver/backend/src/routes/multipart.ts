@@ -1,6 +1,7 @@
 import type {} from '@fastify/multipart';
 import type { FastifyRequest } from 'fastify';
 import type { UploadInput } from '../workspace/attachments';
+import { JSON_PARSE_FAILED, tryParseJson } from '../util/json-file';
 
 const PAYLOAD_FIELD = 'payload';
 const FILES_FIELD = 'files';
@@ -43,12 +44,12 @@ export async function readRequestPayload(
     };
   }
 
-  try {
-    return { ok: true, body: JSON.parse(payload), files };
-  } catch {
+  const body = tryParseJson(payload);
+  if (body === JSON_PARSE_FAILED) {
     return {
       ok: false,
       error: `multipart: поле ${PAYLOAD_FIELD} не является валидным JSON`,
     };
   }
+  return { ok: true, body, files };
 }

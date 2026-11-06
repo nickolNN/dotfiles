@@ -6,7 +6,7 @@ import type {
   ContainerStats,
   SpawnContainerResult,
 } from '@issue-resolver/shared';
-import type { ContainerController, DockerStatsJson } from './controller';
+import type { ContainerController } from './controller';
 
 const CGROUP_POLL_INTERVAL_MS = 1000;
 
@@ -55,7 +55,7 @@ export class LocalContainerController implements ContainerController {
       const systemUsage = prevSystemUsage + elapsedUs * cgroup.numCpus;
       const firstFrame = prevCpuUsage === null;
 
-      const frame: DockerStatsJson = {
+      const frame = {
         cpu_stats: {
           cpu_usage: { total_usage: cgroup.cpuUsage },
           system_cpu_usage: systemUsage,

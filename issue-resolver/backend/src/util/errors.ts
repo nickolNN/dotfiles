@@ -1,0 +1,1 @@
+export { messageOf } from '@issue-resolver/shared';

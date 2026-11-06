@@ -740,13 +740,10 @@ describe('TaskDetail — прогон не притворяется живым',
     next: () => Promise<Response>,
   ): void {
     const base = fetchMock.getMockImplementation();
-    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
-      String(input).endsWith('/report/status')
-        ? next()
-        : base
-          ? base(input, init)
-          : Promise.resolve(jsonResponse({})),
-    );
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/report/status')) return next();
+      return base ? base(input, init) : Promise.resolve(jsonResponse({}));
+    });
   }
 
   it(

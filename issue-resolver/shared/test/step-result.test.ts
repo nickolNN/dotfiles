@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  blockingFindings,
   parseSessionStats,
   parseStepReport,
   stepRunOutcome,
   sumSessionStats,
 } from '../src/step-result';
-import type { SessionStats, StepReport } from '../src/types';
+import type { SessionStats, StepReport, StepReportFinding } from '../src/types';
 
 function stats(overrides: Partial<SessionStats> = {}): SessionStats {
   return {
@@ -181,7 +182,7 @@ describe('parseStepReport', () => {
     });
   });
 
-  it('keeps a valid execution plan', () => {
+  it('treats the retired room mode as an unreadable execution plan', () => {
     const parsed = parseStepReport(
       JSON.stringify({
         status: 'pass',
@@ -194,11 +195,8 @@ describe('parseStepReport', () => {
       }),
     );
 
-    expect(parsed?.execution).toEqual({
-      mode: 'room',
-      executors: 2,
-      decomposition: ['a', 'b'],
-    });
+    expect(parsed).not.toHaveProperty('execution');
+    expect(parsed?.executionMalformed).toBe(true);
   });
 
   it('keeps a valid staged execution plan', () => {
@@ -226,21 +224,88 @@ describe('parseStepReport', () => {
   });
 
   it('omits execution when the field is absent', () => {
-    expect(
-      parseStepReport('{"status":"pass","summary":"ok"}'),
-    ).not.toHaveProperty('execution');
+    const parsed = parseStepReport('{"status":"pass","summary":"ok"}');
+
+    expect(parsed).not.toHaveProperty('execution');
+    expect(parsed).not.toHaveProperty('executionMalformed');
   });
 
-  it('omits a broken execution plan', () => {
-    expect(
-      parseStepReport(
-        JSON.stringify({
-          status: 'pass',
-          summary: 'ok',
-          execution: { mode: 'nope' },
-        }),
-      ),
-    ).not.toHaveProperty('execution');
+  it('marks a present but unreadable execution plan instead of hiding it', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({
+        status: 'pass',
+        summary: 'ok',
+        execution: { mode: 'nope' },
+      }),
+    );
+
+    expect(parsed).not.toHaveProperty('execution');
+    expect(parsed?.executionMalformed).toBe(true);
+  });
+
+  it('treats an explicit null execution as absent, not as unreadable', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({ status: 'pass', summary: 'ok', execution: null }),
+    );
+
+    expect(parsed).not.toHaveProperty('execution');
+    expect(parsed).not.toHaveProperty('executionMalformed');
+  });
+
+  it('drops non-object findings, marks unreadable severities and keeps the rest', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({
+        status: 'pass',
+        summary: 'ok',
+        scenarios: [null, 42, {}, { name: '  ' }, { name: 'ok', status: 'pass' }],
+        findings: [
+          null,
+          { title: 'no severity' },
+          { severity: 42, title: 'not a string' },
+          { severity: 'critical', title: 'real' },
+        ],
+      }),
+    );
+
+    expect(parsed?.scenarios).toEqual([{ name: 'ok', status: 'pass' }]);
+    expect(parsed?.findings).toEqual([
+      { severity: 'critical', title: 'no severity' },
+      { severity: 'critical', title: 'not a string' },
+      { severity: 'critical', title: 'real' },
+    ]);
+    expect(parsed?.findingsMalformed).toBe(true);
+  });
+
+  it('keeps a finding with an unknown severity as blocking instead of dropping it', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({
+        status: 'fail',
+        summary: 'bad',
+        findings: [{ severity: 'high', title: 'unknown grade' }],
+      }),
+    );
+
+    expect(parsed?.findings).toEqual([
+      { severity: 'critical', title: 'unknown grade' },
+    ]);
+    expect(parsed?.findingsMalformed).toBe(true);
+  });
+
+  it('keeps every valid finding and scenario', () => {
+    const parsed = parseStepReport(
+      JSON.stringify({
+        status: 'pass',
+        summary: 'ok',
+        scenarios: [{ name: 's', status: 'fail', details: 'd' }],
+        findings: [{ severity: 'minor' }],
+      }),
+    );
+
+    expect(parsed?.scenarios).toEqual([
+      { name: 's', status: 'fail', details: 'd' },
+    ]);
+    expect(parsed?.findings).toEqual([{ severity: 'minor' }]);
+    expect(parsed).not.toHaveProperty('findingsMalformed');
   });
 
   it('accepts blocked as a valid status', () => {
@@ -469,5 +534,76 @@ describe('stepRunOutcome', () => {
     expect(
       stepRunOutcome({ exitCode: 0, report: pass, modelReplied: undefined }),
     ).toEqual({ status: 'success', failure: null });
+  });
+});
+
+describe('blockingFindings', () => {
+  const report = (patch: Partial<StepReport>): StepReport => ({
+    status: 'fail',
+    summary: 'review found defects',
+    ...patch,
+  });
+
+  it('returns major and critical findings only', () => {
+    expect(
+      blockingFindings(
+        report({
+          findings: [
+            { severity: 'minor', title: 'typo' },
+            { severity: 'major', title: 'wrong focus' },
+            { severity: 'critical', title: 'crash' },
+            { severity: 'info', title: 'observation' },
+          ],
+        }),
+      ).map((finding) => finding.severity),
+    ).toEqual(['major', 'critical']);
+  });
+
+  it('returns nothing for a fail with only non-blocking findings', () => {
+    expect(
+      blockingFindings(
+        report({ findings: [{ severity: 'minor', title: 'typo' }] }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('treats a fail without findings as one silent blocking finding', () => {
+    const blockers = blockingFindings(report({}));
+
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0].severity).toBe('critical');
+  });
+
+  it('treats an unreadable severity as blocking', () => {
+    const malformed = report({
+      findings: [{ severity: 'high' } as unknown as StepReportFinding],
+    });
+
+    expect(blockingFindings(malformed)).toHaveLength(1);
+  });
+
+  it('treats the findingsMalformed marker as blocking', () => {
+    const malformed = report({
+      findings: [{ severity: 'minor', title: 'typo' }],
+      findingsMalformed: true,
+    });
+
+    expect(blockingFindings(malformed)).toHaveLength(1);
+  });
+
+  it('treats a missing report as blocking', () => {
+    expect(blockingFindings(null)[0].severity).toBe('critical');
+    expect(blockingFindings(undefined)[0].severity).toBe('critical');
+  });
+
+  it('lets pass win over a major finding', () => {
+    expect(
+      blockingFindings(
+        report({
+          status: 'pass',
+          findings: [{ severity: 'major', title: 'remark' }],
+        }),
+      ),
+    ).toEqual([]);
   });
 });

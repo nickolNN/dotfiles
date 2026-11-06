@@ -14,7 +14,6 @@ import {
   createTag,
   deleteRepository,
   deleteTag,
-  getHostname,
   getIssue,
   getIterationControl,
   getIterations,
@@ -26,10 +25,38 @@ import {
   updateTag,
 } from '../api/client';
 import type { CleanupResult } from '../api/client';
+import { queryKeys } from '../lib/query-keys';
+
+function ensureArray<T>(data: T[] | undefined): T[] {
+  return Array.isArray(data) ? data : [];
+}
+
+function upsertById<T extends { id: string }>(
+  items: T[] | undefined,
+  item: T,
+): T[] {
+  return [...(items ?? []).filter((current) => current.id !== item.id), item];
+}
+
+function replaceById<T extends { id: string }>(
+  items: T[] | undefined,
+  item: T,
+): T[] {
+  return (items ?? []).map((current) =>
+    current.id === item.id ? item : current,
+  );
+}
+
+function removeById<T extends { id: string }>(
+  items: T[] | undefined,
+  id: string,
+): T[] {
+  return (items ?? []).filter((current) => current.id !== id);
+}
 
 export function useIssue(issueId: string | null | undefined) {
   return useQuery({
-    queryKey: ['issue', issueId],
+    queryKey: queryKeys.issue(issueId),
     queryFn: () => getIssue(issueId as string),
     enabled: Boolean(issueId),
   });
@@ -37,7 +64,7 @@ export function useIssue(issueId: string | null | undefined) {
 
 export function useIterations(issueId: string | null | undefined) {
   return useQuery({
-    queryKey: ['iterations', issueId],
+    queryKey: queryKeys.iterations(issueId),
     queryFn: () => getIterations(issueId as string),
     enabled: Boolean(issueId),
   });
@@ -45,7 +72,7 @@ export function useIterations(issueId: string | null | undefined) {
 
 export function useStepRuns(iterationId: string | null | undefined) {
   return useQuery({
-    queryKey: ['step-runs', iterationId],
+    queryKey: queryKeys.stepRuns(iterationId),
     queryFn: () => getStepRuns(iterationId as string),
     enabled: Boolean(iterationId),
   });
@@ -56,28 +83,18 @@ export function useIterationControl(
   enabled: boolean,
 ) {
   return useQuery({
-    queryKey: ['iteration-control', iterationId],
+    queryKey: queryKeys.iterationControl(iterationId),
     queryFn: () => getIterationControl(iterationId as string),
     enabled: Boolean(iterationId) && enabled,
     refetchInterval: 4000,
   });
 }
 
-export function useHostname() {
-  return useQuery({
-    queryKey: ['hostname'],
-    queryFn: getHostname,
-    staleTime: Infinity,
-  });
-}
+export { useModels } from '../hooks/useModels';
 
-export function useSetHostname() {
-  const qc = useQueryClient();
+export function useSaveHostname() {
   return useMutation({
     mutationFn: setHostname,
-    onSuccess: (_void, hostname) => {
-      qc.setQueryData(['hostname'], hostname);
-    },
   });
 }
 
@@ -87,11 +104,13 @@ export function useCleanupOrphans() {
   });
 }
 
-export function useRepositories() {
+export function useRepositories(enabled = true) {
   return useQuery({
-    queryKey: ['repositories'],
+    queryKey: queryKeys.repositories,
     queryFn: getRepositories,
     staleTime: 60_000,
+    enabled,
+    select: ensureArray,
   });
 }
 
@@ -100,10 +119,9 @@ export function useCreateRepository() {
   return useMutation({
     mutationFn: createRepository,
     onSuccess: (repo) => {
-      qc.setQueryData<SavedRepo[]>(['repositories'], (old) => [
-        ...(old ?? []).filter((item) => item.id !== repo.id),
-        repo,
-      ]);
+      qc.setQueryData<SavedRepo[]>(queryKeys.repositories, (old) =>
+        upsertById(old, repo),
+      );
     },
   });
 }
@@ -114,8 +132,8 @@ export function useUpdateRepository() {
     mutationFn: (args: { id: string; url: string }) =>
       updateRepository(args.id, args.url),
     onSuccess: (repo) => {
-      qc.setQueryData<SavedRepo[]>(['repositories'], (old) =>
-        (old ?? []).map((item) => (item.id === repo.id ? repo : item)),
+      qc.setQueryData<SavedRepo[]>(queryKeys.repositories, (old) =>
+        replaceById(old, repo),
       );
     },
   });
@@ -126,8 +144,8 @@ export function useDeleteRepository() {
   return useMutation({
     mutationFn: deleteRepository,
     onSuccess: (_void, id) => {
-      qc.setQueryData<SavedRepo[]>(['repositories'], (old) =>
-        (old ?? []).filter((item) => item.id !== id),
+      qc.setQueryData<SavedRepo[]>(queryKeys.repositories, (old) =>
+        removeById(old, id),
       );
     },
   });
@@ -137,8 +155,8 @@ export function writeRepositoryToCache(
   qc: ReturnType<typeof useQueryClient>,
   repo: SavedRepo,
 ) {
-  qc.setQueryData<SavedRepo[]>(['repositories'], (old) =>
-    (old ?? []).map((item) => (item.id === repo.id ? repo : item)),
+  qc.setQueryData<SavedRepo[]>(queryKeys.repositories, (old) =>
+    replaceById(old, repo),
   );
 }
 
@@ -147,10 +165,7 @@ export function useCreateTag() {
   return useMutation({
     mutationFn: (request: CreateTagRequest) => createTag(request),
     onSuccess: (tag) => {
-      qc.setQueryData<Tag[]>(['tags'], (old) => [
-        ...(old ?? []).filter((item) => item.id !== tag.id),
-        tag,
-      ]);
+      qc.setQueryData<Tag[]>(queryKeys.tags, (old) => upsertById(old, tag));
     },
   });
 }
@@ -161,9 +176,7 @@ export function useUpdateTag() {
     mutationFn: (args: { id: string; request: UpdateTagRequest }) =>
       updateTag(args.id, args.request),
     onSuccess: (tag) => {
-      qc.setQueryData<Tag[]>(['tags'], (old) =>
-        (old ?? []).map((item) => (item.id === tag.id ? tag : item)),
-      );
+      qc.setQueryData<Tag[]>(queryKeys.tags, (old) => replaceById(old, tag));
     },
   });
 }
@@ -173,32 +186,25 @@ export function useDeleteTag() {
   return useMutation({
     mutationFn: deleteTag,
     onSuccess: (_void, id) => {
-      qc.setQueryData<Tag[]>(['tags'], (old) =>
-        (old ?? []).filter((item) => item.id !== id),
-      );
+      qc.setQueryData<Tag[]>(queryKeys.tags, (old) => removeById(old, id));
     },
   });
 }
 
 export function useSavedRepos() {
-  return useQuery({
-    queryKey: ['savedRepos'],
-    queryFn: () => getRepositories(),
-    staleTime: 60_000,
-    select: (data) => (Array.isArray(data) ? data : []),
-  });
+  return useRepositories();
 }
 
 export function useTags() {
   return useQuery({
-    queryKey: ['tags'],
+    queryKey: queryKeys.tags,
     queryFn: () => getTags(),
     staleTime: 60_000,
-    select: (data) => (Array.isArray(data) ? data : []),
+    select: ensureArray,
   });
 }
 
-export interface CreateIssueVariables {
+interface CreateIssueVariables {
   request: CreateIssueRequest;
   files?: File[];
 }
@@ -211,7 +217,7 @@ export function useCreateIssue() {
         ? createIssueWithFiles(request, files)
         : createIssue(request),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['issues'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues });
     },
   });
 }

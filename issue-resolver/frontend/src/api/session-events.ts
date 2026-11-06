@@ -1,8 +1,6 @@
-import type { SessionEvent, StepRunWithLog } from '@issue-resolver/shared';
+import type { SessionEvent } from '@issue-resolver/shared';
 
 export type { SessionEvent };
-
-export type StepRunWithEvents = StepRunWithLog;
 
 export function sessionEventsOf(run: {
   events?: SessionEvent[] | null;

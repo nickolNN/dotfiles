@@ -492,15 +492,20 @@ describe('TaskDetail — статистика карточки шага', () => 
     expect(formatAvgSpeed(42.6)).toBe('43');
   });
 
-  it('room-resolve: футер показывает агрегат run.stats и step-cost, не координаторские events', async () => {
+  it('многоагентная итерация: футер показывает агрегат run.stats и step-cost, не координаторские events', async () => {
     const refine = makeStepRun({
       id: 'run-refine',
       step: 'refine',
       status: StepRunStatus.success,
       report: JSON.stringify({
         status: 'pass',
-        summary: 'room',
-        execution: { mode: 'room', executors: 2 },
+        summary: 'stages',
+        execution: {
+          mode: 'stages',
+          stages: [
+            { index: 1, executors: 2, decomposition: ['бэк', 'фронт'] },
+          ],
+        },
       }),
     });
     const resolve = makeStepRun({

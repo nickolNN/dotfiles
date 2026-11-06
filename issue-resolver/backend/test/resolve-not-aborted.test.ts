@@ -3,20 +3,19 @@ import type { ExecutionPlan, PipelineStep, StepExecutionResult } from '@issue-re
 import { stepRunOutcome, StepReportStatus } from '@issue-resolver/shared';
 import { FakePiRunner } from '../src/pi/runner';
 import {
-  runRoomResolve,
   runStagedResolve,
-  type RoomResolveInput,
-  type RoomResolveOptions,
-} from '../src/workflow/room';
+  type StagedResolveInput,
+  type StagedResolveOptions,
+} from '../src/workflow/staged-resolve';
 import {
   COMPLEX_STAGES_PLAN,
-  ROOM_PLAN,
+  WAVE_PLAN,
   SEQUENTIAL_STAGES_PLAN,
 } from './execution-plans.example';
 
 const STEP: PipelineStep = 'resolve';
 
-const input = (execution: ExecutionPlan): RoomResolveInput => ({
+const input = (execution: ExecutionPlan): StagedResolveInput => ({
   containerName: 'issue-resolver-issue-1',
   execution,
   issueTitle: 'Fix bug',
@@ -31,7 +30,7 @@ const input = (execution: ExecutionPlan): RoomResolveInput => ({
   attachmentPaths: [],
 });
 
-const options = (): RoomResolveOptions => ({
+const options = (): StagedResolveOptions => ({
   stepRunId: 'run-1',
   iterationId: 'iter-1',
   issueId: 'issue-1',
@@ -56,20 +55,20 @@ function expectSuccessfulResolve(result: StepExecutionResult): void {
 }
 
 describe('resolve не становится aborted, когда все агенты вернули pass', () => {
-  it('room: все исполнители и координатор pass → результат pass/success, не aborted', async () => {
+  it('волна: все исполнители и финальный lead pass → результат pass/success, не aborted', async () => {
     const pi = new FakePiRunner();
     for (const summary of ['w1', 'w2', 'w3', 'coord']) {
       pi.enqueue(pass(summary));
     }
 
-    const result = await runRoomResolve(pi, input(ROOM_PLAN), options());
+    const result = await runStagedResolve(pi, input(WAVE_PLAN), options());
 
     expectSuccessfulResolve(result);
     expect(result.report?.summary).toBe('coord');
     expect(pi.calls.map((call) => call.options?.stepRunId)).toEqual([
-      'run.run-1.w0',
-      'run.run-1.w1',
-      'run.run-1.w2',
+      'run.run-1.s1.w0',
+      'run.run-1.s1.w1',
+      'run.run-1.s1.w2',
       'run-1',
     ]);
   });
@@ -128,7 +127,7 @@ describe('resolve не становится aborted, когда все аген�
       aborted: true,
     });
 
-    const result = await runRoomResolve(pi, input(ROOM_PLAN), options());
+    const result = await runStagedResolve(pi, input(WAVE_PLAN), options());
 
     expect(result.aborted).toBe(true);
     expect(

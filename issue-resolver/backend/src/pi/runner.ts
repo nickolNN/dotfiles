@@ -1,5 +1,5 @@
-import type { ControlResult, PipelineStep, PromptMode, PromptResult, SessionEvent, StepExecutionResult } from '@issue-resolver/shared';
-import { StepReportStatus } from '@issue-resolver/shared';
+import type { ControlResult, PromptMode, PromptResult, SessionEvent, StepExecutionResult } from '@issue-resolver/shared';
+import { PipelineStep, StepReportStatus } from '@issue-resolver/shared';
 
 export interface PiRunOptions {
   model?: string;
@@ -16,7 +16,7 @@ export interface PiRunOptions {
   iterationId?: string;
   issueId?: string;
   registry?: import('../pi/session-registry').StepSessionRegistry;
-  agent?: import('../pi/session-registry').RoomAgentInfo;
+  agent?: import('../pi/session-registry').StepAgentInfo;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
   onEvent?: (event: SessionEvent) => void;
@@ -45,7 +45,7 @@ export interface PiControlCall {
   payload?: import('./session-registry').UiResponsePayload;
 }
 
-const DEFAULT_STEP: PipelineStep = 'resolve';
+const DEFAULT_STEP: PipelineStep = PipelineStep.resolve;
 
 const DEMO_EVENTS: SessionEvent[] = [
   { type: 'text', text: 'demo: analyzing the task' },

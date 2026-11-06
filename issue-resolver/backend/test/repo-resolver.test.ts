@@ -291,7 +291,12 @@ describe('GitLabResolver', () => {
   it('self-hosted host подставляется в URL', async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ path_with_namespace: 'g/p' }))
+      .mockResolvedValueOnce(
+          jsonResponse({
+            path_with_namespace: 'g/p',
+            http_url_to_repo: 'https://gitlab.example.com/g/p.git',
+          }),
+        )
       .mockResolvedValueOnce(jsonResponse([{ name: 'main' }]));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -308,7 +313,11 @@ describe('GitLabResolver', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        jsonResponse({ path_with_namespace: 'g/p', default_branch: null }),
+        jsonResponse({
+          path_with_namespace: 'g/p',
+          default_branch: null,
+          http_url_to_repo: 'https://gitlab.example.com/g/p.git',
+        }),
       )
       .mockResolvedValueOnce(jsonResponse([]));
     vi.stubGlobal('fetch', fetchMock);
@@ -853,7 +862,13 @@ describe('createRepoResolver', () => {
   it('GitHub Enterprise: hostOf(url) прокидывается в GitHubResolver', async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ full_name: 'a/b', default_branch: 'main' }))
+      .mockResolvedValueOnce(
+          jsonResponse({
+            full_name: 'a/b',
+            default_branch: 'main',
+            clone_url: 'https://github.company.com/a/b.git',
+          }),
+        )
       .mockResolvedValueOnce(jsonResponse([{ name: 'main' }]));
     vi.stubGlobal('fetch', fetchMock);
 

@@ -186,6 +186,31 @@ describe('Settings — память и ретро', () => {
     expect(screen.getByTestId('retro-download')).toBeInTheDocument();
   });
 
+  it('транскрипт схлопнут, «Развернуть» его показывает', async () => {
+    stubApi({
+      runs: [retroRun({ id: 'old-run' })],
+      detail: retroRunWithLog({
+        id: 'old-run',
+        stdout: 'читаю 3 сессии',
+        report: '## Память',
+      }),
+    });
+    renderSettings();
+
+    fireEvent.click(screen.getByTestId('settings-retro-open'));
+    const history = await screen.findByTestId('retro-history');
+    fireEvent.click(history.querySelector('button') as HTMLButtonElement);
+
+    const expand = await screen.findByTestId('retro-expand');
+    expect(expand).toHaveTextContent('Развернуть');
+    expect(screen.queryByTestId('retro-log')).toBeNull();
+
+    fireEvent.click(expand);
+    expect(await screen.findByTestId('retro-log')).toHaveTextContent(
+      'читаю 3 сессии',
+    );
+  });
+
   it('«Остановить» шлёт abort и показывает причину из прогона', async () => {
     const fetchMock = stubApi({
       created: retroRun({ status: RetroRunStatus.running }),

@@ -1,14 +1,15 @@
 import { z } from 'zod';
+import { DesiredResult, PipelineStep, ThinkingLevel } from '@issue-resolver/shared';
 
 export const PIPELINE_STEPS = [
-  'refine',
-  'resolve',
-  'review',
-  'test',
-  'pr',
+  PipelineStep.refine,
+  PipelineStep.resolve,
+  PipelineStep.review,
+  PipelineStep.test,
+  PipelineStep.pr,
 ] as const;
 
-const STEP_MODEL_KEYS = [...PIPELINE_STEPS, 'report'] as const;
+const STEP_MODEL_KEYS = [...PIPELINE_STEPS, PipelineStep.report] as const;
 
 const stepModelsSchema = z.record(z.enum(STEP_MODEL_KEYS), z.string());
 
@@ -16,17 +17,11 @@ const selectedStepsSchema = z
   .array(z.enum(PIPELINE_STEPS))
   .min(1, 'выберите хотя бы один шаг пайплайна');
 
-const thinkingLevelSchema = z.enum([
-  'off',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-]);
+const thinkingLevelSchema = z.enum(
+  Object.values(ThinkingLevel) as [ThinkingLevel, ...ThinkingLevel[]],
+);
 
-const STEP_THINKING_KEYS = [...PIPELINE_STEPS, 'report'] as const;
+const STEP_THINKING_KEYS = [...PIPELINE_STEPS, PipelineStep.report] as const;
 
 const stepThinkingLevelsSchema = z
   .record(z.enum(STEP_THINKING_KEYS), thinkingLevelSchema)
@@ -71,7 +66,9 @@ export const createIssueRequestSchema = z
       )
       .optional(),
     additional_context: z.string().optional(),
-    desired_result: z.enum(['md', 'html']).optional(),
+    desired_result: z
+      .enum(Object.values(DesiredResult) as [DesiredResult, ...DesiredResult[]])
+      .optional(),
     review_context: z.string().optional(),
     is_review_need: z.boolean().optional(),
     pipeline_steps: selectedStepsSchema.optional(),
@@ -166,7 +163,9 @@ export const updateIssueRequestSchema = z.object({
   title: z.string().optional(),
   jira_issue_url: z.string().url().optional().nullable(),
   description: z.string().optional(),
-  desired_result: z.enum(['md', 'html']).optional(),
+  desired_result: z
+    .enum(Object.values(DesiredResult) as [DesiredResult, ...DesiredResult[]])
+    .optional(),
   pipeline_steps: selectedStepsSchema.optional(),
   step_models: stepModelsSchema.optional(),
   thinking_level: thinkingLevelSchema.optional().nullable(),

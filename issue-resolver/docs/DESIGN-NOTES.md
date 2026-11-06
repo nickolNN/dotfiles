@@ -12,9 +12,15 @@ future reader could break without noticing, add it here instead of a comment.
 
 ## 1. Pipeline and step order
 
+- Every step is optional: a pipeline may run `resolve` alone, `refine →
+  resolve → pr`, or any other subset in canonical order. No step may assume a
+  neighbour exists — a prompt that hands work to “the `review` step” or “the
+  `test` step” is dead advice when that step is not in the pipeline; name the
+  condition or say it in `summary` instead.
 - Canonical step order is `refine → resolve → review → test → pr`
-  (`backend/src/workflow/engine.ts`, mirrored in `frontend/src/views/TaskDetail.tsx`
-  and `frontend/src/components/IssueForm.tsx`). The engine always executes in
+  (`backend/src/workflow/iteration/pipeline-order.ts`, mirrored in
+  `frontend/src/views/task-detail/constants.ts` and
+  `frontend/src/components/IssueForm.tsx`). The engine always executes in
   this order no matter what order the API received (`iteration.steps`,
   `issue.pipelineSteps`); `resolve` must never run before `refine`.
 - The form order is presentation only: it must not change launch semantics.
@@ -22,7 +28,7 @@ future reader could break without noticing, add it here instead of a comment.
   best-effort and idempotent; a failure must not abort workspace preparation.
 - A step is `timeout` (not `fail`) when the error text/report says so — the
   distinction is textual, because the runner reports both through one channel.
-  See `backend/src/workflow/run-iteration.service.ts`.
+  See `stepOutcome` in `backend/src/workflow/iteration-report.ts`.
 - A step's report is persisted even when writing it fails (disk, permissions):
   report persistence is logging and must not take the iteration down.
 
@@ -34,8 +40,18 @@ future reader could break without noticing, add it here instead of a comment.
   leaves `startNextPendingIteration` never firing.
 - `refine` runs before `resolve` because the planner must not ask the user for
   what the task already states.
+- Stage outcomes survive a restart only inside one iteration and one plan:
+  `backend/src/workflow/stage-run.ts` writes `.issue-stage-manifest.json`
+  (`iterationId` + plan-shape signature) and deletes every `.issue-stage-*.json`
+  when the manifest disagrees, so a previous iteration's file is never read as
+  the current result. Resume decisions live in that module only.
 - After a terminal status the backend spawns the report agent fire-and-forget;
-  such a run must never take the iteration down (`backend/src/workflow/run-iteration.service.ts`).
+  such a run must never take the iteration down (`backend/src/workflow/report-spawn.ts`).
+- Starting an iteration has exactly one implementation:
+  `backend/src/workflow/start-iteration.ts` (`startIteration` + `iterationPrepareDeps`).
+  Issue create, issue start, iteration repeat and the pending queue all call it;
+  a fourth hand-rolled prepare→run copy is how the four call sites drifted apart
+  (different failure marking, different fire-and-forget) before.
 - Status values are declared once in `shared/src/status.ts` as frozen objects and
   never written as literals in code (see `CODING_STANDARDS.md`). Three statuses
   coexist here and are easy to mix: `TaskStatus` on an issue or iteration,
@@ -44,6 +60,25 @@ future reader could break without noticing, add it here instead of a comment.
   (`StepRunStatus.needs_input` ↔ `"needs_input"`); `StepRunOutcome`
   (`shared/src/step-result.ts`) is the only place that maps evidence to a
   status, and `aborted` outranks everything else in it.
+- **A blocker is a `major` or `critical` finding; a cycle ends when none is
+  left.** `blockingFindings` (`shared/src/step-result.ts`) decides the move:
+  `fail` with only `minor`/`low`/`info` advances like a pass, and a `pass` is
+  never overridden by severity. The safe side is explicit — `fail` with no
+  findings, an unreadable severity, and a `findingsMalformed` report are all
+  blocking. `MAX_PIPELINE_ATTEMPTS` is the last line, not the only exit: its
+  `needs_input(max_attempts)` fires only when blockers remain after the budget.
+  Without the severity gate the loop was unbounded in practice — five review
+  rounds, each honestly closing the previous list and finding a fresh one,
+  because a fix is new code and the prompt put the whole change set in scope.
+- **`review` proves from `file:line`, `test` proves from a reproduction.**
+  Neither fills the other's role: review runs nothing, test judges no names,
+  structure or duplication. Whoever can prove a defect files it; the other
+  mentions it in `summary` so one defect costs one development cycle, not two.
+  The rule is `prompts/step-scope.md`, appended to every step prompt.
+- Missing test for new logic is `major` in a repository that keeps tests
+  (a suite, test files, or a test script) and `minor` where there are none: a
+  repository without a test culture is not blocked, and one that has it does
+  not lose it.
 
 ## 3. pi processes and sessions
 
@@ -82,7 +117,7 @@ future reader could break without noticing, add it here instead of a comment.
   0`, since either alone can be missing while the other is present. `undefined`
   means unknown and is never treated as silence — a fake runner, an older pi or
   a stats payload without that field must not turn into a failure
-  (`backend/src/pi/rpc-runner.ts`).
+  (`backend/src/pi/rpc-session.ts`).
 - A failed run without a report persists a synthesized `fail` report carrying
   the reason (`STEP_FAILURE_TEXT` / `failureReportOverride` in
   `backend/src/workflow/step-failure.ts`) and publishes it as an error notice.
@@ -105,11 +140,38 @@ future reader could break without noticing, add it here instead of a comment.
   back from memory after a restart.
 - Timestamps that go to the API are ISO-Z without milliseconds
   (`toISOString().replace(/\.\d{3}Z$/, 'Z')`) — one shape everywhere.
+- Row coercion helpers live in `db/rows.ts` (`nowIso`, `parseJsonColumn`) and
+  JSON state files go through `util/json-file.ts#readJsonFile`, which has the
+  same lenient contract: unreadable or malformed content reads as empty instead
+  of throwing, and the caller's parser decides whether the shape is acceptable.
+  `tryParseJson` returns `unknown`, not a caller-chosen `T`: the JSON text does
+  not know the type, so every call site narrows the value itself (see
+  `CODING_STANDARDS.md`, "Untrusted input keeps three states").
+  Neither is a `utils.ts` grab bag: a new helper belongs next to the concept it
+  serves, not there.
 - Tag run instructions are not invalidated by `updateTagRunInstructions`;
   otherwise analysis would rerun every iteration, because that file contains
   ports and volatile output.
-- A millisecond-precision timestamp plus one row per millisecond means two
-  repositories created in the same millisecond need a tiebreaker.
+- Timestamps carry second precision (see above), so two rows written in the same
+  second share `created_at` and the tiebreaker decides the order. Chronological
+  lists therefore tiebreak on `rowid` (insertion order) — `step_runs`, `tags`,
+  `tag_repositories`, `repositories` — never on the row's uuid, which is random.
+
+### DDL vs drizzle schema
+
+`backend/src/db/ddl.ts` (raw `CREATE TABLE`) is the source of truth for databases
+that already exist, `backend/src/db/schema.ts` is the drizzle typed surface; when
+the two disagree, the DDL wins and `schema.ts` is corrected — never the other way
+round, and never through a migration. Three columns are missing from the DDL on
+purpose: `devops_model`, `devops_thinking_level` and `worker_count` exist in
+`schema.ts` and are added by `ensureIssueColumns`/`ensureIterationColumns`, so a
+fresh database converges through migrations and a diff there is not a bug. What
+*was* real drift is now aligned in `schema.ts`: the `ON DELETE CASCADE` foreign
+keys on `issue_repositories.issue_id` and `iterations.issue_id`, plus the
+`issue_files_issue_id_idx`, `issue_files_iteration_id_idx` and
+`retro_runs_created_at_idx` indexes that only the DDL had. `step_runs_*_unique`
+looks like it is missing from the DDL too, but it is created from
+`STEP_RUN_UNIQUE_INDEXES` (re-applied by the `step_runs` rebuild) — not drift.
 
 ## 5. SSE
 
@@ -122,8 +184,10 @@ future reader could break without noticing, add it here instead of a comment.
 - A room event must not leak into another agent's stream; the stream is filtered
   by agent/session id.
 - `stream: 'mr'` and `stream: 'stdout'|'stderr'` are separate channels from the
-  session events; devops/report use synthetic step run ids
-  (`{issueId}/devops`, `{issueId}/report`).
+  session events; devops/report use synthetic step run ids built by
+  `SessionAddress.forIssueRun` — `issue.<issueId>.devops` and
+  `issue.<issueId>.report`, not `{issueId}/devops`. The run id and the SSE
+  filter key must match exactly or live events land in no buffer at all.
 
 ## 6. Report artifacts
 
@@ -254,15 +318,41 @@ future reader could break without noticing, add it here instead of a comment.
   it never needs. File paths stay allowed for one purpose only: the ownership
   map that keeps parallel workers off each other's files.
 - `refine` is the single decision point for topology. The engine follows it
-  deterministically: a room only with an explicit `mode: room` and a meaningful
-  executor count, a staged plan with `mode: stages` and 2+ valid stages,
-  otherwise one agent.
-- Room/stage executor caps exist to avoid "20 agents" and to keep parallelism
-  real: a cap below 2 cannot produce parallel work, so it degrades to a single
-  agent.
+  deterministically: a staged plan with `mode: stages` whose declared stages are
+  all well-formed, otherwise one agent. `parseExecutionPlan` keeps every declared
+  stage — only its fields are normalised, a missing or non-numeric `index`
+  becomes `0`, and a present but unusable `executors` becomes a `NaN` marker —
+  so the gate can reject the plan and name the malformed stage instead of
+  executing it minus that stage or with a different executor count. The mode is
+  `single` or `stages` and nothing else: any other mode makes the plan
+  unreadable, and an unreadable plan is a planner error — the same path as a
+  malformed stage, never a silent single-agent run. Declared stages are checked
+  before
+  the plan is counted as staged, so a plan whose stages are all malformed still
+  names the first one. One stage with several executors is a parallel
+  wave and skips the stage coordinator — the final lead integrates the workers
+  itself, so a wave costs N+1 agents, not N+2. One stage with one executor is
+  `single` and is rejected as a planner error.
+- `worker_count` is a scheduling limit, not a plan limit: it is how many
+  agents may run at the same moment. It never shrinks a plan — the number of
+  stages is unlimited, and a plan that declares more parallel executors than
+  the limit is rejected rather than clamped. The engine re-runs `refine` with
+  the exact cause (`executionPlanProblem` returns one specific reason — too many
+  executors, no valid stages, a malformed stage with its position, a stage whose
+  decomposition entry count differs from its executor count, top-level executors
+  on a staged plan, a one-stage-one-executor plan, or a `single` plan that
+  declares more
+  than one executor). A plan that is present but unreadable — an unknown mode, a
+  value where an object belongs — is rejected on the same path by the refine
+  gate, which turns the report's unreadable-plan marker into a plan problem, and
+  spends
+  refine's own self-retry budget on it (`MAX_SELF_RETRIES.refine`, shared with
+  refine crashes); once that budget is spent, the iteration fails and `resolve`
+  never starts. A cap of 1 therefore means "one stage at a time", not "one agent for
+  the whole task".
 - Stages are renumbered to 1..N; strict order is stage executors → stage
   coordinator → next stage.
-- If **all** room/stage agents returned `pass`, `resolve` is never `aborted` —
+- If **all** wave/stage agents returned `pass`, `resolve` is never `aborted` —
   otherwise the iteration would be marked `cancelled`.
 - The coordinator is not started when there is nothing to coordinate; it would
   append to the report and leave the iteration half-open.
@@ -272,8 +362,33 @@ future reader could break without noticing, add it here instead of a comment.
 
 ## 8. Frontend
 
+- `views/TaskDetail.tsx` is composition only (~400 lines): the header card,
+  modals, iteration launcher and each stateful concern live in
+  `views/task-detail/` — one `use*.ts` hook per concern (live SSE buffers,
+  subscription, step-runs, result artifacts, question feed, step-log modal,
+  devops, files, dev servers, jira preview). Add state to the hook that owns
+  the neighbouring state; do not grow the view.
 - `TaskDetail` mounts directly in tests, so it guarantees a `QueryClient`;
   otherwise any `useQuery` throws `No QueryClient set`.
+- `src/index.css` is the hand-written stylesheet (Tailwind 4 `@import` plus the
+  session/editor rules); `src/animations.css` holds the shared keyframes and
+  animation utilities. `frontend/dist/assets/*.css` is generated — never edit it.
+- All HTTP imports go through `api/client.ts`; the `api/endpoints/*` modules are
+  internal and are not a second public surface.
+- Modals close on Escape through `hooks/useEscapeKey`; do not hand-roll a window
+  listener per modal. The card frame itself — overlay, `role="dialog"`,
+  `z-50`, close button, Escape — lives once in `components/ModalShell.tsx`
+  (`layout="card"` for centred dialogs, `layout="full"` for the full-bleed
+  viewers such as the step log and the report). A modal that draws its own
+  overlay is a bug, not a variant.
+- A run's result renders through one component: `components/RunOutcome.tsx`
+  (live box, aborted, empty, or the parsed step report inside a shared frame)
+  plus `RunStatsLine` below it. `prefix` (`step | report | devops | retro`)
+  both names the `data-testid` family and nothing else, so any new run kind is a
+  prefix, never a fourth renderer. Where a run's payload is not a step report
+  (retro's markdown), it goes into `body` and keeps the same frame. A run's
+  transcript is never a permanent block above the frame: it sits behind the
+  «Развернуть» action, and retro's inline disclosure uses that same label.
 - Live step status from SSE wins over the `stepRuns` snapshot; the snapshot is
   not updated while a step runs.
 - A question is eligible not only for active statuses but also for
@@ -290,7 +405,7 @@ future reader could break without noticing, add it here instead of a comment.
 - `report.md` presence is not report readiness: the endpoint serves the last
   completed iteration's report, so readiness is "at least one completed
   iteration".
-- Deep links (`#/tasks/<id>/result`) fire once per mount; a ref suppresses
+- Deep links (`/tasks/<id>/result`) fire once per mount; a ref suppresses
   re-renders.
 - Deletion subscribes to SSE **before** issuing `DELETE`, otherwise the fast
   phases and `issue_deleted` are missed; a timeout drops the placeholder and
@@ -310,6 +425,37 @@ future reader could break without noticing, add it here instead of a comment.
   changes.
 - Jira uses API v2: v3 breaks on Server with 404.
 - Bitbucket auth: Bearer for a PAT, Basic for an app password.
+- Bitbucket Server (8.x) PR review comments are read from
+  `/pull-requests/{id}/activities`, and three details of that payload are easy to
+  get wrong, each with a silent failure mode
+  (`backend/src/pr/bitbucket-server-mr.ts`):
+  1. A comment activity is `action: "COMMENTED"`, not `"COMMENT"` — a filter on
+     the latter drops every comment and the review reads as empty, which looks
+     exactly like a clean review. `OPENED`, `RESCOPED`, `APPROVED`, `MERGED` in the
+     same feed are PR history and must stay out.
+  2. The diff attachment is `commentAnchor` on the **activity**
+     (`{path, line, lineType, fileType}`), not `anchors.line` or a flat `anchor`
+     on the comment; without it every comment loses its file and line.
+  3. Replies are nested in `comment.comments` (one level, inherited anchor), so
+     walking only the top-level feed loses the answers — often the part that
+     says a defect is still there.
+  The author is `comment.author.displayName` when present, else `author.name`.
+- The Bitbucket **project** id and the pull-request id are different numbers on
+  the same wire: `GET /rest/api/1.0/projects/KOS` answers `id: 2859` for project
+  `KOS` (`KVADRA OS`). A number scraped out of a `409 DuplicatePullRequest`
+  body (`existingPullRequest.id`, `pullRequestId`) is therefore not necessarily
+  a PR id, and publishing it built `.../pull-requests/2859` in `result.json`,
+  which then 404'd every later review-comment fetch for that task. The scrape is
+  only used after a `GET` of that PR confirms it exists.
+- `?direction=OUTGOING&at=refs/heads/<base>&state=OPEN` on the PR list answers
+  `200` with an **empty page** on Server 8 while the unfiltered `?state=OPEN`
+  list holds the PR (measured on b.yadro.com). Because "empty page" and "no PR
+  yet" are indistinguishable, an open PR was never found and the engine created
+  a duplicate. The Server lookup therefore lists `state=OPEN` (paged through
+  `collectPagedValues`) and matches `fromRef.id` + `toRef.id` on the client, as
+  the Cloud path already did. A failure to list must stay non-fatal: returning
+  `null` lets the caller try to create, which is what the pre-existing fallback
+  assumed.
 - An empty repository (no commits) is a state, not an error: the remote listing
   returns zero branches, so `RepoInfo.defaultBranch` is `''` and
   `SavedRepo.defaultBranch` is `NULL`. Bitbucket Server answers
@@ -334,7 +480,7 @@ future reader could break without noticing, add it here instead of a comment.
   `/opt/ms-playwright`. The substitution ban applies to a *different version of
   the repo's own* Playwright, not to a repo that has none.
 - The retry `feedback` carries the failed step's `findings`, not only its
-  `summary` (`previousAttemptFeedback` in `workflow/prompts.ts`). The next
+  `summary` (`previousAttemptFeedback` in `workflow/prompts/feedback.ts`). The next
   `resolve` overwrites `.issue-step-result.json`, so without that list a later
   `test` round can only recover the previous defects by reading
   `iterations/<n>/.test.md` — a whole agent turn spent rebuilding what the

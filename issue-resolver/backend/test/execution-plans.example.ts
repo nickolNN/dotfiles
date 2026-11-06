@@ -1,19 +1,27 @@
+import { ExecutionMode } from '@issue-resolver/shared';
 import type { ExecutionPlan } from '@issue-resolver/shared';
 
 export const SINGLE_PLAN: ExecutionPlan = {
-  mode: 'single',
+  mode: ExecutionMode.single,
   rationale: 'простая задача — один агент',
 };
 
-export const ROOM_PLAN: ExecutionPlan = {
-  mode: 'room',
-  executors: 3,
-  decomposition: ['собрать бэкенд', 'собрать фронтенд', 'написать тесты'],
-  rationale: 'три независимые части — параллельно',
+export const WAVE_PLAN: ExecutionPlan = {
+  mode: ExecutionMode.stages,
+  stages: [
+    {
+      index: 1,
+      name: 'Волна',
+      task: 'собрать всё сразу',
+      executors: 3,
+      decomposition: ['собрать бэкенд', 'собрать фронтенд', 'написать тесты'],
+    },
+  ],
+  rationale: 'три независимые части — одна параллельная волна',
 };
 
 export const SEQUENTIAL_STAGES_PLAN: ExecutionPlan = {
-  mode: 'stages',
+  mode: ExecutionMode.stages,
   stages: [
     { index: 1, name: 'Дизайн', task: 'спроектировать', executors: 1 },
     { index: 2, name: 'Реализация', task: 'написать код', executors: 1 },
@@ -23,7 +31,7 @@ export const SEQUENTIAL_STAGES_PLAN: ExecutionPlan = {
 };
 
 export const COMPLEX_STAGES_PLAN: ExecutionPlan = {
-  mode: 'stages',
+  mode: ExecutionMode.stages,
   stages: [
     {
       index: 1,

@@ -84,7 +84,18 @@ function stubFetch(
     }
     if (withControl && url.endsWith('/control')) {
       return Promise.resolve(jsonResponse({
-        state: { provider: 'openai', modelId: 'gpt-4', model: 'gpt-4', thinkingLevel: 'high' },
+        state: {
+          provider: 'openai',
+          modelId: 'gpt-4',
+          model: 'gpt-4',
+          thinkingLevel: 'high',
+          steeringMode: 'all',
+          followUpMode: 'all',
+          autoCompactionEnabled: true,
+          autoRetryEnabled: true,
+          isStreaming: true,
+          sessionName: 'Resolve',
+        },
         models: [{ provider: 'openai', id: 'gpt-4', name: 'GPT-4' }],
         thinkingLevels: ['low', 'medium', 'high'],
         commands: [],

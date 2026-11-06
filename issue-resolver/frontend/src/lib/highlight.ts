@@ -81,7 +81,7 @@ export function extToLanguage(ext: string): string | null {
   }
 }
 
-export function highlightCode(
+function highlightCode(
   code: string,
   language: string | null,
 ): string | null {
@@ -91,4 +91,54 @@ export function highlightCode(
   } catch {
     return null;
   }
+}
+
+export type HighlightNode =
+  | { type: 'text'; text: string }
+  | { type: 'span'; className: string; children: HighlightNode[] };
+
+const HIGHLIGHT_TOKEN =
+  /<span class="([^"]*)">|<\/span>|([^<]+)/g;
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function parseHighlightHtml(html: string): HighlightNode[] {
+  HIGHLIGHT_TOKEN.lastIndex = 0;
+  const root: HighlightNode[] = [];
+  const stack: HighlightNode[][] = [root];
+  let match: RegExpExecArray | null;
+  while ((match = HIGHLIGHT_TOKEN.exec(html)) !== null) {
+    if (match[1] !== undefined) {
+      const node: HighlightNode = {
+        type: 'span',
+        className: match[1],
+        children: [],
+      };
+      stack[stack.length - 1].push(node);
+      stack.push(node.children);
+    } else if (match[0] === '</span>') {
+      if (stack.length > 1) stack.pop();
+    } else if (match[2] !== undefined) {
+      stack[stack.length - 1].push({
+        type: 'text',
+        text: decodeEntities(match[2]),
+      });
+    }
+  }
+  return root;
+}
+
+export function highlightTree(
+  code: string,
+  language: string | null,
+): HighlightNode[] | null {
+  const html = highlightCode(code, language);
+  return html === null ? null : parseHighlightHtml(html);
 }

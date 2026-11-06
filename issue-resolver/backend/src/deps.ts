@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import Dockerode from 'dockerode';
+import { PipelineStep } from '@issue-resolver/shared';
 import type { AppDeps } from './app';
 import { DockerodeContainerController } from './docker/controller';
 import { LocalContainerController } from './docker/local-controller';
@@ -87,7 +88,7 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
       jira: new HttpJiraClient(env.JIRA_BASE_URL || '', env.JIRA_TOKEN || ''),
       control: new InMemoryStepSessionRegistry(),
       devopsFactory: devOpsFactoryFor(pi, devopsTimeoutMs),
-      retroPi: new RpcPiRunner('resolve', 'local'),
+      retroPi: new RpcPiRunner(PipelineStep.resolve, 'local'),
       devopsTimeoutMs,
       local: false,
       workspaceRoot:
@@ -98,7 +99,7 @@ export function buildDepsFromEnv(env: NodeJS.ProcessEnv): AppDeps {
     };
   }
 
-  const pi = new RpcPiRunner('resolve', 'local');
+  const pi = new RpcPiRunner(PipelineStep.resolve, 'local');
   const devopsTimeoutMs = resolveDevOpsTimeoutMs(
     env[DEVOPS_TIMEOUT_ENV] ?? env[LEGACY_DEVOPS_TIMEOUT_ENV],
   );

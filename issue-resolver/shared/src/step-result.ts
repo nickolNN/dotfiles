@@ -1,12 +1,20 @@
-import { StepRunStatus, StepReportStatus, ScenarioStatus } from './status';
+import {
+  FindingSeverity,
+  StepRunStatus,
+  StepReportStatus,
+  ScenarioStatus,
+  StepFailureReason,
+  isFindingSeverity,
+} from './status';
+import type { SessionStats } from './types/session';
 import type {
-  SessionStats,
   StepReport,
   StepReportFinding,
   StepReportScenario,
-} from './types';
+} from './types/step';
 
 import { parseExecutionPlan } from './execution';
+import { num, numberOrNull } from './numbers';
 
 const VALID_REPORT_STATUSES: readonly StepReportStatus[] = [
   StepReportStatus.pass,
@@ -14,11 +22,12 @@ const VALID_REPORT_STATUSES: readonly StepReportStatus[] = [
   StepReportStatus.blocked,
 ];
 
-const num = (value: unknown): number =>
-  typeof value === 'number' && Number.isFinite(value) ? value : 0;
-
-const nullableNum = (value: unknown): number | null =>
-  typeof value === 'number' && Number.isFinite(value) ? value : null;
+function isReportStatus(value: unknown): value is StepReportStatus {
+  return (
+    typeof value === 'string' &&
+    VALID_REPORT_STATUSES.some((candidate) => candidate === value)
+  );
+}
 
 const modelLabel = (value: unknown): string | null =>
   typeof value === 'string' && value.trim().length > 0 ? value : null;
@@ -61,12 +70,12 @@ export function parseSessionStats(
       cacheWrite: num(tokens.cacheWrite),
       total: num(tokens.total),
     },
-    cost: nullableNum(obj.cost),
+    cost: numberOrNull(obj.cost),
     contextUsage: context
       ? {
-          tokens: nullableNum(context.tokens),
+          tokens: numberOrNull(context.tokens),
           contextWindow: num(context.contextWindow),
-          percent: nullableNum(context.percent),
+          percent: numberOrNull(context.percent),
         }
       : null,
   };
@@ -103,6 +112,73 @@ export function sumSessionStats(
   };
 }
 
+function reportRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function scenarioOf(value: unknown): StepReportScenario | null {
+  const raw = reportRecord(value);
+  if (!raw || typeof raw.name !== 'string' || raw.name.trim().length === 0) {
+    return null;
+  }
+  return {
+    name: raw.name,
+    ...(raw.status === ScenarioStatus.pass || raw.status === ScenarioStatus.fail
+      ? { status: raw.status }
+      : {}),
+    ...(typeof raw.details === 'string' ? { details: raw.details } : {}),
+    ...(typeof raw.expected === 'string' ? { expected: raw.expected } : {}),
+    ...(typeof raw.actual === 'string' ? { actual: raw.actual } : {}),
+  };
+}
+
+interface ParsedFinding {
+  finding: StepReportFinding;
+  malformed: boolean;
+}
+
+function findingOf(value: unknown): ParsedFinding | null {
+  const raw = reportRecord(value);
+  if (!raw) return null;
+  const severity = raw.severity;
+  const severityKnown = isFindingSeverity(severity);
+  return {
+    finding: {
+      severity: isFindingSeverity(severity)
+        ? severity
+        : FindingSeverity.critical,
+      ...(typeof raw.title === 'string' ? { title: raw.title } : {}),
+      ...(typeof raw.description === 'string'
+        ? { description: raw.description }
+        : {}),
+      ...(typeof raw.detail === 'string' ? { detail: raw.detail } : {}),
+    },
+    malformed: !severityKnown,
+  };
+}
+
+function findingsOf(raw: unknown[]): {
+  findings: StepReportFinding[];
+  malformed: boolean;
+} {
+  const parsed = raw
+    .map(findingOf)
+    .filter((item): item is ParsedFinding => item !== null);
+  return {
+    findings: parsed.map((item) => item.finding),
+    malformed: parsed.some((item) => item.malformed),
+  };
+}
+
+function reportItems<T>(
+  raw: unknown[],
+  parseOne: (value: unknown) => T | null,
+): T[] {
+  return raw.map(parseOne).filter((item): item is T => item !== null);
+}
+
 export function parseStepReport(json: string): StepReport | null {
   if (typeof json !== 'string') return null;
 
@@ -122,15 +198,21 @@ export function parseStepReport(json: string): StepReport | null {
 
   const obj = parsed as Record<string, unknown>;
   const status = obj.status;
-  if (
-    typeof status !== 'string' ||
-    !VALID_REPORT_STATUSES.includes(status as StepReportStatus)
-  ) {
+  if (!isReportStatus(status)) {
     return null;
   }
 
+  const execution = parseExecutionPlan(obj.execution);
+  const executionMalformed =
+    obj.execution !== undefined &&
+    obj.execution !== null &&
+    execution === null;
+  const findings = Array.isArray(obj.findings)
+    ? findingsOf(obj.findings)
+    : null;
+
   return {
-    status: status as StepReportStatus,
+    status,
     summary: typeof obj.summary === 'string' ? obj.summary : '',
     ...(typeof obj.title === 'string' ? { title: obj.title } : {}),
     ...(typeof obj.description === 'string'
@@ -157,22 +239,18 @@ export function parseStepReport(json: string): StepReport | null {
         }
       : {}),
     ...(Array.isArray(obj.scenarios)
-      ? { scenarios: obj.scenarios as StepReportScenario[] }
+      ? { scenarios: reportItems(obj.scenarios, scenarioOf) }
       : {}),
-    ...(Array.isArray(obj.findings)
-      ? { findings: obj.findings as StepReportFinding[] }
+    ...(Array.isArray(obj.findings) && findings !== null
+      ? { findings: findings.findings }
       : {}),
-    ...(parseExecutionPlan(obj.execution)
-      ? { execution: parseExecutionPlan(obj.execution) as import('./types').ExecutionPlan }
-      : {}),
+    ...(findings?.malformed ? { findingsMalformed: true } : {}),
+    ...(execution !== null ? { execution } : {}),
+    ...(executionMalformed ? { executionMalformed } : {}),
   };
 }
 
-export type StepFailureReason =
-  | 'no_model_reply'
-  | 'no_report'
-  | 'agent_exit'
-  | 'report_fail';
+export type { StepFailureReason } from './status';
 
 export interface StepRunOutcome {
   status: StepRunStatus;
@@ -192,20 +270,61 @@ export function stepRunOutcome(input: StepRunOutcomeInput): StepRunOutcome {
     return { status: StepRunStatus.aborted, failure: null };
   }
   if (input.modelReplied === false) {
-    return { status: StepRunStatus.failed, failure: 'no_model_reply' };
+    return { status: StepRunStatus.failed, failure: StepFailureReason.no_model_reply };
   }
   if (input.exitCode !== 0) {
-    return { status: StepRunStatus.failed, failure: 'agent_exit' };
+    return { status: StepRunStatus.failed, failure: StepFailureReason.agent_exit };
   }
   if (input.report === null) {
     return (input.requiresStepReport ?? true)
-      ? { status: StepRunStatus.failed, failure: 'no_report' }
+      ? { status: StepRunStatus.failed, failure: StepFailureReason.no_report }
       : { status: StepRunStatus.success, failure: null };
   }
   if (input.report.status === StepReportStatus.blocked) {
     return { status: StepRunStatus.needs_input, failure: null };
   }
   return input.report.status === ScenarioStatus.fail
-    ? { status: StepRunStatus.failed, failure: 'report_fail' }
+    ? { status: StepRunStatus.failed, failure: StepFailureReason.report_fail }
     : { status: StepRunStatus.success, failure: null };
+}
+
+const BLOCKING_SEVERITIES: ReadonlySet<FindingSeverity> = new Set([
+  FindingSeverity.major,
+  FindingSeverity.critical,
+]);
+
+const NO_REPORT_FINDING: StepReportFinding = Object.freeze({
+  severity: FindingSeverity.critical,
+  title: 'step failed without a report',
+  detail: 'There is no report to read, so the failure cannot be classified.',
+});
+
+const SILENT_FAILURE_FINDING: StepReportFinding = Object.freeze({
+  severity: FindingSeverity.critical,
+  title: 'failed without findings',
+  detail:
+    'The report says `fail` but names no defect; a silent failure is treated as blocking.',
+});
+
+/** A finding that sends the change back to development: `major`, `critical`,
+ * or an unreadable severity, which sits on the safe side. */
+export function isBlockingFinding(finding: StepReportFinding): boolean {
+  const severity: unknown = finding.severity;
+  return !isFindingSeverity(severity) || BLOCKING_SEVERITIES.has(severity);
+}
+
+/**
+ * Findings that send the pipeline back to development. A `fail` without them
+ * advances like a pass; `pass` is never overridden by a finding's severity.
+ * Unreadable input sits on the safe side: a missing report, a `fail` with no
+ * findings, a malformed severity or a `findingsMalformed` marker all block.
+ */
+export function blockingFindings(
+  report: StepReport | null | undefined,
+): StepReportFinding[] {
+  if (report == null) return [NO_REPORT_FINDING];
+  if (report.status !== StepReportStatus.fail) return [];
+  const findings = report.findings ?? [];
+  if (findings.length === 0) return [SILENT_FAILURE_FINDING];
+  return report.findingsMalformed ? [...findings] : findings.filter(isBlockingFinding);
 }

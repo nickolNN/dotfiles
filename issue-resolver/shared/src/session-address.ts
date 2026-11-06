@@ -7,7 +7,11 @@ export function isValidPiSessionId(id: string): boolean {
   return PI_SESSION_ID_PATTERN.test(id);
 }
 
-export type IssueRunKind = 'report' | 'devops';
+export const IssueRunKind = Object.freeze({
+  report: 'report',
+  devops: 'devops',
+} as const);
+export type IssueRunKind = (typeof IssueRunKind)[keyof typeof IssueRunKind];
 
 export class SessionAddress {
   private constructor(private readonly value: string) {}

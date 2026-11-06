@@ -10,6 +10,7 @@ import {
   type AsciiFigure,
   type MrLink,
 } from './layout';
+import { escapeHtml } from './html';
 import { parseReportDoc, type ReportDoc } from './schema';
 
 export interface RenderPageInput {
@@ -127,15 +128,6 @@ const LIGHTBOX_JS = `
   dialog.addEventListener('click', function(){ dialog.close(); });
 })();
 `.trim();
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 function renderMrLinks(links: MrLink[]): string {
   if (links.length === 0) return '';

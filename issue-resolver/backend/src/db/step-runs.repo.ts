@@ -1,13 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { parseSessionStats, type PipelineStep, type SessionEvent, type SessionStats, type StepOutput, type StepRun, StepRunStatus, type StepRunWithLog } from '@issue-resolver/shared';
-import { and, asc, desc, eq, getTableColumns } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, sql } from 'drizzle-orm';
 import { capSessionEvents } from '../pi/session-events-cap';
 import type { Db } from './client';
+import { nowIso, parseJsonColumn } from './rows';
 import { iterations, stepOutputs, stepRuns } from './schema';
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
 
 function issueIdOfIteration(db: Db, iterationId: string): string | null {
   const row = db
@@ -42,13 +39,11 @@ export interface CreateStepOutputInput {
 }
 
 function parseEvents(raw: string | null): SessionEvent[] {
-  if (!raw) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as SessionEvent[]) : [];
-  } catch {
-    return [];
-  }
+  return (
+    parseJsonColumn(raw, (value) =>
+      Array.isArray(value) ? (value as SessionEvent[]) : null,
+    ) ?? []
+  );
 }
 
 function pickStepRunEvents(
@@ -62,12 +57,40 @@ function pickStepRunEvents(
 }
 
 function parseStats(raw: string | null): SessionStats | null {
-  if (!raw) return null;
-  try {
-    return parseSessionStats(JSON.parse(raw));
-  } catch {
-    return null;
-  }
+  return parseJsonColumn(raw, (value) => parseSessionStats(value));
+}
+
+const stepRunWithLogColumns = {
+  ...getTableColumns(stepRuns),
+  stdout: stepOutputs.stdout,
+  stderr: stepOutputs.stderr,
+  outputEvents: stepOutputs.events,
+  stats: stepOutputs.stats,
+  report: stepOutputs.report,
+  screenshots_dir: stepOutputs.screenshots_dir,
+};
+
+type StepRunWithLogRow = StepRun & {
+  events: SessionEvent[] | null;
+  stdout: string | null;
+  stderr: string | null;
+  outputEvents: string | null;
+  stats: string | null;
+  report: string | null;
+  screenshots_dir: string | null;
+};
+
+function toStepRunWithLog(row: StepRunWithLogRow): StepRunWithLog {
+  const { outputEvents, ...rest } = row;
+  return {
+    ...rest,
+    stdout: rest.stdout ?? '',
+    stderr: rest.stderr ?? '',
+    events: capSessionEvents(pickStepRunEvents(outputEvents, rest.events)),
+    stats: parseStats(rest.stats ?? null),
+    report: rest.report ?? null,
+    screenshots_dir: rest.screenshots_dir ?? null,
+  };
 }
 
 export async function createStepRun(
@@ -146,7 +169,7 @@ export async function listStepRunsByIteration(
     .select()
     .from(stepRuns)
     .where(eq(stepRuns.iteration_id, iterationId))
-    .orderBy(asc(stepRuns.created_at), asc(stepRuns.id))
+    .orderBy(asc(stepRuns.created_at), asc(sql`rowid`))
     .all();
 }
 
@@ -162,7 +185,7 @@ export async function listStepRunsByIssue(
     .select()
     .from(stepRuns)
     .where(eq(stepRuns.issue_id, issueId))
-    .orderBy(asc(stepRuns.created_at), asc(stepRuns.id))
+    .orderBy(asc(stepRuns.created_at), asc(sql`rowid`))
     .all();
 }
 
@@ -176,7 +199,7 @@ export async function getLatestStepRunForIssue(
       .select()
       .from(stepRuns)
       .where(and(eq(stepRuns.issue_id, issueId), eq(stepRuns.step, step)))
-      .orderBy(desc(stepRuns.created_at), desc(stepRuns.id))
+      .orderBy(desc(stepRuns.created_at), desc(sql`rowid`))
       .get() ?? null
   );
 }
@@ -213,30 +236,14 @@ export async function listStepRunsWithLog(
   iterationId: string,
 ): Promise<StepRunWithLog[]> {
   const rows = db
-    .select({
-      ...getTableColumns(stepRuns),
-      stdout: stepOutputs.stdout,
-      stderr: stepOutputs.stderr,
-      outputEvents: stepOutputs.events,
-      stats: stepOutputs.stats,
-      report: stepOutputs.report,
-      screenshots_dir: stepOutputs.screenshots_dir,
-    })
+    .select(stepRunWithLogColumns)
     .from(stepRuns)
     .leftJoin(stepOutputs, eq(stepRuns.id, stepOutputs.step_run_id))
     .where(eq(stepRuns.iteration_id, iterationId))
-    .orderBy(asc(stepRuns.created_at), asc(stepRuns.id))
+    .orderBy(asc(stepRuns.created_at), asc(sql`step_runs.rowid`))
     .all();
 
-  return rows.map(({ outputEvents, ...row }) => ({
-    ...row,
-    stdout: row.stdout ?? '',
-    stderr: row.stderr ?? '',
-    events: pickStepRunEvents(outputEvents, row.events),
-    stats: parseStats(row.stats ?? null),
-    report: row.report ?? null,
-    screenshots_dir: row.screenshots_dir ?? null,
-  }));
+  return rows.map(toStepRunWithLog);
 }
 
 export async function getStepRunWithLog(
@@ -244,29 +251,11 @@ export async function getStepRunWithLog(
   stepRunId: string,
 ): Promise<StepRunWithLog | null> {
   const row = db
-    .select({
-      ...getTableColumns(stepRuns),
-      stdout: stepOutputs.stdout,
-      stderr: stepOutputs.stderr,
-      outputEvents: stepOutputs.events,
-      stats: stepOutputs.stats,
-      report: stepOutputs.report,
-      screenshots_dir: stepOutputs.screenshots_dir,
-    })
+    .select(stepRunWithLogColumns)
     .from(stepRuns)
     .leftJoin(stepOutputs, eq(stepRuns.id, stepOutputs.step_run_id))
     .where(eq(stepRuns.id, stepRunId))
     .get();
 
-  if (!row) return null;
-  const { outputEvents, ...rest } = row;
-  return {
-    ...rest,
-    stdout: rest.stdout ?? '',
-    stderr: rest.stderr ?? '',
-    events: capSessionEvents(pickStepRunEvents(outputEvents, rest.events)),
-    stats: parseStats(rest.stats ?? null),
-    report: rest.report ?? null,
-    screenshots_dir: rest.screenshots_dir ?? null,
-  };
+  return row ? toStepRunWithLog(row) : null;
 }

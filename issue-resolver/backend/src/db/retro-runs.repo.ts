@@ -9,16 +9,11 @@ import {
   type ThinkingLevel,
 } from '@issue-resolver/shared';
 
-
-
-
 import { desc, eq } from 'drizzle-orm';
 import type { Db } from './client';
+import { capSessionEvents } from '../pi/session-events-cap';
+import { nowIso } from './rows';
 import { retroRuns } from './schema';
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
 
 function toRun(row: typeof retroRuns.$inferSelect): RetroRun {
   return {
@@ -52,10 +47,6 @@ export interface CreateRetroRunInput {
   thinkingLevel?: ThinkingLevel | null;
 }
 
-/**
- * A run marked `running` in the database can only be stale here: the caller
- * guards against a live run before inserting a new one.
- */
 export function failStaleRetroRuns(db: Db): void {
   db.update(retroRuns)
     .set({
@@ -63,7 +54,7 @@ export function failStaleRetroRuns(db: Db): void {
       error: 'прогон прерван перезапуском бэкенда',
       updated_at: nowIso(),
     })
-    .where(eq(retroRuns.status, 'running'))
+    .where(eq(retroRuns.status, RetroRunStatus.running))
     .run();
 }
 
@@ -122,7 +113,7 @@ export function getRetroRunWithLog(
     ...toRun(row),
     stdout: row.stdout,
     stderr: row.stderr,
-    events: row.events ?? [],
+    events: capSessionEvents(row.events ?? []),
     stats: parseSessionStats(row.stats),
   };
 }

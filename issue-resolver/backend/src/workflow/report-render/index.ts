@@ -1,6 +1,8 @@
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readTextFileOrNull } from '../../util/files';
 import { renderReportPage } from './page';
+import { messageOf } from '../../util/errors';
 
 export { parseReportDoc } from './schema';
 export type { Diagram, ReportDoc, ReportMetric } from './schema';
@@ -15,20 +17,11 @@ export const REPORT_HTML_FILE = 'report.html';
 
 const SHOT_EXTENSIONS = /\.(png|jpe?g|webp|gif)$/i;
 
-function readText(path: string): string | null {
-  try {
-    if (statSync(path).size === 0) return null;
-    return readFileSync(path, 'utf8');
-  } catch {
-    return null;
-  }
-}
-
 export function readReportJson(hostDir: string): {
   raw: unknown;
   warnings: string[];
 } {
-  const text = readText(join(hostDir, REPORT_JSON_FILE));
+  const text = readTextFileOrNull(join(hostDir, REPORT_JSON_FILE));
   if (text === null) return { raw: null, warnings: [] };
   try {
     return { raw: JSON.parse(text) as unknown, warnings: [] };
@@ -36,7 +29,7 @@ export function readReportJson(hostDir: string): {
     return {
       raw: null,
       warnings: [
-        `report.json: invalid JSON (${error instanceof Error ? error.message : 'parse error'}) — ignored`,
+        `report.json: invalid JSON (${messageOf(error, 'parse error')}) — ignored`,
       ],
     };
   }
@@ -61,7 +54,7 @@ export interface RenderedArtifacts {
 export async function renderReportArtifacts(
   hostDir: string,
 ): Promise<RenderedArtifacts> {
-  const md = readText(join(hostDir, REPORT_MD_FILE));
+  const md = readTextFileOrNull(join(hostDir, REPORT_MD_FILE));
   if (md === null) {
     return {
       ok: false,
