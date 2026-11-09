@@ -54,10 +54,9 @@ A finding the reader must act on is Answer; that same finding's bookkeeping
 
 ### Never name the model
 
-**No model or provider name appears anywhere in either report file — not in
-the footer, not in Execution details.** No `provider/model-id`, no `model:`
-line, no "this run ran on …"; the same holds for every step file. Provenance
-is **step + iteration**; the model is UI/SSE metadata, not an artifact fact.
+No model or provider name appears in either report file — not in the footer, not
+in Execution details. The rule and its reasons are in the output contract;
+provenance here is **step + iteration**.
 
 ### Answer form — choose it by the task's goal
 
@@ -137,13 +136,14 @@ One shape has exactly one carrier per artifact: declaring a diagram in
 combination the engine refuses — it drops such a diagram and the page loses the
 picture. See **`Drawing a shape`** below.
 
-Visual craft comes from the **`frontend-design`** and **`theme-factory`**
-skills — palette, typography, spacing, "not a template". The artifact
-contract outranks them: the generated page stays self-contained — no external
-fonts, CDNs, images or libraries. If **any installed skill** (or an example
-file it links to — e.g. a `tailwindcss` CDN `<script>` or a `mermaid` import
-from `jsdelivr`) suggests a web font, a CDN script or a diagram library,
-discard it; the file must render from `file://` alone.
+Visual craft comes from `frontend-design` and `theme-factory` — palette,
+typography, spacing, "not a template" — and the artifact contract outranks both:
+the page stays self-contained, with no external fonts, no CDN `<script>`, no
+`@import`, no web fonts and no diagram library, so it renders from `file://` and
+survives being emailed. If **any installed skill**, or an example file it links
+to (a `tailwindcss` CDN `<script>`, a `mermaid` import from `jsdelivr`),
+suggests one — discard it. A skill's example is never authority over this
+contract.
 
 ## What to produce
 

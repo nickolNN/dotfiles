@@ -78,50 +78,25 @@
 
 ## Style skills vs artifacts
 
-Chat style and artifact style are separate. Never let a chat
-skill rewrite a deliverable:
+Chat style and artifact style are separate, and an artifact's own contract
+outranks every installed skill — including the example file a skill links to.
+`caveman` (and its `ultracave`/`megacave` variants) and `ponytail` govern code
+and chat only; reports, MR bodies, plans and narratives keep full sentences,
+headings and evidence. Invariants for anything we hand to a human:
 
-- `caveman` (and its `ultracave` / `megacave` variants) and
-  `ponytail` govern **code and chat replies only**.
-  They never apply to artifacts an agent produces — reports, MR
-  descriptions, plans, per-step narratives, specs. Those keep
-  full sentences, headings, and evidence regardless of how terse
-  the chat is.
-- `glyph` belongs to the **human-facing report** (the `report`
-  agent). Its portable core — verdict first, one render per
-  answer, anything with a shape gets a diagram, icon always
-  paired with a word, legend of meanings — governs both report
-  files. Only the medium differs: the same diagram is monospace
-  ASCII or a table in `report.md`, inline `<svg>` in
-  `report.html`. Agent-facing artifacts (narratives, plans,
-  handoffs to peers) get plain structured markdown: no glyph.
-- When brevity skills and `clean-code` disagree about the code,
-  `clean-code` wins: it is the preferred code doctrine here.
-- `frontend-design` and `theme-factory` inform the visual craft
-  of a human-facing artifact (report, MR body). The artifact's
-  own contract outranks them: self-contained, no external fonts
-  or resources, no libraries.
-- The same override applies to **every** installed skill, not
-  just the craft ones — including example files a skill links to.
-  The pattern to distrust: a scaffold that says `Tailwind via CDN`
-  (`<script src="https://cdn.tailwindcss.com">`) and imports a
-  diagram library from `jsdelivr` (mermaid). One such skill used
-  to ship exactly that; it is out of the build now, but the shape
-  repeats. Those examples are written for a
-  throwaway local page that may assume a network; our artifacts
-  must render from `file://` and survive being emailed. So for
-  our deliverables: no CDN `<script src>`, no `@import`, no web
-  fonts, no diagram libraries (mermaid, d3, chart.js) — inline
-  CSS, inline `<svg>`, inline vanilla JS only. A skill's example
-  is never authority over an artifact's contract.
-- Method skills are called by name, not imitated: `refine` and
-  `wayfinder` delegate the interview to the `grilling` skill.
-- **Never name the model or provider in an artifact** — report,
-  per-step narrative, plan, spec, MR body. No `model:` line, no
-  `provider/model-id`, no «this run used …». Provenance in a
-  report means which step and which iteration produced the
-  claim, not which model. Model visibility belongs to the UI
-  and to SSE `step_status`, never to the deliverable.
+- no model or provider name in an artifact — provenance is the step and the
+  iteration a fact came from;
+- self-contained: inline CSS, inline `<svg>`, inline JS, no CDN `<script>`, no
+  `@import`, no web fonts, no diagram library — it must render from `file://`;
+- `glyph` belongs to the human-facing report; agent-facing artifacts get plain
+  structured markdown;
+- when brevity skills and `clean-code` disagree about the code, `clean-code`
+  wins;
+- a method skill is called by name, not imitated: `refine` and `wayfinder`
+  delegate the interview to `grilling`.
+
+The skill-by-skill map, the `glyph` core and the reasoning are in the
+`artifact-style` skill — read it before reshaping a deliverable's format.
 
 ## Context & token efficiency
 

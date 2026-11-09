@@ -2,7 +2,7 @@ import { join } from 'node:path';
 
 import type { PipelineStep } from '@issue-resolver/shared';
 import type { RepoChangeDigest } from '../../git/service';
-import { readPrompt } from './loader';
+import { readPrompt, render } from './loader';
 
 export interface PrTarget {
   path: string;
@@ -211,9 +211,14 @@ export function grouped(value: number): string {
 
 const SHARED_FRAGMENTS = ['step-scope.md', 'capabilities.md', 'memory-rules.md'];
 
-export function withSharedFragments(prompt: string): string {
+export function withSharedFragments(
+  prompt: string,
+  extra: readonly string[] = [],
+  values: Record<string, string> = {},
+): string {
   return [
     prompt,
+    ...extra.map((name) => render(readPrompt(name), values).trim()),
     ...SHARED_FRAGMENTS.map((name) => readPrompt(name).trim()),
   ].join('\n\n');
 }

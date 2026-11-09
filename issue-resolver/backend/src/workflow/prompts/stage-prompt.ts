@@ -43,6 +43,9 @@ export interface WorkerSummary {
   summary: string;
 }
 
+/** Only the agents that write a stage outcome file read it. */
+const STAGE_FRAGMENTS = ['stage-outcome.md'];
+
 function stageValues(
   input: StagePromptInput,
   extra: Record<string, string> = {},
@@ -125,6 +128,8 @@ export function buildStageCoordinatorPrompt(
         summaries ||
         'There are no worker agents for this stage: perform the stage task YOURSELF\nand produce the stage result directly.',
     }),
+    STAGE_FRAGMENTS,
+    { STAGE_INDEX: String(stage.index) },
   );
 }
 
@@ -139,6 +144,8 @@ export function buildStageSoloPrompt(
       STAGE_NAME: stage.name,
       STAGE_TASK: stage.task,
     }),
+    STAGE_FRAGMENTS,
+    { STAGE_INDEX: String(stage.index) },
   );
 }
 

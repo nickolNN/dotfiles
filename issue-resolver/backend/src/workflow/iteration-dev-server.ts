@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { join } from 'node:path';
 import { extractRepoNameFromUrl } from '@issue-resolver/shared';
 import type { Db } from '../db/client';
 import { issues } from '../db/schema';
@@ -20,32 +21,39 @@ export async function restartDevServerForIteration(
     .from(issues)
     .where(eq(issues.id, input.issue.id))
     .get();
+  const devRepo = input.repositories.find(
+    (repo) => repo.bootstrap_enabled !== false,
+  );
+  const workspaceDir = workspaceHostDirFor(
+    deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
+    input.issue.id,
+  );
+  const devRepoName = devRepo
+    ? extractRepoNameFromUrl(devRepo.repository_url)
+    : null;
   if (issueRow?.dev_server_pid) {
-    await stopDevServerProcess(issueRow.dev_server_pid);
+    await stopDevServerProcess(
+      issueRow.dev_server_pid,
+      devRepoName === null ? workspaceDir : join(workspaceDir, devRepoName),
+    );
     releaseIssueDevPorts(input.issue.id);
     db.update(issues)
       .set({ dev_server_port: null, dev_server_pid: null })
       .where(eq(issues.id, input.issue.id))
       .run();
 
-    const devRepo = input.repositories.find(
-      (repo) => repo.bootstrap_enabled !== false,
-    );
-    if (devRepo) {
+    if (devRepo && devRepoName !== null) {
       const preferredPort = issueRow.dev_server_port ?? undefined;
       const port =
         preferredPort !== undefined &&
         (await reserveDevPort(input.issue.id, preferredPort))
           ? preferredPort
           : await allocateDevPort(input.issue.id);
-      const workspaceDir = workspaceHostDirFor(
-        deps.workspaceRoot ?? DEFAULT_WORKSPACE_ROOT,
-        input.issue.id,
-      );
       const pid = startRepoDevServer(
         workspaceDir,
-        extractRepoNameFromUrl(devRepo.repository_url),
+        devRepoName,
         port,
+        input.issue.id,
       );
       if (pid !== null) {
         db.update(issues)

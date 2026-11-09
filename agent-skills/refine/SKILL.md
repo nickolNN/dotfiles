@@ -11,11 +11,11 @@ description: >-
 
 # Refine — pipeline step adapter
 
-Refine sizes the work and writes the executor's brief. Two outputs, one decision:
-how big the task is and how many executors/stages it needs, and a task
-description detailed enough that the executor never has to re-interview the user
-or reopen a settled decision. **The method lives in the `grilling` skill;** this
-file only glues it to the mechanics of the step.
+Refine sizes the work and writes the executor's brief. **The method lives in the
+`grilling` skill; the step's contract lives in
+[`issue-resolver/prompts/step-refine.md`](../../issue-resolver/prompts/step-refine.md).**
+This file only glues them: how the interview reaches the user here, where the
+answer goes, and what the step must not do.
 
 ## Method: grilling
 
@@ -48,39 +48,28 @@ Two to five concrete options, the recommended one first.
 ## Artifacts (output contract)
 
 - `plan.md` at the root of the working folder — the expanded brief handed to the
-  executors: the request in the user's words and what it means concretely,
-  decisions with their reasons, behaviour before/after, constraints and
-  invariants, one block per executor or stage (naming the area it owns),
-  acceptance criteria, risks, and the file ownership map (only so that parallel
-  workers never edit the same file);
-- `.issue-step-result.json` — `summary`, `scenarios`, `execution`
-  (`mode` / `executors` / `decomposition` / `stages` / `rationale`);
+  executors. What belongs in it, and what must stay out, is defined by
+  `prompts/step-refine.md` §4;
+- `.issue-step-result.json` — `summary`, `scenarios`, `execution`;
 - `iterations/<n>/.refine.md` — this iteration's record for the report agent: a
   delta (what the input added, what was asked, how you sized the work), never a
   copy of the decisions in `plan.md`; long-term memory gets only cross-task
   conventions and traps, not this task's decisions.
 
 What goes into `execution` and the worker limits is defined by the step prompt
-(`prompts/step-refine.md`) — not duplicated here.
+(`prompts/step-refine.md` §3) — not duplicated here.
 
-## Constraints
+## Boundaries
 
-- **You decide what and why, not how.** The executor designs the edit: which
-  files and functions to touch, the current and target code,
-  classes/props/signatures, diffs, line numbers. None of that belongs in
-  `plan.md` — such a plan duplicates the executor's work and goes stale on its
-  first change.
-- Read code shallowly and for one purpose: sizing. Where the area is, how big
-  it is, does the capability already exist, which file goes to which worker when
-  splitting. Opened a file to work out the edit itself — you have left the
-  step's boundary.
-- Judge size before writing anything, on two axes. **Shape**: one coherent
-  change in one area is `single`; a room or stages is a cost paid for genuinely
-  independent or genuinely ordered parts, never a default. **Capacity**: a change
-  that outgrows one executor's working set — on the order of a dozen files plus
-  one test loop — becomes ordered stages even when its parts are not independent.
-- Do not write code — implementation belongs to resolve.
-- Do not commit or push — that is the PR step.
-- Do not duplicate review/test when they are in `pipeline_steps`.
-- Product and design decisions go to the user as a question, not your own
-  judgement.
+The sizing axes, the `single`-versus-`stages` rule, the ownership map and the
+"what, never how" boundary are stated once, in `prompts/step-refine.md`. What
+this adapter adds is what that prompt cannot know:
+
+- read code only far enough to name the area that owns the work and to check
+  whether the capability already exists — opened a file to work out the edit
+  itself, and you have left the step;
+- judge the size before writing anything;
+- decisions go to the user as a question, facts you check in the code yourself;
+- no code, no commit — resolve implements, `pr` publishes;
+- review and test work belongs to those steps when they are in
+  `pipeline_steps`.

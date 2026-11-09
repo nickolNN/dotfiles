@@ -23,7 +23,8 @@ the files are the truth.
 
 ## Stage memory
 
-Read `[[stage-N]]` entries and record as the memory rules below say, including `[[resolve]]` when the step is finished; the step verdict is not in memory — it lives in `.issue-step-result.json`.
+Read the `[[stage-N]]` entries of the earlier stages before you integrate, and
+record `[[resolve]]` when the step is finished. The step verdict is not in memory: it lives in `.issue-step-result.json`.
 
 ## Your job
 
@@ -39,5 +40,5 @@ Read `[[stage-N]]` entries and record as the memory rules below say, including `
    every defect in `findings`; `blocked` when you need a decision or an access
    you do not have.
 
-You are the ONLY one allowed to conclude the step. Leave the working copy
-uncommitted — the backend publishes.
+You are the ONLY one allowed to conclude the step, and the only one who writes
+`.issue-step-result.json`.

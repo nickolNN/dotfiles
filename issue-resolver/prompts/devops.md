@@ -392,12 +392,24 @@ install nginx.
    For a shell, also confirm the HTML references assets that resolve (a 200 on
    `/` with 404s on every `.js`/`.css` is a broken base path, not a success).
 
+   **Before you start it, look at the port.** If `ss -ltnp | grep :{{DEV_SERVER_PORT}}`
+   already shows a listener and you did not start it, the port belongs to another
+   workspace or to a leftover process: do **not** start, do **not** free it, write
+   the listener's `pid/command` into `## Notes` and report it. The engine
+   re-allocates the port itself when it is held by someone else — a busy port is
+   never your problem to solve by killing.
+
    Leave it running — do **not** stop it when you finish. The engine checks
    `http://localhost:{{DEV_SERVER_PORT}}/` after your run, adopts the pid from
-   `.dev-server.pid`, and keeps the server for the next steps and the human. When
-   the script has to be replaced, kill the old process and start it the same way:
+   `.dev-server.pid`, and keeps the server for the next steps and the human. If
+   your own attempt did not survive, the engine starts `DEV_SERVER.sh` itself, so
+   a dead server is a detail to report, not a reason to force anything.
+
+   When the script has to be replaced, restart **only your own** server — that is
+   the single kill you are allowed, and it goes through the pid file:
 
    ```bash
+   ps -o pid,cmd -p "$(cat .dev-server.pid)"   # confirm it is your DEV_SERVER.sh
    kill -- -"$(cat .dev-server.pid)" 2>/dev/null || true
    setsid nohup ./DEV_SERVER.sh > .dev-server.log 2>&1 < /dev/null &
    echo $! > .dev-server.pid
@@ -425,6 +437,18 @@ install nginx.
 - All of these files are infrastructure: the system excludes them from git and
   commits nothing else for you.
 - Read inside `{{REPO_DIR}}` and the workspace root; write only the files above.
+- **Never kill by pattern or by port.** `pkill`, `killall`, `fuser -k 5100/tcp`,
+  `kill $(pgrep …)`, `lsof -t … | xargs kill` — this container is shared with the
+  issue-resolver's own UI, other issues' dev servers and the human's shells; those
+  commands reach all of them. `pkill -f <pattern>` is doubly wrong: the pattern
+  also matches the `bash -c` line that is running it, so the call kills itself and
+  exits with 143 — a red herring that looks like "the command failed".
+- The only process you may signal is `./DEV_SERVER.sh` of this workspace, and only
+  as a process group via its own pid file (`kill -- -"$(cat .dev-server.pid)"`),
+  after `ps -o pid,cmd -p` confirms it. No pid file → no kill.
+- The entry port `{{DEV_SERVER_PORT}}` is allocated by the engine. If something
+  you did not start is listening on it, stop: report the listener, do not restart
+  anything, do not "clean up".
 - No container runtimes — see *Docker-in-docker is not available* above.
 - Use whatever toolchain the project actually needs (npm/yarn/pnpm/npx/go/pip/
   python3/cargo/make).

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -35,6 +36,11 @@ import {
   runDevopsAgent,
   startRepoDevServer,
 } from '../src/workflow/run-iteration.service';
+import {
+  isProcessAlive,
+  readOwnedDevServerPid,
+  stopDevServerProcess,
+} from '../src/workflow/dev-server';
 
 const REPO_URL = 'https://example.com/acme/app.git';
 const NOW = '2026-06-01T00:00:00.000Z';
@@ -104,6 +110,19 @@ function makeClonedRepo(repoDir: string): void {
   mkdirSync(join(repoDir, '.git'), { recursive: true });
 }
 
+function killGroup(pid: number): void {
+  if (pid <= 0) return;
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (error) {
+      void error;
+    }
+  }
+}
+
 type AgentBehaviour = (
   repoName: string,
   emit: {
@@ -155,6 +174,7 @@ function buildDeps(
     workspaceRoot: root,
     local: true,
     devopsModel: 'gpt-test',
+    devServerStartupMs: 300,
   };
 }
 
@@ -739,13 +759,21 @@ describe('учёт dev-сервера после прогона DevOps', () => {
     makeClonedRepo(repoDir);
     const server = createServer((_request, response) => response.end('ok'));
     let port = 0;
+    let agentPid = 0;
 
     const factory: DevOpsFactory = () => ({
       async runDevOps(_workspaceDir, _repoUrl, _repoName, devServerPort) {
         port = devServerPort ?? 0;
         writeFileSync(join(repoDir, 'DEV_SERVER.sh'), '#!/bin/sh\nexec sleep 30\n');
         chmodSync(join(repoDir, 'DEV_SERVER.sh'), 0o755);
-        writeFileSync(join(repoDir, '.dev-server.pid'), `${process.pid}\n`);
+        const child = spawn('sleep', ['30'], {
+          cwd: repoDir,
+          detached: true,
+          stdio: 'ignore',
+        });
+        child.unref();
+        agentPid = child.pid ?? 0;
+        writeFileSync(join(repoDir, '.dev-server.pid'), `${agentPid}\n`);
         await new Promise<void>((resolve) =>
           server.listen(port, '127.0.0.1', () => resolve()),
         );
@@ -760,13 +788,15 @@ describe('учёт dev-сервера после прогона DevOps', () => {
       });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      killGroup(agentPid);
     }
 
     const run = await getLatestStepRunForIssue(db, issueId, 'devops');
     expect(run?.status).toBe('success');
     const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
     expect(issue?.dev_server_port).toBe(port);
-    expect(issue?.dev_server_pid).toBe(process.pid);
+    expect(issue?.dev_server_pid).toBe(agentPid);
+    expect(agentPid).toBeGreaterThan(0);
   });
 
   it('помечает репозиторий failed, если скрипт есть, а порт не отвечает', async () => {
@@ -777,6 +807,7 @@ describe('учёт dev-сервера после прогона DevOps', () => {
     makeClonedRepo(repoDir);
     const { factory } = trackingFactory(() => {
       writeFileSync(join(repoDir, 'DEV_SERVER.sh'), '#!/bin/sh\nexit 1\n');
+      chmodSync(join(repoDir, 'DEV_SERVER.sh'), 0o755);
       return { success: true, instructions: '# Run', stats: null };
     });
 
@@ -790,5 +821,104 @@ describe('учёт dev-сервера после прогона DevOps', () => {
     expect(run?.feedback).toContain('dev server не отвечает');
     const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
     expect(issue?.dev_server_pid).toBeNull();
+  });
+});
+
+describe('чужой процесс не получает pid-файл задачи', () => {
+  it('readOwnedDevServerPid игнорирует pid процесса из другой директории', () => {
+    const root = tempRoot();
+    const repoDir = join(root, 'app');
+    mkdirSync(repoDir, { recursive: true });
+    const foreign = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      writeFileSync(join(repoDir, '.dev-server.pid'), `${foreign.pid}\n`);
+      expect(readOwnedDevServerPid(root, 'app')).toBeNull();
+    } finally {
+      killGroup(foreign.pid ?? 0);
+    }
+  });
+
+  it('readOwnedDevServerPid принимает pid процесса, запущенного из репозитория', async () => {
+    const root = tempRoot();
+    const repoDir = join(root, 'app');
+    mkdirSync(repoDir, { recursive: true });
+    const own = spawn('sleep', ['30'], {
+      cwd: repoDir,
+      detached: true,
+      stdio: 'ignore',
+    });
+    own.unref();
+    const pid = own.pid ?? 0;
+    try {
+      writeFileSync(join(repoDir, '.dev-server.pid'), `${pid}\n`);
+      const deadline = Date.now() + 2000;
+      while (!existsSync(`/proc/${pid}/cwd`) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(pid).toBeGreaterThan(0);
+      expect(readOwnedDevServerPid(root, 'app')).toBe(pid);
+    } finally {
+      killGroup(pid);
+    }
+  });
+
+  it('stopDevServerProcess не убивает процесс, чья cwd вне рабочей папки', async () => {
+    const root = tempRoot();
+    const repoDir = join(root, 'app');
+    mkdirSync(repoDir, { recursive: true });
+    const foreign = spawn('sleep', ['30'], { stdio: 'ignore' });
+    const pid = foreign.pid ?? 0;
+    await stopDevServerProcess(pid, repoDir);
+    expect(isProcessAlive(pid)).toBe(true);
+    killGroup(pid);
+  });
+});
+
+describe('занятый порт задачи', () => {
+  afterEach(() => {
+    resetPortAllocator();
+  });
+
+  it('выделяет новый порт, если сохранённый держит чужой процесс', async () => {
+    const db = createDb(':memory:');
+    const root = tempRoot();
+    const sse = new RecordingSseHub();
+    const foreign = createServer((_request, response) => response.end('foreign'));
+    await new Promise<void>((resolve) =>
+      foreign.listen(0, '127.0.0.1', () => resolve()),
+    );
+    const occupied = (foreign.address() as { port: number }).port;
+    const { issueId, repoDir } = seedIssue(db, root, {
+      dev_server_port: occupied,
+      dev_server_pid: null,
+    });
+    makeClonedRepo(repoDir);
+    const { factory, calls } = trackingFactory(() => ({
+      success: true,
+      instructions: '# Run\nnpm start',
+      stats: null,
+    }));
+
+    try {
+      await runDevopsAgent(buildDeps(db, root, factory, sse), {
+        issueId,
+        repositories: [{ repository_url: REPO_URL }],
+      });
+    } finally {
+      await new Promise<void>((resolve) => foreign.close(() => resolve()));
+    }
+
+    const allocated = calls[0]?.devServerPort;
+    expect(allocated).toBeDefined();
+    expect(allocated).not.toBe(occupied);
+    expect(allocated).toBeGreaterThanOrEqual(5100);
+    expect(allocated).toBeLessThanOrEqual(5299);
+    expect(
+      db
+        .select({ port: issues.dev_server_port })
+        .from(issues)
+        .where(eq(issues.id, issueId))
+        .get()?.port,
+    ).toBe(allocated);
   });
 });

@@ -8,6 +8,11 @@ const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '.
 
 const _cache = new Map<string, { mtimeMs: number; size: number; body: string }>();
 
+/** Drops the `# Prompt: <name>` header every prompt file carries for its reader. */
+export function stripPromptHeader(raw: string): string {
+  return raw.replace(/^#\s+Prompt:.*\n\n?/, '');
+}
+
 export function readPrompt(filename: string): string {
   const path = join(PROMPTS_DIR, filename);
   const { mtimeMs, size } = statSync(path);
@@ -16,7 +21,7 @@ export function readPrompt(filename: string): string {
     return cached.body;
   }
   const raw = readFileSync(path, 'utf-8');
-  const body = raw.replace(/^#\s+Prompt:.*\n\n?/, '');
+  const body = stripPromptHeader(raw);
   _cache.set(filename, { mtimeMs, size, body });
   return body;
 }

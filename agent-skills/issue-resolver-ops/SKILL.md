@@ -63,143 +63,53 @@ before concluding anything is unimplemented.
 
 ## DevOps run (workspace preparation)
 
-Issue-level, like report, and **not** a pipeline step: `PIPELINE_STEPS` stays
+Issue-level, not a pipeline step: `PIPELINE_STEPS` stays
 `refine, resolve, review, test, pr` (`backend/src/validation.ts:3-8`); `'devops'`
 exists in `shared` `PipelineStep` only so the run has a step label.
 
-- `POST /issue-resolver/api/v1/issues/:id/devops` → `202 {ok, devopsRunId}`
-  (`routes/issues.ts:749`), id = `<issueId>/devops`
-  (`SessionAddress.forIssueRun(issueId, 'devops')`); while a run is active the
-  second POST gets `409 {error:'devops run already active'}`.
-- `GET …/devops/status` (`:783`) → `running` (`isDevopsRunActive`) else the
-  newest `devops` `step_runs` row: `success` / `failed` / `idle`.
-- `GET …/devops/run` (`:834`) → that row with stdout, stderr, session events and
-  per-model stats (`getStepRunWithLog`); `404 {error:'issue not found'}` or
-  `{error:'devops run not found'}`.
+- `POST …/issues/:id/devops` → `202 {ok, devopsRunId}`, id = `<issueId>/devops`
+  (`SessionAddress.forIssueRun(issueId, 'devops')`); a second start while one is
+  active → `409 {error:'devops run already active'}`.
+- `GET …/devops/status` and `GET …/devops/run` behave exactly like their report
+  twins (below): the newest issue-level `step_runs` row, then `StepRunWithLog`
+  with stdout, stderr, session events and per-model stats.
 - What it does: for every issue repository with `bootstrap_enabled` (NULL counts
-  as enabled) whose clone exists (`<task>/<repo>/.git`), it deletes the old
+  as enabled) whose clone exists (`<task>/<repo>/.git`) it deletes the old
   `RUN_INSTRUCTIONS.md` + `DEV_SERVER.sh`, runs the agent, and writes
   `repositories.run_instructions` + `run_instructions_status` =
-  `generated` | `failed` — a run that inherits a previous `generated` would be a
-  lie. Those are the only records of the outcome: there is **no
-  `issues.bootstrap_error` column** (grep finds none in the whole repo).
-   Diagnose via the status column, the `devops` step run, and
-  `<task>/WORKSPACE_INSTRUCTIONS.md` (the port map the agent writes).
+  `generated | failed`. Those two columns are the only record: there is **no
+  `issues.bootstrap_error` column**. Diagnose via the status column, the
+  `devops` step run, and `<task>/WORKSPACE_INSTRUCTIONS.md` (the port map).
+- Ports: `allocateDevPort` (`backend/src/port-allocator.ts`, 5100–5299) → the
+  entry script gets it as `PORT`, so it must honour `"${PORT:-<written port>}"`.
+  `{{DEV_SERVER_PORT}}` in `prompts/devops.md` is always a concrete number.
 - `<task>/pw-browsers.sh` is copied into every task workspace by
-  `installWorkspaceHelpers` (`backend/src/workflow/run-iteration.service.ts`).
-  A step agent sees only the `/workspaces/<issueId>` bind, so prompts call it by
-  name (`bash pw-browsers.sh <repo-dir>`), never by the host path under
-  `/home/agent/…`.
-- The entry port belongs to the system, never to the agent: `allocateDevPort`
-  (`backend/src/port-allocator.ts`, range 5100–5299) → `issues.dev_server_port`.
-  A manual run allocates when the row is empty and releases the port + clears the
-  column if the run generated nothing. The backend starts `DEV_SERVER.sh` with
-  `PORT` in its environment, so the entry script must honor
-  `"${PORT:-<written port>}"`; `{{DEV_SERVER_PORT}}` in `prompts/devops.md` is
-  always a concrete number (there is no `AUTO` any more). Repositories other than
-  the entry point are upstreams on their own ports, outside 5100–5299.
-- Template: `prompts/devops.md` with `{{REPO_DIR}} {{REPO_NAME}}
-  {{DEV_SERVER_PORT}} {{TAG_INSTRUCTIONS}} {{REPOS_NAMES}}
-  {{REPOS_REQUIRE_DEV_SERVER}} {{REPOS_INSTRUCTIONS}}` —
-  `renderDevOpsPrompt` (`backend/src/workflow/devops.ts`).
-- Frontend: the `DevOps задачи` card on the task page
-  (`frontend/src/views/TaskDetail.tsx`, `data-testid="devops-section"`) polls
-  `/devops/status` and opens the saved run in a modal.
+  `installWorkspaceHelpers`; prompts call it by name, never by a host path.
 
 ## Report artifacts
 
 Post-iteration, fire-and-forget (`spawnReportAgent` in
-`workflow/run-iteration.service.ts`); `POST
-/issue-resolver/api/v1/issues/:id/report` →
+`workflow/run-iteration.service.ts`); `POST …/issues/:id/report` →
 `202 {ok, reportRunId}`. The agent writes `report.md` + `report.json` at
-`<task>/` root (`report-<n>.md` = engine summaries); **`report.html` is
-rendered by the engine** from those two (`workflow/report-render`) right after
-the agent exits, so the page always exists when the markdown does. SSE
-`step_status`/`log`/`step_event`
-carry `stepRunId = '{issueId}/report'` (`reportRunId` in the POST reply).
-The live section a user watches is fed by those SSE events + the run's
-session jsonl; files (`/result`, snapshot, archive) are the durable copy.
+`<task>/`; **`report.html` is rendered by the engine** from those two right after
+the agent exits (`workflow/report-render`), then the screenshots are inlined.
+Composition rules live in `prompts/step-report.md` and `docs/FEATURES.md` — this
+file only needs the operational facts:
 
-Before each run `archiveReportArtifacts` moves the pair into
-`<task>/reports/<stamp>/` (`toISOString()`, `-1` on collision); a failure
-aborts the run (`step_status failed`). `/result` serves the snapshot, copy
-flagged via `x-artifact-source`/`x-artifact-mtime` (mtime is ISO-Z, no
-milliseconds: `toISOString().replace(/\.\d{3}Z$/, 'Z')`, the shape D16 pins;
-404 only if neither).
-
-**Status** (`GET /issue-resolver/api/v1/issues/:id/report/status`): `running` while a run is
-active (`isReportRunActive`); else `success` if `report.md` exists, `failed`
-if `lastReportFailed`, else `idle`. `activeReportRuns`/`lastReportFailed` are
-process-local: a restart resets `failed` to `idle`. The archive empties the
-root, so `running` is the only in-flight signal; corroborate via the log
-(`report agent started: … trigger=… [origin=…] archived=<dir|none>
-files=[…] at=<ISO>` / `report agent finished: … trigger=… durationMs=…
-artifacts: …`; a silent caller logs `trigger=unknown`) or the newest session
-jsonl.
-
-`warnings`/`x-artifact-warning` come from `detectModelLeak`: exact
-(needle = `observedModelFor` — the model the session reported, else
-`input.model`; plus a ≥6-char `/`-tail) and a narrow pattern layer that
-runs even with no model, so a foreign id is still flagged (`model-like id
-leaked into …`). Pattern layer is derived **on read** (`reportWarningsFor`)
-⇒ survives a restart; only the exact-id layer is process-local; max one
-warning per file (`warningFile` dedupe, exact wins). `/report/status` adds
-`observedModel` (additive, absent after a restart → UI "no telemetry"),
-and a `running` `step_status {model: null}` honestly means "none
-requested, system model" — never the model that actually ran.
-`report.md` precedes the page: mid-run `/result` serves the previous HTML
-(`iteration-snapshot`, `text/html`), md-fallback if none.
-
-**The page is built, never authored.** `renderReportArtifacts(hostDir)` reads
-`report.md`, optional `report.json` (verdict/metrics/diagrams; a broken file
-degrades to a warning, never to a lost page) and `screenshots/`, then writes
-`report.html`: inline CSS with light+dark, markdown rendered through an
-escaping subset (raw HTML stays text, `javascript:` links are neutralized),
-`<dialog>` lightbox.
-
-Composition is code, not authoring (`workflow/report-render/layout.ts`):
-whatever section, metric, diagram or metrology line smells like the run
-(`execution`, `итерац`, `шаг`, `timeline`, `change set`, `findings`,
-`reproduction`) is collected into one collapsed `<details>` at the end, the
-leading `<h1>` and the `Status/Generated/Iterations` line are dropped, merge/
-pull-request links are lifted into the header (the section that mentions them
-stays in the details), and diagrams land after the answer text.
-
-Diagrams — the doctrine lives in exactly one place: `prompts/step-report.md`,
-the block **“Drawing a shape”**. This skill does not restate it on purpose: a
-second copy is how the “opt-in” and “one per section” wordings ended up
-contradicting each other. When a report has too few or too many diagrams, read
-that section. What the engine does regardless of the doctrine: kinds are
-`flow | bars | matrix | svg` (`report-render/schema.ts:19-61`), there is no
-`timeline`; a declared diagram is dropped when `duplicatesAscii` (`layout.ts:166`)
-finds `max(2, ⌈half the title words⌉)` of them inside an ASCII figure of
-`report.md`, warning
-`report.json: диаграмма "<title>" пропущена — та же схема уже нарисована ASCII в report.md`
-(`page.ts:185-189`) — so a shape drawn twice loses its picture on the page; a
-diagram whose title or labels match `EXECUTION_LABEL` (`layout.ts:20-21`,`diagramIsExecution:124`)
-goes to the collapsed block instead of the answer (`page.ts:192`).
-
-**Screenshots are inlined as the last step.** A screenshot is cited where it
-proves something — a markdown image, or the file name mentioned in a
-paragraph, list or table cell — and rendered as a `<figure>` right there; only
-files nobody cited reach the closing gallery. Every figure carries a
-`data-slot="01-board.png"` placeholder; `bin/embed-screenshots.mjs` (Node,
-no Python) rewrites them into WebP-q85 data URIs at full resolution
-(`--lossless`, `--keep-png` for alternatives; no encoder → original bytes).
-`runReportAgent` renders, then inlines, then re-reads sizes, so the DB keeps
-the final byte counts. Idempotent: no placeholders → no-op, exit 0. Exit 1
-means placeholders or a missing screenshot file survived — that lands in the
-step `feedback` (`report.html без всех скриншотов: …`), not in `failed`.
-`report.md` itself no longer replays the run: `## Execution details` keeps the
-change set, the findings table with provenance, MR links and the reproduction
-recipe — not an iteration timeline nor a step-by-step retelling of narratives.
-
-Base64 in a tool-call argument is the failure mode this replaces: it gets
-truncated, and even when it survives it costs minutes of generation per
-image.
-
-Model-leak detection scans authored files only (`report.md`, `report.json`):
-the page inherits the markdown, so scanning it would report one defect twice.
+- Before each run `archiveReportArtifacts` moves the pair into
+  `<task>/reports/<stamp>/`; a failed archive aborts the run.
+- `/result` serves the snapshot while the root is empty, flagged via
+  `x-artifact-source`/`x-artifact-mtime` (mtime is ISO-Z without milliseconds);
+  `404` only when neither exists.
+- `GET …/report/status` — see above. `GET …/report/run` → `StepRunWithLog`, which
+  is how the UI restores the output panel after a reload.
+- Warning channels: `warnings` in `/report/status` and the
+  `x-artifact-warning` header (non-ASCII percent-encoded, else Node rejects the
+  header). Two detectors feed them: a model id in the authored files, and
+  reading a previous `reports/**`/`.iteration-results/**` copy
+  (`anchored on previous report: <path>`).
+- A run whose pi process is gone is closed as `failed` by `failOrphanReportRun`;
+  `POST …/report/reembed` rebuilds the page from the existing markdown.
 
 ## Did the prompt edit reach the agent?
 

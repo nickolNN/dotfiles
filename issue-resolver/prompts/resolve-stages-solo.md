@@ -21,17 +21,12 @@ Stage {{STAGE_INDEX}} task: {{STAGE_TASK}}
 
 ## Stage memory
 
-Read earlier `[[stage-N]]` entries before you start and record as the memory rules below say; the stage verdict does not go to memory — it goes to `.issue-stage-{{STAGE_INDEX}}.json`.
+Read earlier `[[stage-N]]` entries before you start, and record your own as the
+memory rules below say. No verdict goes to memory.
 
 ## Your job
 
 1. Do the stage task above — the whole stage is yours.
 2. Verify your stage result: build/tests/typecheck over the stage change.
-3. Write the stage outcome to `.issue-stage-{{STAGE_INDEX}}.json` at the
-   working-folder root:
-   `{ "status": "pass|fail|blocked", "summary": "what the stage produced, what the next stage inherits", "findings": [ ... ] }`
-   The next stage and the final lead read this file — make it a hand-off, not a
-   log.
 
-This is NOT the step result: leave `.issue-step-result.json` to the final lead.
-Leave the working copy uncommitted — the backend publishes.
+Leave `.issue-step-result.json` to the final lead.

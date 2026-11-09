@@ -1,23 +1,24 @@
 # Issue Resolver
 
-> Комментариев в коде нет: код самодокументируемый. Инварианты, которые нельзя
-> вывести из кода (порядок шагов, гонки, семантика провалов, протокол pi/SSE),
-> собраны в [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md).
-
 Оркестратор `pi`-агентов, которые решают задачи разработки: на вход — тикет
 (Jira) и git-репозитории, на выход — изменение кода, отчёт о шагах и MR/PR.
 Агенты работают в отдельном контейнере задачи, шаги конвейера идут по порядку,
 результаты каждого шага и живой лог стримятся в веб-UI.
 
-Проект — npm-workspaces:
+Этот файл — для человека: как запустить и что где лежит. Что система умеет и как
+себя ведёт — [`docs/FEATURES.md`](docs/FEATURES.md). Почему сделано именно так,
+и особенно то, что нельзя вывести из кода — [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md).
+Правила для агентов, работающих в этом репозитории — [`AGENTS.md`](AGENTS.md) и
+[`CODING_STANDARDS.md`](CODING_STANDARDS.md).
 
 | Пакет | Что внутри |
 | --- | --- |
 | `shared/` | Доменные типы, статусная модель, чистые функции (workflow, разбор отчёта шага, статус задачи) — контракт для всех пакетов |
 | `backend/` | Fastify 5 REST API, workflow-движок, SQLite/Drizzle, адаптеры (docker/git/pi/MR/Jira/RPC) |
 | `frontend/` | React 19 + Vite 6 + Tailwind 4 SPA (тема Matrix/hackerman) |
-| `frontend/e2e/` | Playwright UI-сценарии на мок-стеке: `flows/` (жизненный цикл, bootstrap-тоггл/лог, вопрос, статусы, обрыв SSE, отчёт, две задачи), `scenarios/` (мок-ответы агента), `backend/` (HTTP-сценарии) |
-| `backend/test/scenarios/` | Пресеты мок-ответов агента (`all-success`, `step-failure`, `agent-question`, `concurrent-questions`, `bootstrap-failure`) |
+| `prompts/` | Тексты шагов конвейера и разовых прогонов (devops, retro) |
+| `frontend/e2e/` | Playwright на мок-стеке: `flows/` (жизненный цикл, bootstrap-тоггл/лог, вопрос, статусы, обрыв SSE, отчёт, две задачи), `scenarios/` (мок-ответы агента), `backend/` (HTTP-сценарии) |
+| `bin/` | Операционные скрипты: `up.sh`, `service.sh`, `pw-browsers.sh`, `embed-screenshots.mjs` |
 
 ## Запуск
 
@@ -25,152 +26,114 @@
 npm install
 
 # backend: Fastify на 127.0.0.1:8080 (PORT переопределяет порт; наружу не выводится)
-# ISSUE_RESOLVER_LOCAL=1 обязателен для dev без docker: без него workspace root
-# остаётся docker-дефолтом /workspaces, которого в dev-контейнере нет → EACCES
-# на первой же задаче. В docker-ветке (ISSUE_RESOLVER_USE_REAL=1) /workspaces есть.
 cd backend && ISSUE_RESOLVER_LOCAL=1 npm run start
 
-# frontend: Vite dev-сервер на 0.0.0.0:5173, проксирует /issue-resolver → http://localhost:8080
+# frontend: Vite на 0.0.0.0:5173, проксирует /issue-resolver → http://localhost:8080
 cd frontend && npm run dev -- --host 0.0.0.0 --port 5173
 
 # e2e: сам поднимает мок-стек :8095/:5195 (backend HTTP + flows + scenarios)
 cd frontend && npx playwright test
 ```
 
-**Лаунчер одной командой — `bin/up.sh`.** Поднимает backend + frontend через
-`bin/service.sh`, ждёт готовности (порт + `GET /ping` → `{"ok":true}`, Vite отдаёт
-`/`) до ~15 с (переопределяется `IR_UP_WAIT_SECS`), при неудаче печатает
-`tail -n 20` соответствующего лога и выходит с non-zero. Идемпотентен: если сервисы
-уже слушают — сообщает об этом и всё равно печатает host-команду публикации.
-Публикацию порта сам сделать не может (в dev-контейнере нет docker CLI/`docker.sock`).
+`ISSUE_RESOLVER_LOCAL=1` обязателен для dev без docker: без него workspace root
+остаётся docker-дефолтом `/workspaces`, которого в dev-контейнере нет → `EACCES`
+на первой же задаче. В docker-ветке (`ISSUE_RESOLVER_USE_REAL=1`) `/workspaces`
+есть.
 
-**Ручное управление — `bin/service.sh`.** `start|stop|restart|status` поднимает/
-гасит backend + frontend; режим задаётся `IR_MODE=local|docker` (дефолт `local`),
-PID-файлы и логи — в `/tmp` (переопределяются `IR_PID_DIR`/`IR_LOG_DIR`).
+- **`bin/up.sh`** — поднять всё одной командой: backend + frontend через
+  `bin/service.sh`, ждёт готовности (порт + `GET /ping` → `{"ok":true}`, Vite
+  отдаёт `/`) до ~15 с (`IR_UP_WAIT_SECS`), при неудаче печатает `tail -n 20`
+  лога и выходит с non-zero. Идемпотентен; в конце печатает готовую host-команду
+  публикации порта.
+- **`bin/service.sh start|stop|restart|status`** — backend + frontend.
+  Режим — `IR_MODE=local|docker` (дефолт `local`), pid-файлы и логи в `/tmp`
+  (`IR_PID_DIR`/`IR_LOG_DIR`). `npm run start` — это `tsx src/server.ts`, без
+  watch: правки в `backend/src/**` требуют `restart` (автоперезагрузка — только
+  у `npm run dev`).
+- **`bin/pw-browsers.sh [repo-dir]`** — сделать браузеры работоспособными для
+  склонированного репозитория: запускает браузер **родным** Playwright репозитория
+  и, только если не вышло, доставляет недостающую ревизию его же
+  `playwright install chromium`. Образ везёт браузеры лишь под свою версию
+  (`PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`), поэтому чужой пин падает на
+  `browserType.launch: Executable doesn't exist at /opt/ms-playwright/…`.
+  Скрипт идемпотентен и сам копируется в рабочую папку задачи как
+  `pw-browsers.sh` — его и вызывают промпты `devops` и `test`.
 
-**Браузеры для тестов рабочей папки — `bin/pw-browsers.sh [repo-dir]`.** Образ
-везёт браузеры только под свою версию Playwright (`PLAYWRIGHT_BROWSERS_PATH=`
-`/opt/ms-playwright` плюс build-time алиасы), а склонированный репозиторий
-приносит свою (`@playwright/test` 1.63 ↔ `chromium-1243`) — тогда каждый тест
-падает на `browserType.launch: Executable doesn't exist at /opt/ms-playwright/…`
-и агент тестирует чужим Playwright. Скрипт идемпотентен: запускает браузер
-**родным** Playwright репозитория и, только если не вышло, доставляет недостающую
-ревизию его же `playwright install chromium`. Вызывается из промптов `devops`
-(подготовка рабочей папки) и `test` (перед прогоном). Если у репозитория нет
-своего Playwright вовсе (CSS/docs-пакет с `node:test`), тестер берёт общий из
-образа — `playwright screenshot` из `PATH` либо
-`NODE_PATH=/opt/bun/install/global/node_modules`, браузеры в `/opt/ms-playwright` —
-и не добавляет зависимость в манифест репозитория.
+### Режимы и данные
 
-**Доступ по локальной сети (LAN).** Vite слушает `0.0.0.0:5173` и
-проксирует `/issue-resolver` на `127.0.0.1:8080`, поэтому наружу достаточно
-опубликовать один порт UI — сам backend слушает только loopback
-(`HOST = '127.0.0.1'` в `backend/src/server.ts`) и наружу не выводится.
-`bin/up.sh` в конце работы печатает готовую host-команду.
-`agent-fwd up 5173:5173`
-(на хосте, где есть Docker CLI и `docker.sock`) поднимает sidecar, публикующий
-`5173` контейнера на `0.0.0.0` хоста — UI открывается по `http://<host-IP>:5173`.
-Сам бэкенд наружу не выводится. Внутри dev-контейнера docker CLI/`docker.sock`
-нет, поэтому `agent-fwd` запускается с хоста.
-
-Backend по умолчанию поднимается с in-memory фейками docker/git/pi/MR/Jira/RPC —
-без реальных контейнеров и git-пуша. Продовый wiring — это
-`buildDepsFromEnv(process.env)` в `server.ts`:
-
-Токены доступа к репозиториям (`BITBUCKET_TOKEN`,
-`BITBUCKET_USERNAME`/`BITBUCKET_PASSWORD`, `GITHUB_TOKEN`, `GITLAB_TOKEN`) можно
-задавать и в `backend/config.json` (gitignored; в репозитории лежит шаблон с
-пустыми строками). `loadConfig()` (`backend/src/config.ts`) читает файл
-относительно cwd и мержит с окружением: приоритет
-`process.env` > `config.json` > пустая строка; отсутствие или битый JSON не
-фатальны (работает только `process.env`). `server.ts` раскладывает результат
-обратно в `process.env`, поэтому резолверы репозиториев о файле не знают.
-
-- **Локальный режим (dev без docker) — `ISSUE_RESOLVER_LOCAL=1`**: pi
-  запускается НАПРЯМУЮ на хосте (`RpcPiRunner('local')`), контейнер задачи —
-  обычная host-папка (`LocalContainerController` — mkdir/rm), git — `GitCliService`,
-  workspace root по умолчанию `/home/agent/workspace/.issue-resolver/workspaces`
-  (переопределяется `ISSUE_RESOLVER_WORKSPACE_ROOT`).
-- **Прод docker-ветка — `ISSUE_RESOLVER_USE_REAL=1`**: изолированные
-  контейнеры задач, боевые `DockerodeContainerController` (`DOCKER_SOCKET`,
-  дефолт `/var/run/docker.sock`), `GitCliService`, `RpcPiRunner('docker')`,
+- **Локальный (dev без docker) — `ISSUE_RESOLVER_LOCAL=1`**: pi запускается
+  напрямую на хосте (`RpcPiRunner('local')`), контейнер задачи — обычная
+  host-папка (`LocalContainerController`), git — `GitCliService`.
+- **Прод (docker) — `ISSUE_RESOLVER_USE_REAL=1`**: изолированные контейнеры задач
+  (`DockerodeContainerController`, `DOCKER_SOCKET`), `RpcPiRunner('docker')`,
   `HttpMrClient` (`MR_TOKEN` как общий фолбек + per-host
-  `BITBUCKET_TOKEN`/`GITHUB_TOKEN`/`GITLAB_TOKEN`), `HttpJiraClient` (`JIRA_BASE_URL`,
-  `JIRA_TOKEN`) и `InMemoryStepSessionRegistry` (steer/abort/respond живых шагов).
+  `BITBUCKET_TOKEN`/`GITHUB_TOKEN`/`GITLAB_TOKEN`), `HttpJiraClient`
+  (`JIRA_BASE_URL`, `JIRA_TOKEN`).
+- Без обоих флагов поднимаются in-memory фейки docker/git/pi/MR/Jira/RPC.
+- Токены доступа можно задавать в `backend/config.json` (gitignored, в репо лежит
+  шаблон): `loadConfig()` мержит файл с окружением по приоритету
+  `process.env` > `config.json` > пустая строка. Битый JSON не фатален.
+- **`ISSUE_RESOLVER_DATA_DIR`** — общий каталог данных: БД в
+  `<DATA_DIR>/issue-resolver.db`, рабочие папки задач в `<DATA_DIR>/workspaces`,
+  git-кэш originals в `<DATA_DIR>/originals`. Без него: БД
+  `backend/data/issue-resolver.db`, originals `/tmp/issue-resolver/originals`,
+  папки задач — `ISSUE_RESOLVER_WORKSPACE_ROOT` (local-дефолт
+  `/home/agent/workspace/.issue-resolver/workspaces`, docker-дефолт
+  `/workspaces`). `ISSUE_RESOLVER_WORKSPACE_ROOT` сильнее `DATA_DIR` для папок
+  задач. Без `DATA_DIR` кэш originals теряется при пересоздании контейнера, и
+  следующий прогон снова платит за полный клон.
 
-**Общий каталог данных — `ISSUE_RESOLVER_DATA_DIR`.** Если он задан, БД лежит в
-`<DATA_DIR>/issue-resolver.db`, рабочие папки задач — в `<DATA_DIR>/workspaces`,
-git-кэш originals — в `<DATA_DIR>/originals`. Без него работают прежние
-дефолты: БД `backend/data/issue-resolver.db`, originals
-`/tmp/issue-resolver/originals`, а
-папки задач — `ISSUE_RESOLVER_WORKSPACE_ROOT` (local-дефолт
-`/home/agent/workspace/.issue-resolver/workspaces`, docker-дефолт `/workspaces`).
-`ISSUE_RESOLVER_WORKSPACE_ROOT` имеет приоритет над `DATA_DIR` для папок задач:
-он переопределяет `<DATA_DIR>/workspaces`.
+### Переменные окружения
 
-Иначе — пустой объект и безопасные Fake*-адаптеры `buildApp(db, deps)`. Имя
-общего named volume для памяти модели — `ISSUE_RESOLVER_MEMORY_VOLUME` (дефолт
-`agent-memory`). Таймаут одного pi-агента шага —
-`ISSUE_RESOLVER_RESOLVE_AGENT_TIMEOUT_MS` (мс, дефолт 90 мин; значения меньше
-60с поднимаются до 60с): прокидывается в `RpcPiRunner` (reject + SIGKILL) и
-дополнительно страхуется внешним таймером движка. Отдельно работает сторож
-тишины — `ISSUE_RESOLVER_AGENT_STALL_TIMEOUT_MS` (мс, дефолт 15 мин; минимум
-30с): если за это время от агента не пришло ни одного чанка stdout/stderr или
-события сессии, сторож сначала пробует разбудить агента, а не убить его:
-отправляет `follow_up`-нудж с просьбой доложить одной строкой, даёт ещё окно
-тишины, затем шлёт `compact` — и только после этого снимает прогон как зависший
-(`<step> agent stalled: no output for Nms (tried: nudge, compact)`), не дожидаясь
-трёхчасового потолка. Счётчик активности питают те же колбэки, что публикуют
-SSE. Таймаут pi-агента разовой
-подготовки — `ISSUE_RESOLVER_DEVOPS_TIMEOUT_MS` (мс, дефолт 90 мин; тот
-же минимум 60с; если новая переменная не задана, читается устаревшее имя —
-`LEGACY_DEVOPS_TIMEOUT_ENV`): прокидывается в `PiDevOpsAgent` через
-`devOpsFactoryFor`, чтобы зависший анализатор не держал задачу в
-`preparing` вечно. Таймаут git-операций — `GIT_TIMEOUT_MS` (мс, дефолт 5 мин):
-под него попадает и первичный прогрев originals-кэша (`clone --bare`), который
-на медленной сети идёт десятки секунд. Без `ISSUE_RESOLVER_DATA_DIR` кэш живёт
-в `/tmp/issue-resolver/originals` и теряется при пересоздании контейнера — тогда
-следующий прогон снова платит за полный клон (при заданном `DATA_DIR` он лежит
-в `<DATA_DIR>/originals`). Ожидание порта dev-сервера —
-`DEV_SERVER_PORT_TIMEOUT_MS` (мс, дефолт 30 с). Дополнительные разрешённые
-CORS-origin — `ISSUE_RESOLVER_ALLOWED_ORIGINS` (через запятую, **точные**
-строки; `*` и пустые игнорируются; локальный дефолт — любой порт на
-localhost/loopback, см. «API» ниже). Данные лежат в SQLite
-(`backend/data/issue-resolver.db`, таблицы
-создаются идемпотентно при старте).
+| Переменная | Что делает |
+| --- | --- |
+| `PORT` | порт backend (по умолчанию `8080`, слушает только loopback) |
+| `ISSUE_RESOLVER_LOCAL` / `ISSUE_RESOLVER_USE_REAL` | режим: dev без docker / прод docker |
+| `ISSUE_RESOLVER_DATA_DIR` | БД + рабочие папки + кэш originals в одном каталоге |
+| `ISSUE_RESOLVER_WORKSPACE_ROOT` | каталог рабочих папок задач (сильнее `DATA_DIR`) |
+| `ISSUE_RESOLVER_MEMORY_VOLUME` | имя docker-volume памяти модели (дефолт `agent-memory`) |
+| `ISSUE_RESOLVER_ALLOWED_ORIGINS` | дополнительные **точные** CORS-ы через запятую; `*` и пустые игнорируются |
+| `ISSUE_RESOLVER_RESOLVE_AGENT_TIMEOUT_MS` | таймаут одного pi-агента шага (дефолт 90 мин, минимум 60 с) |
+| `ISSUE_RESOLVER_AGENT_STALL_TIMEOUT_MS` | сторож тишины (дефолт 15 мин, минимум 30 с): `follow_up`-нудж → `compact` → снять прогон |
+| `ISSUE_RESOLVER_DEVOPS_TIMEOUT_MS` | таймаут pi-агента разовой подготовки (дефолт 90 мин; читает и устаревшее имя) |
+| `GIT_TIMEOUT_MS` | таймаут git-операций, включая первичный прогрев originals-кэша (дефолт 5 мин) |
+| `DEV_SERVER_PORT_TIMEOUT_MS` | ожидание порта dev-сервера (дефолт 30 с) |
+| `MODELS_JSON` | список моделей для `GET /models`; пусто/бито → `user-default` |
+| `IR_MODE`, `IR_UP_WAIT_SECS`, `IR_PID_DIR`, `IR_LOG_DIR` | поведение `bin/up.sh` и `bin/service.sh` |
+
+### Доступ по локальной сети
+
+Vite слушает `0.0.0.0:5173` и проксирует `/issue-resolver` на `127.0.0.1:8080`,
+поэтому наружу достаточно опубликовать один порт UI — backend слушает только
+loopback (`HOST = '127.0.0.1'` в `backend/src/server.ts`) и наружу не выводится.
+Внутри dev-контейнера нет docker CLI/`docker.sock`, поэтому с хоста:
+
+```bash
+agent-fwd up 5173:5173   # sidecar публикует порт контейнера на 0.0.0.0 хоста
+```
+
+UI открывается по `http://<host-IP>:5173`.
 
 ## API
 
-Все бизнес-роуты — под префиксом `/issue-resolver/api/v1`.
+Все бизнес-роуты — под префиксом `/issue-resolver/api/v1`; health — `GET /ping`
+без префикса.
 
-CORS и защита от внешних origin — централизованно в
-`backend/src/http/origin.ts` (`LOCAL_ORIGIN` + `isAllowedOrigin`). По
-умолчанию разрешены только http(s)-origin на `localhost`/`127.0.0.1`/`[::1]`
-в любом порту; чужие домены, не-http схемы и `Origin: null` (`file://`,
-sandboxed iframe без `allow-same-origin`) — запрещены. Дополнительные
-**точные** origins задаются через запятую в `ISSUE_RESOLVER_ALLOWED_ORIGINS`
-(`https://foo.example.com`); `*` и пустые элементы игнорируются — wildcard
-API не открывает. CORS закрывает только чтение ответа, поэтому тот же
-allow-list enforcement'ится на мутирующих методах (`POST`/`PUT`/`PATCH`/
-`DELETE`) root-`preHandler`-хуком: `Origin` присутствует и не разрешён →
-`403 { error: 'origin not allowed' }`; без `Origin` (curl,
-`APIRequestContext` в e2e, same-origin без заголовка) — пропускается;
-`Origin: null` → `403`. `GET`/SSE не задеваются.
-
-Важно: браузер шлёт `Origin` и на **same-origin** POST — это origin самого
-приложения. Такой запрос пропускается без настройки: `isSameOrigin`
-сравнивает host:port из `Origin` с заголовком `Host`, поэтому приложение
-работает и на `localhost`, и на LAN-адресе, и на проброшенном порту. Условие —
+CORS и защита от чужих origin — в `backend/src/http/origin.ts`. По умолчанию
+разрешены только http(s)-origin на `localhost`/`127.0.0.1`/`[::1]` в любом
+порту; чужие домены, не-http схемы и `Origin: null` запрещены. Дополнительные
+**точные** origins — `ISSUE_RESOLVER_ALLOWED_ORIGINS` (`*` игнорируется). Тот же
+allow-list применяется к мутирующим методам (`POST`/`PUT`/`PATCH`/`DELETE`)
+root-`preHandler`-хуком: неразрешённый `Origin` → `403 { error: 'origin not
+allowed' }`; без `Origin` (curl, e2e) — пропускается. Браузер шлёт `Origin` и на
+same-origin POST, поэтому `isSameOrigin` сравнивает host:port с заголовком
+`Host` — приложение работает и на LAN-адресе, и на проброшенном порту. Условие:
 прокси не должен переписывать `Host` (`changeOrigin: false` во
-`frontend/vite.config.ts`); с `changeOrigin: true` backend видит
-`Host: localhost:8080` и отвечает `403`. Если фронт и API живут на разных
-origin-ах, добавляй origin фронта в `ISSUE_RESOLVER_ALLOWED_ORIGINS`.
+`frontend/vite.config.ts`).
 
-Одиночные ответы-ошибки маршрутов не собираются руками: `notFound`,
-`badRequest`, `conflict`, `unprocessable` и `getIterationRow` живут в
-`backend/src/routes/params.ts`, поэтому тела `{ error: … }` в таблице ниже —
-единственное место, где текст ошибки задаётся. Один и тот же тест кода в
-`routes/issues/*` и `routes/iterations/*` даёт одинаковый ответ.
+Тела ошибок собираются в `backend/src/routes/params.ts` (`notFound`,
+`badRequest`, `conflict`, `unprocessable`), поэтому одинаковая проверка в разных
+роутерах даёт одинаковый ответ.
 
 | Метод и путь | Запрос | Ответ |
 | --- | --- | --- |
@@ -225,1124 +188,51 @@ origin-ах, добавляй origin фронта в `ISSUE_RESOLVER_ALLOWED_ORI
 | `GET /settings/retro/:id` | — | `RetroRunWithLog` (`report`, `stdout`, `stderr`, `events`, `stats`) / `404 { error }` |
 | `POST /admin/cleanup-orphans` | — | `{ orphaned_workspaces, killed_processes, deleted_dirs, deleted_rooms, errors }` / `500 { error: 'cannot read workspace root' }` |
 
-Встроенные интерактивные команды pi на `POST /iterations/:id/prompt`
-перехватываются сервером и транслируются в явные RPC-команды (`/compact` →
-`compact`, `/model` → `set_model`/`cycle_model`, `/thinking` →
-`set_thinking_level`/`cycle_thinking_level`, `/name` → `set_session_name`,
-`/new` → `new_session`), потому что pi не исполняет их через `prompt` — без
-перехвата они ушли бы модели обычным текстом. Клиентские/недоступные в RPC
-команды (`/cwd`, `/resume`, `/reload`, `/help`, `/copy`) перехватываются без
-запроса и возвращают `{ ok: true, disposition: 'handled' }` — это не ошибка
-(noop), клиент отрисует собственную справку/действие. Ошибочные встроенные
-команды (`/thinking bogus`, `/name` без имени, `/model <ненайденная>`)
-возвращают `PromptResult` с `ok: false` и человекочитаемым `error`. Команды
-расширений/шаблонов/скиллов (`get_commands`) pi раскрывает сам и они идут в
-`prompt` как прежде.
+### Полезные детали
 
-В `GET /iterations/:id/control` список `commands` начинается со встроенных
-команд (`source: 'builtin'`, имена из `BUILTIN_SLASH_COMMANDS`) с
-`argumentHint` (напр. `[provider/id]`) и продолжается командами `get_commands`
-(`extension`/`prompt`/`skill`); hint из `get_commands` пробрасывается, если он
-есть. При коллизии имени побеждает встроенная (она идёт первой и дубль из
-`get_commands` пропускается). Благодаря этому палитра показывает `/compact`,
-`/model`, `/thinking`, `/name` и т.п.
-
-`CreateIssueRequest`: `{ title?, jira_issue_url?, repositories?: [{ repository_url, base_branch, create_mr? } | { repo_id, repository_url?, base_branch?, create_mr? }], tag_id?, desired_result?, additional_context?, review_context?, is_review_need?, pipeline_steps?, model? }`.
-`title` обязателен, если нет `jira_issue_url`. `repositories` необязателен
-(`[]`/отсутствует — валидно, min 0): задача без репозиториев запускается, а
-агент пишет файлы-результаты прямо в папку задачи. Пункт репозитория — либо
-явный URL+ветка (`repository_url`+`base_branch`, старый формат), либо ссылка
-на сохранённый репозиторий (`repo_id`, приоритет над `repository_url`;
-`base_branch` при отсутствии берётся из `defaultBranch` репозитория).
-Несуществующий `repo_id` → `422 { error: 'Repository not found' }`; `repo_id`
-без `defaultBranch` и без `base_branch` → `422`.
-
-**Загрузка файлов.** `POST /issues` и `POST /issues/:id/iterations` принимают
-либо `application/json` (как раньше), либо `multipart/form-data`: JSON-тело
-создания передаётся строкой в поле `payload`, а файлы — повторяющимся файловым
-полем `files` (лимиты `@fastify/multipart`: до 10 файлов по 25 МБ). Файлы
-сохраняются **до** `runIssueIteration` в `<workspace>/attachments/` (задача и
-итерация №1) либо `<workspace>/attachments/iteration-<n>/` (итерации №2+);
-имена санитайзятся (basename по обоим разделителям, без `..`/управляющих
-символов, пустое → `file`), коллизии разрешаются суффиксом `-1`/`-2`.
-Метаданные — в таблице `issue_files` (`rel_path` — относительно корня рабочей
-папки, т.е. cwd агента). В промпт каждого шага добавляется секция
-`Uploaded files (already in the working folder):` со списком `rel_path` и
-инструкцией прочитать файлы до решения. `GET /issues/:id/files` отдаёт
-`IssueFile[]`, `DELETE /files/:fileId` удаляет строку и файл с диска.
-
-`desired_result` (`DesiredResult`) задаёт желаемый результат задачи: `'md'`
-(дефолт) — `report.md`, `'html'` — self-contained `report.html`, `'pr'` —
-добавляется шаг `pr` (валидация требует хотя бы один репозиторий: иначе
-`400 «PR требует хотя бы один репозиторий»`). Для `'md'`/`'html'` шаг `pr` из
-эффективных шагов задачи/итерации убирается. Артефакт отдаётся роутами
-`/issues/:id/result` (inline-предпросмотр) и `/issues/:id/result/download`.
-
-Эффективный конвейер берётся напрямую из `pipeline_steps` (при создании задачи)
-/ `steps` (при новой итерации); дефолт — `['refine', 'resolve']`. `resolve` НЕ
-добавляется принудительно: галочка «Исполнение» снимается, поэтому итерация
-может состоять из одного `pr` (публикация уже сделанной работы) или, например,
-`['review', 'pr']`. Пустой выбор отвергается — `400` на `pipeline_steps: []` и
-`steps: []` (UI без галочек не даёт стартовать), а не подменяется дефолтом.
-Шаги `review` и `test` выбираются НЕЗАВИСИМО друг
-от друга (можно включить только `review`, только `test`, оба или ни одного) —
-они просто перечисляются в `pipeline_steps`/`steps`. Флаг `is_review_need`
-БОЛЬШЕ НЕ вставляет шаги: это только метаданные на итерации (при этом
-`review_context` всё так же попадает в промпт шага `review`, секция «Reviewer
-context», когда не пуст). Шаг `pr` добавляется в конец при `create_mr: true`
-хотя бы у одного репозитория, но итоговое наличие `pr` определяется
-`desired_result` (см. выше). `Issue.description` хранит исходный
-`additional_context`.
-
-**SSE-потоки.** Каждый SSE-ответ открывается комментарием `: connected`
-(см. `openSse` в `backend/src/routes/stream/sse.ts`). Это не данные, а требование к
-прокси: и Vite dev-proxy, и nginx держат блок заголовков в буфере до первого
-байта тела, поэтому поток, который сразу ничего не пишет, у клиента не
-открывается (`EventSource` остаётся в CONNECTING). До этого фикса через
-dev-прокси `container-stats-stream` открывался лишь на первом `: keepalive`
-спустя 15 с, а поток без событий — никогда.
-
-`SSEEvent`: `{ type: 'log' | 'step_status' | 'step_event' | 'iteration_status' |
-'workspace_progress' | 'issue_deleting' | 'issue_deleted' |
-'container_stats', issueId, iterationId, stepRunId?, stream?, data, ts }`.
-У `step_status` со `status: 'running'` `data` — `JSON.stringify({ status:
-'running', step, model })` (`step` — шаг конвейера, `model` — id выбранной
-модели или `null`); остальные статусы (`success`/`failed`/`aborted`/…) приходят
-голой строкой.
-У `workspace_progress` `data` — `JSON.stringify({ step, repo?, status:
-'running'|'done'|'warning'|'error', message?, devPort? })`: по одному событию на
-шаг подготовки (`creating_dirs`, `cloning` на каждый репозиторий,
-`checking_instructions` (проверка статуса `run_instructions`), `devops` на
-каждый репозиторий без актуальной инструкции, `installing`, `dev_server` на
-каждый репозиторий (запуск dev-сервера, `devPort` — найденный порт), `ready`).
-Сбой запуска dev-сервера — `status: 'warning'` (не роняет подготовку). У
-`iteration_status` со `status: 'failed'`
-есть `error` — причина инфраструктурного сбоя (catch подготовки/прогона).
-У `issue_deleting` `data` — `JSON.stringify({ phase, message? })`, `phase` —
-`stopping_processes` | `removing_container` | `removing_workspace` | `error`
-(фазы идут в порядке выполнения, `message` — только при `error`); у
-`issue_deleted` — `JSON.stringify({ issueId })`. Оба события issue-уровневые
-(`iterationId` отсутствует) и покрывают фоновое удаление `DELETE /issues/:id`.
-У `container_stats` `data` — `JSON.stringify(ContainerStatsPayload)`
-(`{ cpuPercent, memoryUsageBytes, memoryLimitBytes, pids }`): живая статистика
-контейнера задачи, которую открывает `GET /issues/:id/container-stats-stream`, а
-доставляется она через `GET /issues/:id/stream`.
-
-`StepRunWithLog` (контракт шага в `shared`) — это `StepRun` плюс лог его
-output-строки: `stdout`/`stderr` (сырой вывод прогона; `''`, если output-строки
-ещё нет), `events` (структурированные события сессии: `text`/`thinking`/`usage`/`stats`/
-`question`/`tool_use`/`tool_result`/`tool_update`/`compaction_start`/
-`compaction_end`/`retry_start`/`retry_end`/`queue`/`thinking_level`/
-`session_info`/`notice`/`status`/`widget`/`title`/`extension_error`/`bash`/
-`editor_text`), `stats` (`SessionStats` из `get_session_stats` либо `null`), а
-также `report` и `screenshots_dir` (`null`, если отчёта ещё нет;
-`'screenshots'`, когда шаг создал такой каталог в рабочей папке — его пишет
-шаг `test`).
-
-`GET /models` читает `MODELS_JSON` (массив `ModelDescriptor`), при пустом/битом
-значении отдаёт `[{ id: 'user-default', name: 'Default' }]`.
-
-**Валидация репозиториев.** `POST /repos/validate` принимает
-`{ urls: string[] }` (1..20 URL) и для каждого возвращает
-`RepoValidationResult` (`{ url, valid, platform, info?, error? }`). Платформа
-определяется по хосту: публичные SaaS и известные имена
-(`github`/`gitlab`/`bitbucket`/`stash`); любой неизвестный self-hosted хост по
-умолчанию трактуется как Bitbucket Server (`bitbucket`), а `unknown` →
-`«Unsupported platform»` остаётся только для URL без хоста/неразбираемых.
-Затем резолвер ходит в API платформы:
-`GitHubResolver` (`GET api.github.com/repos/:owner/:repo`, токен `GITHUB_TOKEN`),
-`GitLabResolver` (`GET <host>/api/v4/projects/:encoded_path`, токен
-`GitLAB_TOKEN`), `BitbucketResolver` Server/Data Center
-(`GET <host>/rest/api/1.0/projects/:project/repos/:repo` + `/branches/default`,
-Bearer `BITBUCKET_TOKEN` или Basic `BITBUCKET_USERNAME`/`BITBUCKET_PASSWORD`),
-`BitbucketCloudResolver` для `bitbucket.org` — Cloud API 2.0
-(`GET api.bitbucket.org/2.0/repositories/:owner/:repo` +
-`/refs/branches?pagelen=100`, та же авторизация; `BitbucketResolver` по хосту
-`bitbucket.org` делегирует в него).
-`info` — `RepoInfo` (`platform`, `fullName`, `defaultBranch`, `branches`,
-`language`, `description`, `stars`, `isPrivate`, `cloneUrl`, `writeAccess`);
-резолвер
-дополнительно тянет список веток платформы (GitHub/GitLab `branches`,
-Bitbucket Server `branches`, Bitbucket Cloud `/refs/branches`), а при
-недоступности — массив из одного
-`defaultBranch`. `writeAccess` — есть ли у токена право на запись (от него
-зависит доступность галки «Создать MR»): GitHub — `permissions.push`,
-GitLab — `permissions.project_access.access_level >= 30` (Developer+),
-Bitbucket Server — пробная ветка (`POST /branches` от default-ветки +
-best-effort `DELETE`), токен аутентифицирует сам (без `BITBUCKET_USERNAME`),
-Bitbucket Cloud и неопределимые случаи — `false`.
-Сбой проверки прав не роняет валидацию (просто `false`). Форма создания
-задачи ветки из `RepoInfo` больше не берёт:
-она выбирает сохранённый репозиторий и тянет ветки live через
-`GET /repositories/:id/branches`, подставляя его `defaultBranch` (при ошибке
-загрузки веток остаётся только `defaultBranch`, форма не падает). Поле ввода
-URL (`RepoUrlInput`) живёт на экране «Репозитории» и нормализуется до запроса:
-без схемы → префикс `https://`, ssh-стиль `git@host:owner/repo` → `https://host/owner/repo`;
-схема-лесс URL и неизвестные хосты с путём `owner/repo` тоже валидируются
-(платформу определяет бэкенд). Если строку нельзя разобрать как URL — ✕
-«Invalid URL» без запроса; если это URL, но без пути `owner/repo` — серая
-подсказка «Непохоже на URL репозитория» (`data-state="invalid-url"`), запрос
-не шлётся. Токены опциональны; 404 →
-`«Repository not found»`, 401/403 → `«Access denied»`, сетевые ошибки не роняют
-запрос — URL получает `valid: false` с текстом ошибки. Реализация — global
-`fetch` без новых зависимостей; роут/фабрика резолверов инъектируемы в тестах.
-
-**Сохранённые репозитории (CRUD).** Репозиторий — самостоятельная сущность в
-таблице `repositories` (`shared.SavedRepo`): `id` (uuid), `url`, метаданные
-последней валидации (`platform`, `fullName`, `defaultBranch`, `cloneUrl`,
-`language`, `description`, `isPrivate`), `connectionStatus`
-(`ok`/`error`/`unknown`), `writeAccess` (право токена на запись из последней
-валидации; на его основе форма задачи и карточка репозитория показывают
-статус «только чтение»), `lastValidatedAt`, `runInstructions` (Markdown-инструкция
-по запуску) и `runInstructionsStatus` (`unknown`/`generated`/`failed`),
-`createdAt`/`updatedAt`. CRUD смонтирован под `/repositories`: `POST /`
-(`{ url }`) валидирует URL существующим резолвером и сохраняет результат
-(ва¬лидный → `201 SavedRepo`; ошибка резолвера или неподдерживаемая платформа
-→ репо всё равно сохраняется с `connectionStatus: 'error'` и пустыми
-метаданными, ответ `422 { error, repository }`); `PUT /:id` меняет URL и
-перевалидирует; `DELETE /:id` → `204`; `POST /:id/validate` перепроверяет
-соединение (`200 SavedRepo`, `connectionStatus` — итог) и `GET /:id/branches`
-тянет ветки **live** через резолвер (`{ branches: string[] }`), не из БД.
-Поля `runInstructions*` валидация не трогает: их заполняет агент-анализатор
-(`backend/src/workflow/devops.ts`) на этапе разовой подготовки рабочей
-папки.
-
-**Сопоставление URL репозитория.** В `repositories.url` лежит тот URL, который
-пользователь вставил в реестр (для Bitbucket Server — browse-страница
-`.../projects/KOS/repos/x/browse`), а задача хранит **клон**
-(`issues` → `issue_repositories.repository_url` = `saved.cloneUrl ?? saved.url`,
-то есть `.../scm/kos/x.git`). Поэтому поиск строки реестра по URL идёт не по
-tочному совпадению строк, а по канонической идентичности
-(`shared/src/domain.ts:repositoryIdentity` / `isSameRepository` — разбор
-`projects/<P>/repos/<R>`, `scm/<P>/<R>`, `<org>/<proj>/_git/<R>` и scp-like
-`git@host:path`; регистр хоста/проекта/имени незначим, `.git` и хвостовой
-слэш отбрасываются). Реализовано в `db/repositories.repo.ts:findRowsByUrl`
-(сначала точный `url`/`clone_url`, затем канонический проход) —
-`getRepositoryByUrl` и `updateRepositoryRunInstructions` обновляют **по id**
-все подошедшие строки и возвращают `boolean`; если не подошла ни одна,
-`dbRunInstructionsStore` пишет `console.warn` (молчаливый no-op ровно этим багом
-и прятался: статус `run_instructions_status` не обновлялся никогда). Тот же
-разбор чинит `extractRepoNameFromUrl`: для browse-URL он возвращает имя
-репозитория, а не хвостовой сегмент `browse`, — раньше имена репозиториев в
-контексте DevOps-промпта для тегов выглядели как «browse, browse». Пути
-рабочей папки так и строятся из clone-URL задачи, поэтому имена каталогов
-существующих воркспейсов не меняются. После clone и ДО `install`, для каждого репозитория со статусом НЕ
-`generated`, `PiDevOpsAgent` запускает pi-агента с промптом
-`prompts/devops.md` (плейсхолдеры `{{REPO_DIR}}`/`{{REPO_NAME}}`/
-`{{DEV_SERVER_PORT}}`/`{{TAG_INSTRUCTIONS}}`): агент смотрит проект, пробует
-поставить зависимости/ собрать, пишет `RUN_INSTRUCTIONS.md` и `DEV_SERVER.sh` в
-корень репо и проверяет, что скрипт действительно отдаёт выделенный порт. Успех
-→ `runInstructions = <Markdown>`, `runInstructionsStatus = 'generated'`; сбой
-(нет файла/ошибка/таймаут) → `'failed'`, инструкция очищается. Репозитории со
-`generated` повторно не анализируются. Если последующий `installDependencies`
-всё равно падает, инструкции считаются устаревшими и сбрасываются в `'failed'`.
-Оба файла — инфраструктура задачи: `prepareIssueWorkspace` дописывает их в
-локальный `.git/info/exclude` каждой рабочей копии, иначе публикация (`git add -A`
-на шаге `pr`) увезла бы их в MR. Идемпотентно и best-effort.
-
-**Инструкции тега (кросс-репо топология).** У тега есть собственное поле
-`run_instructions` — Markdown о том, как запускать ВЕСЬ набор репозиториев
-вместе: прокси, порты, общие переменные окружения. Это инструкции уровня
-workspace, а не отдельного проекта, поэтому они живут на теге. Задача хранит
-`issues.tag_id` (FK на `tags`, `ON DELETE SET NULL`), и
-`prepareIssueWorkspace` читает `tag.run_instructions` по нему, передавая их
-агенту-анализатору через `tagInstructions` → плейсхолдер
-`{{TAG_INSTRUCTIONS}}` (пустые инструкции рендерятся в пустую строку, секция не
-появляется). Тег-инструкции имеют приоритет над дефолтами промпта: именно они
-задают, проксируется ли набор на один порт или сервисы живут на разных URL.
-
-Обратная запись: агент ведёт `WORKSPACE_INSTRUCTIONS.md` в КОРНЕ рабочей папки
-задачи (не внутри репозитория) — общий файл координации, из которого следующие
-агенты узнают уже занятые порты. После успешной подготовки
-`prepareIssueWorkspace` читает этот файл и сохраняет его в
-`tags.run_instructions` (`status = 'generated'`) — так знание о том, как
-разворачивался набор, накапливается на теге и переиспользуется следующей
-задачей.
-
-**Инвалидация при смене тег-инструкций.** Правка `run_instructions` через
-`PUT /tags/:id` (только реальная смена текста) сбрасывает у репозиториев тега
-`run_instructions` в `null`, а `run_instructions_status` — в `'unknown'`
-(`db/tags.repo.ts:updateTag`). Без этого `'generated'` навсегда пропускал бы
-DevOps-агента в `prepareIssueWorkspace`, и новые тег-инструкции не доехали бы
-до агента: пропуск анализа — это ровно условие
-`runInstructions.getStatus(url) === 'generated'`. Обратная запись из
-`WORKSPACE_INSTRUCTIONS.md` (`updateTagRunInstructions`) инвалидации НЕ делает —
-этот файл описывает порты и пути конкретной задачи, поэтому анализ
-перезапускался бы на каждой итерации.
-
-При `bootstrap_enabled = false` у репозитория анализ пропускается, но
-клон остаётся: агент пишет в порт-карту `⛔ clone-only`, а его `location`-блок в
-прокси — закомментированным.
-
-**Файлы в корне рабочей папки.** Помимо `WORKSPACE_INSTRUCTIONS.md`, генерируемых
-агентом, `prepareIssueWorkspace` вызывает `installWorkspaceHelpers`
-(`backend/src/workflow/workspace-helpers.ts`): он копирует `bin/pw-browsers.sh`
-в корень рабочей папки задачи с правами `0755`. Контейнер агента видит только
-бинд `/workspaces/<issueId>`, поэтому хостовый путь
-`…/issue-resolver/bin/pw-browsers.sh` внутри него не существует — в промптах
-скрипт называется по имени (`bash pw-browsers.sh <repo-dir>`), а тест
-`backend/test/workspace-helpers.test.ts` следит и за копированием, и за тем,
-чтобы в `prompts/*.md` не вернулись домашние пути хоста.
-
-**Порт-контракт.** `allocateDevPort` выдаёт ОДИН порт на задачу
-(диапазон `5100–5299`), и движок передаёт одно и то же значение каждому
-анализатору в цикле, а `DEV_SERVER.sh` система поднимает только у первого
-репозитория с `bootstrap_enabled`. Поэтому `{{DEV_SERVER_PORT}}` в промпте
-описан как ЕДИНЫЙ публичный вход workspace, а не «порт этого репо»: entry-point
-(шелл/прокси) слушает его, остальные репозитории — апстримы на собственных
-портах ВНЕ `5100–5299`, которые агент занимает и фиксирует в порт-карте
-`WORKSPACE_INSTRUCTIONS.md`. До этого закрепления анализатор сажал все
-репозитории набора на один порт и резюмировал «запускать строго по очереди»,
-что для микрофронтендов неработоспособно (шелл грузится без единого ремоута).
-Владелец entry-порта — система, а сервер поднимает и оставляет жить
-devops-агент: он стартует `DEV_SERVER.sh` через `setsid nohup … &` и пишет pid
-в `<repo>/.dev-server.pid`. Без `setsid` процесс остаётся в process group
-своего tool-вызова, а pi на завершении сессии добивает такие группы
-(`killTrackedDetachedChildren` → `SIGKILL`), поэтому сервер «мелькал и гас».
-После прогона движок читает pid-файл, проверяет `http://127.0.0.1:<port>/` и
-пишет `dev_server_pid`; если скрипт есть, а порт молчит — репозиторий помечается
-`failed` с хвостом `.dev-server.log` вместо ложного success. Ручной
-`POST /issues/:id/devops`
-тоже аллоцирует порт и пишет его в `issues.dev_server_port` (пустое значение
-означало бы `AUTO` в промпте и мёртвый URL в UI), а при старте `DEV_SERVER.sh`
-порт передаётся скрипту в `PORT` — поэтому entry-скрипт обязан читать
-`"${PORT:-<записанный порт>}"`, а апстримы `PORT` игнорируют. На старте новой
-итерации прежний порт переиспользуется (`reserveDevPort`), новый выдаётся
-только если старый реально занят — иначе перезапуск сдвигал адрес, который
-человек уже открыл. Если прогон не сгенерировал ни одной `RUN_INSTRUCTIONS.md`, порт
-возвращается аллокатору, а `dev_server_port` задачи очищается: UI не должен
-предлагать адрес, где никого нет.
-
-**Микрофронтенды без docker-in-docker.** Промпт учит агента распознавать набор
-шелл+сервисы (`nginx-local/`, `docker-compose.yaml`, `servePath`/`baseHref` с
-подпутём, Module Federation/`remoteEntry.js`, runtime-ключ вида
-`remoteComponentsUrl` в `src/assets/vars.json`) и поднимать прокси НАТИВНО:
-контейнер задачи не имеет docker, поэтому `docker compose up` не вариант.
-Compose-файл транслируется по таблице (`host.docker.internal` → `127.0.0.1`,
-volume-пути `/usr/share/nginx/html/...` → реальный `dist/`, порты уже
-контейнерные), а сам конфиг сохраняется как `nginx-workspace.conf` в корне
-рабочей папки. Приведён проверенный non-root-рецепт: `pid`/`error_log`/все
-`*_temp_path` в `/tmp`, без директивы `user`, `listen` на порт > 1024, запуск
-`nginx -t|-c <conf> -p <prefix>`. Если бинаря nginx нет — фолбек на небольшой
-Node-reverse-proxy (node в образе всегда), без попыток его установить. nginx
-добавлен в `dotfiles-agent/Dockerfile` (`nginx-light`), пересборка образа делает
-его основным путём.
-Детерминированный install остаётся по манифесту, а из `RUN_INSTRUCTIONS.md`
-берётся только секция `## Run` — команда запуска dev-сервера (см. ниже).
-Остальные секции (build и т.п.) пока не исполняются (только логируются).
-
-## Функционал
-
-- **Конвейер** `refine → resolve → review → test → pr` (дефолт — `refine`,
-  `resolve`; `review` и `test` опциональны и независимы, см. следующий пункт).
-  Каждый шаг пишет в рабочую папку задачи `.issue-step-result.json` (`{ status:
-  pass|fail|blocked, summary, scenarios, findings }`), а движок читает его
-  после шага (`parseStepReport`) и мапит в статус: `pass → success`,
-  `fail → failed`, `blocked → needs_input`. Файл принимается только если он
-  записан **во время** шага: движок снимает mtime кандидатов перед запуском,
-  поэтому незатронутый файл — вердикт предыдущего шага, а не этого. Копия,
-  оставшаяся в клоне репозитория (`<workspace>/<repo>/`), читается как
-  fallback (корень рабочей папки приоритетнее) и видна в логе предупреждением.
-  Если файла нет (или он битый/не
-  читается), статус определяется по exit-коду: exit 0 → `success` (отчёт при
-  этом хранится пустой строкой, не `"null"`), иначе `failed` — прогон не падает.
-- **Шаги `review` и `test`** (оба необязательны и независимы): `review` —
-  только код-ревью: проверяет исходный код против задачи и `review_context`,
-  без запуска приложения/тестов/браузера (быстрый). `test` — финальная
-  проверка: гоняет приложение в браузере (Playwright), фиксирует найденные
-  дефекты и НЕ чинит код; при падении конвейер возвращается к разработке
-  (`resolve`).
-- **Подготовка задачи (при запуске)**: clone репозиториев + разовый
-  детерминированный install зависимостей по манифесту (`package-lock.json` →
-  `npm ci`, `pnpm-lock.yaml` → `pnpm install`, `yarn.lock` → `yarn install`,
-  `bun.lock`/`bun.lockb` → `bun install`, `package.json` → `npm install`,
-  `go.mod` → `go mod download`) выполняются ОДИН раз при инициализации задачи.
-  После успешного install каждого репозитория бэкенд поднимает его dev-сервер:
-  разбирает секцию `## Run` из `RUN_INSTRUCTIONS.md`, запускает команду в фоне
-  и берёт порт из её вывода (`workspace_progress` шаг `dev_server` со `devPort`);
-  сбой запуска — `status: 'warning'`, подготовка не падает.
-  Повтор (папка уже склонирована) НЕ переклонирует и не переинсталлирует — все
-  итерации работают с одним кодом. Пока идёт подготовка, задача — в статусе
-  `preparing`, а итерация — `pending` (в `running` её переводит
-  `runIssueIteration` сразу после подготовки); неудача clone/install переводит
-  их терминально в `failed`. Каждый шаг подготовки публикует SSE
-  `workspace_progress`
-  (`creating_dirs` → `cloning` на каждый репозиторий → `checking_instructions`
-  → `devops` на каждый репозиторий без актуальной инструкции →
-  `installing` → `dev_server` на каждый репозиторий → `ready`), при ошибке —
-  событие со `status: 'error'` и
-  `message` и `iteration_status` со `status: 'failed'` + `error`. Живой
-  stdout/stderr DevOps-агента идёт обычными SSE `log`-событиями с
-  адресом `issue.<issueId>.devops` (`stream` — `stdout`/`stderr`,
-  `data` — чанк вывода); прогон параллельно пишется в `step_runs` /
-  `step_outputs` (`context: 'post-prepare'`), так что его исход и сессия
-  переживают рестарт backend. UI конвертирует чанки в `text`-события и рендерит их
-  тем же `SessionView`, что и шаги, в скроллируемом окне ~300px под панелью
-  подготовки. Пару
-  «задача `preparing` / итерация `pending`», пережившую рестарт backend,
-  `reconcileInterruptedRuns` доводит до `failed`.
-- **Отчёт итерации в файл**: по завершении прогона (`completed`/`failed`)
-  в корне рабочей папки задачи пишется `report-<number>.md`: заголовок задачи
-  и итерации, статус/даты и секция на каждый `step_run` с выводом (`ok`/`fail`/
-  `timeout` + текст `report` из `step_outputs`). Запись best-effort — её сбой
-  логируется и не роняет итерацию.
-- **Отчёт задачи (`report`-агент)**: по терминальной итерации (и по
-  `POST /issues/:id/report`) отдельный pi-агент пишет в корне рабочей папки
-  `report.md` (plain Markdown для агентов) и, если ответу нужна структура,
-  маленький `report.json` (вердикт, метрики, диаграммы — десятки строк, не
-  второй отчёт). `report.html` агент **не пишет**: страницу детерминированно
-  собирает движок `backend/src/workflow/report-render` (сразу после выхода
-  агента, до проверки артефактов), а `bin/embed-screenshots.mjs` вшивает
-  скриншоты как WebP в полном разрешении. Отсюда контракт страницы:
-  - single-file, открывается с `file://`, ноль сетевых запросов: inline CSS
-    (тёмная и светлая темы), `<dialog>`-лайтбокс, markdown через
-    экранирующее подмножество (сырой HTML остаётся текстом, `javascript:`-
-    ссылки нейтрализуются), внешние картинки и `../` не вшиваются;
-  - сначала ОТВЕТ: `## Answer` (суть вопроса, сравнения, план, рекомендации,
-    оценки, находки, адресованные читателю, и `### Verification`), с
-    диаграммами и скриншотами по месту;
-  - всё про выполнение — в одном свёрнутом `<details>` внизу страницы. Туда
-    уезжают не только секции с «процессными» заголовками (`execution`,
-    `итерац`, `шаг`, `timeline`, `change set`, `findings`, `reproduction`),
-    но и метрика вида «Итерации», строка `Status/Iterations/Generated` из md и
-    диаграмма с процессным названием; дублирующий `<h1>` снимается;
-  - ссылки на merge/pull request поднимаются в шапку страницы (раздел, где
-    они упомянуты, остаётся в деталях);
-  - скриншот попадает в текст там, где доказывает: markdown-изображение или
-    упоминание имени файла в абзаце/списке/таблице; галерея в конце — только
-    для файлов, которые никто не процитировал;
-  - диаграммы — не по умолчанию: `report.json` рисует только то, что текст не
-    может. Виды: `flow` (узлы со статусом, связи с подписями), `bars`,
-    `matrix`, `svg` (санитизированный escape hatch). Вида `timeline` нет, и
-    диаграмма, дублирующая ASCII-схему из `report.md`, отбрасывается с
-    предупреждением;
-  - битый `report.json` не стоит страницы: конструкция отбрасывается,
-    предупреждение попадает в статус прогона. Если страницу собрать не удалось,
-    это видно в `feedback` шага («страница не собрана: …»).
-  В `report.md` раздел `## Execution details` больше не пересказывает прогон:
-  только change set (`git diff --stat`, base/head), полная таблица находок с
-  происхождением и статусом, MR, рецепт воспроизведения и метрология.
-  Диаграмма в `report.md` — monospace ASCII или таблица; timeline итераций и
-  пошаговые пересказы narrative живут в движке (`step_runs`, `step_outputs`,
-  сессии) и на странице задачи, в отчёт они не дублируются. Ремесло страницы —
-  `frontend-design` / `theme-factory`, но контракт сильнее (self-contained,
-  ноль внешних ресурсов: если скилл или его пример тянет CDN, это
-  отбрасывается); `caveman` (`ultracave`/`megacave`) / `ponytail` на артефакт
-  не действуют. Агент читает
-  narratives `iterations/<n>/.<step>.md` всех итераций (плюс `report-<number>.md`
-  как фолбек и `git diff --stat` рабочей копии). Прогон виден в SSE: на старте
-  публикуется `step_status` `running`, на финише — терминальный `success`/
-  `failed` по адресу `issue.<issueId>.report` (тот же ключ, что несут
-  `log`/`step_event` и `reportRunId` в `POST /issues/:id/report`); ошибка
-  агента не тонет молча — старт/итог/длительность пишутся в серверный лог
-  (`report agent started|finished: … trigger=post-iteration|manual [origin=…]
-  … at=<ISO>`, т.е. видно, кто запустил — терминальная итерация или ручной
-  `POST`). Любой мутирующий HTTP-запрос (`POST|PUT|PATCH|DELETE`) даёт одну
-  строку `mutate <METHOD> <url> origin=<…|none> status=<…> at=<ISO>` —
-  авторство изменений восстанавливается из лога без полного request-логирования.
-  Перед спавном прошлые `report.md`/`report.html` **архивируются** в
-  `<workspace>/<issueId>/reports/<ISO-ts-Z>/`, чтобы агент писал отчёт заново,
-  а не «дописывал» старый (сбой архивации → агент не запускается, причина в
-  ответе `500` / серверном логе). Повторный запуск во время активного прогона
-  → `409 { error: 'report run already active' }` — без второй архивации, иначе
-  готовый `report.md` исчезал бы из корня, пока первый агент ещё пишет;
-  post-iteration прогон в это же окно тоже пропускается (в логе
-  `report agent skipped: run already active`). Корень на время прогона пуст, поэтому
-  `GET /result` (и `/result/md`, `/download`) отдаёт артефакт из снапшота
-  последней итерации, но помечает это заголовками `x-artifact-source:
-  iteration-snapshot` (+ `x-artifact-mtime`); из корня — `x-artifact-source:
-  root`. Честный `404` — только когда нет ни в корне, ни в снапшоте. `GET
-  /issues/:id/report/status` отвечает статусом **последнего прогона из БД**
-  (строка `step_runs` с `iteration_id = NULL`), а не наличием файла:
-  `running` — прогон идёт, `success` — прогон завершился успешно и на диске
-  есть `report.md`, `failed` — прогон упал **или не создал ни одного
-  артефакта** (типичный случай: ответ модели упёрся в лимит выхода, exit code
-  0, файлов нет), `idle` — прогонов не было. Поля ответа: `runId`,
-  `runStatus`, `startedAt`, `finishedAt`, `updatedAt`, `feedback` (причина падения либо
-  «report.html отсутствует»), `artifacts{md,html}` (`present/bytes/mtime`),
-  `lastRunAt` (mtime `report.md`, ISO-Z без миллисекунд — один формат с
-  `x-artifact-mtime`), плюс process-local `observedModel`/`warnings`. Исходы
-  больше не живут только в памяти: после рестарта backend статус не
-  сбрасывается в `idle`. `GET /issues/:id/report/run` отдаёт последний прогон
-  целиком (`StepRunWithLog`: события сессии, stdout/stderr, stats) — UI
-  поднимает из него панель вывода после перезагрузки страницы.
-- **Прогон отчёта вне итерации**: строка `step_runs` с `issue_id` и
-  `iteration_id = NULL`, `step = 'report'`, `attempt` = число прошлых
-  прогонов + 1; на финише — `step_outputs` с сессией и статистикой. Поэтому
-  ручной запуск не требует фиктивной итерации, а тот же приём готов для шага
-  `pr`. Схема: `iteration_id` больше не `NOT NULL`, добавлен `issue_id`;
-  уникальность держат частичные индексы
-  `step_runs_iteration_step_attempt_unique (WHERE iteration_id IS NOT NULL)` и
-  `step_runs_issue_step_attempt_unique (WHERE iteration_id IS NULL)` — в SQLite
-  NULL-ы в UNIQUE не конфликтуют, один общий индекс дубли не ловит. Миграция
-  пересобирает таблицу (`client.ts` → `ensureStepRunIssueColumn`): SQLite не
-  умеет снять `NOT NULL`, а `DROP TABLE` при включённых FK снёс бы
-  `step_outputs` каскадом, поэтому пересборка идёт при `foreign_keys = OFF`,
-  `issue_id` бэкфиллится из `iterations`, индексы создаются после миграции.
-  Готовность отчёта для UI: `success` + `artifacts.html.present` → «HTML + MD»,
-  `success` без html → «Только markdown» (модалка рендерит markdown сама),
-  `failed` → «✕ Прогон упал» с причиной, `running` → «⏳ Генерируется · N мин».
-  Агент пишет `report.md` **раньше** `report.html` (окно
-  обычно минуты): пока html нет, корень содержит только md, и `/result` отдаёт
-  прошлый HTML из снапшота с пометкой `iteration-snapshot`, а не markdown — вот
-  почему важно смотреть и на `content-type`, и на `x-artifact-source`. После
-  успеха новый отчёт попадает и в снапшот итерации.
-- **DevOps задачи (`devops`-агент)**: DevOps привязан к задаче, а не к
-  репозиторию и не к итерации — это уровень задачи целиком. Раньше агент жил
-  только внутри разовой подготовки воркспейса, и после её окончания вывод
-  терялся. Теперь прогон пишется в `step_runs`/`step_outputs` так же, как
-  отчёт: `issue_id`, `iteration_id = NULL`, `step = 'devops'`,
-  `attempt` = число прошлых прогонов + 1, `context` — `post-prepare` или
-  `manual`. Сессия регистрируется под адресом `issue.<issueId>.devops`, оттуда
-  идут `log`/`step_event`/`step_status`; на финише в `step_outputs` ложятся
-  накопленные `stdout`/`stderr`, события сессии и `stats` (`SessionStats`), а
-  в `step_runs` — итоговый `status` и `feedback` с причиной по каждому репо.
-  Ручной перезапуск: `POST /issues/:id/devops` → `202 { ok, devopsRunId }`;
-  `409 { error: 'devops run already active' }`, если прогон уже идёт; `400`,
-  если devops-агент не настроен; `404` — нет задачи. Прогон перегенерирует
-  `RUN_INSTRUCTIONS.md` и `DEV_SERVER.sh` репозиториев с включённым bootstrap
-  (старые файлы стираются **до** запуска, чтобы упавший агент не мог
-  «унаследовать» успех предыдущего), сохраняет инструкции в строку
-  репозитория и пропускает репозиторий без клона с внятной причиной.
-  `GET /issues/:id/devops/status` отвечает `idle`/`running`/`success`/`failed`
-  по **последнему прогону из БД** (после рестарта backend статус не сбрасывается
-  в `idle`; зависший без активности прогон доводится до `failed`) и несёт
-  `runId`, `runStatus`, `startedAt`, `finishedAt`, `updatedAt`, `feedback`.
-  `GET /issues/:id/devops/run` отдаёт `StepRunWithLog` целиком — UI поднимает
-  из него панель вывода после перезагрузки страницы.
-- **Управление report-агентом как шагом**: живая report-сессия
-  регистрируется в реестре под адресом `issue.<issueId>.report`
-  (SSE и control-роуты работают с этим id), но сам прогон живёт в БД обычной
-  строкой `step_runs` — поэтому исход, длительность и вся сессия видны после
-  перезагрузки и рестарта. control-роуты
-  `/iterations/:id/{control,prompt,abort,message}` принимают этот id
-  (URL-encoded) и обслуживают отчёт теми же командами, что шаги (модель,
-  thinking, compact, clear-queue, abort, отправка сообщения). UI секции
-  «Отчёт» показывает строку статистики (`SessionStatsBar` по live
-  `stats`/`usage`) и кнопку «Развернуть» — ту же модалку, что у шагов
-  (session-view, панель контроля, композер). Вне прогона сессии в реестре нет:
-  панель контроля скрыта, а накопленный живой лог всё ещё показывается.
-- **Детект утечки модели в отчёт**: после успешного прогона сервер механически
-  ищет id модели/провайдера в `report.md`/`report.html` и даёт `console.warn`,
-  поле `warnings` в `GET /report/status` и заголовок `x-artifact-warning` на
-  артефактных роутах (UI показывает бейдж). Два слоя: точный id текущего
-  прогона (→ `model id leaked into …`) и узкий паттерн-поиск
-  `provider\d*/`, `**Model:**`/`model: <id/id>`, имена моделей рядом с
-  разделителем (`model-like id leaked into …`) — второй ловит id **чужой**
-  модели, перекочевавший из прошлого отчёта (якорение), независимо от
-  `input.model`. Слой 1 хранится в памяти процесса (гаснет на рестарте), а
-  слой 2 **вычисляется на чтении** по файлам — поэтому `warnings` и
-  `x-artifact-warning` переживают рестарт backend без персиста в БД. Сам файл
-  агента **не правится** — prevention =
-  промпт (`step-report.md`, `output-contract.md` запрещают имя модели),
-  detection = сервер, visibility = UI.
-- **`observedModel` в `GET /report/status`**: модель, которую pi-сессия отчёта
-  реально назвала (`stats.model`) — поле additive и может отсутствовать
-  (process-local: после рестарта — «нет телеметрии», UI рисует это, а не
-  пустое значение). `running.step_status.model` при этом остаётся `null` («модель
-  **не запрошена**, будет системная») — сервер не подставляет в UI догадку
-  (`step_models.resolve` и т.п.). Наблюдённая модель — **игла точного слоя**
-  детекта на чтении: если сессия назвала id, ловится реальный id, а не
-  запрошенный.
-- **Запрошенная модель отчёта — единая на обоих входах**
-  (`reportModelFor`): `step_models.report` задачи, иначе — модель итерации
-  (`iterations.model`); для ручного `POST /report` берётся последняя
-  завершённая итерация, для терминального — та, что терминалилась. Иначе
-  «🔄 Обновить» собирал бы отчёт на системном дефолте pi, а терминальный — на
-  модели итерации: два артефакта с одним именем и разной provenance.
-  `running.step_status.model` остаётся `null` (модель не запрошена явно),
-  а фактическую отдаёт `observedModel` после прогона.
-- **Якорение на прошлом отчёте (видимость)**: если `tool_use`-события прогона
-  читают `reports/**` или `.iteration-results/**` с хвостом ровно
-  `report.md`/`report.html` (в т.ч. через `bash cat/head/sed` — аргументы
-  целиком), в `warnings` попадает `anchored on previous report: <path>`
-  (максимум один путь на прогон) — тот же канал, что у утечки модели
-  (`/report/status` + `x-artifact-warning`) и **тот же тег `console.warn`**
-  (`model id leaked into report artifacts`), чтобы грепалось вместе.
-  Опознаются и абсолютные, и относительные пути, и поля `path`/`file_path`
-  (аргументы `tool_use` берутся целиком). Сигнал process-local (берётся из
-  `tool_use`, а не из файлов): после рестарта не пересчитывается. Легальные
-  `report-<n>.md`/`.<step>.md` из тех же папок не считаются. Прогон **никогда
-  не блокируется** — это только видимость.
-- **Желаемый результат**: `desired_result` задачи (`'md'` дефолт / `'html'` /
-  `'pr'`) попадает в промпт `resolve` и определяет итоговый артефакт —
-  `report.md` (Markdown, plain, без HTML-обёртки) при `'md'`, self-contained
-  `report.html` при `'html'`; оба дополнительно к `.issue-step-result.json`.
-  `'pr'` вместо этого гарантирует шаг `pr`. Артефакт отдаётся через
-  `GET /issues/:id/result` (inline) и `/result/download` (attachment).
-- **Refine-агрегация**: первый шаг получает весь вход одним контекстом —
-  `title` + `description` (`additional_context`) + текст Jira + пути
-  репозиториев + `context` итерации — задаёт уточняющие вопросы (вывод в живой
-  лог), затем по ответам строит план. Текст Jira докачивается на прогоне через
-  `jira.fetchIssue`; ошибка Jira деградирует до `null` и шаг не падает.
-  Главный выход планировщика — решение, а не документ: он оценивает размер
-  задачи и решает форму прогона (один агент / одна стадия с N исполнителями /
-  несколько этапов), по умолчанию
-  `single`, и пишет `plan.md` как развёрнутое ТЗ исполнителю: запрос
-  пользователя и что он значит конкретно, решения из интервью с причинами,
-  поведение до/после, ограничения и инварианты, критерии приёмки, риски, по
-  блоку на исполнителя/этап. Этот бриф и уходит исполнителю — блок `Task brief`
-  в его промпте (читается из `plan.md`, обрезается на 12 000 символов, а при
-  обрезке в промпт добавляется указатель на полный `plan.md` в рабочей папке и
-  в живой лог уходит предупреждение). Бриф, который так и не написан, и бриф
-  со ссылками на строки (`KanbanBoard.tsx:335`) тоже дают предупреждение в
-  живом логе: граница «планировщик не проектирует правку» живёт в тексте
-  промпта, поэтому её нарушение должно быть видно механически.
-  Три выхода `refine` обслуживают трёх разных читателей и не дублируют друг
-  друга: `plan.md` — бриф исполнителю (перезаписывается каждую итерацию),
-  `iterations/<n>/.refine.md` — дельта этой итерации для report-агента (что
-  добавил вход, что спросили, как оценили размер), память — только то, что
-  следующая задача по этому репозиторию не прочитает в коде (`#convention`,
-  `#lesson`), но не решения текущей задачи.
-  Планировщик решает **что и зачем**, а не **как**: в `plan.md` — поведение
-  до/после, область (модуль/feature), критерии приёмки, инварианты, риски и
-  карта владения файлами для параллельных воркеров, но не номера строк,
-  цитаты кода и диффы — правку проектирует исполнитель, иначе план дублирует
-  его работу и устаревает на первом же изменении. Ориентирование в коде
-  ограничено бюджетом (`prompts/step-refine.md` §1) — читать файл целиком
-  «чтобы понять правку» значит выйти за границу шага.
-  Планировщик также получает `pipeline_steps` — канонический список включённых
-  шагов прогона — и согласует план с даунстрим-верификацией: при включённых
-  `review`/`test` не дублирует их работу и оставляет только лёгкие локальные
-  self-checks (build/typecheck/unit smoke), а без них `resolve` сам становится
-  финальным гейтом, и план несёт полную самопроверку. Промпт `resolve`
-  аналогично знает о включённых даунстрим-шагах `review`/`test` и ограничивает
-  свою проверку локальными self-checks (то же — у координатора этапа и
-  финального lead staged-режима).
-- **Промпты шагов** (`prompts/*.md` + сборка в `backend/src/workflow/prompts/`,
-  реэкспорт из `backend/src/workflow/prompts.ts`):
-  к каждому промпту — шаговому и staged-роли — в конце добавляются общие
-  фрагменты `SHARED_FRAGMENTS` (`capabilities.md` о доступном агенту,
-  `memory-rules.md` о тегах и ссылках): правило живёт в одном файле и не
-  копируется по ролям, а тест проверяет, что фрагмент доехал ровно один раз.
-  У каждого шага одна и та же шапка контекста — `Pipeline step: <step>`,
-  `Enabled pipeline for this run: …` (где я в конвейере), задача/описание/Jira/
-  контекст итерации, пути рабочих копий репозиториев, живой dev-сервер
-  (`http://localhost:<dev_server_port>`, если он поднят), загруженные файлы,
-  план refine, итог предыдущей итерации, фидбек упавшего шага (его `summary`
-  **и** `findings` — строкой `[severity] title — detail`, чтобы следующий раунд
-  закрывал весь список, а не восстанавливал его чтением `iterations/*/.test.md`)
-  и общий
-  `output-contract.md` (форма `.issue-step-result.json` c `scenarios`/`findings`).
-  Дальше — роль-специфичное тело: `refine` (метод — скилл `grilling`,
-  интервью через tool `question`, `plan.md`, рекомендация `execution`, потолок
-  исполнителей подставляется из `maxExecutorsFor` — это `worker_count`, а
-  `DEFAULT_MAX_EXECUTORS = 4` (`shared/src/execution.ts`) служит фолбэком), `resolve` (implementer + HARD-RULES: изменения
-  остаются незакоммиченными), `review` (read-only ревью change set рабочего
-  дерева), `test` (Playwright против живого dev-сервера, скриншоты в
-  `screenshots/`; оба обязаны отдать весь список дефектов за один проход и не
-  сворачивать охват из-за того, что прошлый раунд нашёл мало), `pr` (единственный автор текста MR: `title`/`description`;
-  форма описания берётся из оригинального скилла `pr`
-  (`mattpocock/skills:skills/engineering/pr`, запечён в образ agent-контейнера;
-  `## Summary` / `## Evidence` / `## Merge Danger` с `Door` + `Blast Radius`),
-  который движок вставляет в промпт целиком через `{{PR_SKILL}}` — своей версии
-  структуры в `step-pr.md` больше нет (наш форк `agent-skills/pr` удалён: у него
-  были свои секции и `git diff <base>...HEAD`, а в конвейере текущая работа ещё
-  не закоммичена);
-  на каждый репозиторий своё описание в `merge_requests[]`; читает
-  `git diff origin/<base>` — ВСЁ, что несёт ветка, включая работу прошлых
-  итераций, — плюс цели публикации с base-веткой и `create_mr`). Отчёты
-  `resolve`/`review` эти поля не заполняют и движок их не подхватывает. Staged-промпты
-  (`resolve-stages-*`) несут тот же контекст своими
-  плейсхолдерами (`{{TASK_CONTEXT}}`/`{{REPOS}}`/`{{ATTACHMENTS}}`/
-  `{{PREVIOUS_OUTCOME}}`/`{{DOWNSTREAM_AWARENESS}}`), потому что собираются без
-  шапки шага.
-- **Staged-исполнение (последовательные и параллельные агенты)**: `refine` —
-  шаг планирования: его отчёт может нести `execution`
-  (`{ mode: 'single' | 'stages', stages?, rationale? }`), а также пишет
-  человекочитаемый план в `plan.md` в корне рабочей папки. Топологию
-  детерминированно решает движок (`planExecutionMode`), а не сами агенты;
-  предел одновременности задаёт `iteration.worker_count` (когда он не задан
-  или невалиден — фолбэк `DEFAULT_MAX_EXECUTORS = 4`). Планировщик выбирает
-  топологию по двум осям (`prompts/step-refine.md` §3): **форма** — независимые
-  части → одна параллельная волна (`stages` из одного этапа), упорядоченные →
-  несколько `stages`; **ёмкость** — изменение больше одного
-  *working set* исполнителя (порядка десятка файлов плюс один тест-цикл) уходит в
-  `stages`, даже когда части независимы. `iteration.worker_count` — это только
-  предел одновременности: он рендерится в `{{PARALLELISM}}` через
-  `maxExecutorsFor`, но план не переписывает. Движок проверяет план
-  (`executionPlanProblem`): `executors` любого этапа не может превышать этот
-  предел, `stages` без объявленных этапов — ошибка планировщика, а план из
-  одного этапа с одним исполнителем отклоняется с фидбеком «это `single`».
-  Каждая объявленная стадия обязана быть корректной: нецелый или нулевой
-  `index`, `executors` меньше единицы, нецелый или нечисловой `executors`,
-  `decomposition` не массив, содержащий нестроковые или пустые пункты, а также
-  число пунктов, не равное объявленному `executors`, — отказ, а не тихое
-  вычёркивание стадии из плана, не обрезка лишних пунктов и не дописывание
-  недостающих. Стадия называется позицией в объявленном списке (`stage at
-  position 1 of 2 is malformed`, `stage at position 1 of 2 declares 4
-  decomposition entries for 2 executors — a wave has one sub-task per executor`),
-  потому что `index` стадии — подсказка порядка, и он сам может быть тем полем,
-  что сломано. Верхнеуровневые `executors`/`decomposition` у `stages`-плана
-  отклоняются: этапный план объявляет их у этапов, а не у себя
-  (`mode stages declares top-level executors`). Когда кривы все объявленные
-  стадии, сообщение называет первую из них — «no valid stages» остаётся только
-  для плана без объявленных этапов. `single` не может объявлять
-  больше одного исполнителя (ни через `executors`, ни через `decomposition`):
-  такой план отклоняется, иначе отчёт рисовал бы «исполнителей: 9» при одном
-  агенте. Режим объявляется только как `single` или `stages`: неизвестный режим
-  (в том числе снятый `room`) делает `execution` нечитаемым, а нечитаемый план —
-  тоже отказ, а не молчаливый одиночный `resolve`.
-  Невалидный план не исполняется — `refine` перезапускается с фидбеком и тратит
-  на это свой бюджет self-retry (`MAX_SELF_RETRIES.refine = 3` повторных
-  запуска, общий с крашами refine); когда бюджет исчерпан, итерация падает и
-  `resolve` не стартует. Фидбек называет конкретную причину отказа из
-  `executionPlanProblem`, а не общую формулировку. Число этапов пределом не ограничено, поэтому большой объём без
-  параллельности делится в `stages` по одному исполнителю на этап:
-  - `stages` валиден, когда объявлен хотя бы один этап и каждый объявленный
-    этап корректен (`execution.stages`)
-    (элемент — `{ index, name?, task?, executors?, decomposition? }`). Этапы
-    исполняются строго последовательно: на этапе с `executors >= 2` исполнители
-    работают параллельно, затем координатор этапа пишет
-    `.issue-stage-<i>.json` (исполнители — `.issue-stage-<i>-worker-<w>.json`);
-    этап с одним исполнителем выполняет один агент; после всех этапов
-    финальный lead интегрирует исходы и ОДИН пишет deliverable
-    (`report.md`/`report.html` по `desired_result`) и итоговый
-    `.issue-step-result.json`.
-  - **волна** — план из одного этапа с `executors >= 2`: отдельного координатора
-    этапа нет, финальный lead сам интегрирует исполнителей (их саммари приходят
-    в его промпт блоком `## Wave workers`, файлы
-    `.issue-stage-1-worker-<w>.json`) и сразу пишет `.issue-step-result.json`.
-    `.issue-stage-1.json` не создаётся, поэтому повторный `resolve` переигрывает
-    волну целиком. План из одного этапа с одним исполнителем — это `single`,
-    движок его отклоняет. `planExecutionStages` перенумеровывает этапы
-    1..N, зажимает `executors` в `[1..max]` и добивает `decomposition` до
-    ровно `executors` пунктов (это страховка: валидный план уже проверен выше —
-    лишние пункты гейт отклоняет, — поэтому ни зажим, ни добор не могут молча
-    урезать исполняемый план; `max` — обязательный аргумент без дефолта, так что
-    новый вызов не унаследует чужой потолок);
-    abort на любом этапе немедленно завершает шаг.
-    Координатор этапа и финальный lead дополнительно читают решения и ловушки
-    предыдущих этапов через общую память задачи (`memory_read`/`memory_search`);
-    в память пишут то, что не прочитать в коде (`#decision`/`#lesson`, теги
-    `#issue-resolver`/`[[stage-N]]`), а вердикт этапа остаётся в
-    `.issue-stage-<i>.json`: вердикты раундов в `MEMORY.md` не попадают.
-  - исходы этапов переживают рестарт только в границах одной итерации и одного
-    плана: `runStagedResolve` пишет `.issue-stage-manifest.json`
-    (`iterationId` + подпись формы плана) и при расхождении с манифестом на
-    диске удаляет `.issue-stage-*.json` перед запуском. Файл этапа прошлой
-    итерации или прошлого плана больше не читается как результат текущего.
-  - иначе (нет плана, битый, `single`, нет валидных этапов) — один агент, и это
-    заметно: движок отдаёт warning-notice в ленту шага и пишет `console.warn`
-    («no execution plan — resolve runs as single»), чтобы недописанный
-    `.issue-step-result.json` не выглядел как осознанный `single`.
-  В staged-исполнении у каждого агента свой `StepAgent.id` (`<stepRunId>` у
-  финального координатора, `run.<stepRunId>.s<s>.w<w>` у исполнителей и
-  `run.<stepRunId>.s<s>.lead` у координатора этапа; у волны координатора этапа
-  нет, поэтому только `run.<stepRunId>.s1.w<w>` и `<stepRunId>`) и отдельный per-agent SSE (`/agents/stream?agentId=`), а
-  `StepAgent` несёт `stage`/`stageName` (staged-режим), `startedAt` (ISO) и
-  агрегированные `stats` (токены/cost/context из usage/stats-событий его
-  сессии).
-- **Цикл фидбека**: провал `review`/`test` откатывает конвейер на `resolve`
-  (разработку) с `attempt + 1` и передаёт фидбек **только когда в отчёте есть
-  замечание `major` или `critical`**. Решение принимает `blockingFindings`
-  (`shared/src/step-result.ts`): `fail` из одних `minor`/`low`/`info` идёт
-  дальше как pass, а `pass` не переопределяется severity. Безопасная сторона:
-  `fail` без единого findings, нечитаемая severity и помеченный
-  `findingsMalformed` отчёт считаются блокирующими. Сам `test` код не чинит.
-  Максимум `MAX_PIPELINE_ATTEMPTS` попыток (`shared/src/workflow.ts`, сейчас 5),
-  и `needs_input` с причиной `max_attempts` остаётся только для случая «блокеры
-  есть, бюджет кончился» — это последняя линия, а не единственный выход из
-  цикла. Test-шаг получает число в промпте через `{{ATTEMPT_LIMIT}}`, поэтому
-  лимит не живёт отдельным числом в markdown, и номер текущей попытки через
-  `{{VERIFICATION_MODE}}` (его получают и `review`, и `test`): первый раунд
-  гоняет полную матрицу, повторный сначала перепроверяет находки предыдущего
-  раунда и пути из них, затем build/test репозитория, а полную матрицу — только
-  если раунд менял исполняемый код (раунд из одной прозы не стоит свежего клона
-  и сотни вызовов инструментов). Наблюдение вне тронутой этим раундом
-  поверхности — `minor`, а не блокер: остальной change set был принят раньше.
-  `review` и `test` обязаны отдать **весь** список дефектов за проход: раунд с
-  одной находкой и остальными «на потом» стоит полного цикла разработки на
-  каждую оставшуюся.
-- **Граница ревью и теста**: `review` только читает и доказывает дефект
-  `file:line`; `test` только исполняет и доказывает воспроизведением (команда,
-  страница, шаги, скриншот). Заявляет тот, кто может доказать своим способом;
-  второй упоминает находку в `summary` и не заводит её заново — один дефект
-  стоит одного цикла разработки. Ревью не требует прогонов, тест не судит имена,
-  структуру и дубли. Отсутствие теста на новую логику — `major`, если в
-  репозитории тесты есть (сюита, тестовые файлы или тестовый скрипт), и `minor`,
-  если их нет вообще: репозиторий без тестовой культуры не блокируется, а тот,
-  где она есть, её не теряет. Правило целиком — в `prompts/step-scope.md`,
-  который висит на каждом шаге.
-  Провал `refine`/`resolve`/`pr` завершает итерацию сразу.
-- **Терминальность сбоя агента**: reject/таймаут `pi.run` (spawn ENOENT,
-  timeout, child error, зависание) ловится движком вокруг одиночного и staged-
-  вызова шага: `step_run` → `failed`, `step_output` с отчётом
-  `{ status: 'fail', summary: '<step> agent failed/hung' }` и текстом ошибки в
-  `stderr`, итерация → `failed`. Шаг не остаётся в `running` навсегда. Успешный
-  `agent_settled`/abort при этом не путаются со сбоем (см. `resolve-not-aborted`).
-- **Преемственность итераций**: итерация `number > 1` получает в промпт каждого
-  шага блок `Previous iteration outcome` — `status`+`summary` из `report`
-  resolve-шага предыдущей итерации плюс документ результата из рабочей папки
-  (`report.md`/`report.html`, обрезан до ~4000 символов; для `'pr'` документа
-  нет). Агент продолжает с этого итога, а не решает задачу заново. Битый JSON
-  отчёта/отсутствующий документ деградируют до пометки, не роняя прогон.
-- **Очередь итераций**: у задачи максимум одна `running`, одна `pending` и одна
-  `draft`-итерация. Проверки слотов не зависят от наличия `running`: создание
-  (и `repeat`) при уже стоящей в очереди `pending` или `draft` отвечает `409`
-  (`A pending iteration already exists…` / `A draft iteration already exists…`).
-  Без этого простаивающая задача принимала вторую `pending`, и порядок
-  выполнения расходился с номерами (в реальном прогоне: `#2 → #4 → #3`).
-  `POST /iterations/:id/queue` переводит `draft → pending` и тоже требует
-  свободный слот очереди.
-- **Git/MR**: под каждый репозиторий готовится рабочая копия на базовой ветке
-  (bare-кэш originals). `create_mr` задаётся **на репозиторий**; успешный
-  `pr`-шаг коммитит (`feat: <title>`), пушит **feature-ветку**
-  `issue/<issueId>-<iterationId>` (base-ветка защищена от прямого push) и
-  создаёт MR/PR `head=feature → base=base_branch` только для репозиториев с
-  `create_mr: true`; хост (GitLab/GitHub) определяется по URL.
-  Шаг `pr` присутствует в конвейере только при `desired_result: 'pr'` (для
-  остальных значений он удаляется). Для репозиториев с `create_mr: false`
-  результат остаётся файлами в рабочей папке. При 0 репозиториев `pr`-шаг не
-  коммитит и не создаёт MR. `pr_repository_ids` в теле итерации задаёт
-  per-repo выбор для MR: непустой массив включает `create_mr` только у
-  перечисленных репозиториев, пустой — снимает все галочки (и `pr` из шагов),
-  отсутствие поля оставляет флаги прежними. Если `pr` в шагах, но ни один
-  репозиторий не отмечен для MR, публикация не выполняется, а в события шага
-  уходит предупреждение (`notice`/`warning`) — шаг больше не остаётся молча
-  зелёным без ветки/MR.
-  Коммит идёт с явной identity (`-c user.name/user.email`, дефолт
-  `issue-resolver <issue-resolver@localhost>`, переопределяется
-  `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`): в контейнере нет git-конфига, и без
-  этого `git commit` падал с `Author identity unknown`, ошибка глоталась, а
-  затем пушилась ветка без коммитов и GitHub отвечал `422`. Ошибка коммита
-  (кроме `nothing to commit`) роняет шаг, а тело ответа GitHub/GitLab
-  (например `No commits between …`) попадает в причину сбоя, а не только код
-  `422`.
-- **Jira-enrichment**: если задан `jira_issue_url` без `title`, backend
-  подтягивает `summary`/`description` из Jira REST; ошибка Jira деградирует до
-  `title = ключ` тикета.
-- **Общая память модели**: контейнер задачи монтирует named volume
-  `agent-memory` (переопределяется `ISSUE_RESOLVER_MEMORY_VOLUME`) на
-  `/home/agent/.pi/agent/memory`, поэтому pi-memory шарится между всеми
-  контейнерами задач.
-- **Выбор модели**: `GET /models` + селектор в форме новой задачи; `model`
-  сохраняется на итерации и передаётся pi-раннеру.
-- **Live-view (Фаза 2)**: каждый шаг конвейера — живая steerable
-  `pi --mode rpc`-сессия (`RpcPiRunner`, транспорт `docker`|`local`), учёт
-  активных сессий — `InMemoryStepSessionRegistry`. SSE-стрим лога и статусов
-  шагов/итерации; на `completed`/`failed` UI перезапрашивает задачу, итерации и
-  step-runs. Инпут шлёт сообщение в активный шаг (`POST /iterations/:id/message`
-  = steer), кнопка «Прервать» дёргает `POST /iterations/:id/abort` (всегда
-  `200`; без живой сессии доводит итерацию до `cancelled`). Интерактивные вопросы расширений pi (`ctx.ui.select/`
-  `confirm`/`input`/`editor`) приходят как `extension_ui_request` и уходят в
-  SSE событием `question` (`SessionQuestion`); ответ пользователя возвращается
-  в живую сессию через `POST /iterations/:id/ui-response` → протокольный
-  `extension_ui_response` (реестр адресует по итерации). Пока вопрос не
-  отвечен, задача в статусе `question` (виден в списке задач и шапке, янтарный);
-  ответ возвращает её в `running`. UI показывает
-  незавершённый вопрос активной итерации модалкой (`question-modal`): `select`
-  → radio по `options`, `input` → строка, `editor` → textarea, `confirm` →
-  Да/Нет; «Отмена» шлёт `cancelled: true`, отвеченный `id` гасится и больше не
-  перерисовывается (очередь следующих вопросов продолжается). Escape закрывает
-  модалку, НЕ отвечая: вопрос остаётся кликабельным баннером
-  (`step-pending-question`) в карточке активного шага, и автооткрытие его больше
-  не навязывает до клика по баннеру. Структурированные
-  события сессии (текст, `thinking`-
-  блоки, `tool_use`/`tool_result`) идут в SSE как `step_event`; после
-  `agent_settled` раннер запрашивает `get_session_stats` (таймаут 2с, иначе
-  `stats: null`) и кладёт `SessionStats` в результат шага. Пока сессия жива,
-  раннер опрашивает `get_session_stats` каждые ~3с, и каждый ответ уходит в
-  SSE событием `stats` — UI держит из них живой футер (контекст%/токены/cost),
-  не дожидаясь финала (у части провайдеров `message_update.usage` нулевое до
-  конца стрима).
-- **Прозрачность pi и управление (Фаза 3)**: раннер транслирует в SSE **все**
-  служебные события pi (`tool_update`, `compaction_start`/`compaction_end`,
-  `retry_start`/`retry_end`, `queue`, `thinking_level`, `session_info`, `notice`,
-  `status`, `widget`, `title`, `extension_error`, `bash`, `editor_text`) —
-  полная прозрачность сессии без потерь. Управление живой сессией:
-  `GET /iterations/:id/control` — снимок `state`/`models`/`thinkingLevels`/
-  `commands` (из `get_state` + `get_available_models` + `get_available_thinking_levels`
-  + `get_commands`); `POST /iterations/:id/control` — 13 команд `SessionCommand`
-  (смена/цикл модели, thinking-level, компакция, режимы очереди, auto-compaction/
-  retry, abort_retry, bash/abort_bash); `POST /iterations/:id/prompt` — промпт с
-  `streamingBehavior` = `mode`. Встроенные slash-команды pi (`/model`, `/compact`,
-  `/thinking`, `/name`, `/new`, ...) перехватываются сервером и идут явными
-  RPC-командами, а не `prompt`, а в `GET /control.commands` они видны первыми
-  с `source: 'builtin'`. Команды идут через id-коррелированные
-  RPC-запросы (`sendCommand`, таймаут 10с), ответы перехватываются до парсера
-  событий. Очередь и компакция для UI приходят живыми SSE-событиями (`queue`,
-  `compaction_start`/`compaction_end`), а `thinkingLevel` — в `state` снимка.
-  Лог
-  рендерится как Markdown (`AgentMarkdown` на react-markdown@10 + remark-gfm@4), шаг
-  открывается в полноэкранном modal («Развернуть»): вывод (session +
-  stdout/stderr/report) авто-скроллится вниз, steer-бар и строка статистики
-  (`SessionStatsBar`, вынесена из `SessionView`) закреплены внизу вне
-  скролл-области; `SessionView` внутри modal идёт с `showFooter={false}`.
-  Карточка шага условна: пока шаг `running` — **живой вывод агента**
-  (структурированные session-события `sessionEventsOf(run)` + буфер SSE
-  `liveEventsByRun`, тот же `SessionView`) в фиксированном окне ~300px с
-  авто-прокруткой вниз (`AutoScrollBox`, `scrollKey = events.length`);
-  живая проза агента идёт накопительным событием `text_update` (как
-  `thinking_update`), поэтому стрим — один растущий блок, а не цепочка
-  «по токену на строку»; финальный `text` его ретирит;
-  завершённый шаг вместо него показывает статус-чип и краткое саммари отчёта
-  (`parseStepReport(run.report)`, `data-testid="step-summary"`, summary обрезан
-  `line-clamp-4`), а при отсутствии/битом отчёте (в т.ч. устаревшая строка
-  `"null"`) — заглушку «Результат отсутствует.» (статус в блоке саммари —
-  `PASS`/`FAIL`/`BLOCKED` из отчёта, uppercase). В staged-режиме карточка
-  активного `resolve` вместо одной сессии показывает вкладки «Исполнитель 1..N /
-  Координатор (lead)» (`StepAgentTabs`): у выбранного агента — живой
-  `SessionView` и его статистика (токены/cost/контекст + ⏱ длительность), а над
-  вкладками — итог по всему шагу (суммарные токены/cost и wall-time от первого
-  старта). Режим определяется по последнему `refine`-отчёту
-  (`parseStepReport(report).execution.mode === 'stages'`; отчёт с неизвестным
-  режимом, включая снятый `room`, считается нечитаемым планом, а не этапным); в
-  `stages` вкладки группируются по этапам (`stage`/`stageName`, сначала этап 1
-  с его исполнителями и координатором, затем этап 2, …; финальный координатор —
-  последним), иначе — обычная одиночная сессия. Под карточкой шага
-  (`data-testid="step-run-log"`) — строка статистики: длительность (⏱; у
-  активного шага тикает `now - created_at`), токены из `run.stats` в формате
-  `<модель> · ^<input> · v<output> · кеш<cacheRead+cacheWrite> · N вызовов`
-  (компактно 950 / 105k / 1.2M), изменённые файлы (уникальные `tool_use` с
-  `write`/`edit`; `read` и `.issue-step-result.json` исключены, workspace-uuid
-  срезан `shortPath`, первые 5 + `+N`) и артефакты отчёта (счётчики
-  `report.scenarios`/`report.findings`, `report.screenshots_dir`). Полный отчёт
-  и сырой stdout/stderr остаются в modal «Развернуть». Прежний мёртвый
-  `RpcBridge` удалён.
-- **Issue-уровневые сессии `Отчёт`**: в шапке задачи один блок
-  (`data-testid="report-section"`) — «📄 Отчёт и артефакты». Его шапка:
-  лейбл и статус-чип справа — «⏳ Генерируется…» во время генерации (в т.ч.
-  после авто-спавна report-агента на терминальной итерации;
-  `GET /issues/:id/report/status` отдаёт `running`), готовность —
-  «✓ Сгенерирован», `failed` после падения агента (корень пуст — это НЕ
-  `idle`), иначе `idle` — «Отчёт ещё не сгенерирован». В одном ряду действий
-  (flex-wrap): «Показать отчёт» — модалка-просмотрщик HTML, «Артефакты (N)»,
-  «📥 MD» (только при готовом отчёте), «🔄 Обновить»
-  (`POST /issues/:id/report`) и «⤢ Вывод» — модалка живого вывода, пока есть
-  события. Выбор модели/thinking для ручного прогона спрятан в `<details>`
-  «⚙ Выбрать модель»; предупреждения серверных детектов и наблюдённая модель
-  идут одной строкой (`report-warnings` + `report-observed-model`), ошибка —
-  отдельной красной строкой (`report-error`). Открывшийся
-  отчёт начинается с ответа (`Answer`), а детали выполнения свёрнуты в
-  `<details>` внизу; HTML отдаётся в iframe с
-  `sandbox="allow-scripts allow-popups"` (без `allow-same-origin`) — отчёт
-  не видит origin приложения и не может писать в его хранилища. Живой
-  `SessionView` с `log`-чанками адреса `issue.<issueId>.report` показывается
-  там же в шапке, пока идёт генерация. Старого блока с сырым `devops_log`
-  и его `onDevOpsLog`-колбэка в карточке больше нет.
-- **Карточка «DevOps задачи»** (`data-testid="devops-section"`) — отдельный
-  блок уровня задачи сразу под панелью «Репозитории» (прогон один на всю
-  задачу: он перечитывает все её репозитории, поэтому в строке репозитория его
-  кнопки нет). В одной строке: лейбл, статус (`devops-idle` /
-  `devops-running` / `devops-success` / `devops-failed` — при `failed` рядом
-  `feedback` с причиной по репозиторию), «⟳ Пересобрать»
-  (`POST /issues/:id/devops`, заблокирована на время прогона) и «⤤ Вывод» — ту
-  же модалку прогона (`step-log-modal`), что у шагов и отчёта: сохранённая
-  сессия, `stdout`/`stderr` и статистика из `step_outputs`. Пока прогон идёт,
-  под строкой статуса живёт накопительный `SessionView` из SSE-чанков адреса
-  `issue.<issueId>.devops` (`devops-live`). Статус и лог берутся из
-  `GET /devops/status` и `GET /devops/run` (опрос раз в 4 с), поэтому
-  перезагрузка страницы и рестарт backend не теряют ни исход, ни вывод.
-- **Английские промпты**: тексты шагов конвейера (`workflow/prompts.ts`) и
-  `pr`-скилл переведены на английский.
-- **Персистентный лог шагов**: сырой `stdout`/`stderr`, структурированные
-  `events` и `stats` (`SessionStats`) каждого прогона шага пишутся в
-  `step_outputs` (идемпотентная миграция `ensureStepOutputColumns` доводит уже
-  существующие БД) и отдаются вместе с шагами через
-  `GET /iterations/:id/step-runs` — отдельный запрос за логом не нужен.
-  Вопросы агента (`question`) и ответы (`question_answered`) дополнительно
-  дозаливаются по мере появления в `step_runs.events` (`appendStepRunEvent`,
-  миграция `ensureStepRunColumns`): пока шаг в работе, строки `step_outputs`
-  ещё нет, и без этого вопрос терялся бы при перезагрузке страницы (SSE не
-  переигрывает старые события). `GET /iterations/:id/step-runs` до появления
-  output-строки отдаёт именно `step_runs.events`, а после — полный набор из
-  `step_outputs.events`.
-- **UI**: экраны (новая задача / список / детали / репозитории / теги /
-  настройки), Matrix-тема. Единая ширина контента — `max-w-4xl` на всех экранах
-  (переключение между ними не «прыгает» по ширине). Верхняя навигация-табы («Задачи» / «Репозитории») в хедере;
-  справа от табов — кнопка «+» с контекстным действием (создать задачу /
-  добавить репозиторий по активному табу). Нижней мобильной панели нет.
-  Роуты (History API, без хеша): `/new`, `/tasks`, `/tasks/:id`, `/repositories`. На детали
-  задачи над карточкой — текстовая крошка «← Задачи». В карточках списка задач
-  — таймер: у `running` живой «⏱ Xм Yс» от `created_at`, у `completed`
-  фиксированный (`created_at` → `updated_at`), у остальных статусов — прежнее
-  относительное время. У `pending`/`preparing`-карточек под репозиториями —
-  сводка готовности (`📦 репо: ✅N 🔵N 🟡N [❌N]`) по `GET /repositories`
-  (сопоставление сохранённого репозитория с задачей по URL): `✅` — соединение
-  `ok` и инструкция сгенерирована, `🔵` — соединение `ok` без инструкции, `🟡`
-  — ещё ждёт, `❌` — ошибка; запрос кешируется на один список. Экран «Репозитории»
-  (`/repositories`) — CRUD сохранённых репозиториев: карточка той же
-  ширины, что и остальные экраны (`max-w-4xl`), первая строка — индикатор статуса соединения (🟢 `ok` /
-  🔴 `error` / ⚪ `unknown`, с tooltip), чип платформы, `fullName` и иконки
-  действий справа (🔄 «Проверить» → `POST /repositories/:id/validate`, ✏️
-  «Редактировать» → PUT с перевалидацией, 🗑 «Удалить» → `confirm`); ниже —
-  `defaultBranch` и дата последней проверки. Добавление — модалка с валидацией
-  `RepoUrlInput` («Сохранить» активна только после успешной проверки),
-  открывается кнопкой «+» в хедере («Добавить репозиторий») или внешним
-  `createSignal`. Форма создания задачи больше не вводит URL: для
-  каждого репозитория — селектор сохранённых (`GET /repositories`), при выборе
-  которого live подтягиваются ветки (`GET /repositories/:id/branches`) с
-  выбранным `defaultBranch`; в `POST /issues` уходит
-  `{ repo_id, base_branch, create_mr }`. Описание задачи
-  и контекст итерации редактируются WYSIWYG markdown-редактором
-  (`MarkdownEditor` на Tiptap v3 + официальный `@tiptap/markdown`; тулбар —
-  заголовки 1-3, bold/italic/strike, inline code, code block, списки, цитата,
-  ссылка, hr), а в API уходит обычный markdown-текст (контракт не менялся).
-  К формам создания задачи и итерации добавлен выбор файлов (`FilePicker`:
-  чипы с именем/размером и ✕ до отправки); при непустом списке запрос уходит
-  `multipart/form-data` (`createIssueWithFiles`/`createIterationWithFiles`), без
-  файлов — прежний JSON. Вложения задачи показываются блоком «Файлы задачи»
-  (`IssueFilesList`: имя, размер, бейдж итерации, ссылка на
-  `/files/:id/content`, удаление ✕; пустой список не рендерится). В
-  детальном виде
-  итерации кликабельны (по умолчанию активна последняя), а выбранная показывает
-  живой вывод работающих шагов (session-события в окне ~300px), тогда как
-  завершённые шаги — статус+саммари отчёта; полный лог
-  (session + stdout/stderr/report) — в modal «Развернуть». Пока идёт
-  разовая подготовка рабочей папки (`preparing`/`running`), ОТДЕЛЬНОЙ панелью
-  прогресса (`data-testid="workspace-progress"`) ПЕРЕД островом итераций — с
-  шагами `creating_dirs` → `cloning <repo>` → `checking_instructions` →
-  `devops <repo>` → `installing` → `dev_server <repo>` → `ready`
-  (⏳/✓/✕ и `!` у `warning`, текст `message` при ошибке); после
-  `ready`/`error` она затухает через 3с. В шапке задачи (сразу под
-  заголовком и бейджем статуса) — компактная сводка по репозиториям
-  (`data-testid="repo-status"`, строки `repo-status-row`): `owner/repo`, базовая
-  ветка и живой индикатор подготовки (🟡 `pending` / 🔵 `cloning`·`cloned` /
-  🟣 `devops` / 🟢 `installed` / 🔷 `dev_server` / ✅ `ready` /
-  ⏭️ `skipped` при `bootstrap_enabled: false` с пометкой «запуск отключён» /
-  ❌ `failed`), обновляется по `workspace_progress`; для поднятого dev-сервера
-  рядом показывается `Dev: localhost:<порт>`; логика — `views/repoPrep.ts`. Ошибка
-  `iteration_status` со `status: 'failed'` и полем `error` показывается красным
-  баннером «❌ Ошибка
-  подготовки: …» над списком шагов. Для задач с
-  `desired_result` `md`/`html` в шапке — «Показать
-  результат» (модалка: markdown через `AgentMarkdown` или `html` в iframe) и
-  «Скачать» (`/issues/:id/result/download`). Обе кнопки активны только когда
-  `resolve`-шаг уже оставил непустой `.issue-step-result.json` (до этого —
-  `disabled`/`aria-disabled`, чтобы не бить в 404 «результат ещё не создан»);
-  отсутствие `desired_result`/`pr` скрывает их совсем. Рядом с «Скачать»
-  появляются отдельные ссылки скачивания файлов, порождённых агентом в рабочей
-  папке последней completed-итерации (`GET /issues/:id/result/files/content`,
-  список — `GET /issues/:id/result/files`, тот же фильтр: без клонов репозиториев):
-  каждый файл — своя ссылка
-  `Скачать <имя>` с размером; служебные `.`-пути, `attachments/` и сам артефакт
-  результата исключены, пустой список ничего не рендерит. Созданный MR
-  показывается ссылкой в шапке задачи (`data-testid="task-mr-links"`, каждая
-  ссылка — `task-mr-link`): URL берётся персистентно из `result.json` рабочей
-  папки (`merge_requests[].url`, переживает перезагрузку) и живо из SSE-события
-  `stream: 'mr'`, дедуп по URL. Ветка публикации стабильна для задачи
-  (`featureBranchName` несёт суффикс `issueId`), а `commitAndPush` сквошит к
-  `origin/<base>`, то есть payload MR растёт от итерации к итерации. Поэтому, если
-  MR из этой ветки уже открыт, движок не только пушит коммит, но и обновляет его
-  `title`/`description` (`MrClient.updateMr`: GitLab `PUT .../merge_requests/<iid>`,
-  GitHub `PATCH .../pulls/<number>`, Bitbucket Server `PUT` с предварительным чтением
-  `version` — иначе 409 VERSION_CONFLICT; Bitbucket Cloud `PUT /2.0/.../pullrequests/{id}`
-  без `version`). Обновление текста — best-effort: сбой
-  не валит публикацию и не блокирует остальные репозитории, а пишется в то же
-  `stream: 'mr'` сообщением «текст обновить не удалось». Web-ссылка MR всегда
-  приходит от самого MR-клиента (`links.self`/`html_url` у Bitbucket, `web_url`/`html_url`
-  у остальных); движок её не реконструирует — ручной склейкой была ссылка без
-  project-ключа (`/projects/repos/x/pull-requests/1`), по которой комментарии
-  недоступны. 409 DuplicatePullRequestException — тоже не ошибка: клиент находит
-  существующий PR и возвращает его (в Cloud дубликат — 400 с текстом
-  «already exists»; тело ответа читается один раз, поэтому текст — только в ветке
-  ошибки). Bitbucket различается на два API: Server/Data Center (`/rest/api/1.0`,
-  `/scm/`, project-ключ) и Cloud `bitbucket.org` (`https://api.bitbucket.org/2.0`,
-  `/{workspace}/{repo}`, `pullrequests`) — как и в `repo-resolver`. Комментарии
-  ревью (`POST /iterations/:id/fetch-review-comments`) для Server читаются через
-  `GET .../pull-requests/{id}/activities` с обходом страниц: `.../comments` без
-  `?path=<файл>` отвечает 400 («path query parameter is required»), поэтому по
-  одной только ссылке список не получить; для Cloud — `.../pullrequests/{id}/comments`
-  по курсору `next`. Все выборки комментариев постраничны (`per_page`/`pagelen`;
-  без параметра GitHub отдаёт 30, GitLab 20 заметок — остальное терялось), капп —
-  50 страниц, и его исчерпание это ошибка, а не молчаливый partial. Сбой эндпоинта
-  тоже ошибка: ранний `if (res.ok)` превращал 404/500 в «комментариев нет, код чист».
-  Хост определяется по URL репозитория
-  (`repository_url` из `result.json`), а не по ссылке PR: web-URL self-hosted
-  Bitbucket (`b.yadro.com/projects/...`) не содержит ни `bitbucket` в хосте, ни
-  `/scm/` в пути; по той же причине разбор ссылки GitHub не привязан к `github.com`
-  (GitHub Enterprise живёт на своём хосте под `/api/v3`). Если pr-шаг успешен (`create_mr` включён), но
-  ссылки нет — плейсхолдер «MR создан, но ссылка недоступна»
-  (`task-mr-placeholder`); при `pr_error` ссылки/плейсхолдера нет, показывается
-  красный баннер шага. Если рабочая папка
-  задачи удалена, а issue в БД осталась (`Issue.workspace_missing === true`), в
-  шапке задачи показывается бейдж «Файлы задачи отсутствуют»; issue при этом
-  НЕ удаляется автоматически. Удаление задачи гасит всё, что живёт в её папке
-  (`backend/src/processes/workspace-processes.ts`): обход `/proc` ищет процессы с
-  `cwd` **внутри** папки на любой глубине (бывшая проверка сравнивала `cwd` с
-  корнем папки на равенство и не видела `ng serve`, запущенный из подкаталога
-  репозитория), путь папки в командной строке и открытые файлы внутри неё.
-  Сначала `SIGTERM` по группе процесса (`setsid`-дев-серверы живут в своей),
-  через паузу `SIGKILL` по оставшимся; свой процесс и его предки из выборки
-  исключены. Снос папки повторяется до 4 раз с новой сессией убийства между
-  попытками — иначе процесс, переоткрывающий файл, оставлял её `ENOTEMPTY`.
-  Экран «Настройки» (`/settings`) — hostname
-  инстанса (`GET`/`PUT /settings/hostname`) и кнопка очистки
-  орфанед-воркспейсов (`POST /admin/cleanup-orphans`), она же убирает
-  брошенные комнаты задач (`issue-*` без живых агентов; корень комнат —
-  `PI_CODING_AGENT_DIR`/`~/.pi/agent` + `/rooms`, см. `backend/src/pi/rooms.ts`);
-  оттуда же запускается maintenance-сессия **«Память и ретро»**
-  (`POST`/`GET /settings/retro`): кнопка открывает модалку с выбором модели и её
-  thinking effort, числа анализируемых pi-сессий и произвольными инструкциями;
-  пару «модель + thinking effort» рисует общий `ModelThinkingSelect` — тот же,
-  что в форме задачи, шагах пайплайна и живых контролах сессии. Сессия компактит
-  память агента (`PI_MEMORY_DIR`: `MEMORY.md`, `SCRATCHPAD.md`, `daily/*`) и
-  проводит ретро по скиллу `retro` (логи сессий `~/.pi/agent/sessions`, БД
-  приложения, репозиторий), пишет markdown-отчёт в таблицу `retro_runs` —
-  отчёт можно открыть и скачать `.md`, а сохранённый вывод прогона — за
-  кнопкой «Развернуть» рядом с ней (до раскрытия транскрипт не висит над
-  рамкой), историю прогонов — в той же модалке;
-  модель, её thinking effort, лимит сессий и свои инструкции сохраняются в строке
-  прогона (клик по
-  истории подставляет их в форму, чтобы повторить запуск), а идущий прогон
-  останавливается кнопкой «Остановить» (`POST /settings/retro/:id/abort`);
-  сохранённый hostname
-  задаёт заголовок вкладки на всех страницах и переживает перезагрузку
-  (значение грузит `App`, а не только сама страница настроек). В шапке формы и
-  в чипах шагов лейблы шагов —
-  `Review` → «Код-ревью», `Test` → «Тест».
-
-Статусы — из `shared`:
-
-- `TaskStatus` (Issue и Iteration): `pending`, `preparing`, `running`,
-  `completed`, `failed`, `cancelled`, `question`. `preparing` — идёт разовая
-  подготовка рабочей папки (clone/install); `question` — агент задал
-  интерактивный вопрос и ждёт ответа пользователя (янтарный в UI).
-- `StepRunStatus` (шаг): `pending`, `running`, `success`, `failed`,
-  `needs_input`, `skipped`.
-- `StepReportStatus` (отчёт): `pass`, `fail`, `blocked`.
+- **`CreateIssueRequest`**: `{ title?, jira_issue_url?, repositories?:
+  [{ repository_url, base_branch, create_mr? } | { repo_id, ... }], tag_id?,
+  desired_result?, additional_context?, review_context?, is_review_need?,
+  pipeline_steps?, model? }`. `title` обязателен, если нет `jira_issue_url`;
+  репозиториев может не быть вовсе. `desired_result`: `md` (дефолт), `html`,
+  `pr` (требует хотя бы один репозиторий).
+- **Загрузка файлов**: `POST /issues` и `POST /issues/:id/iterations` принимают
+  либо JSON, либо `multipart/form-data` (`payload` строкой + повторяющееся поле
+  `files`, до 10 файлов по 25 МБ). Файлы ложатся в
+  `<workspace>/attachments/` (задача и итерация №1) или
+  `attachments/iteration-<n>/`, имена санитайзятся, коллизии — суффиксом.
+- **SSE**: каждый поток открывается комментарием `: connected` — прокси держат
+  заголовки в буфере до первого байта тела. Типы событий и их `data` —
+  `docs/FEATURES.md`; форма `SSEEvent` — `shared/`.
+- **Терминальные статусы**: `TaskStatus` (задача и итерация), `StepRunStatus`
+  (шаг), `StepReportStatus` (отчёт шага) объявлены один раз в
+  `shared/src/status.ts` — см. `CODING_STANDARDS.md`.
 
 ## Тесты
 
 ```bash
-npm run typecheck                 # tsc во всех пакетах
-npm run lint                      # eslint: правила из eslint.config.mjs
-(cd shared   && npx vitest run)   # 97 тестов
-(cd backend  && npx vitest run)   # 563 теста
-(cd frontend && npx vitest run)   # 660 тестов
-(cd frontend && npx playwright test)  # 8 backend HTTP + 11 flows + 3 scenarios на мок-стеке
+npm run typecheck                     # tsc во всех пакетах
+npm run lint                          # eslint: правила из eslint.config.mjs
+(cd shared   && npx vitest run)
+(cd backend  && npx vitest run)
+(cd frontend && npx vitest run)
+(cd frontend && npx playwright test)  # мок-стек, без Docker/git/pi/сети/токенов
 ```
 
-**E2E-сценарии агента (без Docker/git/pi/сети/токенов).**
-`backend/test/e2e-server.ts` поднимает реальные роуты и движок поверх
-мок-агента: ответы шагов (`success`/`failure`/`question`/`timeout`)
-задаются `POST /e2e/scenarios` (встроенное имя или inline `steps` + опц.
-`bootstrap`/`delayMs`), сброс — `POST /e2e/reset`, чтение —
-`GET /e2e/scenarios`. Пресеты — `backend/test/scenarios/*.ts` (`all-success`,
-`step-failure`, `agent-question`, `concurrent-questions`,
-`bootstrap-failure`). HTTP-спеки — `frontend/e2e/backend/api.spec.ts`
-(вопрос, параллельные вопросы, SSE), UI-спеки —
-`frontend/e2e/scenarios/*.spec.ts` (инлайн-вопрос → ответ → завершение, падение
-шага, падение подготовки). Вопрос получает ответ через реальный
-`POST /iterations/:id/ui-response` → реестр живых сессий; курсор шагов — на
-итерацию, поэтому параллельные задачи независимы. Прогон детерминирован
-(каждый тест < 5с); токены не тратятся.
-
-**Свой мок-стек.** `frontend/playwright.config.ts` поднимает собственные
-e2e-server + vite на свободных портах (`:8095`/`:5195`), не конфликтуя с живым
-dev-стеком соседей (`:8080`/`:5173`); цель vite-прокси задаётся
-`VITE_PROXY_TARGET`. Живой дефолт ‑ `:8080`.
-
-**`frontend/e2e/flows/*`.** Пользовательские сценарии поверх реального
-мок-стека: жизненный цикл задачи, bootstrap-тоггл и лог DevOps, инлайн-вопрос
-(ответ и отмена), подписи статусов, обрыв SSE и восстановление
-(`reconnect.spec.ts`), панель отчёта (`report-flow.spec.ts`: idle → запуск →
-success → артефакт → повтор, ошибка запуска, `step_status` report-прогона в
-SSE) и две независимые задачи в карточном списке
-(`concurrent-issues.spec.ts`). Сеть перехватывается точечно через
-`page.route` (`mockStreamBatches` для SSE), отдельного класса-фейка нет.
-
 Юниты backend работают на in-memory фейках (docker/git/pi/MR/Jira/RPC) — реальные
-контейнеры, git-пуш и сетевые вызовы не выполняются; интеграционные обёртки
-компилируются, но проверяются отдельно (e2e/руками).
+контейнеры, git-пуш и сетевые вызовы не выполняются. E2E поднимает реальные
+роуты и движок поверх мок-агента: `backend/test/e2e-server.ts`, пресеты ответов —
+`backend/test/scenarios/*.ts`, спек-файлы — `frontend/e2e/` (`flows/`,
+`scenarios/`, `backend/`). `frontend/playwright.config.ts` поднимает свой
+мок-стек на свободных портах (`:8095`/`:5195`) и не конфликтует с живым
+dev-стеком; цель vite-прокси задаётся `VITE_PROXY_TARGET`.
+
+## Куда дальше
+
+- [`docs/FEATURES.md`](docs/FEATURES.md) — что система делает: конвейер,
+  подготовка воркспейса, топология исполнения, отчёт, UI.
+- [`docs/DESIGN-NOTES.md`](docs/DESIGN-NOTES.md) — инварианты, которые нельзя
+  вывести из кода. Читать перед правкой конвейера, pi-сессий, отчёта, SSE и БД.
+- [`AGENTS.md`](AGENTS.md) — правила работы в репозитории.
+- [`CODING_STANDARDS.md`](CODING_STANDARDS.md) — код-доктрина,
+  [`docs/REVIEW-EXCEPTIONS.md`](docs/REVIEW-EXCEPTIONS.md) — принятые исключения.

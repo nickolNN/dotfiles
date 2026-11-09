@@ -9,7 +9,7 @@ const issuePorts = new Map<string, Set<number>>();
 
 const portOwner = new Map<number, string>();
 
-async function isPortFree(port: number): Promise<boolean> {
+export async function isDevPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = createServer();
     server.once('error', () => resolve(false));
@@ -25,7 +25,7 @@ export async function allocateDevPort(
 ): Promise<number> {
   for (let port = PORT_RANGE_START; port <= PORT_RANGE_END; port++) {
     if (portOwner.has(port)) continue;
-    if (await isPortFree(port)) {
+    if (await isDevPortFree(port)) {
       const set = issuePorts.get(issueId) ?? new Set();
       set.add(port);
       issuePorts.set(issueId, set);
@@ -45,7 +45,7 @@ export async function reserveDevPort(
 ): Promise<boolean> {
   const owner = portOwner.get(port);
   if (owner !== undefined && owner !== issueId) return false;
-  if (!(await isPortFree(port))) return false;
+  if (!(await isDevPortFree(port))) return false;
   const set = issuePorts.get(issueId) ?? new Set<number>();
   set.add(port);
   issuePorts.set(issueId, set);

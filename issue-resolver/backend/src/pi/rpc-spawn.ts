@@ -1,6 +1,30 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isValidPiSessionId } from '@issue-resolver/shared';
 import type { PiRunOptions } from './runner';
+
+const READ_ONLY_EXTENSION_CANDIDATES = ['read-only-extension.ts', 'read-only-extension.js'];
+
+export function readOnlyExtensionPath(): string | null {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  for (const name of READ_ONLY_EXTENSION_CANDIDATES) {
+    const path = join(dir, name);
+    if (existsSync(path)) return path;
+  }
+  return null;
+}
+
+function readOnlyExtensionArgs(): string[] {
+  const path = readOnlyExtensionPath();
+  if (path === null) {
+    throw new Error(
+      'pi: read-only step has no guard extension — refusing to spawn an unguarded review',
+    );
+  }
+  return ['--extension', path];
+}
 
 const LAUNCHER_ENV_KEYS = [
   'PI_SESSION_FILE',
@@ -55,6 +79,7 @@ export function sessionArgs(options: PiRunOptions): string[] {
     ...(options.excludeTools?.length
       ? ['--exclude-tools', options.excludeTools.join(',')]
       : []),
+    ...(options.readOnly ? readOnlyExtensionArgs() : []),
     ...verboseFlags,
   ];
 }

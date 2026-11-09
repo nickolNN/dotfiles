@@ -10,6 +10,7 @@ import { soloRunExcludeTools } from '../pi/tool-policy';
 import { DEVOPS_SYSTEM_APPEND, withSharedFragments } from './prompts';
 import { messageOf } from '../util/errors';
 import { renderPlaceholders } from '../prompt-render';
+import { stripPromptHeader } from '../workflow/prompts/loader';
 import { readTextFileOrNullAsync } from '../util/files';
 
 export const DEFAULT_DEVOPS_PROMPT_PATH = join(
@@ -115,7 +116,7 @@ export function loadDevOpsPrompt(
   cachedInstructions?: string | null,
   credentials?: string | null,
 ): string {
-  const template = readFileSync(promptPath, 'utf-8');
+  const template = stripPromptHeader(readFileSync(promptPath, 'utf-8'));
   return withSharedFragments(
     renderDevOpsPrompt(
       template,

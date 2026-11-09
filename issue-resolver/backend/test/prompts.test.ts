@@ -361,7 +361,9 @@ describe('buildStepPrompt', () => {
     expect(text).toContain('independent code reviewer');
     expect(text).toContain('source code');
     expect(text).toContain('Read-only git only');
-    expect(text).toContain('You have no execution');
+    expect(text).toContain('Read-only, enforced');
+    expect(text).toContain('rejected before they start');
+    expect(text).toContain('vitest');
     expect(text).toContain('iterations/<n>/.review.md');
     expect(text).toContain('.issue-step-result.json');
     expect(text).not.toContain('You are allowed to run');
@@ -382,9 +384,62 @@ describe('buildStepPrompt', () => {
     const text = prompt('review');
 
     expect(text).toContain('What reading can prove');
-    expect(text).toContain('You have no execution');
+    expect(text).toContain('Read-only, enforced');
     expect(text).toContain('is not yours to file');
     expect(text).toContain('If the repository keeps tests');
+  });
+
+  it('review: две оси — спека, затем стандарты репозитория', () => {
+    const text = prompt('review');
+
+    expect(text).toContain('Two passes, one verdict');
+    expect(text).toContain('**Spec.**');
+    expect(text).toContain('**Standards.**');
+    expect(text).toContain('a beautiful implementation of the wrong behaviour is at least');
+    expect(text).toContain('If the repository has no standards file');
+  });
+
+  it('review: источники стандартов названы, исключения не переоткрываются', () => {
+    const text = prompt('review');
+
+    expect(text).toContain('CODING_STANDARDS.md');
+    expect(text).toContain('CONTRIBUTING.md');
+    expect(text).toContain('REVIEW-EXCEPTIONS.md');
+    expect(text).toContain('Do not file the recorded fact');
+    expect(text).toContain('breaks the reason behind the exception');
+  });
+
+  it('review: смелл-лист есть, но машинно-проверяемое — не находка', () => {
+    const text = prompt('review');
+
+    expect(text).toContain('Not a rule a machine already enforces');
+    expect(text).toContain('Duplicated Code');
+    expect(text).toContain('Refused Bequest');
+    expect(text).toContain('Grade a smell at most `minor`');
+  });
+
+  it('review: стандарты не поднимают severity и не гонят цикл', () => {
+    const text = prompt('review');
+
+    expect(text).toContain('Style never makes a change go back to development');
+    expect(text).toContain('breach with no behavioural');
+    expect(text).toContain('must still leave the verdict');
+    expect(text).toContain('Only a defect whose cost you can put');
+  });
+
+  it('review: лишний ключ в находке сделал бы каждую блокирующей', () => {
+    const text = prompt('review');
+
+    expect(text).toContain('an extra key on a finding');
+    expect(text).toContain('treats *every* finding');
+  });
+
+  it('стандарты ревью не просачиваются в остальные шаги', () => {
+    const test = prompt('test');
+
+    expect(test).not.toContain('Two passes, one verdict');
+    expect(test).not.toContain('REVIEW-EXCEPTIONS.md');
+    expect(prompt('resolve')).not.toContain('Two passes, one verdict');
   });
 
   it('review: повторный круг не открывает весь change set', () => {

@@ -34,8 +34,7 @@ import {
 import {
   devServerResponds,
   excludeInfraFiles,
-  isProcessAlive,
-  readDevServerPid,
+  readOwnedDevServerPid,
   startRepoDevServer,
 } from './dev-server';
 import { installWorkspaceHelpers } from './workspace-helpers';
@@ -181,13 +180,16 @@ export async function prepareIssueWorkspace(
 
     if (devServerPort !== undefined && devRepo) {
       const repoName = extractRepoNameFromUrl(devRepo.repository_url);
-      const adopted = readDevServerPid(workspaceDir, repoName);
+      const adopted = readOwnedDevServerPid(workspaceDir, repoName);
       const pid =
-        adopted !== null &&
-        isProcessAlive(adopted) &&
-        (await devServerResponds(devServerPort, 2, 250))
+        adopted !== null && (await devServerResponds(devServerPort, 2, 250))
           ? adopted
-          : startRepoDevServer(workspaceDir, repoName, devServerPort);
+          : startRepoDevServer(
+              workspaceDir,
+              repoName,
+              devServerPort,
+              input.issueId,
+            );
       if (pid !== null) {
         db.update(issues)
           .set({ dev_server_port: devServerPort, dev_server_pid: pid })

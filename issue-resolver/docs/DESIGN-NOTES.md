@@ -36,6 +36,11 @@ future reader could break without noticing, add it here instead of a comment.
 
 - One agent at a time per iteration is an invariant of the queue and of the
   concurrency accounting (`backend/test/iteration-queue.test.ts`).
+- Queue slots are one `running`, one `pending` and one `draft` per issue, and the
+  checks do not depend on a `running` row existing: creating or repeating while a
+  `pending`/`draft` is queued answers `409` (`A pending iteration already
+exists…`). Without that rule an idle issue accepted a second `pending` and the
+  execution order drifted away from the numbering (`#2 → #4 → #3` in a real run).
 - An iteration only becomes terminal through `completed`/`failed`; anything else
   leaves `startNextPendingIteration` never firing.
 - `refine` runs before `resolve` because the planner must not ask the user for
@@ -72,13 +77,9 @@ future reader could break without noticing, add it here instead of a comment.
   because a fix is new code and the prompt put the whole change set in scope.
 - **`review` proves from `file:line`, `test` proves from a reproduction.**
   Neither fills the other's role: review runs nothing, test judges no names,
-  structure or duplication. Whoever can prove a defect files it; the other
-  mentions it in `summary` so one defect costs one development cycle, not two.
-  The rule is `prompts/step-scope.md`, appended to every step prompt.
-- Missing test for new logic is `major` in a repository that keeps tests
-  (a suite, test files, or a test script) and `minor` where there are none: a
-  repository without a test culture is not blocked, and one that has it does
-  not lose it.
+  structure or duplication. The rule is `prompts/step-scope.md`, appended to
+  every step prompt; the missing-test severity lives in `prompts/severity.md`.
+  Why it exists: a defect filed by both verifiers costs two development cycles.
 
 ## 3. pi processes and sessions
 
@@ -211,6 +212,15 @@ looks like it is missing from the DDL too, but it is created from
   by the engine (`backend/src/workflow/report-render/`) after the agent exits,
   so the page exists whenever the markdown does. Never ask the agent to write
   HTML.
+- `/report/status` answers from the newest `step_runs` row of the issue
+  (`iteration_id IS NULL`), never from the files: `statusFromRun`
+  (`routes/issues/latest-run.ts`) maps an active or non-terminal run to
+  `running`, a terminal one to its own `success`/`failed`. `report.md` presence,
+  then `lastReportFailed`, then `idle` are the fallbacks for an issue that never
+  ran, and only those are process-local. `/devops/status` has the same shape. A
+  `running` row whose session is gone and which stayed quiet for the window is
+  closed as `failed` by `abortStaleRun` — the DB row is what survives a restart,
+  a live badge is not.
 - `report.json` is optional and small: a broken companion degrades to a warning,
   never to a lost page.
 - The renderer is split by job: `schema.ts` validates `report.json`, `markdown.ts`
@@ -318,21 +328,16 @@ looks like it is missing from the DDL too, but it is created from
   boundary is prose, so its violation has to be visible somewhere mechanical. Sizing comes before the plan:
   `single` is the default, and a split has to be earned by independent parts or
   by an ordering constraint.
-- The refine step's three outputs have three different readers, and none of them
-  repeats another: `plan.md` is the executor's brief and is overwritten every
-  iteration; `iterations/<n>/.refine.md` is that iteration's delta for the report
-  agent (what the input added, what was asked, how the work was sized — not a
-  copy of the decisions); long-term memory takes only what a later task on the
-  repository could not read from the code (`#convention`, `#lesson`). A decision
-  copied into two of them becomes two sources that disagree after the next
-  iteration.
+- The refine step's three outputs have three different readers and none repeats
+  another: `plan.md` (the executor's brief, overwritten every iteration),
+  `iterations/<n>/.refine.md` (this iteration's delta for the report agent) and
+  long-term memory (only what a later task could not read from the code). A
+  decision copied into two of them becomes two sources that disagree after the
+  next iteration.
 - The planner decides **what** changes and why; the executor decides **how**.
-  `plan.md` carries the behaviour before/after, the owning area, acceptance
-  criteria, invariants and risks — not line numbers, quoted code, or diffs. A
-  plan written at edit level duplicates the executor's own discovery and goes
-  stale after its first edit, while pushing the planner to read implementation
-  it never needs. File paths stay allowed for one purpose only: the ownership
-  map that keeps parallel workers off each other's files.
+  The boundary and its reasons are `prompts/step-refine.md` §1a; file paths stay
+  allowed for one purpose only — the ownership map that keeps parallel workers
+  off each other's files.
 - `refine` is the single decision point for topology. The engine follows it
   deterministically: a staged plan with `mode: stages` whose declared stages are
   all well-formed, otherwise one agent. `parseExecutionPlan` keeps every declared
@@ -445,6 +450,30 @@ looks like it is missing from the DDL too, but it is created from
   while reads keep working. The frontend dev-server proxy therefore sets
   `changeOrigin: false` — rewriting `Host` to the proxy target breaks exactly
   that comparison.
+- The entry port belongs to the system, never to the agent: `allocateDevPort`
+  hands out one port per issue from `5100–5299` and stores it on
+  `issues.dev_server_port`, a new iteration reuses it (`reserveDevPort`) and only
+  moves when the old one is genuinely busy — a moving URL is one the human has to
+  open again. A run that produced no `RUN_INSTRUCTIONS.md` gives the port back
+  and clears the column, because the UI must not offer an address where nothing
+  listens. Upstream repositories take their own ports outside that range and
+  record them in `WORKSPACE_INSTRUCTIONS.md`.
+- Dev-server ownership is proven, never assumed. `pidServesDir` reads
+  `/proc/<pid>/cwd` (falling back to the `ISSUE_RESOLVER_WORKSPACE` env the
+  engine passes to `DEV_SERVER.sh`), and `.dev-server.pid` is trusted only while
+  the pid is alive *and* that cwd sits inside the repo
+  (`readOwnedDevServerPid`): a reused pid must never let a workspace adopt — or
+  `stopDevServerProcess` kill — an unrelated process. A stored port is reused
+  only when it is free or held by that same issue's process; otherwise the run
+  takes a fresh port from `allocateDevPort` before the prompt is rendered, so
+  `--strictPort` never hands the agent an `EADDRINUSE` to "fix". Killing is not
+  the agent's tool at all: the devops prompt forbids `pkill`/`killall`/`fuser -k`
+  outright — one `pkill -f node_modules/.bin/vite` in this shared container took
+  down the issue-resolver's own UI and the agent's shell with it (`exit 143`) —
+  and the only permitted signal is `DEV_SERVER.sh` through its own pid file. The
+  engine also starts `DEV_SERVER.sh` itself after the run when nothing answers
+  on the port, so a server that never detached is a reported detail, not a failed
+  step.
 - Run instructions are a cache with three consumers: the later steps read
   `RUN_INSTRUCTIONS.md` in the clone, the human edits that text by hand, and the
   DevOps agent reuses it as its own starting point for the next task on the same
@@ -487,6 +516,66 @@ looks like it is missing from the DDL too, but it is created from
   scenario (JSON array of commands on stdin) instead of one command per turn. Prompts are read through an
   mtime-keyed cache (`prompts/loader.ts`), so a prompt edit lands on the next
   step without a backend restart.
+- `review` must not execute anything, and the rule is a tool gate, not a prompt
+  sentence. Observed: reviews ran `npx vitest run` (the whole suite, twice),
+  `npx vite build`, `npx tsc --noEmit`, `npx eslint` — rounds of 682 s and
+  344 s on one issue, `pnpm exec eslint` on another — while the prompt said
+  "code-only, no runtime" and "you have no execution". A model trusts the tool
+  it has over a sentence in a long prompt, so `readOnlyStep`
+  (`pi/tool-policy.ts`) marks `review` and `sessionArgs` (`pi/rpc-spawn.ts`)
+  spawns that session with `--extension …/pi/read-only-extension.ts`. The
+  extension answers `{block: true, reason}` on `tool_call` when a `bash`
+  command's first word is a package manager, runtime, build/lint/test runner,
+  container, network fetch, or a mutating `git` subcommand (`sed -i`,
+  `find -exec` included), and for `ast_grep_replace` and any browser-driving
+  tool (`agent-browser`, `chrome_devtools`, `playwright`, `puppeteer`).
+  `codemode` is not a hole: a nested `tools.bash(...)` is a real `tool_call`
+  with `parentToolCallId`, so the same handler blocks it and the script fails
+  with the reason (`docs/codemode.md`: a blocked call rejects). Verified live,
+  not assumed: a `--print` session with the extension got a blocked
+  `tools.bash` inside `codemode`, a blocked direct `bash`, a working `ls`, and
+  no file written.`write`/`edit` stay open:
+  `.issue-step-result.json` and `iterations/<n>/.review.md` are the deliverable,
+  and blocking them would trade a slow round for a failed one. Inspection stays
+  open — `git status|diff|log|show|blame`, `cat|grep|sed -n|find|ls|wc|jq` —
+  because the reviewer reads the whole file, not just the hunk. The ways around
+  a first-word check are closed too, each found by probing the matcher rather
+  than by argument: running a file (`./scripts/check.sh` — a path head whose
+  name is neither an inspector nor a linter is a script), command substitution
+  (`$(…)`, backticks, `<(`), redirection into anything but `/dev/null` (`>`,
+  `>>` — the tree must come out unchanged), and git config injection (`-c`,
+  `--config-env`, `--exec-path`, a `!` argument, which turn `git` into an
+  arbitrary runner). Text inside single quotes is stripped before the
+  substitution test and both quote kinds before the redirect test, so
+  `grep -n ">" src/app.ts` still passes. Static analysis is the one execution
+  the step keeps, since a linter finds defects reading cannot: `eslint`,
+  `stylelint`, `prettier --check`, `biome check`, `dprint check`, `ruff`,
+  `mypy`, `shellcheck`, `tsc --noEmit` run directly or through `npx` /
+  `pnpm exec`, while `--fix`/`--write`/`fmt` stay blocked so the review cannot
+  rewrite the code it judges (`--fix-dry-run` passes — it writes nothing). The
+  allowance resolves by target, not by runner: `npx eslint` passes because
+  `eslint` is the target, `npx vitest` does not; `tsc` passes only with
+  `--noEmit`, since an emitting build is a build. `npm run <script>` is not
+  accepted at all: a script name proves nothing about what the script runs, so
+  `lint` naming a suite would have been a hole — call the binary instead. A
+  missing extension file is not a warning but a refusal: `sessionArgs` throws
+  `read-only step has no guard extension` and the step fails visibly, because a
+  gate that degrades to a log line is a gate that silently disappears. A
+  blocked call returns its reason to the agent, so it names the scenario for
+  the `test` step instead of retrying; the prompt repeats the ban list for
+  planning, but a rule that costs ten minutes to break cannot live there alone.
+  The standards half of the review is a prompt fragment of its own
+  (`prompts/review-standards.md`, wired through `review`'s `VERIFIER_FRAGMENTS`):
+  two passes, spec then standards; the repository's own rule files named as the
+  source (`CODING_STANDARDS.md`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`,
+  `REVIEW-EXCEPTIONS.md`); machine-enforced rules excluded, since the linters
+  already report them; and the twelve smell names as a judgement vocabulary with
+  a ceiling of `minor`. The ceiling is the point: `blockingFindings`
+  (`shared/src/workflow.ts:92`) sends the change back only on `critical`/`major`,
+  so a standards campaign graded upwards would buy rounds that teach the author
+  nothing — the fragment says a style observation leaves the verdict a `pass`,
+  and the extra-key warning keeps a malformed finding from turning the whole
+  list blocking (`shared/src/step-result.ts:333`).
 - `codemode` is offered to every step through the shared `capabilities.md`
   fragment (`withSharedFragments`), together with the rule to prefer it over a pile
   of single calls. Observed reason: across nine sessions of one issue the step
@@ -500,7 +589,12 @@ looks like it is missing from the DDL too, but it is created from
   `STEP_SYSTEM_APPEND`/`DEVOPS_SYSTEM_APPEND` (`--append-system-prompt`), where it is
   read before the task and cannot be buried by a long step body. Two sentences with
   different jobs — directive at the top, mechanics at the end — not the same text
-  pasted twice.
+  pasted twice. Fragments come in three tiers and `withSharedFragments(prompt,
+  extra, values)` appends `extra` first so the shared rules stay last:
+  `SHARED_FRAGMENTS` (every step and every stage role), verifier fragments
+  (`severity.md` — review and test only, because a severity ladder is not
+  resolve's job) and stage fragments (`stage-outcome.md` — the stage roles that
+  write one). A rule with two homes drifts; a rule with one home needs no copy.
 - Jira uses API v2: v3 breaks on Server with 404.
 - Bitbucket auth: Bearer for a PAT, Basic for an app password.
 - Bitbucket Server (8.x) PR review comments are read from

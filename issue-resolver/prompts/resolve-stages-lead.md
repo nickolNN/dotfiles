@@ -24,7 +24,8 @@ Stage {{STAGE_INDEX}} task: {{STAGE_TASK}}
 
 ## Stage memory
 
-Read earlier `[[stage-N]]` entries before integrating and record as the memory rules below say; the stage verdict does not go to memory — it goes to `.issue-stage-{{STAGE_INDEX}}.json`.
+Read earlier `[[stage-N]]` entries before you integrate, and record your own as
+the memory rules below say. No verdict goes to memory.
 
 ## Your job
 
@@ -33,11 +34,5 @@ Read earlier `[[stage-N]]` entries before integrating and record as the memory r
 2. Close the gaps of your stage: whatever no worker owned is yours.
 3. Verify the integrated stage result: build/tests/typecheck over the whole
    stage change.
-4. Write the stage outcome to `.issue-stage-{{STAGE_INDEX}}.json` at the
-   working-folder root:
-   `{ "status": "pass|fail|blocked", "summary": "what the stage produced, what the next stage inherits", "findings": [ ... ] }`
-   The next stage and the final lead read this file — make it a hand-off, not a
-   log.
 
-This is NOT the step result: leave `.issue-step-result.json` to the final lead.
-Leave the working copy uncommitted — the backend publishes.
+Leave `.issue-step-result.json` to the final lead.

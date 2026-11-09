@@ -38,12 +38,15 @@ files in the working folder plus this JSON — leave the working copy uncommitte
 
 ## Artifact style
 
-Artifacts that other agents read stay plain: `.issue-step-result.json`,
-`iterations/<n>/.<step>.md`, and `plan.md` are machine-readable Markdown or
-JSON. `glyph` is never used there, and `caveman` (and its `ultracave` /
-`megacave` variants) / `ponytail` (chat/code brevity) do not apply to them.
-Never compress a step report to a telegraphic style — a review finding that
-lost its reproduction condition is useless to the next step.
+Everything another agent reads stays machine-readable Markdown or JSON:
+`.issue-step-result.json`, `iterations/<n>/.<step>.md`, `plan.md`. Never compress
+a step report to a telegraphic style — a review finding that lost its
+reproduction condition is useless to the next step. `caveman` (and its
+`ultracave`/`megacave` variants) and `ponytail` govern code and chat, never an
+artifact. `glyph` shapes the human-facing report the report step compiles.
+`frontend-design` and `theme-factory` inform the craft of the generated page,
+and the artifact's own contract outranks any skill, including the example files
+a skill links to.
 
 **No model or provider name in an artifact.** No `provider/model-id`, no
 `model:` line, no "this run ran on …" — in `.issue-step-result.json`,

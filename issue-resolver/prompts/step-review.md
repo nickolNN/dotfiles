@@ -16,46 +16,54 @@ against the task, the brief and the reviewer context below.
 
 {{VERIFICATION_MODE}}
 
-## One pass, every defect
+## Every defect, one round
 
 Produce the COMPLETE list for this round's scope, not its first item. The list
-is complete when every file in scope has been read to its end and every
-requirement checked — not when you run out of ideas. One entry per defect with
-`file:line`; a round that holds a finding back for later costs a whole
-development cycle for it.
+is complete when every file in scope has been read to its end, every requirement
+checked, and both passes of `Two passes, one verdict` are finished — not when you
+run out of ideas. One entry per defect with `file:line`; a round that holds a
+finding back for later costs a whole development cycle for it.
 
-Check, in this pass: every requirement of the task and of the plan, including
-the ones the diff does not mention; regressions in the callers of what changed;
-error paths and edge cases; the conventions of the file you are in; the reviewer
-context below, point by point.
+Check: every requirement of the task and of the plan, including the ones the
+diff does not mention; regressions in the callers of what changed; error paths
+and edge cases; the standards sources in that section; the reviewer context
+below, point by point.
+
+## Read-only, enforced
+
+This step runs no code, and the harness enforces it: `bash` calls that execute
+something — package managers (`npm`, `pnpm`, `yarn`, `npx`), runtimes (`node`,
+`tsx`, `python3`), build/lint/test runners (`vite`, `vitest`, `eslint`, `jest`,
+`make`, `playwright`), containers, network fetches, and mutating `git` — are
+rejected before they start. So are the ways around that: running a file
+(`./scripts/check.sh`), command substitution (`$(…)`, backticks), and writing
+through a redirect (`>`, `>>`) are blocked, because the working copy must come
+out of this step exactly as it went in. A blocked call costs a turn and proves
+nothing: do not retry it, do not route around it through `codemode`, plan the
+review around reading.
+
+What you may run is inspection: `git status|diff|log|show|blame`,
+`cat|head|tail|sed -n|grep|rg|find|ls|wc|jq`.
+
+One exception, because a linter finds defects reading cannot: static analysis is
+allowed — `eslint`, `stylelint`, `prettier --check`, `biome check`,
+`dprint check`, `ruff`, `mypy`, `shellcheck`, `tsc --noEmit` — called directly or
+through `npx` / `pnpm exec`. Never with a writing flag: `--fix`, `--write`, `fmt`
+are blocked, since a review that edits the code it judges destroys its own
+subject. `npm run lint` is not available either: a script name proves nothing
+about what the script runs, so call the binary. Cite what the linter reported
+with the existing `file:line`; a clean lint run is not a verdict on its own.
 
 ## What reading can prove
 
-You have no execution: every finding is visible in the source, with `file:line`.
+Every finding is visible in the source, with `file:line`.
 What only running can show — a build failure, a failing suite, a broken flow,
 layout at extreme widths, behaviour without JS — is not yours to file. Name such
 a scenario in `summary` for the `test` step, or as a risk left untested when
-this pipeline has no `test` step. `One step, one axis` at the end of this prompt
-draws the line.
+this pipeline has no `test` step. `One step, one axis` in the block below
+settles who files it.
 
-## Severity decides the next move
-
-- `critical` — the code cannot satisfy the task, breaks a caller's contract, or
-  leaves a path in the code that crashes on a normal input, a path to data loss,
-  or a security hole.
-- `major` — it works, but wrongly: a requirement or a plan step is violated, a
-  caller regresses, state is lost, a selector overrides the one it must not, an
-  error path is silent, a branch is dead, logic is duplicated where the change
-  should have reused it.
-- `minor` — real but non-blocking: naming, a misleading comment, a document
-  that overstates what the code does.
-- `low`, `info` — observations, not defects of this round.
-
-Only `critical` and `major` send the change back to development; `minor` and
-below are recorded and the round closes — they reach the report and the MR
-description, not another cycle. Do not grade a nit up to `major` to force a
-cycle: an inflated severity costs a full development pass and buries the real
-blocker. A defect in code this change did not touch is `minor`, never `major`.
+## Tests
 
 If the repository keeps tests — a suite, test files, a test script — new logic
 without a test is `major`. In a repository with no tests at all it is `minor`:
@@ -65,10 +73,10 @@ say so plainly instead of demanding a suite the project does not have.
 
 ## Verdict
 
-- `pass` — no `critical` and no `major` finding remains.
-- `fail` — at least one `critical` or `major` remains: put every defect this
-  round found in `findings` with `file:line` and what is wrong.
-- `blocked` — you cannot review it (no change set, code inaccessible).
+`pass` when no `critical` or `major` finding remains; `fail` when one does —
+with every defect this round found in `findings`, each with `file:line` and what
+is wrong; `blocked` when there is nothing to review (no change set, code
+inaccessible). The ladder itself is in `Severity` below.
 
 Format the result in `.issue-step-result.json` (shape in the output contract below).
 

@@ -338,8 +338,10 @@ fatal.
 
 | Skill | Purpose |
 | ----- | ------- |
+| `artifact-style` | How to shape a deliverable for a human — glyph, self-contained, no model names; overrides design skills |
 | `container-environment` | What this container is; what to suggest about the runtime |
 | `coordinator` | Coordinator role in a hand-assembled room — dispatch, verify, integrate (не для шагов issue-resolver: там роль выдаёт движок) |
+| `issue-resolver-ops` | Runtime ops for the issue-resolver backend — live DB, stuck step, which prompt reached an agent |
 | `refine` | Тонкий адаптер над remote-скиллом `grilling` (метод — там) плюс план для шага `refine` в issue-resolver (на него ссылается `issue-resolver/prompts/step-refine.md`) |
 
 ### Remote skills (cloned at build time)

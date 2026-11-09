@@ -62,26 +62,14 @@ survive has to live in the workspace or the sessions/skills volumes.
   grilling, megacave, ponytail, pr, retro, tdd, teach,
   theme-factory, to-questionnaire, ultracave, verification-before-completion,
   wayfinder, web-design-guidelines, writing-for-agents
-- repo skills (re-synced every launch): container-environment, coordinator,
-  issue-resolver-ops, refine
+- repo skills (re-synced every launch): artifact-style, container-environment,
+  coordinator, issue-resolver-ops, refine
 
 Both lists are a snapshot, not a contract — **no count is trustworthy**, and a
 skill added to the Dockerfile after the last image build is missing until a
 rebuild (`check-remote-skills.sh` warns about exactly that on every launch).
-Recount in one command:
-
-```sh
-sed -n '/skills-clone/,/&& repos=/p' dotfiles-agent/Dockerfile \
-  | grep -oE '"[^"]+:[^"]+"' | tr -d '"' \
-  | awk -F: '{n = ($2 == "." ? $1 : $2); sub(".*/", "", n); print n}' | sort -u
-echo clean-code            # curl'd raw, not cloned
-docker exec <c> ls /home/agent/.agents/skills   # what actually exists
-```
-
-A whole-file grep is wrong: it also matches quoted `a:b` strings in messages
-and tarball URLs (54 "skills" instead of the real set).
-
-See `dotfiles-agent/Dockerfile` for the authoritative list.
+`dotfiles-agent/Dockerfile` is the authoritative list; the recount command lives
+in `dotfiles-agent/README.md` → Skills.
 
 pi-lens ships with auto-format **disabled** in the image
 (`~/.pi-lens/config.json` → `format.enabled: false`), so formatting is left to

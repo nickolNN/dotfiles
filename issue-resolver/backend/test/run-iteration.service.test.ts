@@ -331,6 +331,39 @@ describe('runIssueIteration — прямой вызов', () => {
     rmSync(wsRoot, { recursive: true, force: true });
   });
 
+  it('readOnly включается только для review-шага', async () => {
+    const db = createDb(':memory:');
+    const { issueId, iteration } = seedIteration(db, ['resolve', 'review']);
+    const { deps, pi } = makeDeps();
+    pi.enqueue(pass('resolve'));
+    pi.enqueue(pass('review'));
+
+    await runIssueIteration(db, deps, {
+      issue: {
+        id: issueId,
+        title: 'Read-only review',
+        pipelineSteps: ['resolve', 'review'],
+      },
+      iteration: {
+        id: iteration.id,
+        issueId,
+        number: iteration.number,
+        context: iteration.context,
+        steps: ['resolve', 'review'],
+      },
+      repositories,
+      repoWorkspaces: [],
+    });
+
+    const stepCalls = pi.calls.filter(
+      (call) => call.options?.iterationId !== undefined,
+    );
+    expect(stepCalls).toHaveLength(2);
+    expect(stepCalls[0]?.options?.readOnly).toBe(false);
+    expect(stepCalls[1]?.options?.readOnly).toBe(true);
+    expect(stepCalls[1]?.prompt).toContain('Read-only, enforced');
+  });
+
   it('провал resolve → failed и статусы в БД failed', async () => {
     const db = createDb(':memory:');
     const { issueId, iteration } = seedIteration(db, ['resolve']);

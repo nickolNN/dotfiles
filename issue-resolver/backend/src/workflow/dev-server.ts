@@ -3,15 +3,20 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
+  readlinkSync,
   writeFileSync,
   rmSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { readTextFileOrNull } from '../util/files';
 
 export const DEV_SERVER_SCRIPT = 'DEV_SERVER.sh';
 export const DEV_SERVER_PID_FILE = '.dev-server.pid';
 export const DEV_SERVER_LOG_FILE = '.dev-server.log';
+
+export const DEV_SERVER_ISSUE_ENV = 'ISSUE_RESOLVER_ISSUE';
+export const DEV_SERVER_WORKSPACE_ENV = 'ISSUE_RESOLVER_WORKSPACE';
 
 const INFRA_FILES = [
   'RUN_INSTRUCTIONS.md',
@@ -87,6 +92,44 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+function isInsideDir(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(dir.endsWith(sep) ? dir : `${dir}${sep}`);
+}
+
+export function pidServesDir(pid: number, dir: string): boolean | null {
+  let cwd: string | null = null;
+  try {
+    cwd = readlinkSync(`/proc/${pid}/cwd`);
+  } catch {
+    cwd = null;
+  }
+  if (cwd !== null) return isInsideDir(cwd, dir);
+
+  try {
+    const environ = readFileSync(`/proc/${pid}/environ`, 'utf8');
+    return environ.split('\0').includes(`${DEV_SERVER_WORKSPACE_ENV}=${dir}`)
+      ? true
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readOwnedDevServerPid(
+  workspaceDir: string,
+  repoName: string,
+): number | null {
+  const pid = readDevServerPid(workspaceDir, repoName);
+  if (pid === null || !isProcessAlive(pid)) return null;
+  if (pidServesDir(pid, join(workspaceDir, repoName)) === false) {
+    console.error(
+      `ignoring .dev-server.pid=${pid} in ${repoName}: the process belongs to another directory`,
+    );
+    return null;
+  }
+  return pid;
+}
+
 export async function devServerResponds(
   port: number,
   attempts = 1,
@@ -123,6 +166,7 @@ export function startRepoDevServer(
   workspaceDir: string,
   repoName: string,
   port: number,
+  issueId?: string,
 ): number | null {
   const repoDir = join(workspaceDir, repoName);
   const scriptPath = join(repoDir, DEV_SERVER_SCRIPT);
@@ -131,7 +175,16 @@ export function startRepoDevServer(
   try {
     const child = spawn(scriptPath, [], {
       cwd: repoDir,
-      env: { ...process.env, PORT: String(port) },
+      env: {
+        ...process.env,
+        PORT: String(port),
+        ...(issueId
+          ? {
+              [DEV_SERVER_ISSUE_ENV]: issueId,
+              [DEV_SERVER_WORKSPACE_ENV]: repoDir,
+            }
+          : {}),
+      },
       detached: true,
       stdio: 'ignore',
     });
@@ -147,7 +200,14 @@ export function startRepoDevServer(
   }
 }
 
-export async function stopDevServerProcess(pid: number): Promise<void> {
+export async function stopDevServerProcess(
+  pid: number,
+  ownedDir?: string,
+): Promise<void> {
+  if (ownedDir !== undefined && pidServesDir(pid, ownedDir) === false) {
+    console.error(`refusing to stop pid ${pid}: its cwd is outside ${ownedDir}`);
+    return;
+  }
   const tryKill = (target: number, sig: NodeJS.Signals): boolean => {
     try {
       process.kill(target, sig);

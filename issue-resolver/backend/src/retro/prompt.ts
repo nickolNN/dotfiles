@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dbPathFromEnv } from '../db/client';
 import { renderPlaceholders } from '../prompt-render';
-import { readPrompt } from '../workflow/prompts/loader';
+import { readPrompt, stripPromptHeader } from '../workflow/prompts/loader';
 import {
   DEFAULT_RETRO_PROMPT_PATH,
   DEFAULT_RETRO_SESSION_LIMIT,
@@ -68,7 +68,7 @@ export function loadRetroPrompt(
   reportPath: string,
 ): string {
   const promptPath = deps.promptPath ?? DEFAULT_RETRO_PROMPT_PATH;
-  const template = readFileSync(promptPath, 'utf8');
+  const template = stripPromptHeader(readFileSync(promptPath, 'utf8'));
   return [
     renderRetroPrompt(template, retroPromptValues(deps, reportPath)),
     readPrompt('capabilities.md').trim(),

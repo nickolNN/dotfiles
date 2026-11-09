@@ -12,7 +12,7 @@ import type { Db } from '../db/client';
 import { issues } from '../db/schema';
 import type { StepSessionRegistry } from '../pi/session-registry';
 import type { SseHub } from '../sse/hub';
-import { allocateDevPort, releaseIssueDevPorts } from '../port-allocator';
+import { allocateDevPort, isDevPortFree, releaseIssueDevPorts } from '../port-allocator';
 import {
   DEFAULT_WORKSPACE_ROOT,
   containerNameFor,
@@ -34,8 +34,11 @@ import {
   DEV_SERVER_SCRIPT,
   clearDevServerPid,
   devServerResponds,
+  isProcessAlive,
+  pidServesDir,
   readDevServerLogTail,
-  readDevServerPid,
+  readOwnedDevServerPid,
+  startRepoDevServer,
 } from './dev-server';
 import type { DevOpsFactory } from './prepare-workspace';
 import type { DevopsModelSettings } from './run-deps';
@@ -49,6 +52,26 @@ export interface DevopsRunDeps extends DevopsModelSettings {
   control?: StepSessionRegistry;
   workspaceRoot?: string;
   local?: boolean;
+  devServerStartupMs?: number;
+}
+
+const DEV_SERVER_STARTUP_MS = 60_000;
+
+async function storedPortUsableByIssue(
+  deps: DevopsRunDeps,
+  issueId: string,
+  hostDir: string,
+  port: number,
+): Promise<boolean> {
+  if (await isDevPortFree(port)) return true;
+  const pid =
+    deps.db
+      .select({ pid: issues.dev_server_pid })
+      .from(issues)
+      .where(eq(issues.id, issueId))
+      .get()?.pid ?? null;
+  if (pid === null || !isProcessAlive(pid)) return false;
+  return pidServesDir(pid, hostDir) !== false;
 }
 
 export interface RunDevopsAgentInput {
@@ -144,12 +167,27 @@ export async function runDevopsAgent(
     }
 
     const context = collectDevOpsContext(deps.db, input.issueId, targets);
+    if (
+      devPort !== undefined &&
+      !(await storedPortUsableByIssue(deps, input.issueId, hostDir, devPort))
+    ) {
+      console.error(
+        `devops: порт ${devPort} занимает чужой процесс, выделяю новый (issue=${input.issueId})`,
+      );
+      devPort = undefined;
+      releaseIssueDevPorts(input.issueId);
+      deps.db
+        .update(issues)
+        .set({ dev_server_port: null, dev_server_pid: null })
+        .where(eq(issues.id, input.issueId))
+        .run();
+    }
     if (devPort === undefined) {
       devPort = await allocateDevPort(input.issueId);
       portAllocatedNow = true;
       deps.db
         .update(issues)
-        .set({ dev_server_port: devPort })
+        .set({ dev_server_port: devPort, dev_server_pid: null })
         .where(eq(issues.id, input.issueId))
         .run();
     }
@@ -203,18 +241,32 @@ export async function runDevopsAgent(
     const entryRepo = targets[0];
     if (devPort !== undefined && entryRepo && results[0]) {
       const entryName = extractRepoNameFromUrl(entryRepo.repository_url);
-      const pid = readDevServerPid(hostDir, entryName);
-      const serving = pid !== null && (await devServerResponds(devPort, 5, 600));
+      const scriptPath = join(hostDir, entryName, DEV_SERVER_SCRIPT);
+      let pid = readOwnedDevServerPid(hostDir, entryName);
+      let serving = pid !== null && (await devServerResponds(devPort, 5, 600));
+      if (!serving && results[0].ok && existsSync(scriptPath)) {
+        const started = startRepoDevServer(
+          hostDir,
+          entryName,
+          devPort,
+          input.issueId,
+        );
+        const attempts = Math.max(
+          1,
+          Math.ceil((deps.devServerStartupMs ?? DEV_SERVER_STARTUP_MS) / 1000),
+        );
+        serving =
+          started !== null &&
+          (await devServerResponds(devPort, attempts, 1000));
+        pid = serving ? started : null;
+      }
       if (serving && pid !== null) {
         deps.db
           .update(issues)
           .set({ dev_server_port: devPort, dev_server_pid: pid })
           .where(eq(issues.id, input.issueId))
           .run();
-      } else if (
-        results[0].ok &&
-        existsSync(join(hostDir, entryName, DEV_SERVER_SCRIPT))
-      ) {
+      } else if (results[0].ok && existsSync(scriptPath)) {
         const logTail = readDevServerLogTail(hostDir, entryName);
         results[0].ok = false;
         results[0].error = `dev server не отвечает на :${devPort}${

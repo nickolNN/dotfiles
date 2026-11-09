@@ -6,9 +6,7 @@ for it whenever a task is more than a couple of calls: the same lookup across ma
 files, three or more reads whose output you would filter anyway, a
 run-probe-assert sequence where a failure in the middle must stop the rest, or
 anything whose raw output would flood the context — call the tool inside the
-script and return only the answer you need. This is not a hint: a step that
-spends forty turns on forty `bash` calls is measurably slower than the same step
-spent on three scripts, and the chat log is the evidence.
+script and return only the answer you need.
 
 Keep a plain tool for a single call — `codemode` adds a hop of its own, its sandbox
 has no timers and no network, and network work stays in the dedicated tool or
