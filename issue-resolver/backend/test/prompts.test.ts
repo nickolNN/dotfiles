@@ -425,6 +425,7 @@ describe('buildStepPrompt', () => {
     expect(text).toContain('breach with no behavioural');
     expect(text).toContain('must still leave the verdict');
     expect(text).toContain('Only a defect whose cost you can put');
+    expect(text).toContain("a skill's taste never raises a finding");
   });
 
   it('review: лишний ключ в находке сделал бы каждую блокирующей', () => {
@@ -440,6 +441,33 @@ describe('buildStepPrompt', () => {
     expect(test).not.toContain('Two passes, one verdict');
     expect(test).not.toContain('REVIEW-EXCEPTIONS.md');
     expect(prompt('resolve')).not.toContain('Two passes, one verdict');
+  });
+
+  it('resolve: TDD — правило шага, а не ссылка на скилл', () => {
+    const text = flat(prompt('resolve'));
+
+    expect(text).toContain('Tests are the specification');
+    expect(text).toContain('watch it fail for the reason you expect');
+    expect(text).toContain('a test that was already green before your change');
+    expect(text).toContain('Never weaken, skip or delete an existing assertion');
+    expect(text).toContain('cannot be asserted');
+    expect(text).toContain('fix the scenario in your report');
+  });
+
+  it('TDD не просачивается в проверяющие шаги', () => {
+    expect(flat(prompt('review'))).not.toContain('Tests are the specification');
+    expect(flat(prompt('test'))).not.toContain('Tests are the specification');
+  });
+
+  it('чтение кода через линзы: у кого есть, у кого нет', () => {
+    for (const step of ['refine', 'resolve', 'review', 'test'] as const) {
+      const text = flat(prompt(step));
+
+      expect(text, step).toContain('Read code with the lenses, not with grep');
+      expect(text, step).toContain('lens_diagnostics');
+    }
+    expect(flat(prompt('report'))).not.toContain('Read code with the lenses');
+    expect(flat(prompt('pr'))).not.toContain('Read code with the lenses');
   });
 
   it('review: повторный круг не открывает весь change set', () => {

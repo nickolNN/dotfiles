@@ -565,7 +565,7 @@ looks like it is missing from the DDL too, but it is created from
   the `test` step instead of retrying; the prompt repeats the ban list for
   planning, but a rule that costs ten minutes to break cannot live there alone.
   The standards half of the review is a prompt fragment of its own
-  (`prompts/review-standards.md`, wired through `review`'s `VERIFIER_FRAGMENTS`):
+  (`prompts/review-standards.md`, wired through `review`'s `STEP_FRAGMENTS`):
   two passes, spec then standards; the repository's own rule files named as the
   source (`CODING_STANDARDS.md`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/`,
   `REVIEW-EXCEPTIONS.md`); machine-enforced rules excluded, since the linters
@@ -576,6 +576,38 @@ looks like it is missing from the DDL too, but it is created from
   nothing — the fragment says a style observation leaves the verdict a `pass`,
   and the extra-key warning keeps a malformed finding from turning the whole
   list blocking (`shared/src/step-result.ts:333`).
+- Every step spawns with `--no-skills` plus one `--skill` per entry of
+  `STEP_SKILLS` (`backend/src/pi/tool-policy.ts`): refine 6, resolve 10, review 3,
+  test 5, report 2, pr 0, devops 1. The inventory is why: pi advertises every
+  discovered skill in the system prompt — 25 skills, ~10.5 KB, in *every*
+  session, including the ones that never open one (review 0 of 42 sessions,
+  report 0 of 27, over the whole pipeline history; even `refine`, whose prompt
+  names its skill outright, is read in 12 of 43). `skills: []` still emits
+  `--no-skills`: a step without an allowlist must not silently inherit the
+  machine's set. Undefined keeps discovery, for runs outside the pipeline.
+  Two rules keep the table honest. A skill a prompt names must be in that step's
+  allowlist — `backend/test/step-skills.test.ts` reads the step's prompt files
+  and fails on any `the "x" skill` mention outside it. And a rule is not a
+  skill: `tdd` is allowlisted as the method *and* injected as
+  `prompts/resolve-tdd.md` as the obligation, because a lazily-read skill is
+  obeyed in 9% of sessions and "tests are the spec" cannot be optional. The
+  asymmetry with the guard extension is deliberate: a missing skill directory
+  degrades a step, a missing guard refuses to spawn.
+- The pi-lens tools (`symbol_search`, `module_report`, `read_symbol`,
+  `lsp_navigation`, `lens_diagnostics`, `ast_grep_*`) were in every step session
+  all along, and across 263 pipeline sessions they were called **zero** times,
+  against 12,148 `bash` calls — a `grep`/`read` workflow where the lenses answer
+  in one call. The reason is placement, not value: the only description of those
+  tools lived in the `pi-lens-*` skills, and a skill is a file nobody opens (the
+  same 9%). So the rule went where the codemode directive already works — the
+  always-injected `prompts/lens.md` fragment, wired for refine, resolve, review
+  and test: name → `symbol_search` → `read_symbol`; no name → `project_report`
+  → `module_report`; callers → `lsp_navigation`; after multi-file edits →
+  `lens_diagnostics` on the touched batch before the build. The two pi-lens
+  skills stay allowlisted as the parameter tables to read when a call comes back
+  empty, which is the division of labour between a rule and a reference: the
+  rule is injected, the table is optional. Their directories sit in the pi
+  package, not in `~/.agents/skills`, so `SKILL_PATHS` overrides the root.
 - `codemode` is offered to every step through the shared `capabilities.md`
   fragment (`withSharedFragments`), together with the rule to prefer it over a pile
   of single calls. Observed reason: across nine sessions of one issue the step
@@ -591,9 +623,11 @@ looks like it is missing from the DDL too, but it is created from
   different jobs — directive at the top, mechanics at the end — not the same text
   pasted twice. Fragments come in three tiers and `withSharedFragments(prompt,
   extra, values)` appends `extra` first so the shared rules stay last:
-  `SHARED_FRAGMENTS` (every step and every stage role), verifier fragments
-  (`severity.md` — review and test only, because a severity ladder is not
-  resolve's job) and stage fragments (`stage-outcome.md` — the stage roles that
+  `SHARED_FRAGMENTS` (every step and every stage role), step fragments
+  (`STEP_FRAGMENTS`: `severity.md` for review and test, `review-standards.md`
+  for review, `resolve-tdd.md` for resolve, `lens.md` for the four steps that
+  read code — a severity ladder is not resolve's job, and a review has no test
+  to write) and stage fragments (`stage-outcome.md` — the stage roles that
   write one). A rule with two homes drifts; a rule with one home needs no copy.
 - Jira uses API v2: v3 breaks on Server with 404.
 - Bitbucket auth: Bearer for a PAT, Basic for an app password.

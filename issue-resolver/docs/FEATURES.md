@@ -80,6 +80,21 @@ second, and only feedback a machine does not already produce is filed. The
 smell vocabulary (the twelve Fowler heuristics) is a judgement call, capped at
 `minor`, so a standards pass never sends the change back on its own.
 
+**Skills per step.** Each step spawns with skill discovery off and an explicit
+allowlist (`STEP_SKILLS`): refine gets `refine`, `grilling`, `codebase-design`,
+`domain-modeling`; resolve `clean-code`, `tdd`, `codebase-design`,
+`diagnosing-bugs`, `verification-before-completion`, `agent-browser`,
+`frontend-design`, `ponytail`; review `clean-code`; test `agent-browser`,
+`verification-before-completion`, `diagnosing-bugs`; report `artifact-style`,
+`glyph`; devops `container-environment`; pr none, because its skill is injected
+verbatim. Refine, resolve, review and test also get the two `pi-lens-*` skills,
+but the habit comes from the injected `prompts/lens.md`, not from them: the tools
+were always present and went unused in every one of 263 pipeline sessions while
+`bash` ran 12,148 times. Anything else a step does not see, and `pr` shows what
+that saves: the full advertised set costs ~10.5 KB of system prompt in every
+session. Resolve's TDD obligation is not left to that allowlist — it is injected
+text (`prompts/resolve-tdd.md`).
+
 **Iterations.** An iteration is `number > 1` when it continues previous work: its
 prompts carry `Previous iteration outcome` (the resolve step's `status` +
 `summary` from the previous iteration plus the result document, capped at ~4000

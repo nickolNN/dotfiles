@@ -6,7 +6,7 @@ import type { SessionEvent, SessionStats, ThinkingLevel } from '@issue-resolver/
 import type { PiRunner } from '../pi/runner';
 import { PORT_RANGE_LABEL } from '../port-allocator';
 import { issueSessionDir, sessionDisplayName } from '../pi/session-paths';
-import { soloRunExcludeTools } from '../pi/tool-policy';
+import { soloRunExcludeTools, stepSkills } from '../pi/tool-policy';
 import { DEVOPS_SYSTEM_APPEND, withSharedFragments } from './prompts';
 import { messageOf } from '../util/errors';
 import { renderPlaceholders } from '../prompt-render';
@@ -189,6 +189,7 @@ export class PiDevOpsAgent implements DevOpsAgent {
           stepRunId: this.options.stepRunId,
           registry: this.options.registry,
           excludeTools: soloRunExcludeTools(),
+          skills: stepSkills(PipelineStep.devops),
           systemAppend: DEVOPS_SYSTEM_APPEND,
           ...(this.options.issueId
             ? {

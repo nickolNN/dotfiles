@@ -8,6 +8,7 @@ export interface PiRunOptions {
   tools?: string[];
   excludeTools?: string[];
   readOnly?: boolean;
+  skills?: string[];
   timeoutMs?: number;
   sessionId?: string;
   sessionDir?: string;

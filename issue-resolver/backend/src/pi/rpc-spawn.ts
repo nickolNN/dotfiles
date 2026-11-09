@@ -26,6 +26,11 @@ function readOnlyExtensionArgs(): string[] {
   return ['--extension', path];
 }
 
+function skillArgs(skills: string[] | undefined): string[] {
+  if (skills === undefined) return [];
+  return ['--no-skills', ...skills.flatMap((dir) => ['--skill', dir])];
+}
+
 const LAUNCHER_ENV_KEYS = [
   'PI_SESSION_FILE',
   'PI_SESSION_ID',
@@ -80,6 +85,7 @@ export function sessionArgs(options: PiRunOptions): string[] {
       ? ['--exclude-tools', options.excludeTools.join(',')]
       : []),
     ...(options.readOnly ? readOnlyExtensionArgs() : []),
+    ...skillArgs(options.skills),
     ...verboseFlags,
   ];
 }

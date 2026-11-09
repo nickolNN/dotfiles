@@ -14,7 +14,8 @@ findings follows, but the two questions are answered one after the other.
    `CONTRIBUTING.md`, `AGENTS.md`, the rule files under `docs/`, and
    `docs/REVIEW-EXCEPTIONS.md` (below). Where the repository documents a rule,
    that rule wins over your taste — and over the smell list below. A standards
-   finding names the rule it breaks.
+   finding names the rule it breaks. This file also outranks any skill you have
+   loaded: a skill's taste never raises a finding above the ceiling set here.
 
 Order matters: a defect against the requirement outranks any complaint about how
 the code looks, and a beautiful implementation of the wrong behaviour is at least

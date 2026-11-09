@@ -16,7 +16,7 @@ import type { RepoChangeDigest } from '../../git/service';
 import { issueSessionDir, sessionDisplayName } from '../../pi/session-paths';
 import { iterationTarget, type StepAgentInfo } from '../../pi/session-registry';
 import { stallRecoveries } from '../../pi/stall-recovery';
-import { soloRunExcludeTools, readOnlyStep } from '../../pi/tool-policy';
+import { soloRunExcludeTools, readOnlyStep, stepSkills } from '../../pi/tool-policy';
 import { STEP_SYSTEM_APPEND, buildStepPrompt, type PrTarget } from '../prompts';
 import { runStagedResolve } from '../staged-resolve';
 import {
@@ -115,6 +115,7 @@ export async function executeStepAgent(
     sessionDir: issueSessionDir(issue.id),
     systemAppend: STEP_SYSTEM_APPEND,
     readOnly: readOnlyStep(step),
+    skills: stepSkills(step),
     sessionName: sessionDisplayName({
       step,
       issueId: issue.id,

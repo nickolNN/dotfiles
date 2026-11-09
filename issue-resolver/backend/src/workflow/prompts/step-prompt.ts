@@ -141,10 +141,12 @@ function iterationNarrativesBlock(iterationCount: number): string {
 
 type StepBodyBuilder = (input: StepPromptInput) => string;
 
-/** Fragments only a verifying step reads: the severity ladder is not resolve's job. */
-const VERIFIER_FRAGMENTS: Partial<Record<PipelineStep, string[]>> = {
-  [PipelineStep.review]: ['severity.md', 'review-standards.md'],
-  [PipelineStep.test]: ['severity.md'],
+/** Fragments a step reads on top of its body: the severity ladder is not resolve's job. */
+const STEP_FRAGMENTS: Partial<Record<PipelineStep, string[]>> = {
+  [PipelineStep.refine]: ['lens.md'],
+  [PipelineStep.resolve]: ['lens.md', 'resolve-tdd.md'],
+  [PipelineStep.review]: ['lens.md', 'severity.md', 'review-standards.md'],
+  [PipelineStep.test]: ['lens.md', 'severity.md'],
 };
 
 const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
@@ -229,5 +231,5 @@ export function buildStepPrompt(input: StepPromptInput): string {
   if (previousOutcome) lines.push('', previousOutcome);
 
   lines.push('', outputContract(input.workingDir));
-  return withSharedFragments(lines.join('\n'), VERIFIER_FRAGMENTS[input.step] ?? []);
+  return withSharedFragments(lines.join('\n'), STEP_FRAGMENTS[input.step] ?? []);
 }
