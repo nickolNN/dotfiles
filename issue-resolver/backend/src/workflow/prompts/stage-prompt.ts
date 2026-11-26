@@ -8,6 +8,7 @@ import type { RepoChangeDigest } from '../../git/service';
 import { resolveDownstreamAwareness, workerDownstreamAwareness } from './downstream';
 import {
   attachmentsBlock,
+  credentialsBlock,
   outputContract,
   previousOutcomeBlock,
   refinedPlanBlock,
@@ -33,6 +34,7 @@ export interface StagePromptInput {
   attachmentPaths?: string[];
   pipelineSteps?: PipelineStep[];
   devServerPort?: number | null;
+  credentials?: string | null;
   prTargets?: PrTarget[];
   stateDigest?: RepoChangeDigest[];
   workingDir?: string;
@@ -61,6 +63,7 @@ function stageValues(
     ]
       .filter((block) => block.length > 0)
       .join('\n\n'),
+    CREDENTIALS: credentialsBlock(input.credentials),
     REFINED_PLAN: refinedPlanBlock(input.refinedPlan),
     ATTACHMENTS: attachmentsBlock(input.attachmentPaths),
     WORKING_STATE: workingStateBlock(input.stateDigest),

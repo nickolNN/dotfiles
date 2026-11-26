@@ -173,6 +173,19 @@ describe('buildStepPrompt', () => {
     expect(withoutAccount).toContain('A mock or stub backend is');
   });
 
+  it('resolve: тестовый аккаунт доходит до исполнителя, иначе — явное «аккаунта нет»', () => {
+    const withAccount = prompt('resolve', {
+      credentials: 'https://dev.example.com · robot · secret',
+    });
+    expect(withAccount).toContain('Test account for this repository');
+    expect(withAccount).toContain('https://dev.example.com · robot · secret');
+    expect(withAccount).toContain(
+      'Never copy the password or token into `.issue-step-result.json`',
+    );
+
+    expect(prompt('resolve')).toContain('No test account is configured');
+  });
+
   it('test: браузер водит agent-browser с таймаутом 10 с, а не свой харнесс', () => {
     const text = prompt('test');
 
@@ -459,6 +472,24 @@ describe('buildStepPrompt', () => {
     expect(flat(prompt('test'))).not.toContain('Tests are the specification');
   });
 
+  it('report: сначала чистит память, потом пишет отчёт', () => {
+    const text = flat(prompt('report'));
+
+    expect(text).toContain('compact the shared memory');
+    expect(text).toContain('leave it shorter than you found it');
+    expect(text).toContain('`memory_forget` with a match string');
+    expect(text).toContain('`memory_restore` undoes a mistake');
+    expect(text).toContain('round verdicts');
+    expect(text).toContain('never delete an entry only because it belongs to another repository');
+    expect(text).toContain('N removed, M');
+  });
+
+  it('уборка памяти — обязанность report-шага, а не всех подряд', () => {
+    for (const step of ['resolve', 'review', 'test', 'pr'] as const) {
+      expect(flat(prompt(step)), step).not.toContain('compact the shared memory');
+    }
+  });
+
   it('чтение кода через линзы: у кого есть, у кого нет', () => {
     for (const step of ['refine', 'resolve', 'review', 'test'] as const) {
       const text = flat(prompt(step));
@@ -700,6 +731,29 @@ describe('staged prompts', () => {
     expect(text).toContain('plan.md');
     expect(text).toContain('stages');
     expect(text).toContain('.issue-step-result.json');
+  });
+
+  it('staged resolve: аккаунт есть у воркера, координатора, solo и финального lead', () => {
+    const withAccount: StagePromptInput = {
+      ...stagedInput,
+      credentials: 'https://dev.example.com · robot · secret',
+    };
+    const texts = [
+      buildStageWorkerPrompt(withAccount, stage, { index: 0, task: 'frontend' }, 2),
+      buildStageCoordinatorPrompt(withAccount, stage, [
+        { index: 0, summary: 'frontend done' },
+      ]),
+      buildStageSoloPrompt(withAccount, stage),
+      buildStagedFinalCoordinatorPrompt(withAccount, {
+        kind: 'stages',
+        outcomes: [{ stage, outcome: 'stage 1 done' }],
+      }),
+    ];
+
+    for (const text of texts) {
+      expect(text).toContain('Test account for this repository');
+      expect(text).toContain('https://dev.example.com · robot · secret');
+    }
   });
 
   it('stage worker: stage name, peer-not-lead, own stage-worker file', () => {

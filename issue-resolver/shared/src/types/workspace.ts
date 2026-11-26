@@ -24,6 +24,7 @@ export interface SpawnContainerResult {
 export interface ContainerStats {
   containerName: string;
   cpuPercent: number | null;
+  cpuLimitPercent: number;
   memoryUsageBytes: number;
   memoryLimitBytes: number;
   pids: number;
@@ -31,6 +32,7 @@ export interface ContainerStats {
 
 export interface ContainerStatsPayload {
   cpuPercent: number | null;
+  cpuLimitPercent: number;
   memoryUsageBytes: number;
   memoryLimitBytes: number;
   pids: number;

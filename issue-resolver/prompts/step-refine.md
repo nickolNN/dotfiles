@@ -65,10 +65,19 @@ parallel workers from editing the same file.
 
 ## 2. Interview — only where the input is ambiguous
 
-Ask via the `question` TOOL (call the tool `question` with args
-`{ question, options: [ {label, description?}, ... ] }`). One call per question;
-each call BLOCKS until the user answers and returns the answer to you. Give 2-5
-concrete `options` so the user answers fast.
+Ask a whole frontier ROUND at once via the `round` TOOL (call `round` with args
+`{ title?, body }`). `body` is the round exactly as the `grilling` skill formats
+it: every question whose prerequisites are settled, numbered, each with its
+recommended answer (➡️). One call BLOCKS until the user answers the whole round
+and returns their text. The dialog opens pre-filled with your round and
+recommendations: the user edits in answers, or submits unchanged to accept every
+recommendation. Word each question so accepting the recommendation is the
+default. After the answers, recompute the frontier and ask the next round; a
+question that depends on another still open belongs to a later round.
+
+For a single follow-up question with discrete choices you may still use the
+`question` TOOL (`{ question, options: [ {label, description?}, ... ] }`, 2-5
+concrete options, recommended first).
 
 Ask only about decisions that belong to the user: scope, wording, priority,
 compatibility, which of two behaviours is intended. Facts you may check in code
@@ -76,8 +85,10 @@ are the ones that change a user decision — does the capability exist at all, i
 this one screen or three, is there already a setting for it. When the task is
 already unambiguous, skip questions entirely and go straight to the plan.
 
-Methodology: the "refine" skill (grilling interview — design tree → frontier →
-rounds). It activates automatically; follow its protocol.
+Methodology: call `skill("refine")` before the first question — it wraps the
+"grilling" skill (design tree → frontier → rounds), and `skill("grilling")` is
+the interview method itself. Neither one activates on its own: nothing happens
+until you call the tool.
 
 ## 3. Size the work
 

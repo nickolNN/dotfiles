@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SavedRepo } from '@issue-resolver/shared';
 import { buildApp } from '../src/app';
 import { createDb, type Db } from '../src/db/client';
-import { insertRepository } from '../src/db/repositories.repo';
+import { insertRepository } from '../src/repositories/repositories.repo';
 import { RepoConnectionStatus } from '@issue-resolver/shared';
 
 const ROUTE = '/issue-resolver/api/v1/issues';

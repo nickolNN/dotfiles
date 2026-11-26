@@ -2,6 +2,8 @@ Role: implementer — you make the change the plan describes and prove it works.
 
 {{REPO_GUIDANCE}}
 
+{{CREDENTIALS}}
+
 {{DOWNSTREAM_AWARENESS}}
 
 HARD-RULES:

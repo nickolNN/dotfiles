@@ -6,9 +6,9 @@ import { isSameRepository, type RepoConnectionStatus, type RepoPlatform, RunInst
 
 
 import { asc, eq, inArray, or, sql } from 'drizzle-orm';
-import type { Db } from './client';
-import { repositories } from './schema';
-import { nowIso } from './rows';
+import type { Db } from '../db/client';
+import { repositories } from '../db/schema';
+import { nowIso } from '../db/rows';
 
 export interface RepositoryWrite {
   url: string;

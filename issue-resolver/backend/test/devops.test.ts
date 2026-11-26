@@ -39,6 +39,7 @@ const repos = [{ repository_url: REPO_URL, base_branch: 'main' }];
 class FakeRunInstructionsStore implements RunInstructionsPort {
   readonly statuses = new Map<string, RunInstructionsStatus>();
   readonly instructions = new Map<string, string>();
+  readonly credentials = new Map<string, string>();
   readonly saved: { url: string; instructions: string }[] = [];
   readonly failed: string[] = [];
 
@@ -48,6 +49,10 @@ class FakeRunInstructionsStore implements RunInstructionsPort {
 
   getInstructions(repoUrl: string): string | null {
     return this.instructions.get(repoUrl) ?? null;
+  }
+
+  getCredentials(repoUrl: string): string | null {
+    return this.credentials.get(repoUrl) ?? null;
   }
 
   saveGenerated(repoUrl: string, instructions: string): void {
@@ -253,6 +258,35 @@ describe('prepareWorkspace — анализ run_instructions', () => {
     expect(store.saved).toEqual([
       { url: REPO_URL, instructions: '# Run\nnpm run dev' },
     ]);
+  });
+
+  it('тестовый аккаунт: devops получает его из настроек репозитория', async () => {
+    const store = new FakeRunInstructionsStore();
+    store.statuses.set(REPO_URL, RunInstructionsStatus.unknown);
+    store.credentials.set(REPO_URL, 'https://dev.example.com · robot · secret');
+    const agent = new FakeDevOpsAgent({
+      success: true,
+      instructions: '# Run\nnpm run dev',
+    });
+    const seen: Array<string | null | undefined> = [];
+    const root = await tempRoot();
+
+    await prepareWorkspace(
+      {
+        container: new FakeContainerController(),
+        git: new FakeGitService(),
+        workspaceRoot: root,
+        devops: (params) => {
+          seen.push(params.credentials);
+          return agent;
+        },
+        runInstructions: store,
+      },
+      { id: 'issue-1' },
+      repos,
+    );
+
+    expect(seen).toEqual(['https://dev.example.com · robot · secret']);
   });
 
   it('фейл анализа: статус failed, прогресс analyzing error', async () => {

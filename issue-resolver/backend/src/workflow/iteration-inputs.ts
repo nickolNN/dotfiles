@@ -8,7 +8,7 @@ import {
 } from '../workspace/paths';
 import { and, eq } from 'drizzle-orm';
 import { iterations } from '../db/schema';
-import { listStepRunsWithLog } from '../db/step-runs.repo';
+import { listStepRunsWithLog } from '../repositories/step-runs.repo';
 import type { Db } from '../db/client';
 import { extractIssueKeyFromUrl, PipelineStep } from '@issue-resolver/shared';
 import type { DesiredResult } from '@issue-resolver/shared';

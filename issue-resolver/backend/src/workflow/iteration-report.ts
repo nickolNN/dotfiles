@@ -7,7 +7,7 @@ import {
   workspaceHostDirFor,
 } from '../workspace/paths';
 import { iterations } from '../db/schema';
-import { listStepRunsWithLog } from '../db/step-runs.repo';
+import { listStepRunsWithLog } from '../repositories/step-runs.repo';
 import type { Db } from '../db/client';
 import { StepRunStatus, TaskStatus } from '@issue-resolver/shared';
 import type { IterationRunDeps, RunIssueIterationInput } from './service-contracts';

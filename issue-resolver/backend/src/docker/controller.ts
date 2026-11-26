@@ -36,6 +36,7 @@ export function toContainerStatsPayload(data: unknown): ContainerStatsPayload {
   return {
     cpuPercent:
       cpuPercent !== null ? Math.round(cpuPercent * 100) / 100 : null,
+    cpuLimitPercent: numCpus * 100,
     memoryUsageBytes: num(memory?.usage),
     memoryLimitBytes: num(memory?.limit),
     pids: num(pids?.current),
@@ -69,6 +70,7 @@ export class FakeContainerController
     return {
       containerName,
       cpuPercent: 0,
+      cpuLimitPercent: 0,
       memoryUsageBytes: 0,
       memoryLimitBytes: 0,
       pids: 0,

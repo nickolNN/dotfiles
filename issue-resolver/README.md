@@ -18,7 +18,7 @@
 | `frontend/` | React 19 + Vite 6 + Tailwind 4 SPA (тема Matrix/hackerman) |
 | `prompts/` | Тексты шагов конвейера и разовых прогонов (devops, retro) |
 | `frontend/e2e/` | Playwright на мок-стеке: `flows/` (жизненный цикл, bootstrap-тоггл/лог, вопрос, статусы, обрыв SSE, отчёт, две задачи), `scenarios/` (мок-ответы агента), `backend/` (HTTP-сценарии) |
-| `bin/` | Операционные скрипты: `up.sh`, `service.sh`, `pw-browsers.sh`, `embed-screenshots.mjs` |
+| `bin/` | Операционные скрипты: `up.sh`, `service.sh`, `pw-browsers.sh`, `embed-screenshots.mjs`, `skill-usage.mjs` |
 
 ## Запуск
 
@@ -58,6 +58,12 @@ cd frontend && npx playwright test
   `browserType.launch: Executable doesn't exist at /opt/ms-playwright/…`.
   Скрипт идемпотентен и сам копируется в рабочую папку задачи как
   `pw-browsers.sh` — его и вызывают промпты `devops` и `test`.
+- **`bin/skill-usage.mjs [--days N | --since YYYY-MM-DD]`** — что реально
+  использовалось на шагах конвейера: читает логи сессий pi и печатает по шагу
+  число сессий, вызовов инструментов, сколько сессий открыли файл скилла,
+  сколько было вызовов линз и сколько раз смотрели `agent-browser skills get`.
+  Это замер, а не ощущение: до появления расписания скиллов файл открывали 2
+  сессии из 16, линзы — 0 вызовов на 386.
 
 ### Режимы и данные
 
@@ -141,7 +147,7 @@ same-origin POST, поэтому `isSameOrigin` сравнивает host:port �
 | `POST /issues` | `CreateIssueRequest` (JSON) **или** `multipart/form-data` (`payload` + `files`) | `201 Issue`; создаёт итерацию №1 и запускает её в фоне; загруженные файлы сохраняются в рабочую папку |
 | `GET /issues` | — | `Issue[]` (по `created_at` убыв.) |
 | `GET /issues/:id` | — | `Issue` / `404 { error }` |
-| `GET /issues/:id/container-stats` | — | `ContainerStats` (`{ containerName, cpuPercent, memoryUsageBytes, memoryLimitBytes, pids }`; `cpuPercent: null`, если дельт ещё нет) / `200 { containerName, error: 'container_not_found' }`, если контейнера нет / `404 { error }` |
+| `GET /issues/:id/container-stats` | — | `ContainerStats` (`{ containerName, cpuPercent, cpuLimitPercent, memoryUsageBytes, memoryLimitBytes, pids }`; `cpuPercent: null`, если дельт ещё нет, `cpuLimitPercent` = `число_cpu × 100` — база для «из скольки») / `200 { containerName, error: 'container_not_found' }`, если контейнера нет / `404 { error }` |
 | `GET /issues/:id/container-stats-stream` | — | SSE: живой поток статистики контейнера (docker stats `stream`). Отдаёт `text/event-stream` и шлёт только keepalive `: keepalive`, а сами события `container_stats` публикует в общую шину — их доставляет `GET /issues/:id/stream`. `404 { error }` (нет задачи) / `404 { containerName, error: 'container_not_found' }` / `503 { containerName, error: 'container_stats_unavailable' }` |
 | `GET /issues/:id/result` | — | результат задачи inline: `report.md` (`text/markdown`) или `report.html` (`text/html`); нет файла → `404 { error: 'result not found' }` |
 | `GET /issues/:id/result/download` | — | тот же файл как `Content-Disposition: attachment; filename="report.md"` (или `report.html`) / `404` |
@@ -171,7 +177,7 @@ same-origin POST, поэтому `isSameOrigin` сравнивает host:port �
 | `GET /repositories` | — | `SavedRepo[]` (по `created_at` возр.) |
 | `POST /repositories` | `CreateRepoRequest` `{ url }` | `201 SavedRepo` (валиден, `connectionStatus: 'ok'`) / `422 { error, repository }` (валидация не прошла — репо сохранён со `connectionStatus: 'error'`) / `400 { error }` |
 | `PUT /repositories/:id` | `UpdateRepoRequest` `{ url }` | `200 SavedRepo` / `422 { error, repository }` / `404` |
-| `PUT /repositories/:id/credentials` | `{ testCredentials: string \| null }` | `200 SavedRepo` (пустая строка → `null`) / `400` / `404`. Тестовый аккаунт репозитория: пишет человек, агенты только читают; едет в промпты `devops` и `test` как `{{CREDENTIALS}}` |
+| `PUT /repositories/:id/credentials` | `{ testCredentials: string \| null }` | `200 SavedRepo` (пустая строка → `null`) / `400` / `404`. Тестовый аккаунт репозитория: пишет человек, агенты только читают; едет в промпты `resolve` (solo и staged, воркерам тоже), `devops` и `test` как `{{CREDENTIALS}}` |
 | `DELETE /repositories/:id` | — | `204` / `404` |
 | `POST /repositories/:id/validate` | — | `200 SavedRepo` (перевалидирован; `connectionStatus` — итог) / `404` |
 | `GET /repositories/:id/branches` | — | `200 { branches: string[] }` (live из резолвера, не из БД) / `502 { error }` / `404` |

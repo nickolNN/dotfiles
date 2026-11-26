@@ -25,7 +25,9 @@ memory and report paths are writable. Use them; this is the point of the session
   no `sqlite3` binary; use node from the repo, e.g.
   `node -e "const D=require('better-sqlite3'); const db=new D('{{DB_PATH}}',{readonly:true}); console.log(db.prepare('select status, count(*) c from step_runs group by status').all())"`
 - **Method skills**: `{{RETRO_SKILL}}` (how to run a retro) and
-  `{{WRITING_SKILL}}` (its writing step). Read both before writing the report.
+  `{{WRITING_SKILL}}` (its writing step). Both are also callable as
+  `skill("retro")` and `skill("writing-for-agents")`; read or call them before
+  writing the report.
 - **Report file** (writable, outside the repository): `{{REPORT_FILE}}`
 
 Today is {{DATE}}. Analyse the {{SESSION_LIMIT}} most recent sessions, excluding

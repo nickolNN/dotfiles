@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PipelineStep } from '@issue-resolver/shared';
 import { describe, expect, it } from 'vitest';
-import { sessionArgs } from '../src/pi/rpc-spawn';
+import { sessionArgs, skillAllowList, stepAgentEnv } from '../src/pi/rpc-spawn';
 import {
   PI_LENS_SKILLS_ROOT,
   SKILLS_ROOT,
@@ -59,9 +59,13 @@ const EXPECTED: Record<PipelineStep, string[]> = {
 };
 
 function skillMentions(text: string): string[] {
-  return [...text.matchAll(/\bthe [`"]?([a-z][a-z0-9-]*)[`"]? skill\b/gi)].map(
+  const named = [
+    ...text.matchAll(/\bthe [`"]?([a-z][a-z0-9-]*)[`"]? skill\b/gi),
+  ].map((match) => match[1]);
+  const called = [...text.matchAll(/\bskill\(["']([a-z][a-z0-9-]*)["']\)/g)].map(
     (match) => match[1],
   );
+  return [...named, ...called];
 }
 
 describe('stepSkills', () => {
@@ -105,6 +109,24 @@ describe('stepSkills', () => {
 
     expect(args).not.toContain('--no-skills');
     expect(args).not.toContain('--skill');
+  });
+
+  it('список для инструмента skill совпадает с allowlist шага', () => {
+    expect(skillAllowList(stepSkills(PipelineStep.review))).toBe(
+      'clean-code:pi-lens-lsp-navigation:pi-lens-ast-grep',
+    );
+    expect(skillAllowList([])).toBe('');
+    expect(skillAllowList(undefined)).toBeUndefined();
+  });
+
+  it('PI_SKILL_ALLOW уходит в окружение шага, а без набора его нет', () => {
+    expect(stepAgentEnv({}, undefined, 'clean-code')).toMatchObject({
+      PI_SKILL_ALLOW: 'clean-code',
+    });
+    expect(stepAgentEnv({}, undefined, '')).toMatchObject({ PI_SKILL_ALLOW: '', });
+    expect(stepAgentEnv({}, undefined, undefined)).not.toHaveProperty(
+      'PI_SKILL_ALLOW',
+    );
   });
 
   it('скилл, названный в промпте шага, есть в его allowlist', () => {

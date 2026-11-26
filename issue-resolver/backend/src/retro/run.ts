@@ -2,7 +2,7 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { RetroRunStatus } from '@issue-resolver/shared';
 import type { SessionEvent, SessionStats } from '@issue-resolver/shared';
-import { getRetroRun, updateRetroRun } from '../db/retro-runs.repo';
+import { getRetroRun, updateRetroRun } from '../repositories/retro-runs.repo';
 import type { PiRunOptions } from '../pi/runner';
 import { capSessionEvents } from '../pi/session-events-cap';
 import { soloRunExcludeTools } from '../pi/tool-policy';

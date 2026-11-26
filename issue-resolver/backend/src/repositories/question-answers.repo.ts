@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import type { Db } from './client';
-import { questionAnswers } from './schema';
-import { nowIso } from './rows';
+import type { Db } from '../db/client';
+import { questionAnswers } from '../db/schema';
+import { nowIso } from '../db/rows';
 
 export interface RecordQuestionAnswerInput {
   iterationId: string;

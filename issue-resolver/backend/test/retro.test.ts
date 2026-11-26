@@ -10,7 +10,7 @@ import { createDb } from '../src/db/client';
 import {
   createRetroRun,
   getRetroRunWithLog,
-} from '../src/db/retro-runs.repo';
+} from '../src/repositories/retro-runs.repo';
 import type { PiRunOptions, PiRunner } from '../src/pi/runner';
 import {
   RETRO_SCOPE_ID,

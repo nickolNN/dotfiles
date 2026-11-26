@@ -132,6 +132,53 @@ describe('read-only guard: линтеры разрешены без записи
   });
 });
 
+describe('read-only guard: шаблон поиска не превращается в команду', () => {
+  it.each([
+    "rg -n 'rm -rf|rm -r' .ci/build.groovy",
+    'grep -E "membershipMessages|utils/words|MessageRows" /tmp/tsc.out',
+    'npx tsc --noEmit 2>&1 | grep -E "utils/words|MessageList.tsx"',
+    "rg -n 'sed -i|find -exec' docs",
+    "rg -n 'a;b' src",
+    "echo 'npm test'",
+  ])('пропускает: %s', (command) => {
+    expect(readOnlyViolation(command)).toBeNull();
+  });
+
+  it.each([
+    'npx tsc --noEmit > /tmp/tsc.out 2>&1; echo done',
+    'echo hi > /tmp/scratch',
+    'npx tsc --noEmit 2>&1 | tee /tmp/tsc.out',
+  ])('/tmp — не мутация рабочей копии: %s', (command) => {
+    expect(readOnlyViolation(command)).toBeNull();
+  });
+
+  it.each([
+    'tee src/app.ts',
+    'touch src/pwned',
+    'rm -rf /tmp',
+    'tee',
+  ])('запись в рабочую копию остаётся блокировкой: %s', (command) => {
+    expect(readOnlyViolation(command)).not.toBeNull();
+  });
+
+  it.each([
+    ["rg -n 'a|b' . | npm test", 'npm test'],
+    ["rg -n 'x' .; npx vitest run", 'npx vitest run'],
+    ['echo $(date) > /tmp/x', 'command substitution'],
+    ['npx tsc --noEmit > src/out.txt', 'write to src/out.txt'],
+    ["sed -i 's/a/b/' src/app.ts", 'sed -i'],
+  ])('кавычки не открывают обход: %s', (command, expected) => {
+    expect(readOnlyViolation(command)).toBe(expected);
+  });
+
+  it.each(['bash -c "npm test"', "sh -c 'rg x; npm run test'"]) (
+    'исполнение внутри кавычек всё равно блокируется: %s',
+    (command) => {
+      expect(readOnlyViolation(command)).not.toBeNull();
+    },
+  );
+});
+
 describe('read-only guard: запись результата остаётся', () => {
   it.each([
     'write',
@@ -159,7 +206,7 @@ describe('read-only guard: запись результата остаётся', 
 
   it('codemode как точка входа не обходит гейт: вложенный bash — тот же tool_call', () => {
     expect(decide('codemode')).toBeUndefined();
-    expect(decide('bash', { command: 'touch /tmp/pwned' })?.block).toBe(true);
+    expect(decide('bash', { command: 'touch src/pwned' })?.block).toBe(true);
   });
 
   it('bash с исполняющей командой блокируется с объяснением', () => {

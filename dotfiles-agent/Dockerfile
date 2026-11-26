@@ -194,20 +194,21 @@ RUN for i in 1 2 3; do \
       [ "$i" -lt 3 ] || { echo "FATAL: node tools install failed after 3 attempts"; exit 1; }; \
     done \
   && corepack enable \
-  && chmod +x /opt/bun/install/global/node_modules/agent-browser/bin/agent-browser-* \
+  # agent-browser >= 0.44 moved the native binary into a per-platform optional
+  # dependency (@agent-browser/cli-linux-<arch>-gnu) and links it from its
+  # postinstall — which bun blocks by default ("Blocked N postinstalls" in the
+  # install log). The launcher bin/agent-browser.js relinks on first run, but a
+  # symlink to the optional dep's binary gives a plain binary in
+  # /usr/local/bin. Bun installs only the platform package matching the build,
+  # so no other-platform copies exist to prune (the old bin/ glob is gone).
   && AB_ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/') \
-  && AGENT_BROWSER_BIN=/opt/bun/install/global/node_modules/agent-browser/bin/agent-browser-linux-${AB_ARCH} \
+  && AGENT_BROWSER_BIN=/opt/bun/install/global/node_modules/@agent-browser/cli-linux-${AB_ARCH}-gnu/bin/agent-browser \
   && if [ -x "$AGENT_BROWSER_BIN" ]; then \
        ln -sf "$AGENT_BROWSER_BIN" /usr/local/bin/agent-browser; \
      else \
        echo "WARNING: agent-browser native binary not found"; \
      fi \
-  && find /opt/bun/install/global/node_modules -type f -path '*/bin/*' -exec chmod +x {} + \
-  # agent-browser ships a native binary per platform; keep only the one this
-  # image can run (glibc linux on the target arch) and drop ~100MB of
-  # win32/darwin/musl builds.
-  && find "$(dirname "$AGENT_BROWSER_BIN")" -maxdepth 1 -type f \
-       -name 'agent-browser-*' ! -name "agent-browser-linux-${AB_ARCH}" -delete
+  && find /opt/bun/install/global/node_modules -type f -path '*/bin/*' -exec chmod +x {} +
 
 # ── qmd (BM25 search backend for pi-memory) ─────────────────────
 # npm (not bun): better-sqlite3 ships prebuilt N-API binaries that real

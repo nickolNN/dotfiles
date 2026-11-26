@@ -9,6 +9,8 @@ Stage {{STAGE_INDEX}} task: {{STAGE_TASK}}
 
 {{REPOS}}
 
+{{CREDENTIALS}}
+
 {{WORKING_STATE}}
 
 {{REFINED_PLAN}}

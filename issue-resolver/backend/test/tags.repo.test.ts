@@ -11,7 +11,7 @@ import {
   insertTag,
   updateTag,
   updateTagRunInstructions,
-} from '../src/db/tags.repo';
+} from '../src/repositories/tags.repo';
 
 const TAGS_ROUTE = '/issue-resolver/api/v1/tags';
 const OLD_INSTRUCTIONS = '# Workspace\nproxy on :8081';

@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { and, eq, inArray } from 'drizzle-orm';
 import { StepRunStatus, TaskStatus } from '@issue-resolver/shared';
 import type { Db } from '../../db/client';
-import { recordQuestionAnswer } from '../../db/question-answers.repo';
+import { recordQuestionAnswer } from '../../repositories/question-answers.repo';
 import { issues, iterations, stepRuns } from '../../db/schema';
 import type { UiResponsePayload } from '../../pi/session-registry';
 import type { SseHub } from '../../sse/hub';

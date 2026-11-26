@@ -10,8 +10,6 @@ tmux/plugins
 nvim/lazy-lock.json
 .DS_Store
 cagent
-kilo/opencode.jsonc
-kilo/kilo.jsonc
 .agents
 skills-candidates/
 pi/models.json

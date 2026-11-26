@@ -53,6 +53,10 @@ export function readOnlyStep(step: PipelineStep): boolean {
   return step === PipelineStep.review;
 }
 
+export function roundStep(step: PipelineStep): boolean {
+  return step === PipelineStep.refine;
+}
+
 export function stepSkillNames(step: PipelineStep): string[] {
   return [...(STEP_SKILLS[step] ?? [])];
 }

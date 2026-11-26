@@ -14,7 +14,7 @@ import { iterations } from '../../db/schema';
 import {
   getLatestStepRunForIssue,
   getStepRunWithLog,
-} from '../../db/step-runs.repo';
+} from '../../repositories/step-runs.repo';
 import { buildStepPrompt } from '../../workflow/prompts';
 import {
   isReportRunActive,

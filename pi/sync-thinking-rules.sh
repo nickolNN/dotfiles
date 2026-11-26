@@ -8,6 +8,7 @@
 #
 # Matching, in order:
 #   1. provider baseUrl equal to a catalog provider's baseUrl  -> that catalog only
+#      (a retired host listed in LEGACY_BASE_URLS counts as that provider)
 #   2. per-model ALIASES entry (`ours=catalog-model`, optional
 #      `ours=catalog-provider/catalog-model`)
 #   3. model id / name match across all catalogs, only when every catalog entry
@@ -30,6 +31,9 @@ LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 # Custom model id -> catalog model id (or catalog-provider/model-id).
 ALIASES = {
+    # opencode-go is the only catalog carrying `qwen4-max`, and it maps no
+    # levels there; the gateway serves it exactly like the `-preview` build.
+    "qwen4-max": "qwen4-max-preview",
     # "deepseek-v4-pro-0831": "deepseek-v4-pro-0813",
 }
 
@@ -43,6 +47,18 @@ OVERRIDES = {
     # and only for the base id). V4-generation models stay catalog-only.
     "provider1/deepseek-v4.1-flash": {"xhigh": "xhigh"},
     "provider1/deepseek-v4.1-flash-1017": {"xhigh": "xhigh"},
+}
+
+# Retired gateway hosts -> catalog provider that serves the same plans. pi's
+# catalogs follow only the current hostnames, so a provider still pointed at a
+# retired host loses rule 1 (baseUrl match) and falls back to matching by model
+# id across every catalog — which can map a same-id model from an unrelated
+# provider, or strip a level the old gateway still accepts. provider1 itself
+# now points at the current host; this entry keeps rule 1 working for copies
+# still on a retired one (the old hosts keep serving the same plans).
+LEGACY_BASE_URLS = {
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1":
+        "qwen-token-plan-individual",
 }
 
 CATALOG_ROOTS = [
@@ -126,11 +142,15 @@ def resolve(scope, provider_id, provider, model):
         prov, _, mid = alias.rpartition("/") if "/" in alias else (None, "", alias)
         hits = [(p, m) for p, ms in scope.items() if prov in (None, p)
                 for m in ms if m.get("id") == mid]
-        if len(hits) == 1:
+        if hits and len({shape(m) for _, m in hits}) == 1:
             return hits[0]
         return None
 
     same_provider = by_base_url(scope, provider.get("baseUrl"))
+    if not same_provider:
+        legacy = LEGACY_BASE_URLS.get(norm_base(provider.get("baseUrl")))
+        if legacy in scope:
+            same_provider = {legacy: scope[legacy]}
     hits = [(p, m) for p, ms in same_provider.items() for m in ms
             if m.get("id") == model["id"]]
     if hits and len({shape(m) for _, m in hits}) == 1:
@@ -165,7 +185,12 @@ def main(argv):
                     unmapped += 1
                     print(f"  ?  {provider_id}/{model['id']}: no catalog match")
                     continue
-                hit = ("override", {"reasoning": model.get("reasoning")})
+                # No catalog entry: keep the map in the file and let the
+                # OVERRIDES below pin only the levels they name.
+                hit = ("override", {
+                    "reasoning": model.get("reasoning"),
+                    "thinkingLevelMap": model.get("thinkingLevelMap"),
+                })
             catalog_provider, ref = hit
             before = shape(model)
             new_map = OrderedDict(ref.get("thinkingLevelMap") or {})

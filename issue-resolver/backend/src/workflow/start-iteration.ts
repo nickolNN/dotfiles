@@ -4,7 +4,7 @@ import { DesiredResult } from '@issue-resolver/shared';
 import { TaskStatus } from '@issue-resolver/shared';
 import { and, eq, max } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import type { IssueRepositorySelection } from '../db/issue-repositories.repo';
+import type { IssueRepositorySelection } from '../repositories/issue-repositories.repo';
 import { issues, iterations } from '../db/schema';
 import {
   prepareIssueWorkspace,

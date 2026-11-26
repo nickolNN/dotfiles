@@ -12,7 +12,7 @@ import { eq } from 'drizzle-orm';
 import { buildApp } from '../src/app';
 import { createDb } from '../src/db/client';
 import { iterations } from '../src/db/schema';
-import { insertMany, listByIssue, listByIteration } from '../src/db/issue-files.repo';
+import { insertMany, listByIssue, listByIteration } from '../src/repositories/issue-files.repo';
 import { FakePiRunner } from '../src/pi/runner';
 import { TaskStatus } from '@issue-resolver/shared';
 

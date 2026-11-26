@@ -29,6 +29,7 @@ export type IssueDeletedPayload = {
 
 export type ContainerStatsPayload = {
   cpuPercent: number | null;
+  cpuLimitPercent: number;
   memoryUsageBytes: number;
   memoryLimitBytes: number;
   pids: number;

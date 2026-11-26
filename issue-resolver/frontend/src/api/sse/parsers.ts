@@ -100,6 +100,9 @@ export function parseContainerStatsPayload(
 
   return {
     cpuPercent: isNumber(record.cpuPercent) ? record.cpuPercent : null,
+    cpuLimitPercent: isNumber(record.cpuLimitPercent)
+      ? record.cpuLimitPercent
+      : 0,
     memoryUsageBytes: isNumber(record.memoryUsageBytes)
       ? record.memoryUsageBytes
       : 0,

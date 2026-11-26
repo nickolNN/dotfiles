@@ -4,12 +4,12 @@ import {
   createStepOutput,
   createStepRun,
   updateStepRun,
-} from '../db/step-runs.repo';
+} from '../repositories/step-runs.repo';
 import {
   getRepositoryByUrl,
   getRepositoryTestCredentials,
   updateRepositoryRunInstructions,
-} from '../db/repositories.repo';
+} from '../repositories/repositories.repo';
 import { RunInstructionsStatus } from '@issue-resolver/shared';
 import type { StepRunStore } from './iteration/contracts';
 import type { RunInstructionsPort } from './prepare-workspace';

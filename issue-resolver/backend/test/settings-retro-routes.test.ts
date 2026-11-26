@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app';
 import type { Db } from '../src/db/client';
 import { createDb } from '../src/db/client';
-import { getRetroRun } from '../src/db/retro-runs.repo';
+import { getRetroRun } from '../src/repositories/retro-runs.repo';
 import type { PiRunOptions, PiRunner } from '../src/pi/runner';
 import { retroRuns } from '../src/db/schema';
 import { retroReportPath } from '../src/retro/service';

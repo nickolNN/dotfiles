@@ -4,13 +4,12 @@ set -euo pipefail
 # ── Usage ────────────────────────────────────────────────────────
 usage() {
   cat <<EOF
-Usage: attach.sh [-p HOST:GUEST]... [--network-host] [--build] [--no-install] [FOLDER] [-- CMD...]
+Usage: attach.sh [-p HOST:GUEST]... [--network-host] [--build] [FOLDER] [-- CMD...]
 
   FOLDER      Path to mount as /home/agent/workspace (default: \$PWD)
   -p HOST:GUEST  Publish host:container port (bare PORT ≡ PORT:PORT). Repeatable.
   --network-host  Use host network (all container ports exposed, no -p needed).
   --build     Force rebuild the image even if it exists.
-  --no-install  Skip auto dependency install when package.json detected.
   CMD         Command to run (default: bash). Use "pi" for pi agent.
 
   Env: AGENT_DOCKER_ARGS="…"  raw extra `docker run` arguments, applied when
@@ -28,7 +27,6 @@ IMAGE="dotfiles-agent"
 USER_PORTS=()
 NETWORK_HOST=false
 FORCE_BUILD=false
-NO_INSTALL=false
 FOLDER=""
 
 while [ $# -gt 0 ]; do
@@ -43,10 +41,6 @@ while [ $# -gt 0 ]; do
     ;;
   --build)
     FORCE_BUILD=true
-    shift
-    ;;
-  --no-install)
-    NO_INSTALL=true
     shift
     ;;
   --)
@@ -154,6 +148,13 @@ docker_args_match() {
   [ "$(current_docker_args_hash "${CONTAINER}")" = "$(docker_args_hash)" ]
 }
 
+# The node_modules volume is retired: a container created before that still
+# mounts a persistent tree the scripts no longer create, so recreate it once to
+# take the tmpfs. Same rule as ports/network/args — a mount is fixed at create.
+node_modules_shadowed() {
+  [ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/home/agent/workspace/node_modules"}}{{.Type}}{{end}}{{end}}' "${CONTAINER}" 2>/dev/null)" = "tmpfs" ]
+}
+
 # ── Build image if needed ────────────────────────────────────────
 if [ "${FORCE_BUILD}" = true ] || ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
   echo "→ Building ${IMAGE} image..."
@@ -175,6 +176,11 @@ elif ! network_match; then
   echo "→ Network mode changed (${cur_net} → host) — recreating ${CONTAINER}..."
   docker rm -f "${CONTAINER}" >/dev/null
   NEED_CREATE=true
+elif ! node_modules_shadowed; then
+  echo "→ node_modules is no longer a volume — recreating ${CONTAINER}..."
+  echo "   ⚠ Any agent running in this container is killed by the recreate."
+  docker rm -f "${CONTAINER}" >/dev/null
+  NEED_CREATE=true
 elif ! docker_args_match; then
   echo "→ AGENT_DOCKER_ARGS changed (${AGENT_DOCKER_ARGS:-<unset>}) — recreating ${CONTAINER}..."
   echo "   ⚠ Any agent running in this container is killed by the recreate."
@@ -191,28 +197,22 @@ if [ "${NEED_CREATE}" = true ]; then
   echo "→ Creating container ${CONTAINER} for ${FOLDER}..."
   [ ${#USER_PORTS[@]} -gt 0 ] && echo "→ Ports: ${USER_PORTS[*]}"
 
-  # Only bind host git/ssh config when it actually exists. A missing source
-  # makes Docker auto-create a DIRECTORY that can't mount over the image's
-  # baked-in ~/.gitconfig file -> OCI "not a directory".
   MOUNTS=(-v "${FOLDER}:/home/agent/workspace")
 
-  # Shadow the host's node_modules with a PERSISTENT named volume keyed by
-  # the derived container name. Two reasons the host copy must stay hidden:
-  # it may hold macOS-built native modules (node-gyp) that break on Linux,
-  # and virtiofs IO is ~10-22x slower than the VM's ext4 for small files.
-  # volume-nocopy is essential: without it Docker would seed the fresh
-  # volume from the virtiofs content — copying the macOS tree into Linux.
-  # A fresh nocopy volume comes up root-owned, so chown it via a root exec
-  # (cheap: only when the uid actually mismatches).
-  MOUNTS+=(--mount "type=volume,source=agent-node-modules-${CONTAINER},target=/home/agent/workspace/node_modules,volume-nocopy=true")
-
-  # Other host-only dirs stay on tmpfs (throwaway by design).
-  # Extend via AGENT_SHADOW_DIRS: space-separated workspace-relative names.
-  for dir in ${AGENT_SHADOW_DIRS:-}; do
+  # Shadow the host's node_modules (plus anything in AGENT_SHADOW_DIRS) with a
+  # tmpfs: the host copy may hold macOS-built native modules (node-gyp) that
+  # break on Linux, and virtiofs IO is ~10-22x slower than the VM's tmpfs for
+  # small files. A tmpfs dies with the container, so a stale install cannot
+  # survive a rebuild. AGENT_SHADOW_DIRS: space-separated workspace-relative
+  # names; the mount is agent-owned, else installs hit EACCES.
+  for dir in node_modules ${AGENT_SHADOW_DIRS:-}; do
     [ -n "$dir" ] || continue
     MOUNTS+=(--tmpfs "/home/agent/workspace/${dir}:exec,uid=$(id -u),gid=$(id -g),mode=755")
   done
 
+  # Only bind host git/ssh config when it actually exists. A missing source
+  # makes Docker auto-create a DIRECTORY that can't mount over the image's
+  # baked-in ~/.gitconfig file -> OCI "not a directory".
   [ -f "${HOME}/.gitconfig" ] && MOUNTS+=(-v "${HOME}/.gitconfig:/home/agent/.gitconfig:ro")
   [ -d "${HOME}/.ssh" ] && MOUNTS+=(-v "${HOME}/.ssh:/home/agent/.ssh:ro")
   # Sessions and long-term memory are both one shared volume per name, so
@@ -245,40 +245,10 @@ if [ "${NEED_CREATE}" = true ]; then
     "${IMAGE}" \
     infinity
 
-  # Fix root-owned fresh volume (see note above); stat-first so the
-  # common case costs one exec and no recursive chown.
-  docker exec -u root "${CONTAINER}" bash -c \
-    "[ \"\$(stat -c %u /home/agent/workspace/node_modules)\" = \"$(id -u)\" ] || chown -R $(id -u):$(id -g) /home/agent/workspace/node_modules"
-
 elif [ "${STATE}" != "running" ]; then
   echo "→ Starting container ${CONTAINER}..."
   docker start "${CONTAINER}" >/dev/null
 fi
-
-# ── node_modules staleness guard ─────────────────────────────────
-# A persisted-but-stale node_modules is worse than an empty one. npm does
-# not record the source lock's hash in node_modules/.package-lock.json,
-# so keep a marker file on the volume and combine it with an mtime check.
-docker exec "${CONTAINER}" bash -c '
-  nm=/home/agent/workspace/node_modules
-  lock=/home/agent/workspace/package-lock.json
-  [ -f "$lock" ] || exit 0
-  [ -d "$nm" ] || exit 0
-  h_new=$(sha256sum "$lock" | cut -d" " -f1)
-  marker="$nm/.dotfiles-agent-lock-hash"
-  h_old=$(cat "$marker" 2>/dev/null || true)
-  if [ ! -f "$nm/.package-lock.json" ]; then
-    if [ -n "$(ls -A "$nm" 2>/dev/null)" ]; then
-      echo "⚠ node_modules has content but no .package-lock.json — run: npm ci"
-    else
-      echo "⚠ node_modules volume is EMPTY — run: npm ci"
-    fi
-  elif [ -n "$h_old" ] && [ "$h_new" != "$h_old" ] && \
-       [ "$lock" -nt "$nm/.package-lock.json" ]; then
-    echo "⚠ package-lock.json changed since node_modules was installed — run: npm ci"
-  fi
-  echo "$h_new" > "$marker" 2>/dev/null || true
-' || true
 
 # ── Sync local skills into the container ─────────────────────────
 # Skills ship baked into the image, but a skill added/edited in the repo
@@ -299,18 +269,6 @@ fi
 # missing here in silence. Make it a warning (never a failure) — pipeline step
 # prompts inject those files and an empty injection is invisible otherwise.
 "${SCRIPT_DIR}/check-remote-skills.sh" "${CONTAINER}" || true
-
-# ── Auto dependency install ────────────────────────────────────
-# Prefer bun (in-image, ~5-10× faster than npm); fall back to npm.
-# node_modules is now a container-private volume — check inside the
-# container (not the host) to decide whether to install.
-if [ "${NO_INSTALL}" = false ] &&
-  [ -f "${FOLDER}/package.json" ] &&
-  docker exec "${CONTAINER}" bash -c '[ -z "$(ls -A /home/agent/workspace/node_modules 2>/dev/null)" ]'; then
-  echo "→ Installing dependencies (bun)..."
-  docker exec -w /home/agent/workspace "${CONTAINER}" \
-    bash -c 'if command -v bun >/dev/null 2>&1; then bun install || npm install --legacy-peer-deps; else npm install --legacy-peer-deps; fi'
-fi
 
 # ── Attach ───────────────────────────────────────────────────────
 echo "→ Attaching to ${CONTAINER}..."

@@ -71,7 +71,7 @@
   verify claims against source.
 - No speculative files: check schema/format first, then write;
   validate after writing with what exists here — `jq`, `node -e`,
-  `python3 -c "import json…"`. The agent image has no `kilo`.
+  `python3 -c "import json…"`.
   Scope: config/schema files (code: "Verify once").
 - Invalid file: fix in place after finding the correct schema;
   delete only when certain it's wrong AND replacement is ready.

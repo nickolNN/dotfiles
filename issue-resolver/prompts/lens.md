@@ -25,5 +25,5 @@ Text search stays right for text: config values, log lines, prose. For code
 intelligence it is the slowest option and the one that misses.
 
 The `pi-lens-lsp-navigation` and `pi-lens-ast-grep` skills carry the full
-parameter tables — read the relevant one when a call returns nothing or a batch
-is slow.
+parameter tables — call `skill("pi-lens-lsp-navigation")` or
+`skill("pi-lens-ast-grep")` when a call returns nothing or a batch is slow.

@@ -7,14 +7,14 @@ import {
   extractRepoNameFromUrl,
 } from '@issue-resolver/shared';
 import type { SessionStats } from '@issue-resolver/shared';
-import { getTag } from '../db/tags.repo';
+import { getTag } from '../repositories/tags.repo';
 import { issues } from '../db/schema';
 import {
   appendStepRunEvent,
   createStepRun,
   listStepRunsByIssue,
   updateStepRun,
-} from '../db/step-runs.repo';
+} from '../repositories/step-runs.repo';
 import type { Db } from '../db/client';
 import { capSessionEvents } from '../pi/session-events-cap';
 import { startAgentSession } from '../pi/agent-session';

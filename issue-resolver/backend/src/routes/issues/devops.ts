@@ -8,7 +8,7 @@ import type { IssuesContext } from './context';
 import {
   getLatestStepRunForIssue,
   getStepRunWithLog,
-} from '../../db/step-runs.repo';
+} from '../../repositories/step-runs.repo';
 import { isDevopsRunActive, runDevopsAgent } from '../../workflow/run-iteration.service';
 import { ROUTE_PATH } from './paths';
 import { badRequest, conflict, notFound } from '../params';

@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { IssuesContext } from './context';
-import { listIssueRepositories } from '../../db/issue-repositories.repo';
+import { listIssueRepositories } from '../../repositories/issue-repositories.repo';
 import { issueRepositories, iterations } from '../../db/schema';
 import { toIteration } from '../../issues/service';
 import { createIterationRequestSchema } from '../../validation';

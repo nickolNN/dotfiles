@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { parseSessionStats, type PipelineStep, type SessionEvent, type SessionStats, type StepOutput, type StepRun, StepRunStatus, type StepRunWithLog } from '@issue-resolver/shared';
 import { and, asc, desc, eq, getTableColumns, sql } from 'drizzle-orm';
 import { capSessionEvents } from '../pi/session-events-cap';
-import type { Db } from './client';
-import { nowIso, parseJsonColumn } from './rows';
-import { iterations, stepOutputs, stepRuns } from './schema';
+import type { Db } from '../db/client';
+import { nowIso, parseJsonColumn } from '../db/rows';
+import { iterations, stepOutputs, stepRuns } from '../db/schema';
 
 function issueIdOfIteration(db: Db, iterationId: string): string | null {
   const row = db

@@ -19,7 +19,7 @@ import {
   listStepRunsByIteration,
   listStepRunsWithLog,
   updateStepRun,
-} from '../src/db/step-runs.repo';
+} from '../src/repositories/step-runs.repo';
 import { StepRunStatus } from '@issue-resolver/shared';
 
 function makeDb(): Db {

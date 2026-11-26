@@ -231,6 +231,8 @@ const REDIRECTION = /(>>?)\s*([^\s;&|]+)/g;
 
 const HARMLESS_TARGET = /^\/dev\/(null|stdout|stderr|fd\/\d+)$/;
 
+const SCRATCH_TARGET = /^\/tmp\//;
+
 const EXECUTING_TOOL_NAMES = new Set(['ast_grep_replace', 'agent-browser']);
 
 const EXECUTING_TOOL_PATTERNS = [
@@ -371,17 +373,30 @@ function findRule(command: Command): Verdict {
   return executes ? 'find -exec' : undefined;
 }
 
+function scratchRule(command: Command): Verdict {
+  if (!EXECUTING_COMMANDS.has(command.name)) return undefined;
+  const targets = command.args.filter((arg) => !arg.startsWith('-'));
+  if (targets.length === 0) return undefined;
+  return targets.every((arg) => isHarmlessTarget(arg)) ? null : undefined;
+}
+
 const BASH_RULES: Array<(command: Command) => Verdict> = [
   gitRule,
   pathRule,
   lintRule,
   sedRule,
   findRule,
+  scratchRule,
 ];
 
 function isHarmlessTarget(target: string): boolean {
-  return target.startsWith('&') || HARMLESS_TARGET.test(target);
+  return (
+    target.startsWith('&') ||
+    HARMLESS_TARGET.test(target) ||
+    SCRATCH_TARGET.test(target)
+  );
 }
+
 
 function redirectViolation(segment: string): string | null {
   const withoutSingleQuotes = segment.replace(/'[^']*'/g, "''");
@@ -406,8 +421,47 @@ function segmentViolation(segment: string): string | null {
   return EXECUTING_COMMANDS.has(command.name) ? clip(command.text) : null;
 }
 
+function segments(command: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: string | null = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? '';
+    if (quote !== null) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '\\' && index + 1 < command.length) {
+      current += char + (command[index + 1] ?? '');
+      index += 1;
+      continue;
+    }
+    const twin = char === command[index + 1] && (char === '&' || char === '|');
+    if (twin) {
+      parts.push(current);
+      current = '';
+      index += 1;
+      continue;
+    }
+    if (char === ';' || char === '|' || char === '\n') {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts;
+}
+
 export function readOnlyViolation(command: string): string | null {
-  for (const segment of command.split(/&&|\|\||[;|\n]/)) {
+  for (const segment of segments(command)) {
     const violation = segmentViolation(segment);
     if (violation !== null) return violation;
   }

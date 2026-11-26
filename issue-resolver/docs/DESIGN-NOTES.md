@@ -95,6 +95,16 @@ exists…`). Without that rule an idle issue accepted a second `pending` and the
 - Tool policy is deny-by-default: an allowlist replaces pi's whole tool
   selection, so a forgotten entry is a lost capability, not an extra one
   (`backend/src/pi/tool-policy.ts`).
+- A grilling round rides the `editor` dialog, not a new wire method: pi's
+  `extension_ui_request` union is one question → one answer
+  (`select`/`confirm`/`input`/`editor`) with no batch shape, and `ctx.ui.custom()`
+  is TUI-only. The `round` tool (`backend/src/pi/round-extension.ts`, loaded for
+  refine via `roundStep`) passes the whole formatted round as `editor` prefill and
+  returns the edited text; no backend mapping change was needed. The frontend
+  (`round-format.ts` + `InlineQuestion`) parses the ❓/➡️ round into one reply
+  field per question, pre-filled with its recommendation, so each answer is edited
+  separately; a non-round editor prefill falls back to a single textarea.
+  Submitting unchanged accepts every recommendation.
 - Timeout handling is a ladder of attempts, each with its own grace window. A
   live but silent run must be killed (no output bumps the counter), while an
   attempt in flight must not let the window fire twice; the guard moves down the
@@ -285,6 +295,15 @@ looks like it is missing from the DDL too, but it is created from
   and engine warnings are written in the user's language, so a non-ASCII value
   is percent-encoded — otherwise Node rejects the header and the whole result
   endpoint answers `500`, which reads to the user as «отчёта нет».
+- The report step compacts long-term memory before writing, and it is the only
+  step that does: the pipeline ends there, so a stray entry written by an early
+  step is never cleaned by anyone later, and memory is re-read at the start of
+  every session, which makes its size a cost paid by every later agent. The rule
+  is deletion-first and reversible — `memory_forget` by match string returns a
+  recovery id, `memory_restore` undoes it — because a rewrite of the whole file
+  blind loses facts silently and cannot be audited afterwards. What must survive
+  a pass: a `#decision` that still governs the code, a `#lesson` whose trap can
+  recur, and entries belonging to other repositories (the file is shared).
 - The report run is shown by the **same card component as a pipeline step**
   (`RunOutcome` / `RunStatsLine`): live transcript while it runs, one-line
   verdict plus a stats line once it ends, and the transcript behind «Развернуть».
@@ -491,8 +510,10 @@ looks like it is missing from the DDL too, but it is created from
 - The test account is a per-repository, human-owned value
   (`repositories.test_credentials`, written through
   `PUT /repositories/:id/credentials`). Agents only read it: it reaches the
-  `devops` and `test` prompts as `{{CREDENTIALS}}` so the tester logs into the
-  real stand instead of inventing a mock backend, and both prompts forbid copying
+  `resolve` (solo and staged, workers included), `devops` and `test` prompts as
+  `{{CREDENTIALS}}`, so the implementer can drive the real UI and the tester logs
+  into the real stand instead of inventing a mock backend, and every prompt that
+  receives it forbids copying
   the password or token into the step result, the narrative, a screenshot, the
   report or `RUN_INSTRUCTIONS.md`/`WORKSPACE_INSTRUCTIONS.md`. An empty value is
   not "try harder": with an account the tester must log in and verify against
@@ -502,6 +523,9 @@ looks like it is missing from the DDL too, but it is created from
   When nothing else can judge the change, the verdict is `blocked`. Empty string
   clears the field to `NULL`, so removing an account never leaves a stale secret
   behind.
+- `review` is deliberately not on that list: the step runs no code and no
+  browser (see the tool gate below), so an account there is a secret with no
+  use.
 - The `test` step drives the browser through `agent-browser`, not a harness the
   agent writes for itself: the CLI ships in the image and carries its own guide
   (`agent-browser skills get core`), while a hand-rolled Puppeteer/Playwright
@@ -542,12 +566,20 @@ looks like it is missing from the DDL too, but it is created from
   a first-word check are closed too, each found by probing the matcher rather
   than by argument: running a file (`./scripts/check.sh` — a path head whose
   name is neither an inspector nor a linter is a script), command substitution
-  (`$(…)`, backticks, `<(`), redirection into anything but `/dev/null` (`>`,
-  `>>` — the tree must come out unchanged), and git config injection (`-c`,
+  (`$(…)`, backticks, `<(`), redirection into anything but `/dev/null` or
+  `/tmp` (`>`, `>>` — the tree must come out unchanged, scratch does not),
+  and git config injection (`-c`,
   `--config-env`, `--exec-path`, a `!` argument, which turn `git` into an
   arbitrary runner). Text inside single quotes is stripped before the
   substitution test and both quote kinds before the redirect test, so
-  `grep -n ">" src/app.ts` still passes. Static analysis is the one execution
+  `grep -n ">" src/app.ts` still passes. Segments are split on `;` `|` `&&`
+  `||` only **outside** quotes: quoting was not cosmetic in practice — six
+  blocks across two live reviews produced five false positives, because a
+  `grep -E "membershipMessages|utils/words"` alternation was cut at the pipe
+  and `utils/words` parsed as a script to run, while `rg -n 'rm -rf|rm -r'`
+  was read as `rm`. A command whose every target sits in `/tmp` or `/dev/null`
+  passes for the same reason (`tee /tmp/tsc.out` captures compiler output) —
+  the rule is about the working tree, not about syscalls. Static analysis is the one execution
   the step keeps, since a linter finds defects reading cannot: `eslint`,
   `stylelint`, `prettier --check`, `biome check`, `dprint check`, `ruff`,
   `mypy`, `shellcheck`, `tsc --noEmit` run directly or through `npx` /
@@ -587,7 +619,41 @@ looks like it is missing from the DDL too, but it is created from
   machine's set. Undefined keeps discovery, for runs outside the pipeline.
   Two rules keep the table honest. A skill a prompt names must be in that step's
   allowlist — `backend/test/step-skills.test.ts` reads the step's prompt files
-  and fails on any `the "x" skill` mention outside it. And a rule is not a
+  and fails on any `the "x" skill` or `skill("x")` mention outside it. A skill
+  in the allowlist must also have a routing line:
+  `backend/src/workflow/prompts/skill-routing.ts` holds a `when to call it`
+  trigger per skill, rendered **before the step body** as
+  `- \`skill(ID)\` — the trigger`, and `backend/test/skill-routing.test.ts`
+  fails on a skill without a trigger or a trigger for a skill nobody loads. The
+  reason is a measurement, not a hunch: the descriptions pi advertises are
+  written for a human asking ("Use when the user says diagnose this"), so in a
+  step — where the failure is a red test, not a request — the condition never
+  matches and the line is dead weight. Routing is the one place where the
+  step's own situation is named, it costs ~10 short lines per step, and it
+  duplicates no advice: the file is still the only source when the agent opens
+  it. It is a schedule, not doctrine.
+- Pi has no `skill` tool: it lists skills as name + description + a file path and
+  says "read it when the task matches". Measured over 451 sessions, 16 % opened
+  a skill file, and in 61 % of those the human had named the skill; the
+  `refine` reinforce was read in 12 of 43 sessions even though its prompt names
+  it. So the missing piece arrives as an extension
+  (`~/.pi/agent/extensions/skill-tool.ts`, outside this repository because it
+  serves every pi session): it registers `skill({ id })`, the shape OpenCode
+  (Kilo's parent) gives its skills and Claude Code has as `Skill`. Its
+  description enumerates the allowed skills, an id the user named counts as
+  valid, the answer carries the skill's directory so relative references
+  resolve, and a skill already loaded is not pasted twice. The pipeline bounds
+  it exactly as it bounds `--skill`: `skillAllowList` (`pi/rpc-spawn.ts`) turns
+  the step's own paths into `PI_SKILL_ALLOW`, so resolve advertises its ten and
+  `pr`, with an empty set, advertises none. The allowlist is enforced, not
+  advertised: while it is set, the extension blocks any tool call whose
+  arguments name `…/skills/<id>/` for an id off the list. Without that, a step
+  that wanted a skill it was not given could just `read` the file — one did
+  (`sed -n 1,80p …/skills/issue-resolver-ops/SKILL.md` in a resolve session). The probe that decided it matters:
+  with the tool present but the skill unnamed a fresh session still called
+  `bash`/`read` and not `skill`; with the skill named in the sentence it called
+  `skill({"id":"clean-code"})` — matching the one path a human actually uses,
+  naming the skill. And a rule is not a
   skill: `tdd` is allowlisted as the method *and* injected as
   `prompts/resolve-tdd.md` as the obligation, because a lazily-read skill is
   obeyed in 9% of sessions and "tests are the spec" cannot be optional. The

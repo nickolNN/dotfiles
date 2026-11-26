@@ -5,8 +5,8 @@ import {
   getRetroRun,
   getRetroRunWithLog,
   listRetroRuns,
-} from '../db/retro-runs.repo';
-import { getSetting, setSetting } from '../db/settings.repo';
+} from '../repositories/retro-runs.repo';
+import { getSetting, setSetting } from '../repositories/settings.repo';
 import {
   AbortRetroResult,
   abortRetroRun,

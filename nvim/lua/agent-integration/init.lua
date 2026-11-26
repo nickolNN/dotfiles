@@ -3,11 +3,11 @@
 --
 -- Usage (from a wrapper plugin):
 --   return require("agent-integration").create({
---     name         = "kilo",
---     command      = "kilo .",
---     leader       = "k",
---     display_name = "Kilo",
---     bracketed_paste = false,
+--     name         = "pi",
+--     command      = "pi",
+--     leader       = "p",
+--     display_name = "Pi",
+--     bracketed_paste = true,
 --     is_terminal  = function(bufName) ... end,
 --   })
 

@@ -211,6 +211,7 @@ describe('App', () => {
           issueId: '__global__',
           data: JSON.stringify({
             cpuPercent: 12.45,
+            cpuLimitPercent: 800,
             memoryUsageBytes: 268435456,
             memoryLimitBytes: 2147483648,
             pids: 5,
@@ -221,11 +222,14 @@ describe('App', () => {
     });
 
     expect(await screen.findByTestId('container-stats')).toHaveTextContent(
-      'CPU 12.4%',
+      'CPU 12.4/800%',
     );
     expect(screen.getByTestId('cpu-health')).toHaveStyle({
       backgroundColor: '#00FF41',
     });
+    expect(screen.getByTestId('container-stats')).toHaveTextContent(
+      'MEM 256.0/2048.0MB',
+    );
     expect(screen.getByTestId('mem-health')).toHaveStyle({
       backgroundColor: '#00FF41',
     });
@@ -240,7 +244,7 @@ describe('App', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('container-stats')).toHaveTextContent(
-        'CPU 12.4%',
+        'CPU 12.4/800%',
       ),
     );
     expect(screen.getByTestId('cpu-health')).toHaveStyle({

@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isValidPiSessionId } from '@issue-resolver/shared';
 import type { PiRunOptions } from './runner';
@@ -26,9 +26,39 @@ function readOnlyExtensionArgs(): string[] {
   return ['--extension', path];
 }
 
+const ROUND_EXTENSION_CANDIDATES = ['round-extension.ts', 'round-extension.js'];
+
+export function roundExtensionPath(): string | null {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  for (const name of ROUND_EXTENSION_CANDIDATES) {
+    const path = join(dir, name);
+    if (existsSync(path)) return path;
+  }
+  return null;
+}
+
+function roundExtensionArgs(): string[] {
+  const path = roundExtensionPath();
+  if (path === null) {
+    throw new Error(
+      'pi: refine step has no round extension — refusing to spawn without the round tool',
+    );
+  }
+  return ['--extension', path];
+}
+
 function skillArgs(skills: string[] | undefined): string[] {
   if (skills === undefined) return [];
   return ['--no-skills', ...skills.flatMap((dir) => ['--skill', dir])];
+}
+
+/**
+ * The `skill` extension reads this, so a step advertises exactly the set its
+ * own `--skill` flags allow and nothing else.
+ */
+export function skillAllowList(skills: string[] | undefined): string | undefined {
+  if (skills === undefined) return undefined;
+  return skills.map((dir) => basename(dir)).join(':');
 }
 
 const LAUNCHER_ENV_KEYS = [
@@ -43,10 +73,12 @@ const LAUNCHER_ENV_KEYS = [
 export function stepAgentEnv(
   base: NodeJS.ProcessEnv,
   room?: string,
+  skillAllow?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of LAUNCHER_ENV_KEYS) delete env[key];
   if (room) env.PI_AGENT_ROOM = room;
+  if (skillAllow !== undefined) env.PI_SKILL_ALLOW = skillAllow;
   env.PI_OFFLINE = '1';
   env.PI_SKIP_VERSION_CHECK = '1';
   env.PI_TELEMETRY = '0';
@@ -85,6 +117,7 @@ export function sessionArgs(options: PiRunOptions): string[] {
       ? ['--exclude-tools', options.excludeTools.join(',')]
       : []),
     ...(options.readOnly ? readOnlyExtensionArgs() : []),
+    ...(options.round ? roundExtensionArgs() : []),
     ...skillArgs(options.skills),
     ...verboseFlags,
   ];
@@ -98,6 +131,7 @@ export function spawnRpcSession(launch: RpcLaunchOptions): ChildProcess {
     : [];
   const sessionFlags = sessionArgs(options);
   const room = options.issueId ? `issue-${options.issueId}` : undefined;
+  const skillAllow = skillAllowList(options.skills);
 
   if (launch.transport === 'local') {
     return spawn(
@@ -113,7 +147,7 @@ export function spawnRpcSession(launch: RpcLaunchOptions): ChildProcess {
       {
         cwd: options.cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: stepAgentEnv(process.env, room),
+        env: stepAgentEnv(process.env, room, skillAllow),
       },
     );
   }
@@ -125,6 +159,9 @@ export function spawnRpcSession(launch: RpcLaunchOptions): ChildProcess {
       '-i',
       ...(options.cwd ? ['-w', options.cwd] : []),
       ...(room ? ['-e', `PI_AGENT_ROOM=${room}`] : []),
+      ...(skillAllow !== undefined
+        ? ['-e', `PI_SKILL_ALLOW=${skillAllow}`]
+        : []),
       launch.containerName,
       launch.piCommand,
       ...launch.piArgs,

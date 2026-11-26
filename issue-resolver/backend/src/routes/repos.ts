@@ -10,7 +10,7 @@ import {
   updateRepository,
   updateRepositoryTestCredentials,
   type RepositoryWrite,
-} from '../db/repositories.repo';
+} from '../repositories/repositories.repo';
 import type { RepoResolverFactory } from '../repo-resolver/resolver';
 import {
   createReposValidator,

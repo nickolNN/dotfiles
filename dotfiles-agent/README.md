@@ -69,9 +69,8 @@ one another's containers.
 — override with `--room NAME`. Rooms are selected through the `PI_AGENT_ROOM`
 env var; see [Agent rooms](#agent-rooms-per-task).
 
-`attach.sh` extras: `--build` (force rebuild), `--no-install` (skip the auto
-`bun install`/`npm install` when `package.json` is present), and `-- CMD` to run
-a specific command (`attach.sh -- pi` is equivalent to `spawn-pi-agent.sh`).
+`attach.sh` extras: `--build` (force rebuild) and `-- CMD` to run a specific
+command (`attach.sh -- pi` is equivalent to `spawn-pi-agent.sh`).
 
 ## Agent rooms (per-task)
 
@@ -240,9 +239,12 @@ owned by the agent user (host uid/gid, which the image is aligned to via
 `AGENT_UID`/`AGENT_GID`), so installs can write to it — Docker's tmpfs default
 is root-owned, which would make `bun install` fail with `EACCES`.
 
-On first attach, if `package.json` exists and the container's `node_modules` is
-empty, `bun install` (or `npm install`) runs automatically. Stopping the
-container discards it — the next launch installs fresh.
+Nothing is installed for you and nothing persists: run `bun install` (or
+`npm install`) yourself when a repo needs dependencies, and expect to do it
+again after the container is recreated. That is deliberate — a dependency tree
+carried across rebuilds goes stale quietly, and a stale one is worse than an
+empty one. Repos that vendor their own toolchain (the issue-resolver pins its
+own `package.json` per subproject) are unaffected.
 
 Note: Docker needs the tmpfs target to exist and will create an **empty**
 `node_modules` directory on the host if it's missing. It's always empty (the
@@ -311,6 +313,30 @@ Notes:
 
 Skills reach the container from two sources, merged in
 `/home/agent/.agents/skills`; the pi-lens package adds four more of its own.
+
+### The `skill` tool
+
+Pi has no skill tool: it advertises skills as name + description + file path and
+says "read it when the task matches". Measured over 451 recorded sessions, 16 %
+opened a skill file, and in 61 % of those the human had named the skill — the
+description alone almost never won. `pi/extensions/skill-tool.ts` adds the
+missing tool: `skill({ id })` returns that skill's instructions, accepts an id
+the user named, carries the skill's directory so relative references resolve,
+and does not paste a skill twice. Its description enumerates what a step is
+allowed to call.
+
+- `PI_SKILL_ALLOW=clean-code:tdd` limits the advertised set and is the same list
+the issue-resolver passes as `--skill` (`skillAllowList` in its `rpc-spawn.ts`);
+the variable set but empty means **no** skills, unset means all discovered ones.
+While the variable is set the extension also **blocks** a tool call whose
+arguments name `…/skills/<id>/` for an id that is not on the list — otherwise
+the allowlist would be advisory, and a step that wanted a skill it was not
+given could just `read` its `SKILL.md` (one did, via `sed -n`).
+- `PI_SKILL_ROOTS=/a/skills:/b/skills` adds discovery roots on top of
+  `~/.pi/agent/skills`, `~/.agents/skills`, `~/.claude/skills`, the pi-lens
+  package and the project's `.pi/skills` / `.agents/skills`.
+- Baked in from `pi/extensions/` like every other extension, so an existing
+  image needs `build.sh`; a host session picks it up on `/reload`.
 
 - **Remote skills** are cloned into the image at build time and baked in.
 - **Repo skills** in `agent-skills/` are also baked in by the Dockerfile, and —

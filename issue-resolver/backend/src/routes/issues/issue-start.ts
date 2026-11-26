@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TaskStatus } from '@issue-resolver/shared';
 import { eq } from 'drizzle-orm';
 import type { IssuesContext } from './context';
-import { listIssueRepositories } from '../../db/issue-repositories.repo';
+import { listIssueRepositories } from '../../repositories/issue-repositories.repo';
 import { issues, iterations } from '../../db/schema';
 import {
   startIteration,

@@ -24,7 +24,7 @@ there instead of trusting a summary here:
 
 | Subject | Document |
 | ------- | -------- |
-| Agent rules that apply everywhere | `GLOBAL_AGENTS.md` (`pi/AGENTS.md` and `kilo/AGENTS.md` are symlinks to it) |
+| Agent rules that apply everywhere | `GLOBAL_AGENTS.md` (`pi/AGENTS.md` is a symlink to it) |
 | The container I run in: toolchain, ports, durability, what to suggest to the user | the `container-environment` skill |
 | Building and operating that container | `dotfiles-agent/README.md` |
 | Corporate CA / VPN trust | `dotfiles-agent/certs/README.md` |
@@ -43,9 +43,9 @@ re-copy their contents into prose; it rots.
   outer shell.
 - Neovim is LazyVim: plugins in `nvim/lua/plugins/*.lua` plus `lazyvim.json`
   extras, formatting by `eslint_d`/`stylelint`/`stylua`/`golines`, agent
-  integrations (kilo, pi: terminal toggle, context send, `<leader>{k,p}*`
-  keymaps) in `nvim/lua/plugins/agent-integration/`.
-- `kilo/opencode.jsonc` and `kilo/kilo.jsonc` are gitignored; create locally.
+  integrations (pi: terminal toggle, context send, `<leader>p*` keymaps) in
+  `nvim/lua/plugins/pi-integration/` on top of the shared core in
+  `nvim/lua/agent-integration/`.
 
 ## Pi
 
@@ -60,7 +60,8 @@ re-copy their contents into prose; it rots.
   when MCP is off.
 - `pi/sync-thinking-rules.sh` syncs `reasoning`/`thinkingLevelMap` into
   `models.json` from pi's baked provider catalogs (`--dry-run` by default,
-  `--write` to apply). `provider1` is Aliyun token-plan.
+  `--write` to apply). `provider1` is the Qwen Cloud token-plan individual plan
+  on the international gateway (`token-plan.maas.qwencloudapi.com`).
 - Long-term memory is `pi-memory`: `~/.config/pi/memory` on the host
   (`PI_MEMORY_DIR`), the shared `agent-memory` volume inside containers.
 - Runtime data (sessions, memory, npm, auth, caches) lives in the same directory

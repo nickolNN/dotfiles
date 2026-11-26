@@ -56,6 +56,7 @@ class SpyContainerController implements ContainerController {
     return {
       containerName,
       cpuPercent: 0,
+      cpuLimitPercent: 0,
       memoryUsageBytes: 0,
       memoryLimitBytes: 0,
       pids: 0,

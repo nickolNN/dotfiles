@@ -1,7 +1,7 @@
 import { and, asc, eq } from 'drizzle-orm';
 import { TaskStatus } from '@issue-resolver/shared';
 import type { Db } from '../db/client';
-import { listIssueRepositories } from '../db/issue-repositories.repo';
+import { listIssueRepositories } from '../repositories/issue-repositories.repo';
 import { issues, iterations } from '../db/schema';
 import type { IterationRunDeps } from './service-contracts';
 import { startIteration, startIterationIssue } from './start-iteration';

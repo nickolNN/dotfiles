@@ -23,12 +23,12 @@ import {
   getLatestStepRunForIssue,
   getStepRunWithLog,
   listStepRunsByIssue,
-} from '../src/db/step-runs.repo';
+} from '../src/repositories/step-runs.repo';
 import type { DevOpsAgent, DevOpsResult } from '../src/workflow/devops';
 import { RUN_INSTRUCTIONS_FILE } from '../src/workflow/devops';
 import type { DevOpsFactory } from '../src/workflow/engine';
 import type { SseHub } from '../src/sse/hub';
-import { insertTag } from '../src/db/tags.repo';
+import { insertTag } from '../src/repositories/tags.repo';
 import { resetPortAllocator } from '../src/port-allocator';
 import {
   collectDevOpsContext,
@@ -134,12 +134,18 @@ type AgentBehaviour = (
 
 function trackingFactory(behaviour: AgentBehaviour): {
   factory: DevOpsFactory;
-  calls: Array<{ repoName: string; devServerPort?: number; stepRunId?: string }>;
+  calls: Array<{
+    repoName: string;
+    devServerPort?: number;
+    stepRunId?: string;
+    credentials?: string | null;
+  }>;
 } {
   const calls: Array<{
     repoName: string;
     devServerPort?: number;
     stepRunId?: string;
+    credentials?: string | null;
   }> = [];
   const factory: DevOpsFactory = (params) => {
     const agent: DevOpsAgent = {
@@ -148,6 +154,7 @@ function trackingFactory(behaviour: AgentBehaviour): {
           repoName,
           ...(devServerPort !== undefined ? { devServerPort } : {}),
           ...(params.stepRunId ? { stepRunId: params.stepRunId } : {}),
+          credentials: params.credentials,
         });
         return behaviour(repoName, {
           stdout: (chunk) => params.onStdout?.(chunk),
@@ -202,6 +209,30 @@ describe('runDevopsAgent — прогон DevOps на уровне задачи'
     expect(run?.iteration_id).toBeNull();
     expect(run?.context).toBe('manual');
     expect(isDevopsRunActive(issueId)).toBe(false);
+  });
+
+  it('тестовый аккаунт репозитория уезжает в devops-агент', async () => {
+    const db = createDb(':memory:');
+    const root = tempRoot();
+    const sse = new RecordingSseHub();
+    const { issueId, repoDir } = seedIssue(db, root);
+    makeClonedRepo(repoDir);
+    db.update(repositories)
+      .set({ test_credentials: 'https://dev.example.com · robot · secret' })
+      .where(eq(repositories.url, REPO_URL))
+      .run();
+    const { factory, calls } = trackingFactory(() => ({
+      success: true,
+      instructions: '# Install\nnpm ci',
+      stats: null,
+    }));
+
+    await runDevopsAgent(buildDeps(db, root, factory, sse), {
+      issueId,
+      repositories: [{ repository_url: REPO_URL }],
+    });
+
+    expect(calls[0]?.credentials).toBe('https://dev.example.com · robot · secret');
   });
 
   it('пишет реальный stdout/stderr и события сессии в step_output', async () => {

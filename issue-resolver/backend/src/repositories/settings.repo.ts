@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
-import type { Db } from './client';
-import { settings } from './schema';
-import { nowIso } from './rows';
+import type { Db } from '../db/client';
+import { settings } from '../db/schema';
+import { nowIso } from '../db/rows';
 
 export function getSetting(db: Db, key: string): string | undefined {
   const row = db.select().from(settings).where(eq(settings.key, key)).get();

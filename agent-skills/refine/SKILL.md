@@ -3,8 +3,8 @@ name: refine
 description: >-
   The refine step of the issue-resolver pipeline: wraps the `grilling`
   interview (design tree → frontier → rounds) in the mechanics of the step —
-  step input, questions through the `question` tool, `plan.md`, and the
-  `execution` object. The method itself lives in the `grilling` skill; this
+  step input, questions through the `round` tool (a whole frontier round per
+  call), `plan.md`, and the `execution` object. The method itself lives in the `grilling` skill; this
   file is only the adapter. Use when the refine step of the issue-resolver
   pipeline runs and a raw ticket must become a plan.
 ---
@@ -24,16 +24,21 @@ The interview follows the **`grilling`** skill's protocol: it fixes the shape
 user", and the stopping condition (empty frontier). Only what the original
 cannot know is written here.
 
-Adaptation to the pipeline: there is no chat round — there is the **`question`**
-tool, one call per question; the call blocks the turn until the user answers and
-returns that answer. So the frontier is walked one question at a time, not one
-round at a time:
+Adaptation to the pipeline: there is no chat round — there is the **`round`**
+tool, one call per ROUND; the call blocks the turn until the user answers the
+whole round and returns their text. It opens one editable dialog pre-filled with
+the round and your recommended answers (the `editor` dialog the UI already
+renders), so the frontier is walked one round at a time, exactly as grilling
+formats it:
 
 ```json
-{ "question": "...", "options": [ { "label": "...", "description": "..." } ] }
+{ "title": "...", "body": "❓ **Q1** …\n➡️ …\n\n❓ **Q2** …\n➡️ …" }
 ```
 
-Two to five concrete options, the recommended one first.
+The user edits in answers, or submits unchanged to accept every recommendation.
+For a single discrete-choice follow-up the **`question`** tool
+(`{ question, options }`, two to five concrete options, recommended first) is
+still available.
 
 ## Step input
 

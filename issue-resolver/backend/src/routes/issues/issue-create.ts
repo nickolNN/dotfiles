@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { DesiredResult } from '@issue-resolver/shared';
 import { extractIssueKeyFromUrl, TaskStatus } from '@issue-resolver/shared';
-import type { IssueRepositorySelection } from '../../db/issue-repositories.repo';
+import type { IssueRepositorySelection } from '../../repositories/issue-repositories.repo';
 import type { IssuesContext } from './context';
 import { issueRepositories, issues, iterations } from '../../db/schema';
 import type { JiraIssueFull } from '../../jira/client';

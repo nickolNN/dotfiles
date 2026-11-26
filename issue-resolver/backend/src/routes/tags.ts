@@ -7,7 +7,7 @@ import {
   insertTag,
   listTags,
   updateTag,
-} from '../db/tags.repo';
+} from '../repositories/tags.repo';
 import {
   createTagRequestSchema,
   updateTagRequestSchema,

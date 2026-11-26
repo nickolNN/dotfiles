@@ -35,6 +35,7 @@ export class LocalContainerController implements ContainerController {
     return {
       containerName,
       cpuPercent: null,
+      cpuLimitPercent: 0,
       memoryUsageBytes: 0,
       memoryLimitBytes: 0,
       pids: 0,

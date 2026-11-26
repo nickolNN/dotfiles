@@ -695,4 +695,88 @@ describe('TaskDetail — интерактивный вопрос (inline)', () =
       });
     });
   });
+
+  it('round: editor с grilling-разметкой даёт поле на каждый вопрос', async () => {
+    const fetchMock = stubFetch(undefined, [
+      makeStepRun({
+        events: [
+          {
+            type: 'question',
+            ...question({
+              id: 'q-round',
+              method: 'editor',
+              title: 'Раунд 1',
+              options: undefined,
+              prefill:
+                '❓ **Q1** - **Scope**: one screen?\n\n➡️ One screen.\n\n' +
+                '❓ **Q2** - **Priority**: now?\n\n➡️ Now.',
+            }),
+          },
+        ],
+      }),
+    ]);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const form = await screen.findByTestId('round-form');
+    const q1 = within(form).getByLabelText('Ответ Q1') as HTMLTextAreaElement;
+    const q2 = within(form).getByLabelText('Ответ Q2') as HTMLTextAreaElement;
+    expect(q1.value).toBe('One screen.');
+    expect(q2.value).toBe('Now.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          init?.method === 'POST' && String(url).endsWith('/ui-response'),
+      );
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        id: 'q-round',
+        value: 'Q1: One screen.\n\nQ2: Now.',
+      });
+    });
+  });
+
+  it('round: правка одного ответа меняет только его', async () => {
+    const fetchMock = stubFetch(undefined, [
+      makeStepRun({
+        events: [
+          {
+            type: 'question',
+            ...question({
+              id: 'q-round-edit',
+              method: 'editor',
+              title: 'Раунд 1',
+              options: undefined,
+              prefill:
+                '❓ **Q1** - **A**: x?\n\n➡️ rec1\n\n' +
+                '❓ **Q2** - **B**: y?\n\n➡️ rec2',
+            }),
+          },
+        ],
+      }),
+    ]);
+
+    render(<TaskDetail issueId="issue-1" />);
+    await screen.findByText('Fix login bug');
+
+    const form = await screen.findByTestId('round-form');
+    fireEvent.change(within(form).getByLabelText('Ответ Q2'), {
+      target: { value: 'my answer' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([url, init]) =>
+          init?.method === 'POST' && String(url).endsWith('/ui-response'),
+      );
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+        id: 'q-round-edit',
+        value: 'Q1: rec1\n\nQ2: my answer',
+      });
+    });
+  });
 });

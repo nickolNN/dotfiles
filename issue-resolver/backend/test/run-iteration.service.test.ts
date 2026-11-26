@@ -12,7 +12,7 @@ import { issues, iterations, repositories as repositoriesTable, stepOutputs, ste
 import {
   createStepOutput,
   createStepRun,
-} from '../src/db/step-runs.repo';
+} from '../src/repositories/step-runs.repo';
 import { FakeContainerController } from '../src/docker/controller';
 import {
   FakeGitService,

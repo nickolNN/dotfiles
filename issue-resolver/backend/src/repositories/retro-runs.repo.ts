@@ -10,10 +10,10 @@ import {
 } from '@issue-resolver/shared';
 
 import { desc, eq } from 'drizzle-orm';
-import type { Db } from './client';
+import type { Db } from '../db/client';
 import { capSessionEvents } from '../pi/session-events-cap';
-import { nowIso } from './rows';
-import { retroRuns } from './schema';
+import { nowIso } from '../db/rows';
+import { retroRuns } from '../db/schema';
 
 function toRun(row: typeof retroRuns.$inferSelect): RetroRun {
   return {

@@ -1,5 +1,10 @@
 import type { ContainerStatsPayload } from '../api/sse';
-import { formatBytes, healthColor } from '../lib/containerStats';
+import {
+  cpuLoadPercent,
+  formatBytes,
+  formatBytesPair,
+  healthColor,
+} from '../lib/containerStats';
 
 interface ContainerStatsBlockProps {
   stats: ContainerStatsPayload | null;
@@ -13,12 +18,19 @@ export default function ContainerStatsBlock({
   className,
 }: ContainerStatsBlockProps) {
   const cpuPercent = stats?.cpuPercent ?? null;
+  const cpuLimitPercent = stats?.cpuLimitPercent ?? 0;
   const memoryUsageBytes = stats?.memoryUsageBytes ?? null;
   const memoryLimitBytes = stats?.memoryLimitBytes ?? null;
   const memPercent =
     memoryUsageBytes != null && memoryLimitBytes
       ? (memoryUsageBytes / memoryLimitBytes) * 100
       : null;
+  const cpuLimitSuffix =
+    cpuLimitPercent > 0 ? `/${Math.round(cpuLimitPercent)}%` : '%';
+  const cpuLoad = cpuLoadPercent(cpuPercent, cpuLimitPercent);
+  const memText = memoryLimitBytes
+    ? formatBytesPair(memoryUsageBytes ?? 0, memoryLimitBytes)
+    : formatBytes(memoryUsageBytes ?? 0);
 
   return (
     <div
@@ -34,9 +46,9 @@ export default function ContainerStatsBlock({
             <span
               data-testid={`cpu-health${suffix}`}
               className="inline-block h-2 w-2 rounded-full"
-              style={{ backgroundColor: healthColor(cpuPercent, 80) }}
+              style={{ backgroundColor: healthColor(cpuLoad ?? cpuPercent ?? 0, 80) }}
             />
-            {`CPU ${cpuPercent.toFixed(1)}%`}
+            {`CPU ${cpuPercent.toFixed(1)}${cpuLimitSuffix}`}
           </span>
           <span className="flex items-center gap-1">
             <span
@@ -44,7 +56,7 @@ export default function ContainerStatsBlock({
               className="inline-block h-2 w-2 rounded-full"
               style={{ backgroundColor: healthColor(memPercent ?? 0, 90) }}
             />
-            {`MEM ${formatBytes(memoryUsageBytes ?? 0)}`}
+            {`MEM ${memText}`}
           </span>
         </>
       ) : (

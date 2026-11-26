@@ -59,6 +59,7 @@ export async function prepareRunInstructions(
         registry: deps.control,
         tagInstructions: deps.tagInstructions,
         cachedInstructions: runInstructions.getInstructions(workspace.repoUrl),
+        credentials: runInstructions.getCredentials?.(workspace.repoUrl) ?? null,
         reposNames: deps.reposNames,
         reposRequireDevServer: deps.reposRequireDevServer,
         reposInstructions: deps.reposInstructions,

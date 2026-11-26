@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { IssueFile } from '@issue-resolver/shared';
 import { and, asc, eq, isNull, or } from 'drizzle-orm';
-import type { Db } from './client';
-import { issueFiles } from './schema';
-import { nowIso } from './rows';
+import type { Db } from '../db/client';
+import { issueFiles } from '../db/schema';
+import { nowIso } from '../db/rows';
 
 export interface NewIssueFile {
   issueId: string;

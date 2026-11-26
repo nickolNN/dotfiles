@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { RunInstructionsStatus } from '@issue-resolver/shared';
 import type { CreateTagRequest, Tag, TagRepository, TagRepositoryWithRepo, UpdateTagRequest } from '@issue-resolver/shared';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
-import type { Db } from './client';
+import type { Db } from '../db/client';
 import { toSavedRepo } from './repositories.repo';
-import { repositories, tagRepositories, tags } from './schema';
-import { nowIso } from './rows';
+import { repositories, tagRepositories, tags } from '../db/schema';
+import { nowIso } from '../db/rows';
 
 type TagRow = typeof tags.$inferSelect;
 type TagRepositoryRow = typeof tagRepositories.$inferSelect;

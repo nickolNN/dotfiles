@@ -72,7 +72,7 @@ the code behind it changes, rather than amending it.
   same shape.
 
 - **Reading back our own data does not re-validate its shape.**
-  `db/step-runs.repo.ts` casts the events column to `SessionEvent[]` and
+  `repositories/step-runs.repo.ts` casts the events column to `SessionEvent[]` and
   `issues/artifacts.ts` casts `desired_result` to `DesiredResult`. Both are
   columns this process wrote itself; a full 18-variant re-validation on read
   belongs to the parser that consumes untrusted input, not to a projection that

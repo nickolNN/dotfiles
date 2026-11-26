@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import type { Db } from './client';
-import { issueRepositories } from './schema';
+import type { Db } from '../db/client';
+import { issueRepositories } from '../db/schema';
 
 export interface IssueRepositorySelection {
   repository_url: string;

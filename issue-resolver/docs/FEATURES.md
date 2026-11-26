@@ -55,10 +55,15 @@ blocked call comes back to the agent with the reason, so a round cannot
 "verify by running" a suite or a build: anything only running can show belongs
 to `test`. The ways around the first-word check are closed too: running a file
 (`./scripts/check.sh`), command substitution (`$(…)`, backticks), redirecting
-into anything but `/dev/null`, and git config injection (`git -c`, `!` alias).
+into anything but `/dev/null` or `/tmp`, and git config injection (`git -c`,
+`!` alias). Segments are split on `;`/`|`/`&&` outside quotes only, so a grep
+alternation such as `grep -E "a|utils/words"` is read as one command instead of
+a script to run — quoting, not cosmetics: five of six blocks in the first two
+live reviews were that false positive.
 The tree must come out of the step unchanged, so the mutating file commands
 (`rm`, `mv`, `cp`, `touch`, `tee`, `sed -i`) are blocked for the same reason as
-`--fix`.
+`--fix` — unless every target they name is in `/tmp` or `/dev/null`, which is
+scratch, not the tree.
 Static analysis is the one execution the step keeps: the linters (`eslint`,
 `stylelint`, `prettier --check`, `biome check`, `dprint check`, `ruff`, `mypy`,
 `shellcheck`, `tsc --noEmit`) run directly or through `npx` / `pnpm exec`, but
@@ -94,6 +99,43 @@ were always present and went unused in every one of 263 pipeline sessions while
 that saves: the full advertised set costs ~10.5 KB of system prompt in every
 session. Resolve's TDD obligation is not left to that allowlist — it is injected
 text (`prompts/resolve-tdd.md`).
+
+**Skills are called, not opened.** Pi ships skills as name + description + a
+file path and tells the model to `read` the file "when the task matches". Nobody
+does: across 451 recorded sessions a skill file was opened in 16 % of them, and
+in 61 % of those the skill had been named in the user's message. So the harness
+gets the missing piece as an extension — `~/.pi/agent/extensions/skill-tool.ts`
+registers a `skill({ id })` tool, the shape OpenCode/Kilo use and Claude Code has
+as `Skill`: its description enumerates the skills, an id the user named counts as
+valid, the returned text carries the skill directory, and a skill already loaded
+is not pasted twice. The pipeline bounds it the same way it bounds `--skill`:
+`PI_SKILL_ALLOW` (built by `skillAllowList` in `backend/src/pi/rpc-spawn.ts`
+from the step's own allowlist) makes a step advertise exactly its own set, and
+`pr`, with an empty set, sees no skills at all. The limit is enforced, not just
+advertised: while `PI_SKILL_ALLOW` is set the extension blocks a tool call whose
+arguments name `…/skills/<id>/` for an id off the list. That clause is not
+hypothetical — a resolve session (`2026-11-09T14-42`, issue `e2a10403`) ran
+`sed -n 1,80p /home/agent/.agents/skills/issue-resolver-ops/SKILL.md`, a skill
+no step loads.
+
+**Skills say when to call them.** Each allowlisted skill has a routing line
+(`backend/src/workflow/prompts/skill-routing.ts`), placed **before the step
+body** as a short list: `- \`skill("clean-code")\` — you are about to write the
+edit, not after it`. Before the body rather than after it, so the list is read
+while the plan is being formed, not after the verdict format has been read. The
+descriptions pi advertises were written for a human user ("Use
+when the user says…"), and in a step that condition never arrives, so the table
+supplies the trigger instead — one line per skill, nothing restated from the
+skill itself. A skill without a routing line, or a routing line for a skill no
+step loads, fails `backend/test/skill-routing.test.ts` (which also holds the
+position: heading before `Output contract`), and a skill named in a
+step's prompt (as `the "x" skill` or as `skill("x")`) must be in that step's
+allowlist — `backend/test/step-skills.test.ts`. `bin/skill-usage.mjs` reads the
+session logs and reports per step how many sessions opened a skill file, how
+many `skill` tool calls happened (and in how many sessions; a call nested in
+`codemode` counts too — it is a real `tool_call` but not a transcript entry), how many lens
+calls happened and how often `agent-browser skills get` was used — the number
+that makes this measurable instead of felt.
 
 **Iterations.** An iteration is `number > 1` when it continues previous work: its
 prompts carry `Previous iteration outcome` (the resolve step's `status` +
@@ -204,6 +246,18 @@ engine's mechanical log (step statuses and the raw step reports). It is the
 fallback source for an iteration whose agents left no narrative, and the report
 agent is told to prefer the narratives over it.
 
+The report agent also tidies the shared memory before it writes (see
+`prompts/step-report.md`): memory is re-read at the start of every session and
+shared across tasks on the same repositories, and the report is the last step of
+the pipeline, so it owns the cleanup. It reads first, then removes what
+`memory-rules.md` forbids — round verdicts, a second entry for the same fact,
+statements a later entry contradicts, inventories the repository already
+carries — with `memory_forget` (a match string, reversible through
+`memory_restore`), merges near-duplicates through `memory_write`, and keeps every
+`#decision` that still governs the code and every `#lesson` whose trap can
+recur. The count goes into the narrative (`memory: N removed, M merged`), never
+into the memory itself.
+
 The page is single-file and opens from `file://`: inline CSS with light and dark
 themes, a `<dialog>` lightbox, markdown rendered through an escaping subset (raw
 HTML stays text, `javascript:` links are neutralised), no external images or
@@ -282,6 +336,16 @@ a clickable banner, and a question of a finished run never opens the modal. A
 question is eligible for active statuses and for `needs_input` — a blocked run
 still has to surface it.
 
+**Rounds.** The refine step asks a whole grilling round through the `round`
+extension tool (`backend/src/pi/round-extension.ts`, loaded for refine via
+`roundStep`), which rides the `editor` dialog: one pre-filled editable round, one
+answer. pi's own `question` tool is select-only and the `extension_ui_request`
+union has no batch method, so a round is carried as editor text rather than a new
+wire method. The frontend parses the grilling round (`round-format.ts`) into one
+reply textarea per question, each pre-filled with its recommendation; submitting
+unchanged accepts every recommendation and the answers return keyed by question
+(`Q1: …`). A non-round `editor` request still renders a single textarea.
+
 **Abort** always answers `ok`: it cancels the live step or, with no session,
 drives the iteration to terminal `cancelled`.
 
@@ -310,9 +374,10 @@ rather than returning a partial list.
 
 A per-repository, human-owned value (`repositories.test_credentials`, written by
 `PUT /repositories/:id/credentials`). Agents only read it: it reaches the
-`devops` and `test` prompts as `{{CREDENTIALS}}`, and both prompts forbid copying
+`resolve` (solo and staged, workers included), `devops` and `test` prompts as
+`{{CREDENTIALS}}`, and every prompt that receives it forbids copying
 the password into the step result, a narrative, a screenshot, the report or the
-run instructions. With an account the tester must log in and verify against the
+run instructions. `review` gets none: it runs nothing. With an account the tester must log in and verify against the
 real stand; without one a mock is allowed but has to be declared in `summary`,
 with the scenarios that depend on it named and their findings kept at
 `low`/`info`. When nothing else can judge the change, the verdict is `blocked`.

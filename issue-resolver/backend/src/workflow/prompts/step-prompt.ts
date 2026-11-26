@@ -26,6 +26,7 @@ import {
   type PrTarget,
 } from './fragments';
 import { prSkillBlock, readPrompt, render } from './loader';
+import { skillRouting } from './skill-routing';
 
 export interface StepPromptInput {
   step: PipelineStep;
@@ -166,6 +167,7 @@ const STEP_BODIES: Record<PipelineStep, StepBodyBuilder> = {
         input.repoPaths.length > 0
           ? `Work in the repository working paths above.\n${DEPENDENCIES_PREPARED}`
           : '',
+      CREDENTIALS: credentialsBlock(input.credentials),
       DOWNSTREAM_AWARENESS: resolveDownstreamAwareness(input.pipelineSteps).join('\n'),
     }),
 
@@ -224,6 +226,9 @@ export function buildStepPrompt(input: StepPromptInput): string {
 
   const plan = input.step === PipelineStep.refine ? '' : refinedPlanBlock(input.refinedPlan);
   if (plan) lines.push('', plan);
+
+  const routing = skillRouting(input.step);
+  if (routing !== null) lines.push('', routing);
 
   lines.push('', STEP_BODIES[input.step](input));
 

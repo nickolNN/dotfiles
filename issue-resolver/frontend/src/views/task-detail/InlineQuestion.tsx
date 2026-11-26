@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import FormError from "../../components/FormError";
 import { inputClass } from "./constants";
+import { parseRound, roundAnswerValue } from "./round-format";
 import type { QuestionEvent } from "./types";
 
 export default function InlineQuestion({
@@ -18,6 +19,11 @@ export default function InlineQuestion({
 }) {
   const [value, setValue] = useState(
     question.prefill ?? question.options?.[0] ?? "",
+  );
+  const roundQuestions =
+    question.method === "editor" ? parseRound(question.prefill ?? "") : null;
+  const [answers, setAnswers] = useState<string[]>(
+    () => roundQuestions?.map((q) => q.recommendation) ?? [],
   );
   const isConfirm = question.method === "confirm";
   const submitLabel = question.method === "editor" ? "Отправить" : "Ответить";
@@ -118,24 +124,50 @@ export default function InlineQuestion({
         />
       )}
 
-      {question.method === "editor" && (
-        <textarea
-          ref={editorRef}
-          aria-label="Ответ"
-          className={`${inputClass} mt-3`}
-          rows={5}
-          value={value}
-          placeholder={question.placeholder ?? ""}
-          onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-              event.preventDefault();
-              if (!submitting && value.trim() !== "") onSubmit({ value });
-            }
-          }}
-          disabled={submitting}
-        />
-      )}
+      {question.method === "editor" &&
+        (roundQuestions ? (
+          <div className="mt-3 space-y-4" data-testid="round-form">
+            {roundQuestions.map((q, i) => (
+              <div key={q.id} className="space-y-1">
+                <p className="break-words text-sm text-[#00FF41]/90">
+                  <span className="font-semibold text-[#FFB000]">{q.id}</span>{" "}
+                  {q.text}
+                </p>
+                <textarea
+                  ref={i === 0 ? editorRef : undefined}
+                  aria-label={`Ответ ${q.id}`}
+                  className={inputClass}
+                  rows={3}
+                  value={answers[i] ?? ""}
+                  placeholder="Ваш ответ (по умолчанию — рекомендация)"
+                  onChange={(event) =>
+                    setAnswers((prev) =>
+                      prev.map((v, j) => (j === i ? event.target.value : v)),
+                    )
+                  }
+                  disabled={submitting}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <textarea
+            ref={editorRef}
+            aria-label="Ответ"
+            className={`${inputClass} mt-3`}
+            rows={5}
+            value={value}
+            placeholder={question.placeholder ?? ""}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                event.preventDefault();
+                if (!submitting && value.trim() !== "") onSubmit({ value });
+              }
+            }}
+            disabled={submitting}
+          />
+        ))}
 
       <FormError
         message={error}
@@ -168,8 +200,14 @@ export default function InlineQuestion({
         {!isConfirm && (
           <button
             type="button"
-            disabled={submitting || value.trim() === ""}
-            onClick={() => onSubmit({ value })}
+            disabled={submitting || (!roundQuestions && value.trim() === "")}
+            onClick={() =>
+              onSubmit({
+                value: roundQuestions
+                  ? roundAnswerValue(roundQuestions, answers)
+                  : value,
+              })
+            }
             className="min-h-9 rounded-none border border-[#00FF41] bg-[#003B00] px-4 py-1 text-sm font-medium text-[#00FF41] hover:bg-[#00FF41] hover:text-[#0D0208] disabled:opacity-50 transition-base"
           >
             {submitting ? "Отправка…" : submitLabel}

@@ -1,4 +1,4 @@
-import { appendStepRunEvent, updateStepRun } from '../../db/step-runs.repo';
+import { appendStepRunEvent, updateStepRun } from '../../repositories/step-runs.repo';
 import { startAgentSession } from '../../pi/agent-session';
 import { anchoredPreviousReportPath } from '../report-warnings';
 import { REPORT_RUN_HEARTBEAT_MS } from './tracking';

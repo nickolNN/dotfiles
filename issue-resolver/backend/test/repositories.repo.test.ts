@@ -7,7 +7,7 @@ import { repositories } from '../src/db/schema';
 import {
   getRepositoryByUrl,
   updateRepositoryRunInstructions,
-} from '../src/db/repositories.repo';
+} from '../src/repositories/repositories.repo';
 import { RunInstructionsStatus } from '@issue-resolver/shared';
 
 const NOW = '2026-06-01T00:00:00.000Z';

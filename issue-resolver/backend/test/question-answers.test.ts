@@ -7,7 +7,7 @@ import { createDb } from '../src/db/client';
 import {
   listAnsweredQuestionIds,
   recordQuestionAnswer,
-} from '../src/db/question-answers.repo';
+} from '../src/repositories/question-answers.repo';
 import { questionAnswers } from '../src/db/schema';
 import { issues, iterations } from '../src/db/schema';
 import { InMemoryStepSessionRegistry } from '../src/pi/session-registry';

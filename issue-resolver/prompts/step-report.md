@@ -30,6 +30,32 @@ differ only in presentation, not in content.
 4. **Working copy** — `git diff --stat` against each repository's base
    branch for the final file-level change summary. Read-only.
 
+## Before you write: compact the shared memory
+
+Memory is shared with the other agents on this task and with every later
+attempt on these repositories, and it is re-read at the start of each session.
+This task wrote entries into it; leave it shorter than you found it, and do that
+first — the report is the last thing the pipeline does, so nothing after you
+will clean up.
+
+1. `memory_search` on this task's subject links and `memory_read` the
+   long-term file. Read what is there before touching anything.
+2. Remove what `memory-rules.md` forbids: round verdicts (the `pass`/`fail` of a
+   round, lists of what that round fixed), a second entry that repeats one
+   already in the file, a statement a later entry contradicts, and inventories
+   the repository itself carries. `memory_forget` with a match string is the
+   tool for this: it deletes every entry containing it and returns a recovery
+   id, so `memory_restore` undoes a mistake — do not try to remember what you
+   deleted.
+3. Keep every `#decision` that still governs the code and every `#lesson` whose
+   trap can recur, together with its `[[links]]`. Merging two near-duplicates
+   into one shorter statement through `memory_write` is right; rewriting the
+   whole file blind is not.
+4. Never invent or embellish a fact while compacting, and never delete an entry
+   only because it belongs to another repository — the file is shared.
+5. Report the cleanup in one line in your narrative (`memory: N removed, M
+   merged`), never inside the memory itself.
+
 ## Answer vs Execution — the semantic boundary
 
 The reader came for the ANSWER to the task. The pipeline's own metrology is

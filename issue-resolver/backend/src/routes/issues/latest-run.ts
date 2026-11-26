@@ -5,7 +5,7 @@ import type {
 } from '@issue-resolver/shared';
 import { RunState, StepRunStatus } from '@issue-resolver/shared';
 import type { Db } from '../../db/client';
-import { getLatestStepRunForIssue, updateStepRun } from '../../db/step-runs.repo';
+import { getLatestStepRunForIssue, updateStepRun } from '../../repositories/step-runs.repo';
 import { isSessionStale, quietMinutes } from '../../pi/session-liveness';
 
 export async function abortStaleRun(

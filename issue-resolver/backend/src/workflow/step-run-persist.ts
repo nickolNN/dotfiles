@@ -1,6 +1,6 @@
 import type { SessionEvent, SessionStats, StepRunStatus } from '@issue-resolver/shared';
 import type { Db } from '../db/client';
-import { createStepOutput, updateStepRun } from '../db/step-runs.repo';
+import { createStepOutput, updateStepRun } from '../repositories/step-runs.repo';
 
 export interface StepRunResultInput {
   label: string;

@@ -1,5 +1,5 @@
 import type { Db } from '../../db/client';
-import { getRepository } from '../../db/repositories.repo';
+import { getRepository } from '../../repositories/repositories.repo';
 
 export interface RepositoryInput {
   repo_id?: string;

@@ -10,7 +10,7 @@ import {
   insertMany,
   listByIssue,
   listByIteration,
-} from '../src/db/issue-files.repo';
+} from '../src/repositories/issue-files.repo';
 import { FakePiRunner } from '../src/pi/runner';
 import { issues, iterations } from '../src/db/schema';
 import { TaskStatus } from '@issue-resolver/shared';

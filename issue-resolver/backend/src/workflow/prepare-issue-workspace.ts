@@ -17,7 +17,7 @@ import type { SseHub } from '../sse/hub';
 import { issues, iterations } from '../db/schema';
 import type { Db } from '../db/client';
 import { allocateDevPort, releaseIssueDevPorts } from '../port-allocator';
-import { updateTagRunInstructions } from '../db/tags.repo';
+import { updateTagRunInstructions } from '../repositories/tags.repo';
 import {
   DEFAULT_WORKSPACE_ROOT,
   workspaceContainerDirFor,

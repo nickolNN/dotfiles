@@ -204,6 +204,7 @@ export async function runDevopsAgent(
         registry: deps.control,
         tagInstructions: context.tagInstructions,
         cachedInstructions: runStore.getInstructions(repo.repository_url),
+        credentials: runStore.getCredentials?.(repo.repository_url) ?? null,
         reposNames: context.reposNames,
         reposRequireDevServer: context.reposRequireDevServer,
         reposInstructions: context.reposInstructions,

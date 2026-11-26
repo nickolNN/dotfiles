@@ -6,7 +6,7 @@ import {
   insertMany,
   listByIssue,
   type NewIssueFile,
-} from '../../db/issue-files.repo';
+} from '../../repositories/issue-files.repo';
 import type { IterationRunDeps } from '../../workflow/run-iteration.service';
 import {
   attachmentsFilePathFor,

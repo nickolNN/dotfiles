@@ -65,6 +65,7 @@ describe('FakeContainerController', () => {
     await expect(controller.stats('ir-issue-1')).resolves.toEqual({
       containerName: 'ir-issue-1',
       cpuPercent: 0,
+      cpuLimitPercent: 0,
       memoryUsageBytes: 0,
       memoryLimitBytes: 0,
       pids: 0,
@@ -234,6 +235,7 @@ describe('DockerodeContainerController.stats', () => {
     await expect(controller.stats('ir-issue-1')).resolves.toEqual({
       containerName: 'ir-issue-1',
       cpuPercent: 10,
+      cpuLimitPercent: 200,
       memoryUsageBytes: 1024,
       memoryLimitBytes: 2048,
       pids: 7,
@@ -259,6 +261,7 @@ describe('DockerodeContainerController.stats', () => {
     await expect(controller.stats('ir-issue-1')).resolves.toEqual({
       containerName: 'ir-issue-1',
       cpuPercent: null,
+      cpuLimitPercent: 100,
       memoryUsageBytes: 0,
       memoryLimitBytes: 0,
       pids: 0,
@@ -322,6 +325,7 @@ describe('LocalContainerController.statsStream', () => {
     const first = toContainerStatsPayload(JSON.parse(chunks[0]));
     expect(first).toEqual({
       cpuPercent: null,
+      cpuLimitPercent: 200,
       memoryUsageBytes: 1048576,
       memoryLimitBytes: 2097152,
       pids: 3,
@@ -329,6 +333,7 @@ describe('LocalContainerController.statsStream', () => {
     const second = toContainerStatsPayload(JSON.parse(chunks[1]));
     expect(second).toEqual({
       cpuPercent: 50,
+      cpuLimitPercent: 200,
       memoryUsageBytes: 1048576,
       memoryLimitBytes: 2097152,
       pids: 3,

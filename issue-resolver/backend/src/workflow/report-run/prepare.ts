@@ -4,7 +4,7 @@ import {
   createStepRun,
   listStepRunsByIssue,
   updateStepRun,
-} from '../../db/step-runs.repo';
+} from '../../repositories/step-runs.repo';
 import {
   DEFAULT_WORKSPACE_ROOT,
   workspaceHostDirFor,
